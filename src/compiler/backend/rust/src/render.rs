@@ -158,9 +158,11 @@ const fn memo_entry_bytes(layout_len: usize) -> usize {
         .saturating_add(size_of::<u64>())
 }
 
-/// Every layout decision probes a subtree by rendering it into a scratch buffer
-/// before rendering it for real, and a probed subtree probes its own children the
-/// same way, so without reuse the work doubles with each nesting level. The memo
+/// Every layout decision probes a subtree by a [`trial`] render before rendering
+/// it for real, and a probed subtree probes its own children the same way, so
+/// without reuse the work doubles with each nesting level. A trial lays the
+/// subtree out where the real render will — same buffer, column, cursor, config
+/// and budget — so the real render replays what the trial laid out. The memo
 /// makes a node's layout a pure function computed once per render: keyed by the
 /// node's address and every input its render reads — the config, the indent, the
 /// seed column, the [`Pass`], and the buffer's [`Cursor`] — it replays the bytes
@@ -188,11 +190,11 @@ struct Memo {
     flat_layouts: HashMap<FlatKey, String>,
     /// [`flat_measure`] per [`flat_fixed`] node, computed once.
     flat_measures: HashMap<FlatKey, FlatMeasure>,
-    /// The first line, through its newline, of each layout a [`first_line_probe`]
+    /// The first line, through its newline, of each layout a first-line [`trial`]
     /// rendered and saw break; charged to `bytes` like `layouts`.
     first_lines: HashMap<MemoKey, String>,
-    /// The address of the buffer the innermost [`first_line_probe`] fills.
-    stop_buffer: Option<usize>,
+    /// Where the innermost first-line [`trial`] stops laying out.
+    stop_mark: Option<StopMark>,
     /// [`is_block_like`] per node, computed once.
     block_like: HashMap<usize, bool>,
     /// [`is_glue_shape`] per node, computed once.
@@ -341,7 +343,7 @@ impl MemoScope {
             flat_layouts: HashMap::new(),
             flat_measures: HashMap::new(),
             first_lines: HashMap::new(),
-            stop_buffer: None,
+            stop_mark: None,
             block_like: HashMap::new(),
             glue_shapes: HashMap::new(),
             delimited_exprs: HashMap::new(),
@@ -447,9 +449,9 @@ fn current_col(out: &str) -> usize {
 /// The column the next character will land on. Once anything has been written to
 /// `out`, the live cursor ([`current_col`]) is authoritative — including after a
 /// break reset it to the fresh line's indent. The seed `col` is used only for an
-/// empty buffer (the render root, or a `fits` scratch measured from `start_col`),
-/// where there is no cursor yet. Taking `max` here would leak a pre-newline
-/// column past a break, so we deliberately prefer the live cursor.
+/// empty buffer (the render root, or a [`first_line_fresh`] measure), where there
+/// is no cursor yet. Taking `max` here would leak a pre-newline column past a
+/// break, so we deliberately prefer the live cursor.
 fn eff_col(out: &str, col: usize) -> usize {
     if out.is_empty() {
         col
@@ -557,28 +559,39 @@ fn render_flat_shared(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, o
 /// How much more of its layout a render into a buffer must write.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Reach {
-    /// Every byte: the buffer is not a [`first_line_probe`].
+    /// Every byte: no first-line [`trial`] is open on the buffer.
     Whole,
-    /// Up to and including the first newline, which the probe does not hold yet.
+    /// Up to and including the first newline the open trial writes, which the
+    /// buffer does not hold yet.
     FirstLine,
-    /// Nothing: the probe's first line is complete.
+    /// Nothing: the open trial's first line is complete.
     Done,
+}
+
+/// The buffer, and the offset in it, from which a first-line [`trial`] watches
+/// for its first newline.
+#[derive(Clone, Copy)]
+struct StopMark {
+    addr: usize,
+    from: usize,
 }
 
 /// The [`Reach`] of a render into `out`, the buffer at address `addr`.
 ///
-/// A buffer only grows past its last newline — a break trims trailing spaces,
-/// never a newline — so once a probe holds a newline its first line is final.
+/// A trial never writes below its `from` offset and a buffer only grows past its
+/// last newline — a break trims trailing spaces, never a newline — so once a
+/// newline sits at or past `from` the trial's first line is final.
 fn reach(addr: usize, out: &str) -> Reach {
-    let probe = MEMO.with_borrow(|m| m.as_ref().is_some_and(|m| m.stop_buffer == Some(addr)));
-    if probe {
-        if current_col(out) < out.len() {
-            Reach::Done
-        } else {
-            Reach::FirstLine
+    let mark = MEMO.with_borrow(|m| m.as_ref().and_then(|m| m.stop_mark));
+    match mark {
+        Some(mark) if mark.addr == addr => {
+            if out.rfind('\n').is_some_and(|nl| nl >= mark.from) {
+                Reach::Done
+            } else {
+                Reach::FirstLine
+            }
         }
-    } else {
-        Reach::Whole
+        _ => Reach::Whole,
     }
 }
 
@@ -590,32 +603,118 @@ fn first_line(layout: &str) -> &str {
         .unwrap_or(layout)
 }
 
-/// Run `render` into a fresh buffer that keeps only the first line it writes.
+/// How much of its layout a [`trial`] lays out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TrialReach {
+    /// Up to and including the first newline it writes.
+    FirstLine,
+    /// Every byte.
+    Whole,
+}
+
+/// Where a [`trial`] began on its buffer.
 ///
-/// Every render into the buffer stops laying out once a newline is in it, so a
-/// probe that reads no further than the first line — its length, whether a
-/// newline ends it, its first character — costs that line, not the whole subtree.
-/// Before its first newline the buffer grows exactly as an ordinary one would, so
-/// the probe holds the bytes an ordinary render writes up to and including its
-/// first newline, and nothing after them.
-fn first_line_probe<T>(render: impl FnOnce(&mut String) -> T) -> (String, T) {
-    let mut probe = String::new();
-    let addr = std::ptr::from_ref(&probe).addr();
-    let outer = MEMO.with_borrow_mut(|m| m.as_mut().map(|m| m.stop_buffer.replace(addr)));
-    let read = render(&mut probe);
+/// `start` is the buffer's length then, `stable` that length without the run of
+/// trailing spaces a break may trim.
+#[derive(Clone, Copy)]
+struct Mark {
+    start: usize,
+    stable: usize,
+}
+
+impl Mark {
+    /// Everything the trial has written so far, from the cursor it began at.
+    ///
+    /// When a break trimmed the trailing spaces before the cursor, what is written
+    /// begins at the newline that break wrote.
+    fn written(self, out: &str) -> &str {
+        let intact = out
+            .get(self.stable..self.start)
+            .is_some_and(|run| run.bytes().all(|b| b == b' '));
+        if intact {
+            out.get(self.start..).unwrap_or_default()
+        } else {
+            out.get(self.stable..)
+                .unwrap_or_default()
+                .trim_start_matches(' ')
+        }
+    }
+
+    /// The written part of the trial's first line, through its newline if one ends it.
+    fn line(self, out: &str) -> &str {
+        first_line(self.written(out))
+    }
+}
+
+/// Run `render` on `out` with the stop mark `reach` asks for, restoring the
+/// enclosing mark after.
+fn with_stop<T>(
+    out: &mut String,
+    reach: TrialReach,
+    render: impl FnOnce(&mut String, Mark) -> T,
+) -> T {
+    let start = out.len();
+    let stable = out.trim_end_matches(' ').len();
+    let stop = (reach == TrialReach::FirstLine).then_some(StopMark {
+        addr: std::ptr::from_ref::<String>(out).addr(),
+        from: stable,
+    });
+    let outer = MEMO.with_borrow_mut(|m| {
+        m.as_mut()
+            .map(|m| std::mem::replace(&mut m.stop_mark, stop))
+    });
+    let read = render(out, Mark { start, stable });
     MEMO.with_borrow_mut(|m| {
         if let (Some(m), Some(outer)) = (m.as_mut(), outer) {
-            m.stop_buffer = outer;
+            m.stop_mark = outer;
         }
     });
-    let end = first_line(&probe).len();
-    probe.truncate(end);
-    (probe, read)
+    read
+}
+
+/// Run `render` on `out` at its live cursor, then roll `out` back exactly to how
+/// it was, returning what `render` read of its own bytes.
+///
+/// The trial writes where the real render writes — the same buffer, column,
+/// cursor, and so the same memo keys — so a decision taken on it is the decision
+/// the real render meets, and every layout it lays out is one the real render
+/// replays. Nothing below the trailing-space run is ever rewritten (a break trims
+/// only that run; a replay truncates no further), so restoring the run undoes
+/// the trial. A [`TrialReach::FirstLine`] trial stops laying out past its first
+/// newline; a [`TrialReach::Whole`] one lays everything out even inside an
+/// enclosing first-line trial.
+fn trial<T>(out: &mut String, reach: TrialReach, render: impl FnOnce(&mut String, Mark) -> T) -> T {
+    let (start, stable) = (out.len(), out.trim_end_matches(' ').len());
+    let read = with_stop(out, reach, render);
+    // An abandoned render's buffer is discarded whole, so it is left as it is.
+    if !fuel_exhausted() {
+        out.truncate(stable);
+        out.extend(std::iter::repeat_n(' ', start.saturating_sub(stable)));
+    }
+    read
+}
+
+/// Whether an open first-line [`trial`] on `out` already holds its first line, so
+/// nothing more rendered into `out` is kept and no decision about it matters.
+fn first_line_done(out: &String) -> bool {
+    reach(std::ptr::from_ref::<String>(out).addr(), out) == Reach::Done
+}
+
+/// The first line a render into a fresh buffer writes, with what `render` read.
+///
+/// Only for a layout that reads nothing of its context, which is the same bytes
+/// at every cursor.
+fn first_line_fresh<T>(render: impl FnOnce(&mut String) -> T) -> (String, T) {
+    let mut fresh = String::new();
+    let read = with_stop(&mut fresh, TrialReach::FirstLine, |probe, _| render(probe));
+    let end = first_line(&fresh).len();
+    fresh.truncate(end);
+    (fresh, read)
 }
 
 /// Run `render` for `doc` into `out`, or replay the bytes it produced the last time
 /// it ran on the same node in the same context. A node outside the memoized
-/// document renders directly. Into a [`first_line_probe`] only the first line is
+/// document renders directly. Within a first-line [`trial`] only the first line is
 /// laid out and replayed.
 fn memoized(
     doc: &Doc,
@@ -699,7 +798,7 @@ fn memoized(
 }
 
 /// Keep a fresh `layout` for replay under `key`: whole, or apart as its first
-/// line when a [`first_line_probe`] rendered it and it broke.
+/// line when a first-line [`trial`] rendered it and it broke.
 ///
 /// A probe's layout without a newline was laid out in full, so it is the whole
 /// layout every other render of the key replays.
@@ -867,7 +966,7 @@ fn children_flat_fixed(doc: &Doc) -> bool {
 ///
 /// Measured on the first line of the real flat render (through [`render_at`], so
 /// a keyed node shares its layout) and kept per keyed node. Every field reads no
-/// further than the first newline, so a [`first_line_probe`] measures it.
+/// further than the first newline, so [`first_line_fresh`] measures it.
 fn flat_measure(doc: &Doc, cfg: RenderConfig) -> Option<FlatMeasure> {
     if !flat_fixed(doc) {
         return None;
@@ -877,7 +976,7 @@ fn flat_measure(doc: &Doc, cfg: RenderConfig) -> Option<FlatMeasure> {
     if cached.is_some() {
         return cached;
     }
-    let (first, ()) = first_line_probe(|probe| {
+    let (first, ()) = first_line_fresh(|probe| {
         render_at(doc, cfg.no_reserve(), 0, 0, true, probe);
     });
     let measure = FlatMeasure::of(&first);
@@ -982,8 +1081,8 @@ fn render_node(
             // multiline arg inline. Its own soft `Line`s are what flatten or break
             // as a unit — the standard Wadler `group`, refined to reject an embedded
             // newline the width test alone would miss.
-            let group_flat =
-                flat || (!has_hard_break(inner) && fits_single_line(inner, cfg, start_col, indent));
+            let group_flat = flat
+                || (!has_hard_break(inner) && fits_single_line(inner, cfg, start_col, indent, out));
             render_at(inner, cfg, indent, start_col, group_flat, out);
         }
         Doc::BraceBody(body) => render_brace_body(body, cfg, indent, col, flat, out),
@@ -1137,7 +1236,7 @@ fn render_elidable_paren(
     flat: bool,
     out: &mut String,
 ) {
-    if inner_renders_parenthesized(inner, cfg, eff_col(out, col), indent) {
+    if inner_renders_parenthesized(inner, cfg, eff_col(out, col), indent, out) {
         render_at(inner, cfg, indent, col, flat, out);
     } else {
         out.push('(');
@@ -1192,7 +1291,7 @@ fn render_method_chain(
     }
     let method_w = flat_leaf_len(method);
     let start_col = eff_col(out, col);
-    let shape = receiver_shape(receiver, cfg, start_col, indent);
+    let shape = receiver_shape(receiver, cfg, start_col, indent, out);
     // A single-line receiver glues the method inline (reserving the method's width
     // against the receiver's fit test); a multiline receiver already spans lines, so
     // the method lands on its own fresh line and needs no receiver-side reserve.
@@ -1282,41 +1381,49 @@ enum ReceiverShape {
 
 /// Classify a [`Doc::MethodChain`] receiver's layout shape. A single-line receiver
 /// (plain or brace-carrying) glues its trailing method while the line fits; a
-/// multiline receiver always breaks the method to its own line. Probed by rendering
-/// the receiver from `start_col` with no method reserve and inspecting its bytes.
+/// multiline receiver always breaks the method to its own line. Probed by a
+/// [`trial`] of the receiver at the cursor with no method reserve, inspecting its
+/// bytes.
 fn receiver_shape(
     receiver: &Doc,
     cfg: RenderConfig,
     start_col: usize,
     indent: usize,
+    out: &mut String,
 ) -> ReceiverShape {
-    let mut scratch = String::new();
-    render_at(receiver, cfg, indent, start_col, false, &mut scratch);
-    if scratch.contains('\n') {
-        ReceiverShape::Multiline
-    } else if scratch.contains('{') {
-        ReceiverShape::SingleLineBrace
-    } else {
-        ReceiverShape::Plain
+    if first_line_done(out) {
+        return ReceiverShape::Plain;
     }
+    trial(out, TrialReach::Whole, |out, mark| {
+        render_at(receiver, cfg, indent, start_col, false, out);
+        let written = mark.written(out);
+        if written.contains('\n') {
+            ReceiverShape::Multiline
+        } else if written.contains('{') {
+            ReceiverShape::SingleLineBrace
+        } else {
+            ReceiverShape::Plain
+        }
+    })
 }
 
 /// Whether `inner` renders with a leading `(` at `start_col` — a self-parenthesizing
 /// block / paren-expr whose enclosing redundant paren pair `rustfmt` elides. Probed
-/// by rendering `inner` flat and inspecting its first character.
+/// by a [`trial`] of `inner` flat at the cursor, inspecting its first character.
 fn inner_renders_parenthesized(
     inner: &Doc,
     cfg: RenderConfig,
     start_col: usize,
     indent: usize,
+    out: &mut String,
 ) -> bool {
     if let Some(measure) = flat_measure(inner, cfg) {
         return measure.starts_paren;
     }
-    let (first, ()) = first_line_probe(|probe| {
-        render_at(inner, cfg.no_reserve(), indent, start_col, true, probe);
-    });
-    first.starts_with('(')
+    trial(out, TrialReach::FirstLine, |out, mark| {
+        render_at(inner, cfg.no_reserve(), indent, start_col, true, out);
+        mark.line(out).starts_with('(')
+    })
 }
 
 /// Render a [`Doc::TypeBound`] `Ptr<Head + T1 + …>` with `rustfmt`'s angle-bracket
@@ -1345,18 +1452,14 @@ fn render_type_bound(
     // FLAT: an enclosing group that chose flat forces the inline form (used by the
     // assignment's `flat_width` measurement of its prefix); otherwise the inline
     // form holds only while `Ptr<Head + T1 + …>` fits the (reserve-reduced) width.
-    let flat_w = type_bound_flat_width(ptr_open, head, traits, close, cfg);
-    if flat || start_col + flat_w <= cfg.margin() {
-        render_at(ptr_open, cfg.no_reserve(), indent, start_col, true, out);
-        let c = current_col(out);
-        render_at(head, cfg.no_reserve(), indent, c, true, out);
-        for t in traits {
-            out.push_str(BOUND_SEP);
-            let c = current_col(out);
-            render_at(t, cfg.no_reserve(), indent, c, true, out);
-        }
-        let c = current_col(out);
-        render_at(close, cfg, indent, c, true, out);
+    let pieces = TypeBoundPieces {
+        ptr_open,
+        head,
+        traits,
+        close,
+    };
+    if flat || start_col + pieces.flat_width(cfg, indent, start_col, out) <= cfg.margin() {
+        pieces.render_flat(cfg, indent, start_col, out);
         return;
     }
 
@@ -1369,20 +1472,16 @@ fn render_type_bound(
     // at the bound indent; otherwise BOUND-BREAK, each `+ Ti` on its own line at a
     // further indent step. The `head` and the traits open the bound list at
     // `bound_indent` either way.
-    let bound_flat_w = type_bound_list_flat_width(head, traits, cfg);
+    let bound_flat_w = pieces.list_flat_width(cfg, bound_indent, out);
     let angle_break = bound_indent + bound_flat_w < cfg.max_width;
-    out.push('\n');
-    push_indent(bound_indent, out);
-    let c = current_col(out);
-    render_at(head, cfg.no_reserve(), bound_indent, c, true, out);
     if angle_break {
         // The whole bound list stays on one line at `bound_indent`.
-        for t in traits {
-            out.push_str(BOUND_SEP);
-            let c = current_col(out);
-            render_at(t, cfg.no_reserve(), bound_indent, c, true, out);
-        }
+        pieces.render_list_line(cfg, bound_indent, out);
     } else {
+        out.push('\n');
+        push_indent(bound_indent, out);
+        let c = current_col(out);
+        render_at(head, cfg.no_reserve(), bound_indent, c, true, out);
         // Each `+ Ti` on its own line at a further indent step.
         let trait_indent = bound_indent + CHAIN_BREAK_INDENT;
         for t in traits {
@@ -1403,57 +1502,95 @@ fn render_type_bound(
 /// The separator between the traits of an inline bound list.
 const BOUND_SEP: &str = " + ";
 
-/// The flat width of `Ptr<Head + T1 + …>` — the single-line footprint of a
-/// [`Doc::TypeBound`], for its overflow test.
-fn type_bound_flat_width(
-    ptr_open: &Doc,
-    head: &Doc,
-    traits: &[Doc],
-    close: &Doc,
-    cfg: RenderConfig,
-) -> usize {
-    let pieces = [(ptr_open, 0), (head, 0)]
-        .into_iter()
-        .chain(traits.iter().map(|t| (t, BOUND_SEP.len())))
-        .chain([(close, 0)]);
-    if let FlatRun::Width(w) = flat_run(pieces, cfg) {
-        return w;
-    }
-    let mut scratch = String::new();
-    render_at(ptr_open, cfg.no_reserve(), 0, 0, true, &mut scratch);
-    render_at(
-        head,
-        cfg.no_reserve(),
-        0,
-        current_col(&scratch),
-        true,
-        &mut scratch,
-    );
-    for t in traits {
-        scratch.push_str(BOUND_SEP);
-        let c = current_col(&scratch);
-        render_at(t, cfg.no_reserve(), 0, c, true, &mut scratch);
-    }
-    let c = current_col(&scratch);
-    render_at(close, cfg.no_reserve(), 0, c, true, &mut scratch);
-    scratch.len()
+/// The parts of a [`Doc::TypeBound`] `Ptr<Head + T1 + …>`.
+#[derive(Clone, Copy)]
+struct TypeBoundPieces<'a> {
+    ptr_open: &'a Doc,
+    head: &'a Doc,
+    traits: &'a [Doc],
+    close: &'a Doc,
 }
 
-/// The flat width of the bound list `Head + T1 + …` alone (no `Ptr<` / `>`), for
-/// the angle-break-vs-bound-break decision.
-fn type_bound_list_flat_width(head: &Doc, traits: &[Doc], cfg: RenderConfig) -> usize {
-    let pieces = std::iter::once((head, 0)).chain(traits.iter().map(|t| (t, BOUND_SEP.len())));
-    if let FlatRun::Width(w) = flat_run(pieces, cfg) {
-        return w;
+impl TypeBoundPieces<'_> {
+    /// Render the inline `Ptr<Head + T1 + …>` from `start_col`.
+    fn render_flat(self, cfg: RenderConfig, indent: usize, start_col: usize, out: &mut String) {
+        render_at(
+            self.ptr_open,
+            cfg.no_reserve(),
+            indent,
+            start_col,
+            true,
+            out,
+        );
+        let c = current_col(out);
+        render_at(self.head, cfg.no_reserve(), indent, c, true, out);
+        for t in self.traits {
+            out.push_str(BOUND_SEP);
+            let c = current_col(out);
+            render_at(t, cfg.no_reserve(), indent, c, true, out);
+        }
+        let c = current_col(out);
+        render_at(self.close, cfg, indent, c, true, out);
     }
-    let mut scratch = String::new();
-    render_at(head, cfg.no_reserve(), 0, 0, true, &mut scratch);
-    for t in traits {
-        scratch.push_str(BOUND_SEP);
-        let c = current_col(&scratch);
-        render_at(t, cfg.no_reserve(), 0, c, true, &mut scratch);
+
+    /// Break to a fresh line at `bound_indent` and render the bound list
+    /// `Head + T1 + …` on it.
+    fn render_list_line(self, cfg: RenderConfig, bound_indent: usize, out: &mut String) {
+        out.push('\n');
+        push_indent(bound_indent, out);
+        let c = current_col(out);
+        render_at(self.head, cfg.no_reserve(), bound_indent, c, true, out);
+        for t in self.traits {
+            out.push_str(BOUND_SEP);
+            let c = current_col(out);
+            render_at(t, cfg.no_reserve(), bound_indent, c, true, out);
+        }
     }
-    scratch.len()
+
+    /// The flat width of `Ptr<Head + T1 + …>` — the single-line footprint of the
+    /// bound, for its overflow test — measured, when some piece is not
+    /// [`flat_fixed`], by a [`trial`] of the inline form at the cursor.
+    fn flat_width(
+        self,
+        cfg: RenderConfig,
+        indent: usize,
+        start_col: usize,
+        out: &mut String,
+    ) -> usize {
+        let pieces = [(self.ptr_open, 0), (self.head, 0)]
+            .into_iter()
+            .chain(self.traits.iter().map(|t| (t, BOUND_SEP.len())))
+            .chain([(self.close, 0)]);
+        if let FlatRun::Width(w) = flat_run(pieces, cfg) {
+            return w;
+        }
+        if first_line_done(out) {
+            return 0;
+        }
+        trial(out, TrialReach::Whole, |out, mark| {
+            self.render_flat(cfg, indent, start_col, out);
+            mark.written(out).len()
+        })
+    }
+
+    /// The flat width of the bound list `Head + T1 + …` alone (no `Ptr<` / `>`), for
+    /// the angle-break-vs-bound-break decision — measured, when some piece is not
+    /// [`flat_fixed`], by a [`trial`] of the list on the line it breaks to.
+    fn list_flat_width(self, cfg: RenderConfig, bound_indent: usize, out: &mut String) -> usize {
+        let pieces =
+            std::iter::once((self.head, 0)).chain(self.traits.iter().map(|t| (t, BOUND_SEP.len())));
+        if let FlatRun::Width(w) = flat_run(pieces, cfg) {
+            return w;
+        }
+        if first_line_done(out) {
+            return 0;
+        }
+        trial(out, TrialReach::Whole, |out, mark| {
+            self.render_list_line(cfg, bound_indent, out);
+            let lead = 1 + bound_indent;
+            mark.written(out).len().saturating_sub(lead)
+        })
+    }
 }
 
 /// Render a [`Doc::StructLit`] with `rustfmt`'s `struct_lit_width` rule: the flat
@@ -1480,19 +1617,35 @@ fn render_struct_lit(
     // a struct literal whose field text exceeds 18 columns breaks and forces its
     // enclosing construct broken (like a `HardLine`), so `flat` alone does not force
     // it inline — `struct_lit_flat_fits` is the sole authority.
-    if struct_lit_flat_fits(open, fields, close, cfg, start_col, indent) {
-        // Flat: `Name { a: 1, b: 2 }` — a space hugs each brace.
-        render_at(open, cfg.no_reserve(), indent, start_col, true, out);
-        out.push(' ');
-        render_flat_elems(fields, cfg, indent, out);
-        out.push(' ');
-        let c = current_col(out);
-        render_at(close, cfg, indent, c, true, out);
+    if struct_lit_flat_fits(open, fields, close, cfg, start_col, indent, out) {
+        render_struct_lit_flat(open, fields, close, cfg, indent, start_col, out);
         return;
     }
     // Broken: one field per line with a trailing comma — the same one-per-line
     // layout as a delimited list.
     render_one_per_line(open, fields, close, true, cfg, indent, start_col, out);
+}
+
+/// Render the flat `Name { a: 1, b: 2 }` — a space hugs each brace — from
+/// `start_col`, returning the columns `open` and the fields end at.
+fn render_struct_lit_flat(
+    open: &Doc,
+    fields: &[Doc],
+    close: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    start_col: usize,
+    out: &mut String,
+) -> (usize, usize) {
+    render_at(open, cfg.no_reserve(), indent, start_col, true, out);
+    let open_end = current_col(out);
+    out.push(' ');
+    render_flat_elems(fields, cfg, indent, out);
+    let fields_end = current_col(out);
+    out.push(' ');
+    let c = current_col(out);
+    render_at(close, cfg, indent, c, true, out);
+    (open_end, fields_end)
 }
 
 /// `rustfmt`'s `struct_lit_width` (default 18): the maximum width of a struct
@@ -1504,6 +1657,10 @@ const STRUCT_LIT_WIDTH: usize = 18;
 /// Whether a struct literal `Name { fields }` may lay out flat from `start_col`:
 /// genuinely single-line, the whole line (with the hugging spaces and the trailing
 /// `reserve`) within `max_width`, AND the field text within `struct_lit_width`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "probe threads open/fields/close + cfg/col/indent + the buffer"
+)]
 fn struct_lit_flat_fits(
     open: &Doc,
     fields: &[Doc],
@@ -1511,6 +1668,7 @@ fn struct_lit_flat_fits(
     cfg: RenderConfig,
     start_col: usize,
     indent: usize,
+    out: &mut String,
 ) -> bool {
     match list_widths(open, fields, close, cfg) {
         // `open`, ` `, the fields, ` `, `close`; the `open_end..fields_end` span
@@ -1524,32 +1682,16 @@ fn struct_lit_flat_fits(
         ListWidths::Unmeasured => {}
     }
     // Every column read below is taken before the first newline or discarded by
-    // the single-line check, so the probe's first line decides the fit.
-    let (scratch, (open_end, fields_end)) = first_line_probe(|probe| {
-        render_at(open, cfg.no_reserve(), indent, start_col, true, probe);
-        let open_end = current_col(probe);
-        probe.push(' ');
-        render_flat_elems(fields, cfg, indent, probe);
-        let fields_end = current_col(probe);
-        probe.push(' ');
-        render_at(
-            close,
-            cfg.no_reserve(),
-            indent,
-            fields_end.saturating_add(1),
-            true,
-            probe,
-        );
-        (open_end, fields_end)
-    });
-    if scratch.contains('\n') {
-        return false;
-    }
-    if start_col + scratch.len() > cfg.margin() {
-        return false;
-    }
-    // The field text is the span between the braces, excluding the hugging spaces.
-    fields_end.saturating_sub(open_end) <= STRUCT_LIT_WIDTH
+    // the single-line check, so the trial's first line decides the fit.
+    trial(out, TrialReach::FirstLine, |out, mark| {
+        let (open_end, fields_end) =
+            render_struct_lit_flat(open, fields, close, cfg, indent, start_col, out);
+        let line = mark.line(out);
+        // The field text is the span between the braces, excluding the hugging spaces.
+        !line.contains('\n')
+            && start_col + line.len() <= cfg.margin()
+            && fields_end.saturating_sub(open_end) <= STRUCT_LIT_WIDTH
+    })
 }
 
 /// Render a [`Doc::BraceBody`]: the body inline (no braces) when it fits flat here,
@@ -1582,7 +1724,7 @@ fn render_brace_body(
     // would drop the braces on such a body; `fits_single_line` rejects the
     // embedded newline, keeping the block form `rustfmt` emits.
     let body_flat =
-        flat || (!has_hard_break(body) && fits_single_line(body, cfg, start_col, indent));
+        flat || (!has_hard_break(body) && fits_single_line(body, cfg, start_col, indent, out));
     if body_flat {
         render_at(body, cfg, indent, start_col, true, out);
         return;
@@ -1622,7 +1764,7 @@ fn render_brace_body_broken(
     // overflow. When found, render the body flat instead. Only the block boundary
     // gives up; a nested call's give-up is decided by its own enclosing block, so
     // the decision does not cascade up through breakable constructs.
-    if body_broken_forces_flat(body, cfg, indent + 4, c) {
+    if body_broken_forces_flat(body, cfg, indent + 4, c, out) {
         // Keep the whole body on its original single line, inlining even statement-
         // block `HardLine`s to a single space (`rustfmt`'s given-up rewrite).
         let flat_cfg = RenderConfig {
@@ -1649,13 +1791,26 @@ fn render_brace_body_broken(
 /// is the fresh give-up trigger. A breakable overflowing line (`f(…)`, a call whose
 /// own break `rustfmt` would still take) is NOT a trigger — it belongs to that
 /// construct's own layout, not this block's give-up.
-fn body_broken_forces_flat(body: &Doc, cfg: RenderConfig, indent: usize, start_col: usize) -> bool {
-    let mut probe = String::new();
-    push_indent(start_col, &mut probe);
-    render_at(body, cfg, indent, start_col, false, &mut probe);
-    probe
-        .split('\n')
-        .any(|line| line.len() > cfg.max_width && line_is_unbreakable_atom(line))
+///
+/// The probe is a [`trial`] at the cursor, so the real broken render replays it.
+fn body_broken_forces_flat(
+    body: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    start_col: usize,
+    out: &mut String,
+) -> bool {
+    if first_line_done(out) {
+        return false;
+    }
+    let line_start = out.rfind('\n').map_or(0, |nl| nl + 1);
+    trial(out, TrialReach::Whole, |out, _| {
+        render_at(body, cfg, indent, start_col, false, out);
+        out.get(line_start..)
+            .unwrap_or_default()
+            .split('\n')
+            .any(|line| line.len() > cfg.max_width && line_is_unbreakable_atom(line))
+    })
 }
 
 /// `rustfmt`'s `single_line_if_else_max_width` (default 50): the maximum width of
@@ -1844,7 +1999,7 @@ fn render_match_arm_tail(
     // `has_hard_break`, so its flat render can embed a `\n`; a first-line-only fit
     // sees only the short first line and would inline it, dropping the arm braces
     // `rustfmt` keeps. `fits_single_line` rejects the embedded newline.
-    let body_flat = !has_hard_break(body) && fits_single_line(body, cfg, start_col, indent);
+    let body_flat = !has_hard_break(body) && fits_single_line(body, cfg, start_col, indent, out);
     if body_flat {
         render_at(body, cfg, indent, start_col, true, out);
         out.push(',');
@@ -1861,17 +2016,10 @@ fn render_match_arm_tail(
     // `max_width` at `indent + 4` but whose args exceed 60 columns still breaks in
     // place. A non-delimited body (chain, `if`/`else`) has no argument list to gate,
     // so it falls back to the single-line-at-`indent + 4` test.
-    let block_wrap = control || (!has_hard_break(body) && body_block_wraps(body, cfg, indent));
+    let block_wrap =
+        control || (!has_hard_break(body) && body_block_wraps(body, cfg, indent, start_col, out));
     if block_wrap {
-        out.push('{');
-        render_at(
-            &Doc::Nest(4, Box::new(Doc::HardLine)),
-            cfg,
-            indent,
-            start_col,
-            false,
-            out,
-        );
+        open_arm_block(cfg, indent, start_col, out);
         let c = current_col(out);
         render_at(body, cfg, indent + 4, c, false, out);
         out.push('\n');
@@ -1894,7 +2042,16 @@ fn render_match_arm_tail(
 /// not. A body with no argument list of its own (a chain, an `if`/`else`) has no
 /// such gate, so it falls back to whether the whole body fits single-line on its
 /// own line at `indent + 4`.
-fn body_block_wraps(body: &Doc, cfg: RenderConfig, indent: usize) -> bool {
+///
+/// Measured by a [`trial`] that opens the arm block exactly as the brace-wrapped
+/// render does, so every width is read at the column the body would land on.
+fn body_block_wraps(
+    body: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    start_col: usize,
+    out: &mut String,
+) -> bool {
     // See through a `Group` wrapper to the delimited construct it lays out.
     let inner = match body {
         Doc::Group(g) => g.as_ref(),
@@ -1911,15 +2068,34 @@ fn body_block_wraps(body: &Doc, cfg: RenderConfig, indent: usize) -> bool {
         {
             return innermost_args_width(elems, o, o.saturating_add(e)) <= FN_CALL_WIDTH;
         }
-        let mut scratch = String::new();
-        render_at(open, cfg, indent + 4, 0, true, &mut scratch);
-        let open_end = current_col(&scratch);
-        render_flat_elems(elems, cfg, indent + 4, &mut scratch);
-        let elems_end = current_col(&scratch);
-        let args_width = innermost_args_width(elems, open_end, elems_end);
-        return args_width <= FN_CALL_WIDTH;
+        return trial(out, TrialReach::FirstLine, |out, _| {
+            open_arm_block(cfg, indent, start_col, out);
+            let c = current_col(out);
+            render_at(open, cfg, indent + 4, c, true, out);
+            let open_end = current_col(out);
+            render_flat_elems(elems, cfg, indent + 4, out);
+            let elems_end = current_col(out);
+            innermost_args_width(elems, open_end, elems_end) <= FN_CALL_WIDTH
+        });
     }
-    fits_single_line(body, cfg.no_reserve(), indent + 4, indent + 4)
+    trial(out, TrialReach::FirstLine, |out, _| {
+        open_arm_block(cfg, indent, start_col, out);
+        let c = current_col(out);
+        fits_single_line(body, cfg.no_reserve(), c, indent + 4, out)
+    })
+}
+
+/// Open a brace-wrapped match-arm body: `{`, then a fresh line one indent step in.
+fn open_arm_block(cfg: RenderConfig, indent: usize, start_col: usize, out: &mut String) {
+    out.push('{');
+    render_at(
+        &Doc::Nest(4, Box::new(Doc::HardLine)),
+        cfg,
+        indent,
+        start_col,
+        false,
+        out,
+    );
 }
 
 /// Render an assignment with `rustfmt`'s dedicated RHS-break layout axis. See
@@ -1941,44 +2117,29 @@ fn render_assign(
     out: &mut String,
 ) {
     let start_col = eff_col(out, col);
-    let prefix_flat_w = flat_width(prefix, cfg, start_col, indent);
-    let rhs_flat_w = flat_width(rhs, cfg, 0, indent);
-
-    // FLAT: the whole `prefix rhs;` fits on the current line. An enclosing group
-    // that already chose flat forces this too. A hard break in either side rules
-    // it out (a statement-block RHS never lays out flat). A `flat_width` measures
-    // only the first line, so an RHS wrapping an opaque variant (an applied-lambda
-    // `let p: T = foo(let x = 1 in x)`) whose flat render embeds a `\n` would look
-    // short here and glue the RHS flat, dropping the delimiters `rustfmt` keeps.
-    // Treat such an embedded newline as overflow: the same-line form requires a
-    // genuinely single-line RHS flat render.
-    let same_line_end = start_col + prefix_flat_w + rhs_flat_w + trailer;
-    let no_hard_break = !has_hard_break(prefix) && !has_hard_break(rhs);
-    let rhs_single_line = flat_is_single_line(rhs, cfg, 0, indent);
-    if flat || (no_hard_break && rhs_single_line && same_line_end <= cfg.max_width) {
+    if flat {
         render_at(prefix, cfg, indent, start_col, true, out);
         let c = current_col(out);
         render_at(rhs, cfg, indent, c, true, out);
         return;
     }
 
-    // The same-line form overflows. The `let name: TYPE = ` prefix stays flat
-    // UNLESS its own flat width overflows the line — then `rustfmt` breaks the
-    // TYPE's angle brackets (a `Doc::TypeBound` prefix does this) to shorten the
-    // prefix before it even reaches the RHS. Rendering the prefix non-flat only when
-    // it overflows keeps the RHS-break (which alone fixes a merely-`prefix+rhs`-wide
-    // line) preferred, matching `rustfmt`.
-    let prefix_overflows = start_col + prefix_flat_w > cfg.max_width;
-    render_at(prefix, cfg, indent, start_col, !prefix_overflows, out);
-
-    // When the prefix itself broke its TYPE across lines, its last line ends with
-    // `> = ` and `rustfmt` GLUES the RHS onto it (the type-break already reclaimed
-    // the width the RHS-break would have) — the RHS breaks into its own delimiters
-    // in place, exactly the delimiter-break form. Skip the RHS-break axis.
-    if prefix_overflows {
+    // The `let name: TYPE = ` prefix stays flat UNLESS its own flat width
+    // overflows the line — then `rustfmt` breaks the TYPE's angle brackets (a
+    // `Doc::TypeBound` prefix does this) to shorten the prefix before it even
+    // reaches the RHS. Rendering the prefix non-flat only when it overflows keeps
+    // the RHS-break (which alone fixes a merely-`prefix+rhs`-wide line) preferred,
+    // matching `rustfmt`.
+    let prefix_flat_w = flat_width(prefix, cfg, start_col, indent, out);
+    if start_col + prefix_flat_w > cfg.max_width {
+        render_at(prefix, cfg, indent, start_col, false, out);
+        // The prefix broke its TYPE across lines, so its last line ends with `> = `
+        // and `rustfmt` GLUES the RHS onto it (the type-break already reclaimed the
+        // width the RHS-break would have) — the RHS breaks into its own delimiters
+        // in place, exactly the delimiter-break form. The trailing `;` (the
+        // `trailer`) is reserved on the RHS's last line so a glued closure body
+        // re-tests its fit with room for the statement terminator.
         let c = current_col(out);
-        // The trailing `;` (the `trailer`) is reserved on the RHS's last line so a
-        // glued closure body re-tests its fit with room for the statement terminator.
         render_at(
             rhs,
             cfg.with_reserve(cfg.reserve + trailer),
@@ -1989,22 +2150,41 @@ fn render_assign(
         );
         return;
     }
+    render_at(prefix, cfg, indent, start_col, true, out);
+    // Every RHS placement below is measured by a trial from here, the column the
+    // glued RHS lands on.
+    let glue_col = current_col(out);
 
-    // RHS-BREAK: dropped onto its own line at one indent step past the block, the
-    // RHS's FIRST line (laying out its own internal breaks — e.g. a closure body
-    // block) fits the width. `rustfmt` prefers this next-line placement for a
-    // value that would otherwise crowd the wide `let name: TYPE = ` prefix. The
-    // trailer is charged against the first line only when the RHS does not break
-    // internally (a single-line RHS carries the `;` on that one line).
-    let rhs_indent = indent + CHAIN_BREAK_INDENT;
-    let rhs_break_render = probe_render(rhs, cfg, rhs_indent, rhs_indent);
-    let rhs_break_first = rhs_break_render
-        .split('\n')
-        .next()
-        .unwrap_or(&rhs_break_render);
-    let rhs_break_head_w = rhs_break_first.len().saturating_sub(rhs_indent);
-    let rhs_breaks = rhs_break_render.contains('\n');
-    let rhs_break_trailer = if rhs_breaks { 0 } else { trailer };
+    // A hard break in either side rules out every form but the delimiter-break (a
+    // statement-block RHS never lays out flat).
+    let no_hard_break = !has_hard_break(prefix) && !has_hard_break(rhs);
+    if !no_hard_break || first_line_done(out) {
+        render_at(rhs, cfg, indent, glue_col, false, out);
+        return;
+    }
+
+    // SAME-LINE: the whole `prefix rhs;` fits on the current line. An RHS wrapping
+    // an opaque variant (an applied-lambda `let p: T = foo(let x = 1 in x)`) can
+    // embed a `\n` in its flat render; the same-line form requires a genuinely
+    // single-line RHS flat render.
+    let same_line = flat_measure(rhs, cfg).map_or_else(
+        || {
+            trial(out, TrialReach::FirstLine, |out, mark| {
+                render_at(rhs, cfg, indent, glue_col, true, out);
+                let line = mark.line(out);
+                !line.contains('\n') && glue_col + line.len() + trailer <= cfg.max_width
+            })
+        },
+        |measure| {
+            measure
+                .width()
+                .is_some_and(|w| glue_col + w + trailer <= cfg.max_width)
+        },
+    );
+    if same_line {
+        render_at(rhs, cfg, indent, glue_col, true, out);
+        return;
+    }
 
     // `rustfmt`'s `choose_rhs` accepts the next-line placement only when the
     // glued alternative is not strictly required:
@@ -2017,37 +2197,62 @@ fn render_assign(
     //    exceeds `max_width` — an unbreakable run no indent can ever fit (the
     //    body `rustfmt` leaves as an over-wide raw snippet). Such a body makes
     //    the next-line form no better than the glued one, and the glued form wins.
-    let glue_col = start_col + prefix_flat_w;
-    let glue_render = probe_render(rhs, cfg, indent, glue_col);
-    let glue_head = glue_render.split('\n').next().unwrap_or(&glue_render);
-    let glue_head_core_w = glue_head
-        .trim_end_matches(['(', '{', '['])
-        .len()
-        .saturating_sub(glue_col);
+    let glue_head_core_w = trial(out, TrialReach::FirstLine, |out, mark| {
+        render_at(rhs, cfg, indent, glue_col, false, out);
+        let head = mark.line(out);
+        head.strip_suffix('\n')
+            .unwrap_or(head)
+            .trim_end_matches(['(', '{', '['])
+            .len()
+    });
     let glue_viable = glue_col + glue_head_core_w + trailer <= cfg.max_width;
-    let rhs_tail_fits = rhs_break_render
-        .split('\n')
-        .skip(1)
-        .all(|line| line.trim_start().len() <= cfg.max_width);
-    if no_hard_break
-        && rhs_indent + rhs_break_head_w + rhs_break_trailer <= cfg.max_width
-        && (!glue_viable || rhs_tail_fits)
-    {
-        // `rustfmt` leaves no trailing space on the `= ` line, so trim it before
-        // the newline (the prefix carries the flat-case space after `=`).
-        trim_trailing_spaces(out);
-        out.push('\n');
-        push_indent(rhs_indent, out);
-        let c = current_col(out);
-        render_at(rhs, cfg, rhs_indent, c, false, out);
+
+    // RHS-BREAK: dropped onto its own line at one indent step past the block, the
+    // RHS's FIRST line (laying out its own internal breaks — e.g. a closure body
+    // block) fits the width. `rustfmt` prefers this next-line placement for a
+    // value that would otherwise crowd the wide `let name: TYPE = ` prefix. The
+    // trailer is charged against the first line only when the RHS does not break
+    // internally (a single-line RHS carries the `;` on that one line). Only a
+    // viable glue reads the tail lines, so only then is the whole RHS laid out.
+    let rhs_indent = indent + CHAIN_BREAK_INDENT;
+    let reach = if glue_viable {
+        TrialReach::Whole
+    } else {
+        TrialReach::FirstLine
+    };
+    let rhs_break_fits = trial(out, TrialReach::Whole, |out, _| {
+        open_rhs_break(rhs_indent, out);
+        with_stop(out, reach, |out, mark| {
+            render_at(rhs, cfg, rhs_indent, rhs_indent, false, out);
+            let body = mark.written(out);
+            let mut lines = body.split('\n');
+            let head_w = lines.next().unwrap_or_default().len();
+            let head_trailer = if body.contains('\n') { 0 } else { trailer };
+            let head_fits = rhs_indent + head_w + head_trailer <= cfg.max_width;
+            let tail_fits =
+                !glue_viable || lines.all(|line| line.trim_start().len() <= cfg.max_width);
+            head_fits && tail_fits
+        })
+    });
+    if rhs_break_fits {
+        open_rhs_break(rhs_indent, out);
+        render_at(rhs, cfg, rhs_indent, rhs_indent, false, out);
         return;
     }
 
     // DELIMITER-BREAK: even at `indent + 4` the RHS's first line overflows, so
     // `rustfmt` keeps it glued to `= ` and breaks it into its own delimiters at
     // the block indent.
-    let c = current_col(out);
-    render_at(rhs, cfg, indent, c, false, out);
+    render_at(rhs, cfg, indent, glue_col, false, out);
+}
+
+/// Break an assignment after its `= `, onto a fresh line at `rhs_indent`.
+fn open_rhs_break(rhs_indent: usize, out: &mut String) {
+    // `rustfmt` leaves no trailing space on the `= ` line, so trim it before the
+    // newline (the prefix carries the flat-case space after `=`).
+    trim_trailing_spaces(out);
+    out.push('\n');
+    push_indent(rhs_indent, out);
 }
 
 /// The combined flat width of the run of trailing sibling TEXT leaves that follow a
@@ -2073,46 +2278,21 @@ fn trailing_siblings_flat_width<D: Borrow<Doc>>(siblings: &[D]) -> usize {
 
 /// The width of `doc` rendered entirely flat from column `start_col` up to its
 /// first hard break — the single-line footprint the assignment's fit tests
-/// measure. Rendered into a scratch buffer with everything flat; a hard break
-/// ends the measured line (a flat statement-block never arises in a fit-tested
-/// path, but measuring to the first newline is the correct general rule).
-fn flat_width(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> usize {
+/// measure — by a first-line [`trial`] of that flat render at the cursor.
+fn flat_width(
+    doc: &Doc,
+    cfg: RenderConfig,
+    start_col: usize,
+    indent: usize,
+    out: &mut String,
+) -> usize {
     if let Some(measure) = flat_measure(doc, cfg) {
         return measure.first_len;
     }
-    let (first, ()) = first_line_probe(|probe| {
-        render_at(doc, cfg, indent, start_col, true, probe);
-    });
-    first.trim_end_matches('\n').len()
-}
-
-/// Whether `doc` rendered entirely flat from column `start_col` is genuinely
-/// single-line — no embedded `\n`. An opaque variant (`CallArgs`/`StructLit`/
-/// `Chain`) hides its own `HardLine` from [`has_hard_break`], so a flat render of
-/// it can still carry a newline (a block argument, a wide record broken
-/// one-per-line). [`flat_width`] measures only the first line and misses that;
-/// the assignment's same-line fit gates on this so it never glues a
-/// multiline-flat RHS onto the prefix and drops the delimiters `rustfmt` keeps.
-fn flat_is_single_line(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
-    if let Some(measure) = flat_measure(doc, cfg) {
-        return measure.single_line;
-    }
-    let (first, ()) = first_line_probe(|probe| {
-        render_at(doc, cfg, indent, start_col, true, probe);
-    });
-    !first.contains('\n')
-}
-
-/// `doc` rendered from `start_col` at block indent `indent`, letting its own
-/// groups decide their internal breaks (non-flat), with `start_col` leading
-/// spaces so every line's length is an absolute column. The assignment axis
-/// measures its candidate layouts (glued head, next-line head, tail lines) on
-/// this probe without touching the real output buffer.
-fn probe_render(doc: &Doc, cfg: RenderConfig, indent: usize, start_col: usize) -> String {
-    let mut scratch = String::new();
-    push_indent(start_col, &mut scratch);
-    render_at(doc, cfg, indent, start_col, false, &mut scratch);
-    scratch
+    trial(out, TrialReach::FirstLine, |out, mark| {
+        render_at(doc, cfg, indent, start_col, true, out);
+        mark.line(out).trim_end_matches('\n').len()
+    })
 }
 
 /// Whether `doc` contains a [`Doc::HardLine`] that is NOT enclosed in a nested
@@ -2216,19 +2396,26 @@ fn trim_trailing_spaces(out: &mut String) {
 /// [`Doc::BraceBody`] closure/arm shape; a plain multiline delimited element breaks
 /// the whole list. Groups with only soft `Line`/`Softline` breaks never embed a
 /// newline in their flat form, so a single-line render is exactly a fitting one.
-fn fits_single_line(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
+///
+/// Measured by a first-line [`trial`] of the very flat render the caller commits
+/// to when it fits.
+fn fits_single_line(
+    doc: &Doc,
+    cfg: RenderConfig,
+    start_col: usize,
+    indent: usize,
+    out: &mut String,
+) -> bool {
     if let Some(measure) = flat_measure(doc, cfg) {
         return measure
             .width()
             .is_some_and(|w| start_col.saturating_add(w) <= cfg.margin());
     }
-    let (first, ()) = first_line_probe(|probe| {
-        render_at(doc, cfg.no_reserve(), indent, start_col, true, probe);
-    });
-    if first.contains('\n') {
-        return false;
-    }
-    start_col + first.len() <= cfg.margin()
+    trial(out, TrialReach::FirstLine, |out, mark| {
+        render_at(doc, cfg, indent, start_col, true, out);
+        let line = mark.line(out);
+        !line.contains('\n') && start_col + line.len() <= cfg.margin()
+    })
 }
 
 /// Whether a chain's operands rendered flat from `start_col` are genuinely
@@ -2241,6 +2428,7 @@ fn chain_flat_fits_single_line(
     cfg: RenderConfig,
     start_col: usize,
     indent: usize,
+    out: &mut String,
 ) -> bool {
     let run = flat_run(
         operands.iter().enumerate().map(|(i, o)| {
@@ -2258,13 +2446,11 @@ fn chain_flat_fits_single_line(
         FlatRun::Multiline => return false,
         FlatRun::Unmeasured => {}
     }
-    let (first, ()) = first_line_probe(|probe| {
-        render_chain_flat(operands, cfg.no_reserve(), indent, probe);
-    });
-    if first.contains('\n') {
-        return false;
-    }
-    start_col + first.len() <= cfg.margin()
+    trial(out, TrialReach::FirstLine, |out, mark| {
+        render_chain_flat(operands, cfg, indent, out);
+        let line = mark.line(out);
+        !line.contains('\n') && start_col + line.len() <= cfg.margin()
+    })
 }
 
 /// Render a binop chain with rustfmt's layout.
@@ -2303,7 +2489,7 @@ fn render_chain(
     // path directly, so neither the operand scan nor a whole-chain clone runs.
     if flat
         || (operands.iter().all(|o| !has_hard_break(&o.doc))
-            && chain_flat_fits_single_line(operands, cfg, col, indent))
+            && chain_flat_fits_single_line(operands, cfg, eff_col(out, col), indent, out))
     {
         render_chain_flat(operands, cfg, indent, out);
         return;
@@ -2354,27 +2540,16 @@ fn render_chain(
                 // never opens a multiline operand mid-line in a broken chain (the sole
                 // multiline glue is onto a PRECEDING operand's closing line, the
                 // `prev_multiline` arm below).
-                let (fits, single_line) = glue_fits(&operand.doc, cfg, cur, indent, op);
-                // The single-line probe column matches `glue_fits`'s own render column,
-                // so under a zero reserve the two renders coincide and its verdict is
-                // reused; a nonzero reserve tightens the operand's margin, so re-probe.
-                fits && if cfg.reserve == 0 {
-                    single_line
-                } else {
-                    renders_single_line(&operand.doc, cfg, cur + 1 + op.len() + 1, indent)
-                }
+                let (fits, single_line) = glue_fits(&operand.doc, cfg, cur, indent, op, out);
+                fits && single_line
             } else {
                 // Past the flat prefix, an operator glues only immediately after a
                 // multiline operand, at that operand's closing-line column.
-                prev_multiline && glue_fits(&operand.doc, cfg, cur, indent, op).0
+                prev_multiline && glue_fits(&operand.doc, cfg, cur, indent, op, out).0
             };
             if can_glue {
-                out.push(' ');
-                out.push_str(op);
-                out.push(' ');
-                let c = current_col(out);
                 let before = out.trim_end_matches(' ').len();
-                render_at(&operand.doc, cfg, indent, c, false, out);
+                glue_operand(&operand.doc, cfg, indent, op, out);
                 prev_multiline = wrote_newline(out, before);
                 if prev_multiline {
                     flat_prefix = false;
@@ -2416,11 +2591,8 @@ fn render_call_args(
     // FLAT: the whole `open a, b close` is genuinely single-line, fits the width,
     // and its argument text fits `fn_call_width`. An enclosing group that already
     // chose flat forces this too.
-    if flat || call_args_flat_fits(open, elems, close, cfg, start_col, indent) {
-        render_at(open, cfg, indent, start_col, true, out);
-        render_flat_elems(elems, cfg, indent, out);
-        let c = current_col(out);
-        render_at(close, cfg, indent, c, true, out);
+    if flat || call_args_flat_fits(open, elems, close, cfg, start_col, indent, out) {
+        render_call_args_flat(open, elems, close, cfg, indent, start_col, out);
         return;
     }
 
@@ -2458,32 +2630,29 @@ fn render_call_args_broken(
     // fits on the open's LAST line. `rustfmt` glues `(args)` onto the block's closing
     // `})` line rather than breaking the tiny argument list one-per-line. Render the
     // open non-flat, then the flat args and close on its last line.
-    if !elems.is_empty() {
-        // Render `open` once; its multiline-ness and closing column both read off
-        // this single probe (the glue path re-renders it into `out` below).
-        let mut probe = String::new();
-        render_at(open, cfg.no_reserve(), indent, start_col, false, &mut probe);
-        if probe.contains('\n') {
-            let open_last = current_col(&probe);
-            let run = flat_run(elem_pieces(elems).chain([(close, 0)]), cfg);
-            let args_fit = match run {
+    if !elems.is_empty() && !first_line_done(out) {
+        // One trial of the glued layout reads the open's multiline-ness, its closing
+        // column, and the flat argument run's fit on that line.
+        let glued = trial(out, TrialReach::Whole, |out, mark| {
+            render_at(open, cfg.no_reserve(), indent, start_col, false, out);
+            if !mark.written(out).contains('\n') {
+                return false;
+            }
+            let open_last = current_col(out);
+            match flat_run(elem_pieces(elems).chain([(close, 0)]), cfg) {
                 FlatRun::Width(w) => open_last.saturating_add(w) <= cfg.margin(),
                 FlatRun::Multiline => false,
-                FlatRun::Unmeasured => {
-                    let (first, ()) = first_line_probe(|probe| {
-                        render_flat_elems(elems, cfg, indent, probe);
-                        render_at(close, cfg.no_reserve(), indent, open_last, true, probe);
-                    });
-                    !first.contains('\n') && open_last + first.len() <= cfg.margin()
-                }
-            };
-            if args_fit {
-                render_at(open, cfg.no_reserve(), indent, start_col, false, out);
-                render_flat_elems(elems, cfg, indent, out);
-                let c = current_col(out);
-                render_at(close, cfg, indent, c, true, out);
-                return;
+                FlatRun::Unmeasured => trial(out, TrialReach::FirstLine, |out, mark| {
+                    render_glued_args(elems, close, cfg, indent, out);
+                    let line = mark.line(out);
+                    !line.contains('\n') && open_last + line.len() <= cfg.margin()
+                }),
             }
+        });
+        if glued {
+            render_at(open, cfg.no_reserve(), indent, start_col, false, out);
+            render_glued_args(elems, close, cfg, indent, out);
+            return;
         }
     }
 
@@ -2510,16 +2679,11 @@ fn render_call_args_broken(
             cfg,
             start_col,
             indent,
+            out,
         )
         .is_some()
         {
-            render_at(open, cfg, indent, start_col, false, out);
-            let base = current_col(out);
-            for e in prefix {
-                let c = current_col(out);
-                render_at(e, cfg, indent, c, true, out);
-                out.push_str(", ");
-            }
+            let base = render_combine_head(open, prefix, cfg, indent, start_col, out);
             render_forced_break(last, base, budget, cfg, indent, current_col(out), out);
             let c = current_col(out);
             render_at(close, cfg, indent, c, false, out);
@@ -2540,6 +2704,19 @@ fn render_call_args_broken(
         start_col,
         out,
     );
+}
+
+/// Glue the flat argument list and `close` onto the current line.
+fn render_glued_args(
+    elems: &[Doc],
+    close: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    out: &mut String,
+) {
+    render_flat_elems(elems, cfg, indent, out);
+    let c = current_col(out);
+    render_at(close, cfg, indent, c, true, out);
 }
 
 /// Lay a delimited list out one element per line: `open`, each element on its own
@@ -2587,6 +2764,25 @@ fn render_one_per_line(
     render_at(close, cfg, indent, c, false, out);
 }
 
+/// Render the flat single-line form `open a, b close` from `start_col`, returning
+/// the columns `open` and the elements end at.
+fn render_call_args_flat(
+    open: &Doc,
+    elems: &[Doc],
+    close: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    start_col: usize,
+    out: &mut String,
+) -> (usize, usize) {
+    render_at(open, cfg, indent, start_col, true, out);
+    let open_end = current_col(out);
+    render_flat_elems(elems, cfg, indent, out);
+    let elems_end = current_col(out);
+    render_at(close, cfg, indent, elems_end, true, out);
+    (open_end, elems_end)
+}
+
 /// Whether the flat single-line form `open a, b close` may lay out flat from
 /// `start_col`. Three conditions: it is genuinely single-line (no element embeds a
 /// newline — a statement block forces the broken layout); the whole line fits
@@ -2596,6 +2792,10 @@ fn render_one_per_line(
 /// the whole line would still fit `max_width`. A macro list (`format!` / `vec!`,
 /// `trailing_comma == false`) is not gated by `fn_call_width` here — it uses a
 /// wrap-to-`max_width` layout decided elsewhere.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "probe threads open/elems/close + cfg/col/indent + the buffer"
+)]
 fn call_args_flat_fits(
     open: &Doc,
     elems: &[Doc],
@@ -2603,9 +2803,12 @@ fn call_args_flat_fits(
     cfg: RenderConfig,
     start_col: usize,
     indent: usize,
+    out: &mut String,
 ) -> bool {
     // The full flat line, for the single-line + `max_width` checks: read off the
-    // pieces' measures, or rendered when a piece's flat layout reads its column.
+    // pieces' measures, or laid out by a first-line [`trial`] of the flat commit
+    // when a piece's flat layout reads its column. Every width is relative to
+    // `start_col`.
     let (open_end, elems_end, line_len) = match list_widths(open, elems, close, cfg) {
         ListWidths::Widths(o, e, c) => (
             o,
@@ -2614,18 +2817,22 @@ fn call_args_flat_fits(
         ),
         ListWidths::Multiline => return false,
         ListWidths::Unmeasured => {
-            let (first, (open_end, elems_end)) = first_line_probe(|probe| {
-                render_at(open, cfg, indent, start_col, true, probe);
-                let open_end = current_col(probe);
-                render_flat_elems(elems, cfg, indent, probe);
-                let elems_end = current_col(probe);
-                render_at(close, cfg, indent, elems_end, true, probe);
-                (open_end, elems_end)
+            let flat = trial(out, TrialReach::FirstLine, |out, mark| {
+                let (open_end, elems_end) =
+                    render_call_args_flat(open, elems, close, cfg, indent, start_col, out);
+                let line = mark.line(out);
+                (!line.contains('\n')).then(|| {
+                    (
+                        open_end.saturating_sub(start_col),
+                        elems_end.saturating_sub(start_col),
+                        line.len(),
+                    )
+                })
             });
-            if first.contains('\n') {
+            let Some(widths) = flat else {
                 return false;
-            }
-            (open_end, elems_end, first.len())
+            };
+            widths
         }
     };
     if start_col.saturating_add(line_len) > cfg.max_width {
@@ -2752,9 +2959,13 @@ fn render_flat_elems(elems: &[Doc], cfg: RenderConfig, indent: usize, out: &mut 
 ///     text on the first line must fit `fn_call_width` (the same budget a flat
 ///     call list obeys) so a call whose combined head overflows breaks one-per-line
 ///     instead.
+///
+/// Every gate reads a first-line [`trial`] of the combined layout the caller
+/// commits to — the same head, from the same column, with the same base — so
+/// each column it tests is the column the committed layout lands on.
 #[allow(
     clippy::too_many_arguments,
-    reason = "renderer threads combine base + col/indent"
+    reason = "renderer threads combine base + col/indent + the buffer"
 )]
 fn last_arg_combines(
     open: &Doc,
@@ -2765,6 +2976,7 @@ fn last_arg_combines(
     cfg: RenderConfig,
     start_col: usize,
     indent: usize,
+    out: &mut String,
 ) -> Option<usize> {
     // A SINGLE-argument call glues its argument's head freely (the combine chain
     // "may nest further, as long as all but the innermost construct have only a
@@ -2779,105 +2991,120 @@ fn last_arg_combines(
     } else if !is_delimited_expr(last) {
         return None;
     }
-    // The first-line prefix (`open a, b, `) flat, to find where `last` lands: read
-    // off the pieces' measures, or rendered when a piece's flat layout reads its
-    // column. A multiline preceding argument cannot sit flat.
-    let pieces = std::iter::once((open, 0)).chain(prefix.iter().map(|e| (e, ELEM_SEP.len())));
-    let (open_end, prefix_len) = match (flat_run([(open, 0)], cfg), flat_run(pieces, cfg)) {
-        (FlatRun::Width(o), FlatRun::Width(p)) => (o, p),
-        (_, FlatRun::Multiline) => return None,
-        _ => {
-            let (first, open_end) = first_line_probe(|probe| {
-                render_at(open, cfg, indent, start_col, true, probe);
-                let open_end = current_col(probe);
-                for e in prefix {
-                    let c = current_col(probe);
-                    render_at(e, cfg, indent, c, true, probe);
-                    probe.push_str(ELEM_SEP);
-                }
-                open_end
-            });
-            if first.contains('\n') {
-                return None;
-            }
-            (open_end, first.len())
-        }
-    };
-    let last_col = start_col.saturating_add(prefix_len);
-    if last_col > cfg.max_width {
+    if first_line_done(out) {
         return None;
     }
-    // The `fn_call_width` budget is measured from the OUTERMOST combining call's
-    // argument-start column, shared by this and every nested combine — a deep glue
-    // chain shares one 60-column budget, so an over-wide combined head breaks at
-    // the level where the budget runs out rather than gluing indefinitely.
-    let base = combine_base.unwrap_or(open_end);
-    // A single-argument call glues ONLY when its argument cannot itself sit flat
-    // within the shared budget — i.e. the argument's flat form (from the shared
-    // base) overflows `fn_call_width`, or it is intrinsically multiline. When the
-    // argument fits flat within that budget, `rustfmt` breaks the single-argument
-    // call one-per-line to give the flat argument its own line rather than gluing.
-    // A BLOCK-LIKE argument (a `move |…|` closure or a brace block) is `rustfmt`'s
-    // `overflow_delimited_expr`: it is ALWAYS glued onto the call head, with only its
-    // OWN body breaking — the call is never broken one-per-line to give it its own
-    // line. So the "break to give the flat argument its own line" heuristic below is
-    // skipped for it; only the first-line-fit gate (further down) can reject the glue.
-    if single_arg && !has_hard_break(last) && !is_block_like(last) {
-        let flat_w = flat_measure(last, cfg).map_or_else(
-            || {
-                let (first, ()) = first_line_probe(|probe| {
-                    render_at(last, cfg, indent, last_col, true, probe);
-                });
-                (!first.contains('\n')).then_some(first.len())
-            },
-            FlatMeasure::width,
-        );
-        if flat_w.is_some_and(|w| last_col.saturating_add(w).saturating_sub(base) <= FN_CALL_WIDTH)
-        {
+    trial(out, TrialReach::FirstLine, |out, mark| {
+        // The first-line head (`open a, b, `), to find where `last` lands. A
+        // multiline head cannot sit on the first line.
+        let open_end = render_combine_head(open, prefix, cfg, indent, start_col, out);
+        if mark.written(out).contains('\n') {
             return None;
         }
-        // Recursive `Shape` budget: `rustfmt` shrinks the combining width one step per
-        // nested single-argument call — `min(width − callee(, fn_call_width)` — and
-        // breaks THIS call one-per-line (giving its argument its own line) rather than
-        // gluing when the width for THIS call's argument runs out. `budget` is the
-        // width the enclosing combine handed this call; shrinking it by this call's own
-        // `open` gives the width available to open the argument's combining head. A flat
-        // `fn_call_width` from the outermost base cannot see this shrink and keeps
-        // gluing an ever-deeper chain past the point `rustfmt` stops. When the shrunk
-        // budget cannot open the argument's head, break this call one-per-line.
-        if let Some(b) = budget {
-            let arg_budget = shrink_budget(b, open);
-            let head_len = flat_leaf_len(last_head(last));
-            if arg_budget <= head_len {
+        let last_col = current_col(out);
+        if last_col > cfg.max_width {
+            return None;
+        }
+        // The `fn_call_width` budget is measured from the OUTERMOST combining call's
+        // argument-start column, shared by this and every nested combine — a deep
+        // glue chain shares one 60-column budget, so an over-wide combined head
+        // breaks at the level where the budget runs out rather than gluing
+        // indefinitely.
+        let base = combine_base.unwrap_or(open_end);
+        // A single-argument call glues ONLY when its argument cannot itself sit flat
+        // within the shared budget — i.e. the argument's flat form (from the shared
+        // base) overflows `fn_call_width`, or it is intrinsically multiline. When the
+        // argument fits flat within that budget, `rustfmt` breaks the
+        // single-argument call one-per-line to give the flat argument its own line
+        // rather than gluing. A BLOCK-LIKE argument (a `move |…|` closure or a brace
+        // block) is `rustfmt`'s `overflow_delimited_expr`: it is ALWAYS glued onto
+        // the call head, with only its OWN body breaking — the call is never broken
+        // one-per-line to give it its own line. So the "break to give the flat
+        // argument its own line" heuristic below is skipped for it; only the
+        // first-line-fit gate (further down) can reject the glue.
+        if single_arg && !has_hard_break(last) && !is_block_like(last) {
+            let flat_w = flat_measure(last, cfg).map_or_else(
+                || {
+                    trial(out, TrialReach::FirstLine, |out, mark| {
+                        render_at(last, cfg, indent, last_col, true, out);
+                        let line = mark.line(out);
+                        (!line.contains('\n')).then_some(line.len())
+                    })
+                },
+                FlatMeasure::width,
+            );
+            if flat_w
+                .is_some_and(|w| last_col.saturating_add(w).saturating_sub(base) <= FN_CALL_WIDTH)
+            {
                 return None;
             }
+            // Recursive `Shape` budget: `rustfmt` shrinks the combining width one step
+            // per nested single-argument call — `min(width − callee(, fn_call_width)`
+            // — and breaks THIS call one-per-line (giving its argument its own line)
+            // rather than gluing when the width for THIS call's argument runs out.
+            // `budget` is the width the enclosing combine handed this call; shrinking
+            // it by this call's own `open` gives the width available to open the
+            // argument's combining head. A flat `fn_call_width` from the outermost
+            // base cannot see this shrink and keeps gluing an ever-deeper chain past
+            // the point `rustfmt` stops. When the shrunk budget cannot open the
+            // argument's head, break this call one-per-line.
+            if let Some(b) = budget {
+                let arg_budget = shrink_budget(b, open);
+                let head_len = flat_leaf_len(last_head(last));
+                if arg_budget <= head_len {
+                    return None;
+                }
+            }
         }
+        // The last element FORCED broken from that column; its first line is the
+        // combined head's tail. `budget` (when threaded) is the recursive `Shape`
+        // width for `last`; a combine without a threaded budget measures at the full
+        // `fn_call_width`.
+        let tail_len = trial(out, TrialReach::FirstLine, |out, mark| {
+            render_forced_break(
+                last,
+                base,
+                budget.unwrap_or(FN_CALL_WIDTH),
+                cfg,
+                indent,
+                last_col,
+                out,
+            );
+            mark.line(out).trim_end_matches('\n').len()
+        });
+        let first_line_end = last_col + tail_len;
+        if first_line_end > cfg.max_width {
+            return None;
+        }
+        // A multi-argument overflow's combined first line obeys `fn_call_width`; a
+        // single-argument glue chain is exempt (it only nests through single-arg
+        // heads).
+        if !single_arg && first_line_end.saturating_sub(base) > FN_CALL_WIDTH {
+            return None;
+        }
+        Some(last_col)
+    })
+}
+
+/// Render a combined call's first-line head — `open` in place, then each
+/// preceding argument flat followed by [`ELEM_SEP`] — returning the column `open`
+/// ends at.
+fn render_combine_head(
+    open: &Doc,
+    prefix: &[Doc],
+    cfg: RenderConfig,
+    indent: usize,
+    start_col: usize,
+    out: &mut String,
+) -> usize {
+    render_at(open, cfg, indent, start_col, false, out);
+    let open_end = current_col(out);
+    for e in prefix {
+        let c = current_col(out);
+        render_at(e, cfg, indent, c, true, out);
+        out.push_str(ELEM_SEP);
     }
-    // Render the last element FORCED broken from that column; its first line is the
-    // combined head's tail. `budget` (when threaded) is the recursive `Shape` width
-    // for `last`; a probe without a threaded budget measures at the full `fn_call_width`.
-    let (tail, ()) = first_line_probe(|probe| {
-        render_forced_break(
-            last,
-            base,
-            budget.unwrap_or(FN_CALL_WIDTH),
-            cfg,
-            indent,
-            last_col,
-            probe,
-        );
-    });
-    let first = tail.trim_end_matches('\n');
-    let first_line_end = last_col + first.len();
-    if first_line_end > cfg.max_width {
-        return None;
-    }
-    // A multi-argument overflow's combined first line obeys `fn_call_width`; a
-    // single-argument glue chain is exempt (it only nests through single-arg heads).
-    if !single_arg && first_line_end.saturating_sub(base) > FN_CALL_WIDTH {
-        return None;
-    }
-    Some(last_col)
+    open_end
 }
 
 /// Render `doc` at `col` in FORCED-broken mode: a combinable construct is laid out
@@ -2939,15 +3166,11 @@ fn render_forced_break_node(
                     cfg,
                     start_col,
                     indent,
+                    out,
                 )
                 .is_some()
             {
-                render_at(open, cfg, indent, start_col, false, out);
-                for e in prefix {
-                    let c = current_col(out);
-                    render_at(e, cfg, indent, c, true, out);
-                    out.push_str(", ");
-                }
+                render_combine_head(open, prefix, cfg, indent, start_col, out);
                 let inner_budget = shrink_budget(budget, open);
                 render_forced_break(
                     last,
@@ -3212,46 +3435,52 @@ fn delimited_expr_uncached(doc: &Doc) -> bool {
 /// glued operand rendered single-line. The operand may render multiline; the fit
 /// test measures only whether `op` plus the operand's FIRST line fits at the
 /// current column (a multiline operand's later lines are free to break below). A
-/// single-line operand must fit entirely. The `single_line` flag is the same fact
-/// [`renders_single_line`] measures at the same column under a zero reserve, so a
-/// caller with `cfg.reserve == 0` reads it here instead of re-rendering.
+/// single-line operand must fit entirely.
+///
+/// Measured by a first-line [`trial`] of the very glue the chain commits to, so a
+/// chain operator glues to a FOLLOWING operand only when that operand, laid out
+/// exactly there, is single-line.
 fn glue_fits(
     operand: &Doc,
     cfg: RenderConfig,
     col: usize,
     indent: usize,
     op: &str,
+    out: &mut String,
 ) -> (bool, bool) {
     // Column after " op " is appended.
     let after_op = col + 1 + op.len() + 1;
     if after_op > cfg.margin() {
         return (false, false);
     }
-    let (first, ()) = first_line_probe(|probe| {
-        render_at(operand, cfg.no_reserve(), indent, after_op, false, probe);
-    });
-    let first_line = first.trim_end_matches('\n');
-    let single_line = !first.contains('\n');
-    // The trailing-delimiter `reserve` bites only when the operand renders
-    // single-line here — then this glued line IS the chain's last line and the
-    // enclosing `,` sits at its end. A multiline operand ends on a later line, so
-    // its glued first line is measured against the full width.
-    let margin = if single_line {
-        cfg.margin()
-    } else {
-        cfg.max_width
-    };
-    (after_op + first_line.len() <= margin, single_line)
+    trial(out, TrialReach::FirstLine, |out, mark| {
+        glue_operand(operand, cfg, indent, op, out);
+        let first = mark.line(out);
+        let single_line = !first.contains('\n');
+        let operand_w = first
+            .trim_end_matches('\n')
+            .len()
+            .saturating_sub(1 + op.len() + 1);
+        // The trailing-delimiter `reserve` bites only when the operand renders
+        // single-line here — then this glued line IS the chain's last line and the
+        // enclosing `,` sits at its end. A multiline operand ends on a later line,
+        // so its glued first line is measured against the full width.
+        let margin = if single_line {
+            cfg.margin()
+        } else {
+            cfg.max_width
+        };
+        (after_op + operand_w <= margin, single_line)
+    })
 }
 
-/// Whether `operand`, rendered non-flat from `col`, stays on a single line. A chain
-/// operator glues to a FOLLOWING operand only when the operand is single-line;
-/// `rustfmt` breaks the chain before an operand that would itself render multiline.
-fn renders_single_line(operand: &Doc, cfg: RenderConfig, col: usize, indent: usize) -> bool {
-    let (first, ()) = first_line_probe(|probe| {
-        render_at(operand, cfg, indent, col, false, probe);
-    });
-    !first.contains('\n')
+/// Glue ` op operand` onto the current line.
+fn glue_operand(operand: &Doc, cfg: RenderConfig, indent: usize, op: &str, out: &mut String) {
+    out.push(' ');
+    out.push_str(op);
+    out.push(' ');
+    let c = current_col(out);
+    render_at(operand, cfg, indent, c, false, out);
 }
 
 /// The indentation (leading-space count) of the line currently being written in
@@ -4011,7 +4240,7 @@ mod p0_tests {
     #[test]
     fn assign_blocks_when_rhs_is_call_with_block_arg() {
         // An applied-lambda RHS `let p: T = f({ let x = 1; x }, 0);`: the block arg's
-        // `HardLine` is hidden by the `CallArgs`, so `flat_width(rhs)` measures only
+        // `HardLine` is hidden by the `CallArgs`, so the RHS flat width measures only
         // the short first line `f(` and the same-line form would glue the multiline
         // RHS onto the prefix, dropping the delimiters. The single-line gate treats
         // the embedded newline as overflow, so the RHS breaks its args in place.
