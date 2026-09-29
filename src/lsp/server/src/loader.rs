@@ -33,6 +33,11 @@ pub struct LoadedProject {
     pub files: BTreeMap<Vec<String>, LoadedFile>,
     /// The entry module's path segments (e.g. `["Main"]`).
     pub entry_module: Vec<String>,
+    /// The directory `lint.ipe` is read from.
+    ///
+    /// The driver names it exactly as `ipe lint` does for the same project,
+    /// so the editor and the batch linter configure one set of rules.
+    pub lint_config_dir: PathBuf,
 }
 
 /// A project-resolution failure, typed by how the server must answer it.

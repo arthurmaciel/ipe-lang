@@ -55,6 +55,7 @@ impl ProjectLoader for WorkspaceLoader {
         Ok(LoadedProject {
             files,
             entry_module: vec!["Main".to_owned()],
+            lint_config_dir: ipe_lint::lint_config_dir(open_file),
         })
     }
 }
@@ -207,6 +208,7 @@ impl ProjectLoader for FixtureLoader {
         Ok(LoadedProject {
             files,
             entry_module: vec!["Main".to_owned()],
+            lint_config_dir: ipe_lint::lint_config_dir(open_file),
         })
     }
 }
@@ -489,6 +491,7 @@ impl ProjectLoader for CyclicLoader {
         Ok(LoadedProject {
             files,
             entry_module,
+            lint_config_dir: ipe_lint::lint_config_dir(open_file),
         })
     }
 }

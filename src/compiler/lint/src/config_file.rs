@@ -19,7 +19,7 @@
 //! stay at parity.
 
 use std::io::Read as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config::{ConfigError, LINT_CONFIG_FILE, LINT_CONFIG_MAX_BYTES, LintConfig};
 
@@ -171,6 +171,18 @@ impl std::fmt::Display for LintConfigLoadError {
 }
 
 impl std::error::Error for LintConfigLoadError {}
+
+/// The directory holding the `lint.ipe` of the project anchored at `anchor`.
+///
+/// `anchor` is the project's resolved manifest or loose entry file. `ipe lint`
+/// and the language server both name the directory through this function, so
+/// the editor and the batch linter read one `lint.ipe`.
+#[must_use]
+pub fn lint_config_dir(anchor: &Path) -> PathBuf {
+    anchor
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+}
 
 /// Load the [`LintConfig`] from the `lint.ipe` in `dir`.
 ///

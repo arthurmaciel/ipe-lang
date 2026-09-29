@@ -34,7 +34,7 @@ pub use config::{
     read_lint_config,
 };
 pub use config_file::{
-    LintConfigLoadError, WorkspaceReadError, load_lint_config, read_workspace_file,
+    LintConfigLoadError, WorkspaceReadError, lint_config_dir, load_lint_config, read_workspace_file,
 };
 pub use finding::{Finding, Fix, Severity, SigFix};
 pub use registry::{Fixability, RULES, RuleInfo, is_known, lookup};

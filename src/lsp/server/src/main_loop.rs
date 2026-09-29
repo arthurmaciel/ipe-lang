@@ -78,6 +78,8 @@ struct Layout {
     /// and per-edit overlay lookup are `O(log n)`, not a linear scan or a
     /// re-canonicalize.
     path_of_module: BTreeMap<Vec<String>, PathBuf>,
+    /// The directory `lint.ipe` is read from, as the loader named it.
+    lint_config_dir: PathBuf,
 }
 
 impl Layout {
@@ -98,6 +100,7 @@ impl Layout {
             disk: project.files,
             module_of_path,
             path_of_module,
+            lint_config_dir: project.lint_config_dir,
         }
     }
 }
@@ -969,6 +972,7 @@ fn single_file_layout(path: &Path, text: String) -> Layout {
     Layout::of(LoadedProject {
         files,
         entry_module: module,
+        lint_config_dir: ipe_lint::lint_config_dir(path),
     })
 }
 
@@ -1092,19 +1096,12 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
             }
         }
     }
-    // Load the workspace lint.ipe once per recompute cycle, on the main thread
-    // where filesystem I/O is allowed. The worker receives the resolved config,
-    // not a path, so it never touches the filesystem.
-    let lint_config =
-        state
-            .workspace_root
-            .as_deref()
-            .map_or_else(ipe_lint::LintConfig::default, |root| {
-                ipe_lint::load_lint_config(root).unwrap_or_else(|e| {
-                    eprintln!("[ipe lsp] {e}; linting with the default configuration");
-                    ipe_lint::LintConfig::default()
-                })
-            });
+    // Load `lint.ipe` once per recompute cycle, on the main thread where
+    // filesystem I/O is allowed. The worker receives the verdict, not a path,
+    // so it never touches the filesystem.
+    let lint = state.served.layout().map_or(LintPass::Skipped, |layout| {
+        LintPass::load(&layout.lint_config_dir)
+    });
     let cancel = Arc::new(AtomicBool::new(false));
     state.worker_cancel = Some(cancel.clone());
     let tx = diag_tx.clone();
@@ -1119,7 +1116,7 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
                     &entry_module,
                     encoding,
                     &cancel,
-                    &lint_config,
+                    &lint,
                 )
             }))
         }));
@@ -1138,6 +1135,49 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
     }));
 }
 
+/// The lint pass of one recompute, fixed by whether `lint.ipe` loaded.
+enum LintPass {
+    /// No layout is served, so there is nothing to lint.
+    Skipped,
+    /// Lint with the loaded configuration.
+    Run(ipe_lint::LintConfig),
+    /// `lint.ipe` was refused: no rule runs and its diagnostic is published instead.
+    Withheld {
+        /// The `lint.ipe` document, when its path forms a URI.
+        uri: Option<Url>,
+        /// The refusal, carrying the loader's typed error.
+        diagnostic: lsp_types::Diagnostic,
+    },
+}
+
+impl LintPass {
+    /// Load `lint.ipe` from `dir` through the loader `ipe lint` uses.
+    fn load(dir: &Path) -> Self {
+        match ipe_lint::load_lint_config(dir) {
+            Ok(config) => Self::Run(config),
+            Err(err) => Self::Withheld {
+                uri: Url::from_file_path(dir.join(ipe_lint::LINT_CONFIG_FILE)).ok(),
+                diagnostic: lint_config_diagnostic(&err),
+            },
+        }
+    }
+}
+
+/// The diagnostic a refused `lint.ipe` publishes on itself.
+fn lint_config_diagnostic(err: &ipe_lint::LintConfigLoadError) -> lsp_types::Diagnostic {
+    lsp_types::Diagnostic {
+        range: lsp_types::Range::default(),
+        severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+        code: None,
+        code_description: None,
+        source: Some("ipe-lint".to_owned()),
+        message: format!("{err}; no lint rule runs until it loads"),
+        related_information: None,
+        tags: None,
+        data: None,
+    }
+}
+
 /// Pure worker body: collect, attribute, and map diagnostics to URIs.
 /// A diagnostic owned by a module with no URI (injected stdlib) is
 /// re-attributed to the entry document rather than dropped.
@@ -1150,7 +1190,7 @@ fn compute_batch(
     entry_module: &[String],
     encoding: PositionEncoding,
     cancel: &AtomicBool,
-    lint_config: &ipe_lint::LintConfig,
+    lint: &LintPass,
 ) -> Vec<(Url, Vec<lsp_types::Diagnostic>)> {
     let collected = diagnostics::collect(db, root, entry_file);
     let files = root.files(db);
@@ -1198,9 +1238,18 @@ fn compute_batch(
     // Lint findings flow through the SAME diagnostics transport, appended after
     // the compiler's own diagnostics for each user document (the way clippy flows
     // through rust-analyzer). Only modules the editor owns a file for are linted —
-    // injected stdlib is not the user's code. The gate/severity config uses
-    // `lint.ipe` defaults here; a workspace-configured `lint.ipe` is read on the
-    // CLI/CI path where the project root is known.
+    // injected stdlib is not the user's code. A refused `lint.ipe` runs no rule:
+    // its diagnostic is published in place of every finding.
+    let lint_config = match lint {
+        LintPass::Run(config) => config,
+        LintPass::Withheld { uri, diagnostic } => {
+            if let Some(uri) = uri.clone().or(entry_uri) {
+                per_uri.entry(uri).or_default().push(diagnostic.clone());
+            }
+            return per_uri.into_iter().collect();
+        }
+        LintPass::Skipped => return per_uri.into_iter().collect(),
+    };
     let user_texts: BTreeMap<Vec<String>, String> = uri_of
         .keys()
         .filter_map(|module| {
@@ -1290,12 +1339,13 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
     // Whole-document `source.*` rewrites run only when `only` names a source
     // kind, and never over a `lint.ipe` that failed to load.
     if ipe_lsp_features::source_actions::requested(only) {
-        let lint_config = state.workspace_root.as_deref().map_or_else(
-            || Ok(ipe_lint::LintConfig::default()),
-            ipe_lint::load_lint_config,
-        );
+        let lint_config = state
+            .served
+            .layout()
+            .map(|layout| ipe_lint::load_lint_config(&layout.lint_config_dir));
         match lint_config {
-            Ok(lint_config) => {
+            None => {}
+            Some(Ok(lint_config)) => {
                 let version = params
                     .text_document
                     .uri
@@ -1316,7 +1366,7 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
                     state.encoding,
                 ));
             }
-            Err(e) => eprintln!("[ipe lsp] {e}; no source actions offered"),
+            Some(Err(e)) => eprintln!("[ipe lsp] {e}; no source actions offered"),
         }
     }
     FeatureOutcome::payload(actions)
@@ -1676,6 +1726,98 @@ mod tests {
         ));
     }
 
+    /// A module a default-on lint rule flags: an `if` restating its condition.
+    const LINTED_TEXT: &str = "module Main exposing (flag)\n\nflag : Bool -> Bool\nflag ready =\n    if ready then True else False\n";
+
+    /// One diagnostics batch of a `LINTED_TEXT` project whose `lint.ipe` lives in `dir`.
+    fn lint_batch(dir: &Path) -> BTreeMap<Url, Vec<lsp_types::Diagnostic>> {
+        let main_path = normalize(dir).join("Main.ipe");
+        let mut state = State::new(None, PositionEncoding::Utf16);
+        state.overlays.insert(
+            main_path.clone(),
+            Overlay {
+                text: LINTED_TEXT.to_owned(),
+                version: 0,
+            },
+        );
+        ensure_project_fresh(
+            &mut state,
+            &BufferCeilingLoader::new(usize::MAX),
+            &main_path,
+        );
+        sync_inputs(&mut state);
+        let (diag_tx, diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
+        recompute(&mut state, &diag_tx);
+        diag_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("diagnostics batch")
+            .per_uri
+            .into_iter()
+            .collect()
+    }
+
+    /// The URI of the `lint.ipe` in `dir`.
+    fn lint_config_uri(dir: &Path) -> Url {
+        Url::from_file_path(normalize(dir).join(ipe_lint::LINT_CONFIG_FILE)).expect("config uri")
+    }
+
+    /// How many lint findings `batch` carries outside the `lint.ipe` document.
+    fn lint_findings(batch: &BTreeMap<Url, Vec<lsp_types::Diagnostic>>, config: &Url) -> usize {
+        batch
+            .iter()
+            .filter(|(uri, _)| *uri != config)
+            .flat_map(|(_, diags)| diags)
+            .filter(|d| d.source.as_deref() == Some("ipe-lint"))
+            .count()
+    }
+
+    /// Assert `batch` carries exactly one refusal on `lint.ipe` and no finding.
+    fn assert_lint_withheld(batch: &BTreeMap<Url, Vec<lsp_types::Diagnostic>>, config: &Url) {
+        let on_config = batch.get(config).map_or(&[][..], Vec::as_slice);
+        assert!(
+            matches!(on_config, [d] if d.severity == Some(lsp_types::DiagnosticSeverity::ERROR)
+                && d.message.contains("no lint rule runs")),
+            "a refused `lint.ipe` publishes one error on itself: {on_config:?}"
+        );
+        assert_eq!(
+            lint_findings(batch, config),
+            0,
+            "a refused `lint.ipe` runs no rule, the defaults included"
+        );
+    }
+
+    #[test]
+    fn an_absent_lint_config_lints_with_the_defaults() {
+        let dir = lint_dir("lsp-absent");
+        let config = lint_config_uri(&dir);
+        let batch = lint_batch(&dir);
+        assert!(
+            !batch.contains_key(&config),
+            "no diagnostic on an absent config"
+        );
+        assert!(
+            lint_findings(&batch, &config) > 0,
+            "the default rules flag the fixture: {batch:?}"
+        );
+    }
+
+    #[test]
+    fn an_invalid_lint_config_withholds_lint_and_publishes_its_refusal() {
+        let dir = lint_dir("lsp-invalid");
+        assert!(std::fs::write(dir.join(ipe_lint::LINT_CONFIG_FILE), "module (((\n").is_ok());
+        assert_lint_withheld(&lint_batch(&dir), &lint_config_uri(&dir));
+    }
+
+    #[test]
+    fn an_oversized_lint_config_withholds_lint_and_publishes_its_refusal() {
+        let dir = lint_dir("lsp-oversized");
+        let over = usize::try_from(ipe_lint::LINT_CONFIG_MAX_BYTES.saturating_add(1));
+        assert!(
+            matches!(over, Ok(n) if std::fs::write(dir.join(ipe_lint::LINT_CONFIG_FILE), vec![b' '; n]).is_ok())
+        );
+        assert_lint_withheld(&lint_batch(&dir), &lint_config_uri(&dir));
+    }
+
     const MAIN_TEXT: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"ok\"\n";
     const LIB_TEXT: &str = "module Lib exposing (bad)\n\nbad : Int\nbad = \"nope\"\n";
 
@@ -1732,6 +1874,7 @@ mod tests {
             Ok(LoadedProject {
                 files,
                 entry_module: vec!["Main".to_owned()],
+                lint_config_dir: ipe_lint::lint_config_dir(open_file),
             })
         }
     }
@@ -1875,6 +2018,7 @@ mod tests {
             Ok(LoadedProject {
                 files,
                 entry_module: vec!["Main".to_owned()],
+                lint_config_dir: ipe_lint::lint_config_dir(open_file),
             })
         }
     }
@@ -2066,6 +2210,7 @@ mod tests {
             Ok(LoadedProject {
                 files,
                 entry_module: vec!["Main".to_owned()],
+                lint_config_dir: ipe_lint::lint_config_dir(open_file),
             })
         }
     }
@@ -2504,6 +2649,7 @@ mod tests {
         let project = LoadedProject {
             files,
             entry_module: vec!["Main".to_owned()],
+            lint_config_dir: ipe_lint::lint_config_dir(&main_path),
         };
         state.served = Served::Trusted(Layout::of(project));
         sync_inputs(&mut state);

@@ -129,9 +129,7 @@ fn load_config(blame_path: &Path) -> Result<LintConfig, CliError> {
 
     use crate::io_bounded::{SourceRefusal, access_error, source_refused};
 
-    let dir = blame_path
-        .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let dir = ipe_lint::lint_config_dir(blame_path);
     let path = dir.join(LINT_IPE);
     ipe_lint::load_lint_config(&dir).map_err(|e| match e {
         LintConfigLoadError::Read(WorkspaceReadError::Unreadable(source)) => {

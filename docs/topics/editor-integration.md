@@ -54,6 +54,12 @@ that module's exposed members — never the whole in-scope list — and acceptin
 an item replaces whatever member name is already typed rather than appending to
 it.
 
+Lint findings arrive with the diagnostics, configured by the same `lint.ipe`
+`ipe lint` reads (next to `package.ipe`, or next to a loose file). A `lint.ipe`
+that fails to load — invalid, oversized, or not a regular file — shows one error
+on `lint.ipe` itself and no lint findings until it loads; the editor never lints
+with rules the project did not configure.
+
 ## Helix
 
 `editors/helix/configure.sh` builds the grammar with your C compiler into
