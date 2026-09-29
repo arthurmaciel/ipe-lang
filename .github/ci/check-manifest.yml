@@ -133,7 +133,7 @@ checks:
   # ── Panic-scan / cargo-deny / playground / admission (per-change gates) ────
   - context: panic-scan
     disposition: gate
-    producer: panic-scan.yml
+    producer: ci.yml
     guards: Soundness
   - context: cargo-deny
     disposition: gate

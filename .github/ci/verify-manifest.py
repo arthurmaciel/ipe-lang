@@ -81,6 +81,14 @@ Checks performed
      edits `.github/**` runs its own edit with the base secrets.  The boundary
      is who may enqueue: only write-access maintainers, who review every
      `.github/**` diff before enqueueing.
+  9. Fast gate first: in ci.yml, every heavy test-shard job (a matrix job
+     that downloads the `nextest-archive` artifact; `test-run` and `e2e` must
+     be among them) `needs` every fast deterministic gate (FAST_GATES), and
+     its `if:` calls no status function (`always()`, `failure()`,
+     `cancelled()`) that would start it behind a red need.  Each fast gate is
+     a single unexpanded ci.yml job, a manifest `gate`, and `needs` nothing
+     but `changes`, so it stays fast.  A format, lint, lock or panic-scan red
+     therefore never launches the heavy tier on any event or fork.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -116,6 +124,14 @@ WORKFLOW_GLOBS = (
 MANIFEST = os.path.join(REPO_ROOT, "ci", "check-manifest.yml")
 DETERMINISTIC_CHECKS_FILE = os.path.join(REPO_ROOT, "ci", "deterministic-checks.json")
 CANCEL_WATCHER_WORKFLOW = "ci.yml"
+# Check 9: the fast deterministic gates every heavy test shard waits on, and
+# the shard jobs the heavy-shard derivation must find.
+FAST_GATE_WORKFLOW = "ci.yml"
+FAST_GATES = ("fmt", "clippy", "manifest-lock-consistency", "panic-scan")
+FAST_GATE_NEEDS_ALLOWED = frozenset({"changes"})
+HEAVY_SHARD_ANCHORS = ("test-run", "e2e")
+HEAVY_SHARD_ARTIFACT = "nextest-archive"
+_STATUS_FN = re.compile(r"\b(always|failure|cancelled)\s*\(", re.IGNORECASE)
 CANCEL_WATCHER_JOB_ID = "cancel-on-cheap-red"
 
 SCCACHE_ACTION_PREFIX = "mozilla-actions/sccache-action@"
@@ -678,6 +694,99 @@ def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = R
             )
     for fname in sorted(gate_producers - seen):
         errors.append(f"gate producer {fname!r} has no workflow file (check 7)")
+
+
+def _needs_list(job: dict) -> list[str] | None:
+    needs = job.get("needs", [])
+    if isinstance(needs, str):
+        return [needs]
+    if isinstance(needs, list) and all(isinstance(n, str) for n in needs):
+        return list(needs)
+    return None
+
+
+def _downloads_archive(job: dict) -> bool:
+    for st in job.get("steps") or []:
+        if not isinstance(st, dict):
+            continue
+        uses = st.get("uses")
+        with_ = st.get("with")
+        if (
+            isinstance(uses, str)
+            and uses.startswith("actions/download-artifact@")
+            and isinstance(with_, dict)
+            and with_.get("name") == HEAVY_SHARD_ARTIFACT
+        ):
+            return True
+    return False
+
+
+def check_fast_gate_first(gate_contexts: set[str], errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 9 (see the module docstring). Refuses, never skips, a shape it
+    cannot read."""
+    where = os.path.join(root, "workflows", FAST_GATE_WORKFLOW)
+    try:
+        with open(where) as f:
+            doc = strict_yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as e:
+        errors.append(f"check 9: cannot read {where}: {e}")
+        return
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    if not isinstance(jobs, dict):
+        errors.append(f"check 9: {FAST_GATE_WORKFLOW} has no `jobs:` mapping")
+        return
+
+    for gate in FAST_GATES:
+        job = jobs.get(gate)
+        if not isinstance(job, dict):
+            errors.append(f"check 9: fast gate {gate!r} is not a job of {FAST_GATE_WORKFLOW}")
+            continue
+        if "strategy" in job:
+            errors.append(f"check 9: fast gate {gate!r} has a `strategy:`; it must be one unexpanded job")
+        ctx = job.get("name", gate)
+        if ctx not in gate_contexts:
+            errors.append(f"check 9: fast gate {gate!r} (context {ctx!r}) is not a manifest `gate`")
+        needs = _needs_list(job)
+        if needs is None:
+            errors.append(f"check 9: fast gate {gate!r} has a malformed `needs:`")
+        elif not set(needs) <= FAST_GATE_NEEDS_ALLOWED:
+            errors.append(
+                f"check 9: fast gate {gate!r} needs {sorted(set(needs) - FAST_GATE_NEEDS_ALLOWED)}; "
+                f"a fast gate may need only {sorted(FAST_GATE_NEEDS_ALLOWED)}"
+            )
+
+    heavy = sorted(
+        str(jid)
+        for jid, job in jobs.items()
+        if isinstance(job, dict)
+        and isinstance(job.get("strategy"), dict)
+        and "matrix" in job["strategy"]
+        and _downloads_archive(job)
+    )
+    for anchor in HEAVY_SHARD_ANCHORS:
+        if anchor not in heavy:
+            errors.append(
+                f"check 9: {anchor!r} is not a matrix job of {FAST_GATE_WORKFLOW} that downloads "
+                f"{HEAVY_SHARD_ARTIFACT!r}; the heavy-shard derivation no longer finds it"
+            )
+    for jid in heavy:
+        job = jobs[jid]
+        needs = _needs_list(job)
+        if needs is None:
+            errors.append(f"check 9: heavy shard job {jid!r} has a malformed `needs:`")
+        else:
+            missing = [g for g in FAST_GATES if g not in needs]
+            if missing:
+                errors.append(
+                    f"check 9: heavy shard job {jid!r} does not `needs:` fast gate(s) {missing}; "
+                    "a fast red would still launch it"
+                )
+        cond = job.get("if")
+        if cond is not None and (not isinstance(cond, str) or _STATUS_FN.search(cond)):
+            errors.append(
+                f"check 9: heavy shard job {jid!r} `if:` calls a status function "
+                "(always/failure/cancelled) or is not a string; it would start behind a red need"
+            )
 
 
 def _env_keys_folded(env: dict) -> set[str]:
@@ -1247,6 +1356,12 @@ def main() -> int:
             for e in by_context.values()
             if e.get("disposition") == "gate" and e.get("producer")
         },
+        errors,
+    )
+
+    # ---- 9. fast gate first: heavy test shards need every fast gate ----
+    check_fast_gate_first(
+        {ctx for ctx, e in by_context.items() if e.get("disposition") == "gate"},
         errors,
     )
 

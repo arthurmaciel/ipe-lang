@@ -190,6 +190,59 @@ jobs:
       - name: Run clippy
         run: cargo clippy --offline --all-targets --workspace -- -D warnings
 
+  # Token-level scan for authored abrupt-failure constructs in the compiler and
+  # runtime's own Rust — the second, independent gate behind clippy (see
+  # docs/adr/0037-no-authored-abrupt-failure.md). It lexes rather than greps, so
+  # it is free of string/comment false positives and line-split false negatives.
+  # A hard gate: any banned construct in production Rust fails the run. It lives
+  # in this workflow so the heavy test shards can `needs:` it. No author gate and
+  # no job-level `if:`: the job always starts and its own fail-closed classifier
+  # (.github/ci/change_class.py, `panic_scan` scope) decides whether the scan may
+  # skip; a PR it proves irrelevant exits green via the no-op step, and any
+  # doubt runs the scan.
+  panic-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The tested merge commit and its base parent, for the changed-path diff;
+          # a merge-group run needs history back to the queue base.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
+
+      - name: Classify changed paths
+        id: classify
+        # A crash leaves the output unset, which every `!= 'false'` below reads as run.
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 .github/ci/change_class.py classify panic_scan
+
+      - uses: ./.github/actions/rust-toolchain-pinned
+        if: steps.classify.outputs.panic_scan != 'false'
+
+      - name: Test the scanner
+        if: steps.classify.outputs.panic_scan != 'false'
+        run: cargo test --manifest-path tools/panic-scan/Cargo.toml
+
+      - name: Build the scanner
+        if: steps.classify.outputs.panic_scan != 'false'
+        run: cargo build --release --manifest-path tools/panic-scan/Cargo.toml
+
+      - name: Scan production Rust
+        if: steps.classify.outputs.panic_scan != 'false'
+        # `.rs` under src/ (the runtime lives at src/runtime/). The scanner owns
+        # the test-path and template-path rules: it skips a `tests/` directory
+        # or `tests.rs` only after confirming its `#[cfg(test)] mod tests;`
+        # declaration (or, for integration tests, the crate's `Cargo.toml`),
+        # and exits 2 naming the file when that premise does not hold.
+        run: tools/panic-scan/target/release/panic-scan --walk src
+
+      - name: No panic-scan-relevant paths changed
+        if: steps.classify.outputs.panic_scan == 'false'
+        run: echo "No panic-scan-relevant paths changed; gate is a no-op for this PR."
+
   # The CLI's Windows-only code (held output-directory handles, reparse-point
   # refusal) never compiles on a Linux runner, so a cfg(windows) break would
   # otherwise surface only at release. Type-checks the CLI and its tests for
@@ -497,7 +550,10 @@ jobs:
 
   test-run:
     runs-on: ubuntu-latest
-    needs: test-prep
+    # Fast gates first: no shard starts until every fast deterministic gate is
+    # green, so a format, lint, lock or panic-scan red never launches the heavy
+    # tier. A red one skips the shards, which the `test` aggregator refuses.
+    needs: [test-prep, fmt, clippy, manifest-lock-consistency, panic-scan]
     strategy:
       fail-fast: false
       matrix:
@@ -924,7 +980,9 @@ jobs:
     # downloads and RUNS from that archive under IPE_E2E=1 (which changes only
     # runtime behaviour, not the archived binaries), so no shard recompiles the
     # workspace.
-    needs: [changes, quick-check, test-prep]
+    # Fast gates first, as `test-run`: a red fast deterministic gate skips every
+    # shard, which `e2e-all` and `seal-slice` refuse.
+    needs: [changes, quick-check, test-prep, fmt, clippy, manifest-lock-consistency, panic-scan]
     # On the PR gate for ANY code change (all authors), every shard at full
     # depth. A SEAL break is not emit-only: a canon/types/lower acceptance change
     # can make a program ipe-accept that the backend then cannot cargo-build, and
@@ -1008,9 +1066,9 @@ jobs:
   # This job depends on every shard and is GREEN only when all passed — one stable context name
   # (`e2e-all`) branch protection can require so a SEAL regression blocks a
   # landing. The `always()` guard makes a skipped/failed/cancelled shard a
-  # FAILURE here, never a false green; a legitimate skip (the `e2e` matrix itself
-  # skips on a no-code PR — PROSE only) passes vacuously so that path is
-  # unaffected.
+  # FAILURE here, never a false green. A skip passes vacuously only where the
+  # `e2e` job's own `if:` is false (a code-free PR or merge-group run, or a
+  # release-only PR); a skip behind a red need (a fast gate, quick-check) fails.
   # A bare, stable `name` so the required-check context is exactly `e2e-all`
   # (branch protection matches the check name literally; a parenthetical would
   # make the required-context string brittle).
@@ -1038,14 +1096,25 @@ jobs:
             exit 1
           fi
           result='${{ needs.e2e.result }}'
+          code='${{ needs.changes.outputs.code }}'
+          release_only='${{ needs.changes.outputs.release_only }}'
+          event='${{ github.event_name }}'
           case "$result" in
             success)
               echo "e2e-all: every shard passed — THE SEAL holds."
               ;;
             skipped)
-              # The e2e matrix skips on a no-code PR (PROSE only);
-              # nothing to aggregate, so this passes vacuously.
-              echo "e2e-all: e2e shards skipped for this event — vacuously green."
+              # A skip is legitimate ONLY where `e2e`'s own `if:` is false: a
+              # PR/merge-group run the classifier proved code-free, or a
+              # release-only PR. Any other skip is a red need (a fast gate,
+              # quick-check) and proves nothing.
+              if { [ "$code" != true ] && { [ "$event" = pull_request ] || [ "$event" = merge_group ]; }; } \
+                 || [ "$release_only" = true ]; then
+                echo "e2e-all: e2e shards skipped by the classifier for this event — vacuously green."
+              else
+                echo "e2e-all FAILED: e2e shards skipped behind a red need (code=$code release_only=$release_only event=$event)" >&2
+                exit 1
+              fi
               ;;
             *)
               echo "e2e-all FAILED: e2e shards result=$result (a SEAL regression or an infra failure)" >&2
@@ -1060,8 +1129,8 @@ jobs:
   # coverage proof: `e2e_shard.py cover` lists the run's own archive and fails
   # unless the 14 e2e selections partition its test set exactly (every test in
   # exactly one shard), so "e2e runs every test" is checked on every run, not
-  # assumed. Fail closed as `e2e-all`: a skip passes only on a successful
-  # classifier that skipped the test tier.
+  # assumed. Fail closed as `e2e-all`: a skip passes only where the classifier,
+  # not a red need, skipped the shards.
   seal-slice:
     name: seal-slice
     runs-on: ubuntu-latest
@@ -1085,12 +1154,22 @@ jobs:
             exit 1
           fi
           result='${{ needs.e2e.result }}'
+          code='${{ needs.changes.outputs.code }}'
+          release_only='${{ needs.changes.outputs.release_only }}'
+          event='${{ github.event_name }}'
           case "$result" in
             success)
               echo "seal-slice: every e2e shard passed."
               ;;
             skipped)
-              echo "seal-slice: e2e shards skipped for this event — vacuously green."
+              # Legitimate only where `e2e`'s own `if:` is false, as in `e2e-all`.
+              if { [ "$code" != true ] && { [ "$event" = pull_request ] || [ "$event" = merge_group ]; }; } \
+                 || [ "$release_only" = true ]; then
+                echo "seal-slice: e2e shards skipped by the classifier for this event — vacuously green."
+              else
+                echo "seal-slice FAILED: e2e shards skipped behind a red need (code=$code release_only=$release_only event=$event)" >&2
+                exit 1
+              fi
               ;;
             *)
               echo "seal-slice FAILED: e2e result=$result (a SEAL regression or an infra failure)" >&2
