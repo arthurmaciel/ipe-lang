@@ -10,6 +10,96 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.3.3](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.3.2...ipe-v0.3.3) (2026-09-29)
+
+
+### Features
+
+* **lsp:** generic quick-fix for every fixable lint ([18f8a9c](https://github.com/arthurmaciel/ipe-lang/commit/18f8a9c306519c22fcdc625754dd3964cf996683))
+* **lsp:** integration batch (refactor actions, qualified completion, held dirs) ([4d22fc4](https://github.com/arthurmaciel/ipe-lang/commit/4d22fc43cb8ec499405c0b69f9e1ee567cb155fe))
+* **lsp:** refactor.rewrite code actions (function&lt;-&gt;lambda, case-on-Bool&lt;-&gt;if) ([9387394](https://github.com/arthurmaciel/ipe-lang/commit/9387394091763fdb2affda0344072ee1408844f0))
+
+
+### Bug Fixes
+
+* **backend:** sanitize_cargo_name closes the reserved-name gap ([#2981](https://github.com/arthurmaciel/ipe-lang/issues/2981)) ([551adc5](https://github.com/arthurmaciel/ipe-lang/commit/551adc51d8f149d76031038205eded84614d435a))
+* batchJ — scrubbed stdio emitter + private scratch ([#3049](https://github.com/arthurmaciel/ipe-lang/issues/3049), [#3050](https://github.com/arthurmaciel/ipe-lang/issues/3050)) ([bef4f44](https://github.com/arthurmaciel/ipe-lang/commit/bef4f44d87eb98983a283eb474ef4e87cbcbcba5))
+* **ci:** shell gates fail closed on missing tools, failed producers and unscannable input ([#3055](https://github.com/arthurmaciel/ipe-lang/issues/3055)) ([6d72ee8](https://github.com/arthurmaciel/ipe-lang/commit/6d72ee85e7e4d7748edfeb3959dbed40430d6728))
+* **ci:** strict YAML refuses explicit tags and spelling-duplicate keys; expression scan is case-insensitive and literal-aware ([b821415](https://github.com/arthurmaciel/ipe-lang/commit/b8214151783719598a429d88053766f5012f9cd1))
+* **ci:** wire sccache (RUSTC_WRAPPER/SCCACHE_GHA_ENABLED) + verifier fails closed ([#3053](https://github.com/arthurmaciel/ipe-lang/issues/3053)) ([17b3f6d](https://github.com/arthurmaciel/ipe-lang/commit/17b3f6dc0ed0703a4beffe4af612c484e4ddc144))
+* **cli,docs:** register upgrade handshake env vars; banner blank line in unknown-command test ([c9dbc68](https://github.com/arthurmaciel/ipe-lang/commit/c9dbc68c0195fff6e164f019ac28405163d10b5c))
+* **cli,runtime:** banner spacing, build spinner, relayed-output indent, one runtime log emitter ([#3057](https://github.com/arthurmaciel/ipe-lang/issues/3057)) ([96793fd](https://github.com/arthurmaciel/ipe-lang/commit/96793fdf9e50634ce7076dc53a2c50928a05a7b4))
+* **cli:** banner spacing, build spinner, relayed-output indent, upgrade errors ([b74b761](https://github.com/arthurmaciel/ipe-lang/commit/b74b7615687a240e26e0e75d81131f318dc8cdb5))
+* **cli:** bound the manifest walk at the VCS root, home, and a depth cap ([2f33a02](https://github.com/arthurmaciel/ipe-lang/commit/2f33a0289d42d9bde3d669bec153e21c5ce83664))
+* **cli:** split installer-marker doc paragraph ([0cd4e0b](https://github.com/arthurmaciel/ipe-lang/commit/0cd4e0b5bdf52307838dc64d0a1fb464fa64ec6a))
+* **cli:** type trust refusals so a caller can tell them from misuse ([d7c8ac2](https://github.com/arthurmaciel/ipe-lang/commit/d7c8ac2785c93acbb447023a041e81c74d813e4c))
+* **editors:** build the Zed extension for wasm32-wasip2 in CI ([#3043](https://github.com/arthurmaciel/ipe-lang/issues/3043)) ([3b02c04](https://github.com/arthurmaciel/ipe-lang/commit/3b02c04e12403b85bc04bc57e368f166507a81fa))
+* elm-review lint rules, fmt wildcard let, login hardening, typed cargo name, harness early return ([fa1ef91](https://github.com/arthurmaciel/ipe-lang/commit/fa1ef912b8c3b2afe04825ed11e3d83b28f9b412))
+* **fmt:** tolerate a comment before a parenthesised do block's keyword ([f122845](https://github.com/arthurmaciel/ipe-lang/commit/f122845bcb0d0334b146a700799bb6b989856406))
+* **home:** one HomeDir constructor closes dual-decode + Windows verbatim-prefix classes ([cc9d8e7](https://github.com/arthurmaciel/ipe-lang/commit/cc9d8e76725a8b431c36346197454de1a6de1e64))
+* integration batch H (ffi seal, sandbox, cli hardening) ([97fd550](https://github.com/arthurmaciel/ipe-lang/commit/97fd5507e6d7130e774457c88e46b9422981acee))
+* **ipe-cli:** bound the manifest walk's home ceiling by directory identity ([32abecd](https://github.com/arthurmaciel/ipe-lang/commit/32abecd6ca02eddd62fad1ef9848c7416774a0f3))
+* **ipe-cli:** revoke guidance for an exposed stored signing key ([707f2e1](https://github.com/arthurmaciel/ipe-lang/commit/707f2e128b9a4d308c9e8b40e9b1569717a36475))
+* **lint:** continuation-line caret excludes leading indentation ([a5e29a5](https://github.com/arthurmaciel/ipe-lang/commit/a5e29a5734819e51a85d11a062b307409f659288))
+* **lint:** declare fixability for the ported elm-review rules ([bbd3460](https://github.com/arthurmaciel/ipe-lang/commit/bbd346091e69b279f9968ae18b5a745d04cea745))
+* **lint:** drop stale text-rescan fix computation, missed by the merge ([1c70944](https://github.com/arthurmaciel/ipe-lang/commit/1c709445e990dd9cd4fe75eeb98c3da513c89ac8))
+* **lint:** plain-argument atomic subject in right-to-left pipe; bare double-not help; rule tests under rules/tests ([cb95601](https://github.com/arthurmaciel/ipe-lang/commit/cb9560179830d6cc63e4dd0003a207c14bb7f0ab))
+* **login:** prove every secret file owner-only on its open handle ([3d31394](https://github.com/arthurmaciel/ipe-lang/commit/3d313949ed08877996dd9af5e9cb3733a8292fab))
+* **login:** prove the stored signing key and every refusal path owner-only ([e23b7e2](https://github.com/arthurmaciel/ipe-lang/commit/e23b7e20a1ed37e3e743e22e9b4112b455e30871))
+* **login:** route login/status/logout paths through catalog placeholders ([8969f2f](https://github.com/arthurmaciel/ipe-lang/commit/8969f2ff862d8f96896175f575761c9b96a32952)), closes [#3028](https://github.com/arthurmaciel/ipe-lang/issues/3028)
+* **lsp,sandbox:** typed LSP load errors, bounded manifest walk, one HomeDir ([c953e7e](https://github.com/arthurmaciel/ipe-lang/commit/c953e7e0763b67d35bfe75260dc2b274c5444a0f))
+* **lsp:** a refused load retries on filesystem events only, anchored at its path ([497804e](https://github.com/arthurmaciel/ipe-lang/commit/497804edde1d5dddda299274fce07f62f8f7403c))
+* **lsp:** clippy nursery lints + drop issue-number archaeology in completion docs ([5107b93](https://github.com/arthurmaciel/ipe-lang/commit/5107b9398324d55dbd58993582eb2b29a6ad2c16))
+* **lsp:** derive served layout and retry policy from the load verdict type ([f5cb159](https://github.com/arthurmaciel/ipe-lang/commit/f5cb15926826185bdfd56d6cec462360063c587e))
+* **lsp:** map every driver failure to a named load error, no fallback arm ([e7501c1](https://github.com/arthurmaciel/ipe-lang/commit/e7501c1da1a8e152106b2a3b4f59aa821833c457))
+* **lsp:** merge origin/main into the unused-import span fix ([53f816a](https://github.com/arthurmaciel/ipe-lang/commit/53f816a76fb7f532b4212dbaa003dd14cd747d33))
+* **lsp:** record-update base is a name, not an expression, in case/if search ([e4d7e02](https://github.com/arthurmaciel/ipe-lang/commit/e4d7e029d1c9f04f603e2e45ca86b8f31fe317ef))
+* **lsp:** refactor tests import the Db trait ([58a20b7](https://github.com/arthurmaciel/ipe-lang/commit/58a20b7eabdc0f6ca13266af9518fcff01dd48d5))
+* **lsp:** scope qualified completion to the qualifier's own exports ([e7220e1](https://github.com/arthurmaciel/ipe-lang/commit/e7220e164c0e39708101ebb164bcfefc1ed0c0b3)), closes [#3031](https://github.com/arthurmaciel/ipe-lang/issues/3031) [#2861](https://github.com/arthurmaciel/ipe-lang/issues/2861)
+* **lsp:** test helpers avoid panic and indexing ([da9ce13](https://github.com/arthurmaciel/ipe-lang/commit/da9ce131a0537d450dad0cbb19d4a1e384f2d806))
+* **lsp:** type LoadError so the server tells degrade from refuse ([56dc759](https://github.com/arthurmaciel/ipe-lang/commit/56dc759a35967327331a23894b7cdfa3e9254db7))
+* **manifest-walk:** match the home ceiling by canonical path ([3a26bd6](https://github.com/arthurmaciel/ipe-lang/commit/3a26bd64aebd8c9bd28543e10c36f87ecbc9d63e))
+* **merge:** route driver tests through EmitTarget; allowlist console token reader; restore ipe_env lock deps ([7bf34d0](https://github.com/arthurmaciel/ipe-lang/commit/7bf34d0de1c3f104f018c8c6ed03d427c940e355))
+* one tool-home reader; completion fixtures match their module paths ([166a690](https://github.com/arthurmaciel/ipe-lang/commit/166a69034e42712b1e409888dd491263768609f3))
+* **playground:** drop redundant clone in toolchain-binds test ([bec4428](https://github.com/arthurmaciel/ipe-lang/commit/bec4428ba28130cfb4378a460da39f48279e4209))
+* **playground:** toolchain binds borrow the cargo home ([5253ef5](https://github.com/arthurmaciel/ipe-lang/commit/5253ef556a72db67b9b8eb7cc712217ed82cd661))
+* **runtime,cli:** harden runtime stderr logging and upgrade tag channel ([ea63303](https://github.com/arthurmaciel/ipe-lang/commit/ea633039902e7cccabe52784fedbdbbdec4cdb7c))
+* **runtime:** always compile write_stdout_line so no feature set drops it for a caller ([457d203](https://github.com/arthurmaciel/ipe-lang/commit/457d203ae09ff34227f425efa0bf341fc7f86de8))
+* **runtime:** compile write_stdout_line only with a stdout-writing module ([478d792](https://github.com/arthurmaciel/ipe-lang/commit/478d79210a3764456f07a997e2f224c287ed389a))
+* **runtime:** route every stdout/stderr write through one EPIPE-safe scrubbed emitter ([8dfd237](https://github.com/arthurmaciel/ipe-lang/commit/8dfd2374232b481fa5a16d2457ae481dff08f5cf))
+* **runtime:** route every tagged log line through one emitter ([ac02ee0](https://github.com/arthurmaciel/ipe-lang/commit/ac02ee0cbf4e62f558e6a12db9c1e43307d49c0a))
+* **runtime:** route the console-auth startup line through write_stderr_line ([863a7cd](https://github.com/arthurmaciel/ipe-lang/commit/863a7cd4a53fa9dc1c075596f0ead36a25a1b7fc))
+* **runtime:** scrub Unicode line separators and bidi controls from log lines ([5affd4e](https://github.com/arthurmaciel/ipe-lang/commit/5affd4edbdbd722e0b114f7dfcb2305c586fa3de))
+* **runtime:** syn-based print-macro scan; scrub task-error text ([5bd98fc](https://github.com/arthurmaciel/ipe-lang/commit/5bd98fc7f1c36171d233d2895db11cdad30c82d9))
+* **sandbox,cli,install:** scratch only in a verified private directory ([78b4e97](https://github.com/arthurmaciel/ipe-lang/commit/78b4e97a5e5f324ffb41d8c67ca4dce3a257cc23))
+* **sandbox,runtime:** one home_core SSOT for home var name + parser ([056f616](https://github.com/arthurmaciel/ipe-lang/commit/056f616763165f2578c770d78e801324451a0864))
+* **sandbox,runtime:** share one HOME-parsing table between sandbox and runtime ([c19ecd3](https://github.com/arthurmaciel/ipe-lang/commit/c19ecd351ade04f3ea7d520a971a775985a671e0))
+* **sandbox:** annotate bind-index map so push_mounts infers ([#3004](https://github.com/arthurmaciel/ipe-lang/issues/3004) [#3007](https://github.com/arthurmaciel/ipe-lang/issues/3007)) ([ee23b6b](https://github.com/arthurmaciel/ipe-lang/commit/ee23b6ba2347a292e5e867862e1b45ddbf643747))
+* **sandbox:** dedupe binds through the map entry — one lookup per bind ([#3004](https://github.com/arthurmaciel/ipe-lang/issues/3004) [#3007](https://github.com/arthurmaciel/ipe-lang/issues/3007)) ([a7d9389](https://github.com/arthurmaciel/ipe-lang/commit/a7d9389c68db4a0a45446d3cb760537575dcd912))
+* **sandbox:** drop unreachable File arm in private_verdict ([bbef88e](https://github.com/arthurmaciel/ipe-lang/commit/bbef88e6491e3746056ccb158ccccc84eac9affe))
+* **sandbox:** drop unused HomeDir::as_path; run home refusals on Windows CI ([a68638a](https://github.com/arthurmaciel/ipe-lang/commit/a68638aa79321b1a5cf4f6942bfca1193bab4c33))
+* **sandbox:** host-trusted launchers immutable to the payload; every jail bind checked against CARGO_HOME ([fe2d0ed](https://github.com/arthurmaciel/ipe-lang/commit/fe2d0ed73f02558ca742b373cccc7333d5c7ef63)), closes [#3040](https://github.com/arthurmaciel/ipe-lang/issues/3040) [#3041](https://github.com/arthurmaciel/ipe-lang/issues/3041)
+* **sandbox:** one canonical jail path feeds every bind and consumer ([#3004](https://github.com/arthurmaciel/ipe-lang/issues/3004) [#3007](https://github.com/arthurmaciel/ipe-lang/issues/3007)) ([e7728f1](https://github.com/arthurmaciel/ipe-lang/commit/e7728f1d74b6aba14260c6f344cc09ff2d7e9ccc))
+* **sandbox:** Seatbelt read roots answer to the cargo-home check; no redundant system binds ([d59bd49](https://github.com/arthurmaciel/ipe-lang/commit/d59bd4978ab6d42dd7de123c78b9b4aa33798ebe))
+* **sandbox:** the probe jail binds and names only canonical paths ([#3004](https://github.com/arthurmaciel/ipe-lang/issues/3004) [#3007](https://github.com/arthurmaciel/ipe-lang/issues/3007)) ([8445f08](https://github.com/arthurmaciel/ipe-lang/commit/8445f0800d766ae6c275bac93b97b58e8dfcab9b))
+* **scratch:** private base creation, unsafe-free jail uid, testable installer verdicts ([2c11950](https://github.com/arthurmaciel/ipe-lang/commit/2c11950ea012244308620b0083cddf7f43499615))
+* **secrets:** create every on-disk secret through one owner-only primitive ([4ca5686](https://github.com/arthurmaciel/ipe-lang/commit/4ca5686a924ed77c29b39bf1e09ab7c51a72e49f)), closes [#3027](https://github.com/arthurmaciel/ipe-lang/issues/3027)
+* **security:** sandbox trust boundaries + strict YAML manifest loader ([a44165e](https://github.com/arthurmaciel/ipe-lang/commit/a44165e37931f646ba13285f71d69b6ab83037fa))
+* test-target clippy (Db trait import, redundant clone) ([4278a7c](https://github.com/arthurmaciel/ipe-lang/commit/4278a7ce80e55c087a0e6b42416aa644beebd26e))
+* **types,lower,ir:** scheme var instances compare constructor tags, not only arity ([#3095](https://github.com/arthurmaciel/ipe-lang/issues/3095)) ([317576b](https://github.com/arthurmaciel/ipe-lang/commit/317576bed0c70f4261895286670859b7573e6e2d))
+* **types,lower:** lower signature wildcards from their solved facts ([6c72ee0](https://github.com/arthurmaciel/ipe-lang/commit/6c72ee067389498316725d68ee3c6867ef4cda17))
+* **types,lower:** satisfy clippy raw-string and const-fn lints ([2f14229](https://github.com/arthurmaciel/ipe-lang/commit/2f14229b2015e81788eb81315d013321c47d7559))
+* **types:** check interpolation bounds on wildcard any at every use site ([db4c7f2](https://github.com/arthurmaciel/ipe-lang/commit/db4c7f24e24588894a67abc7a85847f381642d5f))
+* **types:** fail closed on signature wildcards whose solved root is not independent ([429798d](https://github.com/arthurmaciel/ipe-lang/commit/429798d69455bf6f101033042a982431927c616e))
+* **types:** judge wildcard groundness on the solver, not the read-back ([254c83a](https://github.com/arthurmaciel/ipe-lang/commit/254c83ab673db51ceb303d6879aa296037e94927))
+* **types:** kill vacuous-green harness early returns ([#3001](https://github.com/arthurmaciel/ipe-lang/issues/3001)) ([2864272](https://github.com/arthurmaciel/ipe-lang/commit/2864272c0628d53ba51374de77eb3dcc66360f6f))
+* **types:** refuse a signature wildcard whose solved root is not independent (IPE-T0021) ([51ff523](https://github.com/arthurmaciel/ipe-lang/commit/51ff52359adbaa9e1f61a034548421b942de7a4c)), closes [#3058](https://github.com/arthurmaciel/ipe-lang/issues/3058)
+
+
+### Performance Improvements
+
+* **ffi:** seal reuses the merged dependency table ([a1eaa24](https://github.com/arthurmaciel/ipe-lang/commit/a1eaa241bf5ed5de85cff087c2e12b896f3fbe5c))
+
 ## [0.3.2](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.3.1...ipe-v0.3.2) (2026-09-28)
 
 
