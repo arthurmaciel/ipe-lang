@@ -26,6 +26,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -3920,21 +3921,40 @@ jobs:
 _IB_CONSUMER_RUN = "          cargo nextest run -p ipe\n"
 
 
+_IB_FILES = {
+    "Cargo.toml": '[workspace]\nmembers = ["src/ipe-cli", "src/ipe-docs", "tools/panic-scan"]\n',
+    "src/ipe-cli/Cargo.toml": '[package]\nname = "ipe"\n',
+    "src/ipe-cli/src/main.rs": "fn main() {}\n",
+    "src/ipe-docs/Cargo.toml": '[package]\nname = "ipe_docs"\n',
+    "tools/panic-scan/Cargo.toml": '[package]\nname = "panic-scan"\n',
+    "editors/grammar/README.md": "x\n",
+}
+
+
 class TestOneIpeBuild(unittest.TestCase):
     """Check 15: ci.yml compiles `ipe` in one job; its consumers need it."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.root = self._tmp.name
+        self.repo = self._tmp.name
+        self.root = os.path.join(self.repo, ".github")
+        self.files = dict(_IB_FILES)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
     def errors(self, content: str) -> list[str]:
+        for rel, text in self.files.items():
+            _write(os.path.join(self.repo, rel), text)
         _write(os.path.join(self.root, "workflows", "ci.yml"), content)
         errors: list[str] = []
-        check_one_ipe_build(errors, root=self.root)
+        check_one_ipe_build(errors, root=self.root, tracked=sorted(self.files))
         return errors
+
+    def with_consumer_step(self, run: str, extra: str = "") -> str:
+        """`_IB_OK` with one more consumer step running `run` from the root."""
+        step = "      - " + extra + ("\n        " if extra else "") + "run: " + run + "\n"
+        return _IB_OK.replace(_IB_CONSUMER_RUN, _IB_CONSUMER_RUN + step)
 
     def assertRefused(self, content: str, needle: str) -> None:
         errors = self.errors(content)
@@ -3966,7 +3986,7 @@ class TestOneIpeBuild(unittest.TestCase):
             "cargo build --all --release",
             "cargo build --manifest-path src/ipe-cli/Cargo.toml",
             "cargo build --manifest-path=./src/ipe-cli/Cargo.toml",
-            "cargo build --manifest-path Cargo.toml",
+            "cargo build --workspace --manifest-path $X/Cargo.toml",
             "cargo install --path src/ipe-cli",
             "cargo install ipe",
             "RUSTFLAGS=x cargo build -p ipe",
@@ -3984,6 +4004,81 @@ class TestOneIpeBuild(unittest.TestCase):
     def test_unreadable_package_pattern_refused(self) -> None:
         self.assertRefused(self.with_consumer_line("cargo build -p 'ip*'"), "cannot resolve")
 
+    def test_ipe_build_by_directory_or_bin_refused(self) -> None:
+        for run in (
+            "cargo build",
+            "cargo build --release --locked",
+            "cargo -C src/ipe-cli build",
+            "cargo -C src build --manifest-path ipe-cli/Cargo.toml",
+            "cargo build --manifest-path Cargo.toml",
+            "cargo build --manifest-path ./Cargo.toml --release",
+            "cargo build --bin ipe",
+            "cargo run --bin ipe -- check x",
+            "cd src/ipe-cli && cargo build",
+            "cd src/ipe-cli/src; cargo build",
+            "(cd src/ipe-docs); cargo build",
+            "pushd src/ipe-cli; cargo rustc",
+            "cd src && cargo build --manifest-path ipe-cli/Cargo.toml",
+            'cargo build --manifest-path "$GITHUB_WORKSPACE/src/ipe-cli/Cargo.toml"',
+            "cargo build --manifest-path ${{ github.workspace }}/Cargo.toml",
+            "env -u X timeout 30m cargo build",
+            "bash -c 'cd src/ipe-cli && cargo build'",
+            "x=$(cargo build -p ipe)",
+        ):
+            with self.subTest(run=run):
+                self.assertRefused(self.with_consumer_step(repr(run) if ":" in run else run), "compiles `ipe`")
+
+    def test_ipe_build_through_working_directory_refused(self) -> None:
+        self.assertRefused(self.with_consumer_step("cargo build", "working-directory: src/ipe-cli"), "compiles `ipe`")
+        job_default = self.with_consumer_step("cargo build").replace(
+            "  consumer:\n", "  consumer:\n    defaults:\n      run:\n        working-directory: src/ipe-cli\n"
+        )
+        self.assertRefused(job_default, "compiles `ipe`")
+        wf_default = "defaults:\n  run:\n    working-directory: src/ipe-cli\n" + self.with_consumer_step("cargo build")
+        self.assertRefused(wf_default, "compiles `ipe`")
+
+    def test_ipe_build_in_a_local_action_refused(self) -> None:
+        self.files[".github/actions/b/action.yml"] = (
+            "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: cargo build -p ipe\n"
+        )
+        self.assertRefused(self.with_consumer_step("true", "uses: ./.github/actions/b"), "compiles `ipe`")
+        del self.files[".github/actions/b/action.yml"]
+        self.files[".github/actions/b/action.yaml"] = (
+            "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/c\n"
+        )
+        self.files[".github/actions/c/action.yml"] = (
+            "runs:\n  using: composite\n  steps:\n    - shell: bash\n      working-directory: src/ipe-cli\n      run: cargo build\n"
+        )
+        self.assertRefused(self.with_consumer_step("true", "uses: ./.github/actions/b"), "compiles `ipe`")
+
+    def test_missing_local_action_refused(self) -> None:
+        self.assertRefused(self.with_consumer_step("true", "uses: ./.github/actions/none"), "has no single action.yml")
+
+    def test_unreadable_cargo_command_refused(self) -> None:
+        for run, needle in (
+            ("cargo build --frobnicate -p x", "is not one this check reads"),
+            ("cargo --unknown-global build -p x", "is not one this check reads"),
+            ("cargo bld -p x", "a cargo alias could compile anything"),
+            ("cargo build -p", "lacks its value"),
+            ("cargo build extra-operand", "is not one `cargo build` takes"),
+            ("xargs cargo build", "cannot read"),
+            ("env -C src/ipe-cli cargo build", "does not read"),
+            ("cargo build --manifest-path src/ipe-docs", "names no Cargo.toml"),
+        ):
+            with self.subTest(run=run):
+                self.assertRefused(self.with_consumer_step(run), needle)
+
+    def test_bare_build_in_an_output_directory_passes(self) -> None:
+        # `**/out` reserves `out/rust/Cargo.toml` for an emitted crate: the
+        # manifest cargo finds there is generated, not the workspace root's.
+        self.files[".gitignore"] = "**/out\n"
+        for rel, text in self.files.items():
+            _write(os.path.join(self.repo, rel), text)
+        subprocess.run(["git", "init", "-q", self.repo], check=True)
+        self.assertEqual(self.errors(self.with_consumer_step("cd editors/grammar/out/rust && cargo build --release")), [])
+        # A directory the ignore rules do not reserve is searched upward.
+        self.assertRefused(self.with_consumer_step("mkdir -p x && cd x && cargo build"), "compiles `ipe`")
+
     def test_other_packages_pass(self) -> None:
         for line in (
             "cargo build -p ipe_docs --bin gen-stdlib-docs",
@@ -3995,6 +4090,19 @@ class TestOneIpeBuild(unittest.TestCase):
         ):
             with self.subTest(line=line):
                 self.assertEqual(self.errors(self.with_consumer_line(line)), [])
+        for run in (
+            "cargo install tree-sitter-cli --version ^0.27.0 --locked",
+            "cd src/ipe-docs && cargo build",
+            "cargo -C tools/panic-scan build --release",
+            "cd src/ipe-cli; cargo test; cargo fmt --all -- --check",
+            'cd "$dir" && cargo build',
+            "(cd src/ipe-cli && cargo check)",
+            "cargo build -p ipe_docs --bin gen-stdlib-docs",
+            'printf "cargo build\\n"',
+            "command -v cargo",
+        ):
+            with self.subTest(run=run):
+                self.assertEqual(self.errors(self.with_consumer_step(repr(run) if ":" in run else run)), [])
 
     def test_consumer_without_needs_producer_refused(self) -> None:
         bad = _IB_OK.replace("needs: [changes, build-tools]", "needs: [changes]")
@@ -4045,6 +4153,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 """
 _SC_FILES = {
+    "Cargo.toml": '[workspace]\nmembers = ["src/rt", "src/dx", "src/other"]\n',
     "Cargo.lock": _SC_LOCK,
     "src/rt/Cargo.toml": '[package]\nname = "rt"\n',
     "src/rt/src/lib.rs": 'const F: &str = include_str!("../../shared/f.txt");\nconst R: &str = "../..";\n',
@@ -4130,6 +4239,34 @@ class TestScopedPackageCoverage(unittest.TestCase):
 
     def test_unknown_package_refused(self) -> None:
         self.assertRefused("not a path package", wf=_SC_WF.replace("-p rt", "-p nope"))
+
+    def test_directory_selection_is_read(self) -> None:
+        narrow = ("src/rt/**", "src/shared/**")
+        for run in (
+            "cargo -C src/rt test",
+            "cargo test --manifest-path src/rt/Cargo.toml",
+            "cd src/rt && cargo +nightly test",
+            "cd src && cargo test --manifest-path rt/Cargo.toml",
+        ):
+            with self.subTest(run=run):
+                self.assertRefused("src/dx/src/lib.rs", wf=_SC_WF.replace("cargo +nightly --locked test -p rt", run), scope=narrow)
+        wd = _SC_WF.replace("      - run: cargo +nightly --locked test -p rt\n", "      - working-directory: src/rt\n        run: cargo test\n")
+        self.assertRefused("src/dx/src/lib.rs", wf=wd, scope=narrow)
+
+    def test_bare_root_or_bin_selection_refused(self) -> None:
+        self.assertRefused("selects the whole workspace", wf=_SC_WF.replace(" -p rt", ""))
+        self.assertRefused("by `--bin` alone", wf=_SC_WF.replace("-p rt", "--bin rt"))
+
+    def test_unreadable_cargo_command_refused(self) -> None:
+        self.assertRefused("is not one this check reads", wf=_SC_WF.replace("-p rt", "-p rt --frobnicate"))
+        self.assertRefused("a cargo alias", wf=_SC_WF.replace("test -p rt", "tst -p rt"))
+
+    def test_yaml_workflow_is_read(self) -> None:
+        for rel, text in self.files.items():
+            _write(os.path.join(self.repo, rel), text)
+        _write(os.path.join(self.repo, ".github", "workflows", "extra.yaml"), _SC_WF.replace("-p rt", "--workspace"))
+        errors = self.errors()
+        self.assertTrue(any("extra.yaml" in e and "selects the whole workspace" in e for e in errors), errors)
 
     def test_registry_package_refused(self) -> None:
         self.assertRefused("not a path package", wf=_SC_WF.replace("-p rt", "-p serde"))
@@ -4218,7 +4355,7 @@ class TestDriftSeesUntracked(unittest.TestCase):
             with self.subTest(line=line):
                 wf = _DU_WF.replace("tools/scripts/generated-unchanged.sh docs/reference/x.md docs/reference/x/", line)
                 errors = self.errors(wf=wf)
-                self.assertTrue(any("check 17: ci.yml job 'drift'" in e for e in errors), errors)
+                self.assertTrue(any("check 17: workflows/ci.yml job 'drift'" in e for e in errors), errors)
 
     def test_manifest_local_git_diff_exit_code_refused(self) -> None:
         for item in (
@@ -4247,6 +4384,18 @@ class TestDriftSeesUntracked(unittest.TestCase):
         )
         self.assertEqual(parse("git -C diff status --quiet".split()), [])
         self.assertEqual(parse("git log --exit-code a".split()), [])
+
+    def test_yaml_workflow_and_local_action_are_read(self) -> None:
+        _write(os.path.join(self.root, "workflows", "other.yaml"), _DU_WF.replace(
+            "tools/scripts/generated-unchanged.sh docs/reference/x.md docs/reference/x/", "git diff --exit-code gen/"))
+        for name in ("action.yml", "action.yaml"):
+            _write(os.path.join(self.root, "actions", name.replace(".", "-"), name),
+                   "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: git diff --quiet gen/\n")
+        errors = self.errors()
+        self.assertTrue(any("workflows/other.yaml job 'drift'" in e for e in errors), errors)
+        for name in ("action.yml", "action.yaml"):
+            path = f"actions/{name.replace('.', '-')}/{name} composite steps"
+            self.assertTrue(any(path in e for e in errors), (path, errors))
 
     def test_unreadable_inputs_refused(self) -> None:
         self.assertTrue(any("check 17: cannot read" in e for e in self.errors(wf="jobs: [\n")))

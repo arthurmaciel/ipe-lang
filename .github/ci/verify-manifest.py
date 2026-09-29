@@ -198,29 +198,40 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       holding a tracked `Cargo.lock` that passes that rule, and `/` is one of
       them, so every update lands in the lock that governs the graph.
   15. One `ipe` build: in ci.yml only `IPE_BUILD_PRODUCER` compiles the `ipe`
-      package — a `cargo build`/`b`/`run`/`r`/`rustc`/`install` that selects
-      it (`-p ipe` in any spelling, `--workspace`/`--all`, or a
-      `--manifest-path`/`--path` naming `src/ipe-cli` or the root manifest)
-      in any other job is refused, as is a package spec this check cannot
-      read (a glob).  The producer must build it and upload
-      `IPE_BUILD_ARTIFACTS`; a job that downloads one of them must list the
-      producer in its own `needs:`.  LIMIT: a bare `cargo build` (no package
-      selection) builds whatever its runtime cwd holds; the cwd is not
-      static, so such a line is not attributed to `ipe`.
+      package.  Every cargo command a job runs (its `run:` steps and those of
+      each local composite action it `uses`) is read by
+      `cargo_invocation`: its directory follows `working-directory`, job and
+      workflow `defaults`, `cd`, subshells and `-C`; its selection is
+      `-p`/`--package`, `--bin`, `--manifest-path`, `--workspace`/`--all`, or
+      the package the directory holds (the virtual root, which has no
+      `default-members`, selects every member).  A
+      `build`/`run`/`rustc`/`install` selecting `ipe` in any other job is
+      refused, as is a command this check cannot read (an unknown flag or
+      subcommand, a package glob, `cargo` under an unread wrapper).  The
+      producer must build it and upload `IPE_BUILD_ARTIFACTS`; a job that
+      downloads one of them must list the producer in its own `needs:`.
+      LIMIT: after a `cd` to a run-time path (a variable, `cd -`), or in a
+      directory the checkout does not hold whose `Cargo.toml` its ignore
+      rules reserve for build output (an emitted crate), the manifest is not
+      known statically, so a command there that selects nothing by name is
+      not attributed.
   16. Path-scoped coverage: a job whose `if:` reads a narrow
       `needs.changes.outputs.<scope>` (a `change_class.SCOPES` scope other
       than `code`) may skip on a PR only where that skip is proven harmless.
-      Every package its cargo commands select (`-p`/`--package`) is closed
+      Every package its cargo commands select (read as in check 15: by name,
+      or by the member directory the command runs in or names) is closed
       over its path dependencies in the root `Cargo.lock` (dev ones
       included), and every tracked file under those crates' directories —
       plus every existing path a `../` string literal in them reaches — must
       force one of the job's scopes.  A scoped job that selects the whole
-      workspace, or a package spec this check cannot resolve, is refused.
-      LIMIT: a path built at run time (a bare `"../.."` ancestor joined to a
-      computed name, or no `../` literal at all), and a scoped
-      job with no cargo package selection, are not seen.
-  17. Drift checks see new files: no workflow `run:` and no manifest
-      `local:` command asserts regenerated output with a
+      workspace, selects by `--bin` alone, or runs a command or package spec
+      this check cannot resolve, is refused.  Both `.yml` and `.yaml`
+      workflows are read.  LIMIT: a path built at run time (a bare `"../.."`
+      ancestor joined to a computed name, or no `../` literal at all), and a
+      cargo command after a `cd` to a run-time path, are not seen.
+  17. Drift checks see new files: no `run:` of a workflow (`.yml` or
+      `.yaml`) or of a local composite action, and no manifest `local:`
+      command, asserts regenerated output with a
       `git diff`/`diff-index`/`diff-files` carrying `--exit-code` or
       `--quiet`, which is blind to a file the generator writes that git does
       not track yet; `tools/scripts/generated-unchanged.sh` (tracked changes
@@ -278,6 +289,7 @@ import shell_lex  # noqa: E402  # the one quote-removing shell lexer
 import change_class  # noqa: E402  # the path-scope classifier, SSOT for every scope's patterns
 import trust_roots  # noqa: E402  # the CODEOWNERS trust-root parser, shared with trust-root-diff.yml
 import drift_assertion  # noqa: E402  # the one drift-assertion parser, shared with change_class
+import cargo_invocation  # noqa: E402  # the one cargo-invocation reader, checks 15 and 16
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Both extensions: a workflow (or, for check 6, a local composite action) is a
@@ -1887,11 +1899,23 @@ IPE_BUILD_ARTIFACTS = frozenset({"ci-ipe-release", "ci-build-tools"})
 IPE_RELEASE_ARTIFACT = "ci-ipe-release"
 IPE_PACKAGE = "ipe"
 IPE_PACKAGE_DIR = "src/ipe-cli"
-# Cargo subcommands that compile the selected package (aliases included).
-_CARGO_COMPILES = frozenset({"build", "b", "run", "r", "rustc", "install"})
-# Cargo's global flags that take a value as the next word.
-_CARGO_VALUED_GLOBALS = frozenset({"--config", "-Z", "-C", "--color"})
-_ROOT_MANIFESTS = frozenset({"Cargo.toml", "${{github.workspace}}/Cargo.toml", "$GITHUB_WORKSPACE/Cargo.toml"})
+# Cargo subcommands that compile the selected package's binary.
+_CARGO_COMPILES = frozenset({"build", "run", "rustc", "install"})
+# Nesting bound for a composite action whose steps use another local action.
+LOCAL_ACTION_DEPTH_LIMIT = 4
+WORKFLOW_PATTERNS = ("*.yml", "*.yaml")
+
+
+def _workflow_files(root: str) -> list[str]:
+    """Every workflow file under `root`, both extensions."""
+    return sorted(f for pat in WORKFLOW_PATTERNS for f in glob.glob(os.path.join(root, "workflows", pat)))
+
+
+def _local_action_files(root: str) -> list[str]:
+    """Every local composite action definition under `root`, both extensions."""
+    return sorted(
+        f for name in ("action.yml", "action.yaml") for f in glob.glob(os.path.join(root, "actions", "*", name))
+    )
 
 
 def _names_ipe_dir(path: str) -> bool:
@@ -1900,75 +1924,129 @@ def _names_ipe_dir(path: str) -> bool:
     return p == IPE_PACKAGE_DIR or p.endswith("/" + IPE_PACKAGE_DIR)
 
 
-def _cargo_ipe_selection(words: list[str]) -> bool | str:
-    """Whether the cargo invocation `words` (starting after `cargo`) compiles
-    the `ipe` package, or why that cannot be read."""
-    i, n = 0, len(words)
-    if i < n and words[i].startswith("+"):
-        i += 1
-    while i < n and words[i].startswith("-"):
-        i += 2 if words[i] in _CARGO_VALUED_GLOBALS else 1
-    if i >= n or words[i] not in _CARGO_COMPILES:
-        return False
-    sub, args = words[i], words[i + 1 :]
-    specs: list[str] = []
-    manifest: str | None = None
-    j = 0
-    while j < len(args):
-        a = args[j]
-        nxt = args[j + 1] if j + 1 < len(args) else None
-        if a in ("-p", "--package", "--manifest-path", "--path"):
-            if nxt is None:
-                return f"`cargo {sub} {a}` lacks its argument"
-            val, j = nxt, j + 2
-        elif a.startswith(("--package=", "--manifest-path=", "--path=")):
-            a, val = a.split("=", 1)
-            j += 1
-        elif a.startswith("-p") and len(a) > 2:
-            a, val = "-p", a[2:].removeprefix("=")
-            j += 1
-        else:
-            if a in ("--workspace", "--all"):
-                return True
-            if sub == "install" and not a.startswith("-") and a.split("@", 1)[0] == IPE_PACKAGE:
-                return True
-            j += 1
+def _default_wd(container: dict) -> str | None:
+    defaults = container.get("defaults")
+    run = defaults.get("run") if isinstance(defaults, dict) else None
+    wd = run.get("working-directory") if isinstance(run, dict) else None
+    return wd if isinstance(wd, str) else None
+
+
+def _steps_cargo(
+    steps: object, repo: str, wd: str | None, depth: int = 0
+) -> list[cargo_invocation.Found]:
+    """Every cargo invocation `steps` run, each with its directory: every
+    `run:` (here-document bodies included) from its `working-directory` (else
+    `wd`), and the steps of each local composite action a step `uses`."""
+    out: list[cargo_invocation.Found] = []
+    for st in steps if isinstance(steps, list) else []:
+        if not isinstance(st, dict):
             continue
-        if a in ("-p", "--package"):
-            specs.append(val)
-        elif a == "--path" and _names_ipe_dir(val):
+        uses = st.get("uses")
+        if isinstance(uses, str) and uses.startswith("./"):
+            target = posixpath.normpath(uses.split("@", 1)[0])
+            found = [os.path.join(repo, target, n) for n in ("action.yml", "action.yaml")]
+            found = [f for f in found if os.path.isfile(f)]
+            if depth >= LOCAL_ACTION_DEPTH_LIMIT or len(found) != 1:
+                why = "nests local actions too deep" if found else "has no single action.yml/action.yaml"
+                out.append(cargo_invocation.Found(uses, f"local action {uses!r} {why}", None))
+                continue
+            try:
+                with open(found[0]) as f:
+                    action = strict_yaml.safe_load(f)
+            except (OSError, yaml.YAMLError) as e:
+                out.append(cargo_invocation.Found(uses, f"local action {uses!r} is unreadable: {e}", None))
+                continue
+            runs = action.get("runs") if isinstance(action, dict) else None
+            if isinstance(runs, dict) and runs.get("using") == "composite":
+                out.extend(_steps_cargo(runs.get("steps"), repo, None, depth + 1))
+            continue
+        run = st.get("run")
+        if not isinstance(run, str):
+            continue
+        step_wd = st.get("working-directory")
+        where = step_wd if isinstance(step_wd, str) else wd
+        cwd = "" if where is None else cargo_invocation.resolve("", where)
+        for text in _shell_texts(run):
+            out.extend(cargo_invocation.in_shell(text, cwd))
+    return out
+
+
+def _job_cargo(job: dict, repo: str, doc: object) -> list[cargo_invocation.Found]:
+    """Every cargo invocation of `job` (see `_steps_cargo`); its default
+    directory is the job's `defaults.run.working-directory`, else the
+    workflow's."""
+    wd = _default_wd(job)
+    if wd is None and isinstance(doc, dict):
+        wd = _default_wd(doc)
+    return _steps_cargo(job.get("steps"), repo, wd)
+
+
+def _workspace_layout(repo: str, tracked: list[str] | None) -> cargo_invocation.Layout | str:
+    """The root workspace `Layout`, or why it cannot be read."""
+    if tracked is None:
+        tracked = _tracked_paths(repo)
+        if tracked is None:
+            return "`git ls-files` failed"
+    top = _load_toml(os.path.join(repo, "Cargo.toml"))
+    if isinstance(top, str):
+        return f"root Cargo.toml {top}"
+    return cargo_invocation.layout(top, tracked, lambda d: _ignored(repo, posixpath.join(d, "Cargo.toml")))
+
+
+def _ignored(repo: str, path: str) -> bool:
+    """`path` matches the checkout's ignore rules; False when git cannot say
+    (so a directory is never taken for build output without proof)."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", repo, "check-ignore", "-q", "--no-index", "--", path], capture_output=True, timeout=60
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def _ipe_build(found: cargo_invocation.Found, layout: cargo_invocation.Layout) -> bool | str:
+    """Whether one invocation compiles the `ipe` package, or why that cannot
+    be read."""
+    inv = found.invocation
+    if isinstance(inv, str):
+        return inv
+    if inv.subcommand not in _CARGO_COMPILES:
+        return False
+    if inv.subcommand == "install":
+        if any(c.split("@", 1)[0] == IPE_PACKAGE for c in inv.install_crates):
             return True
-        elif a == "--manifest-path":
-            manifest = val
-    for spec in specs:
+        if inv.install_path is None:
+            return False
+        path = cargo_invocation.resolve(found.cwd, inv.install_path)
+        return path == IPE_PACKAGE_DIR or _names_ipe_dir(inv.install_path)
+    for spec in inv.packages:
         if any(c in spec for c in "*?["):
             return f"package spec {spec!r} is a pattern this check cannot resolve"
         name = spec.rsplit("#", 1)[-1].split("@", 1)[0]
         if name == IPE_PACKAGE or ("#" in spec and _names_ipe_dir(spec.split("#", 1)[0].split("://", 1)[-1])):
             return True
-    if manifest is not None:
-        if _names_ipe_dir(manifest):
-            return True
-        if not specs and posixpath.normpath(manifest) in _ROOT_MANIFESTS:
-            return True
-    return False
+    if IPE_PACKAGE in inv.bins:
+        return True
+    if inv.manifest_path is not None and _names_ipe_dir(inv.manifest_path):
+        return True
+    sel = cargo_invocation.select(inv, found.cwd, layout)
+    if isinstance(sel, str):
+        return sel
+    # `--workspace` where the manifest is unknown may be the root's: fail closed.
+    return sel.whole_workspace or IPE_PACKAGE_DIR in sel.dirs or (inv.workspace and not sel.known)
 
 
-def _builds_ipe(job: dict) -> list[str]:
-    """Each command line of `job`'s `run` steps that compiles `ipe`, or a
-    refusal for one this check cannot read."""
+def _builds_ipe(job: dict, repo: str, layout: cargo_invocation.Layout, doc: object = None) -> list[str]:
+    """Each cargo command of `job` that compiles `ipe`, or a refusal for one
+    this check cannot read."""
     hits: list[str] = []
-    runs = [st["run"] for st in job.get("steps") or [] if isinstance(st, dict) and isinstance(st.get("run"), str)]
-    for line in _quote_removed(runs):
-        words = line.split()
-        for k, w in enumerate(words):
-            if posixpath.basename(w) != "cargo":
-                continue
-            got = _cargo_ipe_selection(words[k + 1 :])
-            if got is True:
-                hits.append(line)
-            elif isinstance(got, str):
-                hits.append(f"{line} (unreadable: {got})")
+    for found in _job_cargo(job, repo, doc):
+        got = _ipe_build(found, layout)
+        if got is True:
+            hits.append(found.line)
+        elif isinstance(got, str):
+            hits.append(f"{found.line} (unreadable: {got})")
     return hits
 
 
@@ -1984,9 +2062,14 @@ def _artifact_steps(job: dict, action: str) -> set[str]:
     return out
 
 
-def check_one_ipe_build(errors: list[str], root: str = REPO_ROOT) -> None:
+def check_one_ipe_build(errors: list[str], root: str = REPO_ROOT, tracked: list[str] | None = None) -> None:
     """Check 15 (see the module docstring). Refuses, never skips, a shape it
     cannot read."""
+    repo = os.path.dirname(root)
+    layout = _workspace_layout(repo, tracked)
+    if isinstance(layout, str):
+        errors.append(f"check 15: {layout}; cannot tell what a cargo command builds")
+        return
     where = os.path.join(root, "workflows", FAST_GATE_WORKFLOW)
     try:
         with open(where) as f:
@@ -2002,7 +2085,7 @@ def check_one_ipe_build(errors: list[str], root: str = REPO_ROOT) -> None:
     if not isinstance(producer, dict):
         errors.append(f"check 15: producer {IPE_BUILD_PRODUCER!r} is not a job of {FAST_GATE_WORKFLOW}")
     else:
-        if not any("unreadable" not in h for h in _builds_ipe(producer)):
+        if not any("unreadable" not in h for h in _builds_ipe(producer, repo, layout, doc)):
             errors.append(f"check 15: producer {IPE_BUILD_PRODUCER!r} does not build the `ipe` package")
         if IPE_RELEASE_ARTIFACT not in _artifact_steps(producer, "upload"):
             errors.append(f"check 15: producer {IPE_BUILD_PRODUCER!r} does not upload {IPE_RELEASE_ARTIFACT!r}")
@@ -2011,7 +2094,7 @@ def check_one_ipe_build(errors: list[str], root: str = REPO_ROOT) -> None:
             errors.append(f"check 15: job {jid!r} is not a mapping; refused")
             continue
         if jid != IPE_BUILD_PRODUCER:
-            for hit in _builds_ipe(job):
+            for hit in _builds_ipe(job, repo, layout, doc):
                 errors.append(
                     f"check 15: job {jid!r} compiles `ipe` ({hit!r}); only {IPE_BUILD_PRODUCER!r} "
                     f"builds it — download {IPE_RELEASE_ARTIFACT!r} instead"
@@ -2042,22 +2125,28 @@ def check_drift_sees_untracked(errors: list[str], root: str = REPO_ROOT, manifes
     """Check 17 (see the module docstring). Refuses, never skips, a file it
     cannot read."""
     fix = f"assert with {DRIFT_ASSERTION}, which also fails on untracked output"
-    for wf in sorted(glob.glob(os.path.join(root, "workflows", "*.yml"))):
-        name = os.path.basename(wf)
+    for wf in _workflow_files(root) + _local_action_files(root):
+        name = os.path.relpath(wf, root)
         try:
             with open(wf) as f:
                 doc = strict_yaml.safe_load(f)
         except (OSError, yaml.YAMLError) as e:
             errors.append(f"check 17: cannot read {wf}: {e}")
             continue
-        jobs = doc.get("jobs") if isinstance(doc, dict) else None
-        if not isinstance(jobs, dict):
+        if not isinstance(doc, dict):
+            errors.append(f"check 17: {name} is not a mapping; refused")
             continue
-        for jid, job in jobs.items():
-            steps = job.get("steps") if isinstance(job, dict) else None
+        jobs = doc.get("jobs")
+        runs_ = doc.get("runs")
+        groups = (
+            [(f"job {jid!r}", job.get("steps") if isinstance(job, dict) else None) for jid, job in jobs.items()]
+            if isinstance(jobs, dict)
+            else [("composite steps", runs_.get("steps"))] if isinstance(runs_, dict) else []
+        )
+        for what, steps in groups:
             runs = [st["run"] for st in steps or [] if isinstance(st, dict) and isinstance(st.get("run"), str)]
             for line in _untracked_blind_diffs(_quote_removed(runs)):
-                errors.append(f"check 17: {name} job {jid!r} runs `{line}`, blind to new generated files; {fix}")
+                errors.append(f"check 17: {name} {what} runs `{line}`, blind to new generated files; {fix}")
     where = manifest or os.path.join(root, "ci", "check-manifest.yml")
     try:
         with open(where) as f:
@@ -2083,8 +2172,8 @@ _LOCK_DEPS = re.compile(r"^dependencies = \[(.*?)^\]", re.M | re.S)
 _MANIFEST_PACKAGE_NAME = re.compile(r'^\[package\][^\[]*?^name\s*=\s*"([^"]+)"', re.M | re.S)
 # A `../` literal that names something past its parents (`"../x"`, not `"../.."`).
 _PARENT_LITERAL = re.compile(r'"(/?(?:\.\./)+[^"\\/.][^"\\]*)"')
-# Cargo subcommands whose `-p` selects packages to compile and run.
-_CARGO_SELECTING = frozenset({"build", "b", "check", "c", "clippy", "test", "t", "nextest", "run", "r", "rustc", "doc", "d", "bench"})
+# Cargo subcommands whose selection names packages to compile and run.
+_CARGO_SELECTING = cargo_invocation.COMPILING - {"install", "package", "publish"}
 
 
 def _lock_graph(text: str) -> dict[str, set[str]] | str:
@@ -2106,38 +2195,32 @@ def _lock_graph(text: str) -> dict[str, set[str]] | str:
     return {n: {d for d in ds if d in deps} for n, ds in deps.items()}
 
 
-def _selected_packages(job: dict) -> list[str] | str:
-    """The packages `job`'s cargo commands select by `-p`, or why that
-    selection cannot be read."""
-    runs = [st["run"] for st in job.get("steps") or [] if isinstance(st, dict) and isinstance(st.get("run"), str)]
-    out: list[str] = []
-    for line in _quote_removed(runs):
-        words = line.split()
-        for k, w in enumerate(words):
-            if posixpath.basename(w) != "cargo":
-                continue
-            rest = words[k + 1 :]
-            i = 1 if rest and rest[0].startswith("+") else 0
-            while i < len(rest) and rest[i].startswith("-"):
-                i += 2 if rest[i] in _CARGO_VALUED_GLOBALS else 1
-            if i >= len(rest) or rest[i] not in _CARGO_SELECTING:
-                continue
-            args = rest[i + 1 :]
-            for j, a in enumerate(args):
-                if a in ("--workspace", "--all"):
-                    return f"`{line}` selects the whole workspace"
-                if a in ("-p", "--package"):
-                    val = args[j + 1] if j + 1 < len(args) else None
-                elif a.startswith("--package="):
-                    val = a.split("=", 1)[1]
-                elif a.startswith("-p") and len(a) > 2:
-                    val = a[2:].removeprefix("=")
-                else:
-                    continue
-                if val is None or any(c in val for c in "*?[#") or "://" in val:
-                    return f"`{line}` has a package spec this check cannot resolve"
-                out.append(val.split("@", 1)[0])
-    return out
+def _selected_packages(
+    job: dict, repo: str, layout: cargo_invocation.Layout, doc: object = None
+) -> tuple[list[str], list[str]] | str:
+    """The package names and member directories `job`'s cargo commands
+    select, or why that selection cannot be read."""
+    names: list[str] = []
+    dirs: list[str] = []
+    for found in _job_cargo(job, repo, doc):
+        inv = found.invocation
+        if isinstance(inv, str):
+            return f"`{found.line}` is unreadable: {inv}"
+        if inv.subcommand not in _CARGO_SELECTING:
+            continue
+        sel = cargo_invocation.select(inv, found.cwd, layout)
+        if isinstance(sel, str):
+            return sel
+        if sel.whole_workspace:
+            return f"`{found.line}` selects the whole workspace"
+        if sel.bins and not sel.packages and not sel.dirs:
+            return f"`{found.line}` selects by `--bin` alone; name its package with `-p`"
+        for val in sel.packages:
+            if not val or any(c in val for c in "*?[#") or "://" in val:
+                return f"`{found.line}` has a package spec this check cannot resolve"
+            names.append(val.split("@", 1)[0])
+        dirs.extend(sel.dirs)
+    return names, dirs
 
 
 def check_scoped_package_coverage(
@@ -2151,9 +2234,13 @@ def check_scoped_package_coverage(
         if tracked is None:
             errors.append("check 16: `git ls-files` failed; cannot prove scoped jobs cover their packages")
             return
+    layout = _workspace_layout(repo, tracked)
+    if isinstance(layout, str):
+        errors.append(f"check 16: {layout}; cannot tell what a cargo command compiles")
+        return
     narrow = set(change_class.SCOPES) - {"code"}
-    scoped: list[tuple[str, str, list[str], list[str]]] = []
-    for wf in sorted(glob.glob(os.path.join(root, "workflows", "*.yml"))):
+    scoped: list[tuple[str, str, list[str], list[str], list[str]]] = []
+    for wf in _workflow_files(root):
         name = os.path.basename(wf)
         try:
             with open(wf) as f:
@@ -2170,12 +2257,13 @@ def check_scoped_package_coverage(
             scopes = sorted(set(_SCOPE_REF.findall(job["if"])).intersection(narrow))
             if not scopes:
                 continue
-            pkgs = _selected_packages(job)
-            if isinstance(pkgs, str):
-                errors.append(f"check 16: {name} job {jid!r} is scoped on {scopes} but {pkgs}; refused")
+            got = _selected_packages(job, repo, layout, doc)
+            if isinstance(got, str):
+                errors.append(f"check 16: {name} job {jid!r} is scoped on {scopes} but {got}; refused")
                 continue
-            if pkgs:
-                scoped.append((name, str(jid), scopes, pkgs))
+            pkgs, pkg_dirs = got
+            if pkgs or pkg_dirs:
+                scoped.append((name, str(jid), scopes, pkgs, pkg_dirs))
     if not scoped:
         return
 
@@ -2201,9 +2289,15 @@ def check_scoped_package_coverage(
             continue
         dirs[found.group(1)] = posixpath.dirname(m)
 
-    for wf, jid, scopes, pkgs in scoped:
+    by_dir = {d: n for n, d in dirs.items()}
+    for wf, jid, scopes, pkgs, pkg_dirs in scoped:
         closure: set[str] = set()
         stack = list(pkgs)
+        for d in pkg_dirs:
+            if d not in by_dir:
+                errors.append(f"check 16: {wf} job {jid!r} compiles {d!r}, not a path package of the root workspace")
+                continue
+            stack.append(by_dir[d])
         while stack:
             n = stack.pop()
             if n in closure:
