@@ -417,40 +417,76 @@ fn workspace() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// Recursively collect every `.rs` file under `dir` into `out`.
+/// Every repository source file under the workspace-relative `tops`: tracked
+/// files plus new ones not yet added, never anything `.gitignore` excludes.
 ///
-/// Build output and hidden directories are skipped; integration-test trees
-/// are skipped too unless `with_tests`.
-fn collect_rs(dir: &Path, with_tests: bool, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+/// Asking git rather than walking the disk keeps build output out of the scan
+/// wherever it lands: an emitted project under an example's `out/` vendors a
+/// copy of the runtime that is not a source of this repository.
+fn repository_files(tops: &[&str]) -> Vec<PathBuf> {
+    let root = workspace();
+    let listed = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+        ])
+        .args(tops)
+        .output();
+    assert!(
+        listed.as_ref().is_ok_and(|out| out.status.success()),
+        "`git ls-files` failed in {}: {listed:?}",
+        root.display()
+    );
+    let Ok(listed) = listed else {
+        return Vec::new();
     };
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        if path.is_dir() {
-            let skipped = path.file_name().is_some_and(|n| {
-                n == "target"
-                    || n.to_string_lossy().starts_with('.')
-                    || (!with_tests && n == "tests")
-            });
-            if !skipped {
-                collect_rs(&path, with_tests, out);
-            }
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
+    String::from_utf8_lossy(&listed.stdout)
+        .split('\0')
+        .filter(|rel| !rel.is_empty())
+        .map(|rel| root.join(rel))
+        .filter(|path| path.is_file())
+        .collect()
+}
+
+/// Whether workspace-relative `rel` lies under a directory named `name`.
+fn under_dir(rel: &Path, name: &str) -> bool {
+    rel.parent()
+        .is_some_and(|dir| dir.components().any(|c| c.as_os_str() == name))
+}
+
+/// Whether workspace-relative `rel` lies under a hidden directory.
+fn under_hidden_dir(rel: &Path) -> bool {
+    rel.parent().is_some_and(|dir| {
+        dir.components()
+            .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+    })
+}
+
+/// Every repository `.rs` file under `tops`, hidden directories skipped;
+/// integration-test trees are skipped too unless `with_tests`.
+fn repository_rs(tops: &[&str], with_tests: bool) -> Vec<PathBuf> {
+    let root = workspace();
+    repository_files(tops)
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .filter(|path| {
+            let rel = path.strip_prefix(&root).unwrap_or(path);
+            !under_hidden_dir(rel) && (with_tests || !under_dir(rel, "tests"))
+        })
+        .collect()
 }
 
 /// Every `.rs` file under `src/`, `tools/`, and `examples/`, keyed by its
 /// workspace-relative `/`-separated path.
 fn workspace_sources(with_tests: bool) -> Vec<(String, String)> {
     let root = workspace();
-    let mut files = Vec::new();
-    for top in ["src", "tools", "examples"] {
-        collect_rs(&root.join(top), with_tests, &mut files);
-    }
-    files
+    repository_rs(&["src", "tools", "examples"], with_tests)
         .into_iter()
         .filter_map(|path| {
             let rel = path
@@ -463,35 +499,17 @@ fn workspace_sources(with_tests: bool) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Recursively collect every `Cargo.toml` under `dir` into `out`, build output
-/// and hidden directories skipped.
-fn collect_manifests(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        if path.is_dir() {
-            let skipped = path
-                .file_name()
-                .is_some_and(|n| n == "target" || n.to_string_lossy().starts_with('.'));
-            if !skipped {
-                collect_manifests(&path, out);
-            }
-        } else if path.file_name().is_some_and(|n| n == "Cargo.toml") {
-            out.push(path);
-        }
-    }
-}
-
 /// The workspace root manifest and every `Cargo.toml` under `src/`, `tools/`,
 /// and `examples/`, keyed by its workspace-relative path.
 fn workspace_manifests() -> Vec<(String, String)> {
     let root = workspace();
     let mut files = vec![root.join("Cargo.toml")];
-    for top in ["src", "tools", "examples"] {
-        collect_manifests(&root.join(top), &mut files);
-    }
+    files.extend(
+        repository_files(&["src", "tools", "examples"])
+            .into_iter()
+            .filter(|path| path.file_name().is_some_and(|n| n == "Cargo.toml"))
+            .filter(|path| !under_hidden_dir(path.strip_prefix(&root).unwrap_or(path))),
+    );
     files
         .into_iter()
         .filter_map(|path| {
@@ -883,7 +901,7 @@ mod lexical {
     //! reader is beyond a lexical scan.
 
     use std::ops::Range;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     /// The environment variable names that carry the user's home directory.
     const HOME_NAMES: &[&str] = &ipe_env::HOME_NAMES;
@@ -1631,28 +1649,6 @@ mod lexical {
         hits
     }
 
-    /// Recursively collect every production `.rs` file under `dir` into `out`.
-    ///
-    /// Integration-test trees and build output are skipped: neither ships.
-    fn collect_production_rs(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if path.is_dir() {
-                let skipped = path
-                    .file_name()
-                    .is_some_and(|n| n == "tests" || n == "target");
-                if !skipped {
-                    collect_production_rs(&path, out);
-                }
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                out.push(path);
-            }
-        }
-    }
-
     /// The exempt function names `list` grants in workspace file `rel`.
     fn exempt_in(list: &[Allowed], rel: &str) -> Vec<&'static str> {
         list.iter()
@@ -1669,8 +1665,8 @@ mod lexical {
     #[test]
     fn no_production_source_reads_the_home_directly() {
         let workspace = workspace();
-        let mut files = Vec::new();
-        collect_production_rs(&workspace.join("src"), &mut files);
+        // Integration-test trees are skipped: they never ship.
+        let files = super::repository_rs(&["src"], false);
         assert!(
             !files.is_empty(),
             "the scan found no sources; the walk root is wrong"
