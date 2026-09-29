@@ -2871,7 +2871,7 @@ mod tests {
         );
     }
 
-    /// A loose build never follows a sibling symlink that points outside the entry's directory.
+    /// A loose build refuses an imported sibling that is a symlink out of the entry's directory.
     #[cfg(unix)]
     #[test]
     fn loose_build_does_not_follow_an_escaping_symlink() {
@@ -2894,11 +2894,15 @@ mod tests {
         let collected = collect_entry_and_siblings(&entry);
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&outside);
-        let collected = collected.expect("entry still loads");
-        assert_eq!(
-            collected_modules(&collected),
-            vec![vec!["Main".to_owned()]],
-            "the escaping symlink is left for the compiler to report as unresolved"
+        assert!(
+            matches!(
+                collected,
+                Err(CliError::SourceRefused {
+                    reason: crate::io_bounded::SourceRefusal::Symlink,
+                    ..
+                })
+            ),
+            "an imported symlink sibling is refused, never followed"
         );
     }
 }

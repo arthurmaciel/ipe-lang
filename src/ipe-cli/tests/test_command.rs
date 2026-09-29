@@ -232,7 +232,7 @@ fn a_catch_all_in_the_test_entry_is_refused_at_its_own_arm() -> TestResult {
 /// — it builds and runs the emitted test binary.
 #[test]
 fn a_test_entry_importing_the_database_stdlib_passes() -> TestResult {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping: set IPE_E2E=1 to run the database-stdlib test E2E");
         return Ok(());
     }
