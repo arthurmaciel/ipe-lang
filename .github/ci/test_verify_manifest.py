@@ -1392,6 +1392,25 @@ class TestMergeQueueSafety(unittest.TestCase):
         self.assertNotEqual(ok, _MQ_OK)
         self.assertEqual(self.errors(ok), [])
 
+    def test_job_write_scope_with_trailing_partial_expression_refused(self) -> None:
+        bad = _MQ_OK.replace(
+            "      github.event.pull_request.head.repo.full_name == github.repository\n",
+            "      ${{ true }}\n",
+        )
+        self.assertNotEqual(bad, _MQ_OK)
+        self.assertRefused(bad, "holds a write scope")
+
+    def test_job_write_scope_with_split_partial_expressions_refused(self) -> None:
+        bad = _MQ_OK.replace(
+            "      failure() &&\n",
+            "      ${{ always() }} &&\n",
+        ).replace(
+            "      github.event.pull_request.head.repo.full_name == github.repository\n",
+            "      ${{ true }}\n",
+        )
+        self.assertNotEqual(bad, _MQ_OK)
+        self.assertRefused(bad, "holds a write scope")
+
     def test_job_write_all_refused(self) -> None:
         bad = _MQ_OK.replace("    permissions:\n      actions: write\n", "    permissions: write-all\n").replace(
             "      github.event_name == 'pull_request' &&\n", ""

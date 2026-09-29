@@ -516,7 +516,9 @@ def _load_sccache_workflows(root: str, errors: list[str]) -> list[SccacheWorkflo
 
 
 # A full-tier test that forgot the merge queue: `!= 'pull_request'` (either
-# operand order) not followed by the matching `merge_group` exclusion.
+# operand order) not followed by the matching `merge_group` exclusion. A
+# spelling-bound lint: another spelling of the same test only costs the queue
+# the full tier, since the secret-free and read-only checks stand apart.
 _BARE_PR_TIER = re.compile(
     r"(?:event_name\s*!=\s*['\"]pull_request['\"]|['\"]pull_request['\"]\s*!=\s*github\.event_name)"
     r"(?!\s*&&\s*github\.event_name\s*!=\s*['\"]merge_group['\"])"
@@ -539,11 +541,15 @@ def _mentions_secrets(node: object) -> bool:
 def _top_level_conjuncts(cond: str) -> list[str] | None:
     """Split an `if:` expression on `&&` at parenthesis depth 0, outside string
     literals; whitespace-normalised conjuncts. None when the expression has a
-    `||` anywhere, unbalanced parentheses, or an unterminated string, since
-    none of those can be proven to require its conjuncts."""
+    `||` anywhere, unbalanced parentheses, an unterminated string, or a
+    `${{ }}` that does not wrap the whole condition (GitHub then evaluates the
+    mix as a `format()` string, which is always truthy), since none of those
+    can be proven to require its conjuncts."""
     expr = cond.strip()
     if expr.startswith("${{") and expr.endswith("}}"):
         expr = expr[3:-2]
+    if "${{" in expr or "}}" in expr:
+        return None
     parts: list[str] = []
     depth = 0
     quote = False
