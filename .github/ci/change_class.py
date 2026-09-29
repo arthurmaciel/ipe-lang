@@ -34,6 +34,9 @@ import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import drift_assertion  # noqa: E402  # the one drift-assertion parser, shared with verify-manifest
+
 # ── The PROSE set: the only paths `code` may skip on ─────────────────────────
 # Each entry is guarded (guard()): no crate, include!, drift check, script,
 # workflow, or source literal may reach it. Directory entries end in "/".
@@ -135,7 +138,6 @@ _INCLUDE = re.compile(
 )
 # A second relevance filter would reopen the allowlist class this module closes.
 _FOREIGN_FILTER = re.compile(r"\buses:\s*['\"]?dorny/paths-filter")
-_DRIFT = re.compile(r"git\s+diff\s+(?:--\S+\s+)*--exit-code((?:\s+[^\s|;&]+)+)")
 
 
 @dataclass(frozen=True)
@@ -334,9 +336,10 @@ def guard(root: str, tracked: Iterable[str]) -> list[str]:
                     errors.append(f"{f}:{lineno}: includes {target!r}, which overlaps PROSE entry {e!r}")
             if f.startswith(".github/") and _FOREIGN_FILTER.search(line):
                 errors.append(f"{f}:{lineno}: path filter outside change_class.py — classify through it")
-            for m in _DRIFT.finditer(line):
-                for arg in m.group(1).split():
-                    if (e := _overlaps_prose(arg.strip("'\""))) is not None:
+            for assertion in drift_assertion.in_shell(line):
+                for arg in assertion.paths:
+                    target = _norm(arg)
+                    if target is not None and (e := _overlaps_prose(target + "/" if arg.endswith("/") else target)) is not None:
                         errors.append(f"{f}:{lineno}: drift check reads {arg!r}, which overlaps PROSE entry {e!r}")
             for token, token_re in token_res:
                 if token_re.search(line):

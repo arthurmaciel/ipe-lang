@@ -4209,6 +4209,11 @@ class TestDriftSeesUntracked(unittest.TestCase):
             'g""it diff "--exit-code" docs/',
             "true && git diff --exit-code docs/",
             "bash <<'EOF'\n          git diff --exit-code docs/\n          EOF",
+            "git diff --quiet docs/reference/x.md",
+            "if git diff --quiet Cargo.lock; then echo same; fi",
+            "git diff-index --quiet HEAD -- docs/",
+            "git diff-files --exit-code",
+            "sh -c 'git diff --quiet docs/'",
         ):
             with self.subTest(line=line):
                 wf = _DU_WF.replace("tools/scripts/generated-unchanged.sh docs/reference/x.md docs/reference/x/", line)
@@ -4229,6 +4234,19 @@ class TestDriftSeesUntracked(unittest.TestCase):
         for line in ("git diff --stat", "git diff --name-only origin/main", "git log --exit-code"):
             with self.subTest(line=line):
                 self.assertEqual(self.errors(wf=_DU_WF.replace("./gen --repo-root .", line)), [])
+
+    def test_parser_reads_both_spellings(self) -> None:
+        parse = verify_manifest.drift_assertion.parse
+        self.assertEqual(
+            [(a.paths, a.sees_untracked) for a in parse("./tools/scripts/generated-unchanged.sh a b/".split())],
+            [(("a", "b/"), True)],
+        )
+        self.assertEqual(
+            [(a.paths, a.sees_untracked) for a in parse("git -C . --no-pager diff --stat --exit-code HEAD -- a".split())],
+            [(("a",), False)],
+        )
+        self.assertEqual(parse("git -C diff status --quiet".split()), [])
+        self.assertEqual(parse("git log --exit-code a".split()), [])
 
     def test_unreadable_inputs_refused(self) -> None:
         self.assertTrue(any("check 17: cannot read" in e for e in self.errors(wf="jobs: [\n")))

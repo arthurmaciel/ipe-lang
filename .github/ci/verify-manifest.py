@@ -220,10 +220,12 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       computed name, or no `../` literal at all), and a scoped
       job with no cargo package selection, are not seen.
   17. Drift checks see new files: no workflow `run:` and no manifest
-      `local:` command asserts regenerated output with
-      `git diff --exit-code`, which is blind to a file the generator writes
-      that git does not track yet; `tools/scripts/generated-unchanged.sh`
-      (tracked changes plus untracked files) is the one drift assertion.
+      `local:` command asserts regenerated output with a
+      `git diff`/`diff-index`/`diff-files` carrying `--exit-code` or
+      `--quiet`, which is blind to a file the generator writes that git does
+      not track yet; `tools/scripts/generated-unchanged.sh` (tracked changes
+      plus untracked files) is the one drift assertion.  Both spellings are
+      read by `drift_assertion.parse`, the parser the PROSE guard shares.
       LIMIT: a `git diff` reached through an alias or a script is not seen.
   18. Dependabot PR budget: every `updates` entry declares its own integer
       `open-pull-requests-limit` of at least 1 (Dependabot's implicit
@@ -275,6 +277,7 @@ import gha_expr  # noqa: E402  # the one GitHub Actions expression parser
 import shell_lex  # noqa: E402  # the one quote-removing shell lexer
 import change_class  # noqa: E402  # the path-scope classifier, SSOT for every scope's patterns
 import trust_roots  # noqa: E402  # the CODEOWNERS trust-root parser, shared with trust-root-diff.yml
+import drift_assertion  # noqa: E402  # the one drift-assertion parser, shared with change_class
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Both extensions: a workflow (or, for check 6, a local composite action) is a
@@ -2026,23 +2029,13 @@ def check_one_ipe_build(errors: list[str], root: str = REPO_ROOT) -> None:
                 )
 
 
-DRIFT_ASSERTION = "tools/scripts/generated-unchanged.sh"
+DRIFT_ASSERTION = drift_assertion.SCRIPT
 
 
 def _untracked_blind_diffs(lines: list[str]) -> list[str]:
-    """The quote-removed commands in `lines` that assert with
-    `git diff --exit-code`."""
-    out: list[str] = []
-    for line in lines:
-        words = line.split()
-        for k, w in enumerate(words):
-            if posixpath.basename(w) != "git":
-                continue
-            rest = words[k + 1 :]
-            if "diff" in rest and "--exit-code" in rest[rest.index("diff") + 1 :]:
-                out.append(line)
-                break
-    return out
+    """The drift assertions among the quote-removed commands in `lines` that
+    are blind to a file git does not track yet (`drift_assertion.parse`)."""
+    return [a.command for line in lines for a in drift_assertion.parse(line.split()) if not a.sees_untracked]
 
 
 def check_drift_sees_untracked(errors: list[str], root: str = REPO_ROOT, manifest: str | None = None) -> None:

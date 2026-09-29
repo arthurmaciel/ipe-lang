@@ -303,8 +303,26 @@ class GuardTest(unittest.TestCase):
         self.assert_refused("includes 'CONTRIBUTING.md'")
 
     def test_drift_check_over_prose_is_refused(self) -> None:
-        self.add(".github/workflows/w.yml", "      - run: git diff --stat --exit-code docs/adr/\n")
+        self.add(".github/workflows/w.yml", "      - run: tools/scripts/generated-unchanged.sh docs/adr/\n")
         self.assert_refused("drift check reads 'docs/adr/'")
+
+    def test_drift_check_over_a_prose_ancestor_is_refused_in_every_spelling(self) -> None:
+        for line in (
+            "      - run: tools/scripts/generated-unchanged.sh docs/\n",
+            "      - run: ./tools/scripts/generated-unchanged.sh docs/reference/x.md ./docs\n",
+            "        - 'tools/scripts/generated-unchanged.sh \"docs/\"'\n",
+            "  bash -c 'tools/scripts/generated-unchanged.sh docs/'\n",
+            "      - run: git --no-pager diff --exit-code -- docs/\n",
+            "      - run: git -C . diff --quiet docs/\n",
+            "      - run: git diff-index --quiet HEAD -- docs\n",
+        ):
+            with self.subTest(line=line):
+                self.add(".github/workflows/w.yml", line)
+                self.assert_refused("drift check reads")
+
+    def test_drift_check_off_prose_passes(self) -> None:
+        self.add(".github/workflows/w.yml", "      - run: tools/scripts/generated-unchanged.sh docs/reference/x.md\n")
+        self.assertEqual(self.errors(), [])
 
     def test_script_naming_prose_is_refused(self) -> None:
         self.add("tools/read.sh", "cat LICENSE\n")
