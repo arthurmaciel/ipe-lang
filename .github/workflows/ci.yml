@@ -1095,16 +1095,6 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ github.workspace }}/.cache/oracle-shared-target
-      # Reclaim runner disk before the E2E build: each emitted golden crate pulls
-      # the full runtime dep tree (axum/tokio/sqlx/serde) into the shared target.
-      - name: Free disk space
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/share/swift || true
-          sudo rm -rf /opt/hostedtoolcache/CodeQL /opt/microsoft /opt/google/chrome /opt/az || true
-          sudo swapoff -a || true; sudo rm -f /swapfile /mnt/swapfile || true
-          sudo apt-get clean || true
-          df -h /
       # wry 0.55 (Webview runtime) requires GLib/GTK/WebKitGTK on Linux.
       # Without these the `bare_html_view_cargo_builds` E2E golden fails when
       # cargo tries to link the emitted Webview project — pkg-config cannot find
