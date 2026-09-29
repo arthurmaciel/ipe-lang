@@ -46,7 +46,7 @@ use lsp_types::{CodeAction, CodeActionKind, CodeActionOrCommand, Range, TextEdit
 
 use crate::code_actions::DbView;
 use crate::offset::{PositionEncoding, position_to_offset, span_to_range};
-use crate::workspace_edit::single_edit;
+use crate::workspace_edit::{Document, single_edit};
 
 type Provider = fn(
     DbView<'_>,
@@ -181,7 +181,14 @@ fn function_lambda_rewrite_action(
         )
     };
 
-    proven_action(db, uri, text, span, &new_text, &title, encoding, version)
+    proven_action(
+        db,
+        Document { uri, text, version },
+        span,
+        &new_text,
+        &title,
+        encoding,
+    )
 }
 
 /// `case c of { True -> e1; False -> e2 }` ⇄ `if c then e1 else e2`, for the
@@ -235,13 +242,11 @@ fn if_case_bool_rewrite_action(
             let new_text = format!("if {cond_text} then {then_text} else {else_text}");
             proven_action(
                 db,
-                uri,
-                text,
+                Document { uri, text, version },
                 target.span,
                 &new_text,
                 "Convert `case` on `Bool` to `if`",
                 encoding,
-                version,
             )
         }
         Expr_::If(branches, else_body) => {
@@ -257,13 +262,11 @@ fn if_case_bool_rewrite_action(
             );
             proven_action(
                 db,
-                uri,
-                text,
+                Document { uri, text, version },
                 target.span,
                 &new_text,
                 "Convert `if` to `case`",
                 encoding,
-                version,
             )
         }
         _ => None,
@@ -281,14 +284,13 @@ fn if_case_bool_rewrite_action(
 /// provider has no path to a [`CodeAction`] that skips the reparse proof.
 fn proven_action(
     db: &IpeDatabase,
-    uri: &Url,
-    text: &str,
+    doc: Document<'_>,
     span: Span,
     new_text: &str,
     title: &str,
     encoding: PositionEncoding,
-    version: Option<i32>,
 ) -> Option<CodeAction> {
+    let Document { uri, text, version } = doc;
     let lo = span.lo as usize;
     let hi = span.hi as usize;
     let mut spliced = String::with_capacity(text.len() + new_text.len());
@@ -775,6 +777,9 @@ mod tests {
         .expect("lambda body with no top-level params offers a rewrite");
         let edit = action.edit.expect("action carries an edit");
         assert!(edit.document_changes.is_none(), "{edit:?}");
-        assert!(matches!(&edit.changes, Some(m) if !m.is_empty()), "{edit:?}");
+        assert!(
+            matches!(&edit.changes, Some(m) if !m.is_empty()),
+            "{edit:?}"
+        );
     }
 }

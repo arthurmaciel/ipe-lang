@@ -7,11 +7,11 @@
 
 use ipe_diagnostics::Span;
 use ipe_lint::{BlockEdit, LintConfig, SourceModule};
-use lsp_types::{CodeAction, CodeActionKind, CodeActionOrCommand, TextEdit, Url};
+use lsp_types::{CodeAction, CodeActionKind, CodeActionOrCommand, TextEdit};
 
 use crate::action_kind::offered;
 use crate::offset::{PositionEncoding, span_to_range};
-use crate::workspace_edit::single_edit;
+use crate::workspace_edit::{Document, single_edit};
 
 /// The `source.*` kinds this crate can produce.
 ///
@@ -29,20 +29,6 @@ pub fn advertised_kinds() -> Vec<CodeActionKind> {
 #[must_use]
 pub fn requested(only: Option<&[CodeActionKind]>) -> bool {
     advertised_kinds().iter().any(|kind| offered(only, kind))
-}
-
-/// The open document a source action edits.
-#[derive(Clone, Copy, Debug)]
-pub struct Document<'a> {
-    /// The document's URI.
-    pub uri: &'a Url,
-    /// The document's current text.
-    pub text: &'a str,
-    /// The document version the edit applies to.
-    ///
-    /// Set only when the client accepts versioned `documentChanges` and the
-    /// document is open; the edit is then refused by a client whose copy moved on.
-    pub version: Option<i32>,
 }
 
 /// Compute the `source.organizeImports` / `source.fixAll` actions for one document.
@@ -129,7 +115,7 @@ fn push_edit(
 
 #[cfg(test)]
 mod tests {
-    use lsp_types::{DocumentChanges, WorkspaceEdit};
+    use lsp_types::{DocumentChanges, Url, WorkspaceEdit};
 
     use super::*;
 

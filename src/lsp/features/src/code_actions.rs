@@ -57,7 +57,7 @@ use lsp_types::{
 use ipe_db::{Db as _, IpeDatabase, SourceRoot};
 
 use crate::offset::{PositionEncoding, offset_to_position};
-use crate::workspace_edit::single_edit;
+use crate::workspace_edit::{Document, single_edit};
 
 /// The salsa database view a quick-fix reads from.
 ///
@@ -80,23 +80,21 @@ pub struct DbView<'a> {
 
 /// Compute quick-fix code actions for the given range and diagnostic list.
 ///
-/// `diagnostics` are the LSP diagnostics currently shown for `uri` — the
+/// `diagnostics` are the LSP diagnostics currently shown for `doc.uri` — the
 /// client forwards them in the request so we do not need to re-collect them.
-/// `text` is the current source text of the document. `version` is the
-/// document version each produced edit is stamped with — `None` yields an
-/// unversioned flat-`changes` edit, matching [`crate::source_actions`]'s
-/// convention.
+/// `doc.version` is the document version each produced edit is stamped with —
+/// `None` yields an unversioned flat-`changes` edit, matching
+/// [`crate::source_actions`]'s convention.
 #[must_use]
 pub fn code_actions(
     view: DbView<'_>,
     module: &[String],
-    uri: &Url,
+    doc: Document<'_>,
     range: Range,
     diagnostics: &[Diagnostic],
-    text: &str,
     encoding: PositionEncoding,
-    version: Option<i32>,
 ) -> Vec<CodeActionOrCommand> {
+    let Document { uri, text, version } = doc;
     let DbView { db, root, .. } = view;
     let files = root.files(db);
     let Some(&_file) = files.get(module) else {
@@ -143,7 +141,9 @@ pub fn code_actions(
                 // named `import Ipe.X` line. The diagnostic names the exact module
                 // to add (`add `import Ipe.X` to use it`); we insert it in the
                 // module's import block, sorted among the existing imports.
-                if let Some(action) = add_import_action(view, module, uri, diag, text, encoding, version) {
+                if let Some(action) =
+                    add_import_action(view, module, uri, diag, text, encoding, version)
+                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -152,7 +152,9 @@ pub fn code_actions(
                 // repoint the offending import to the app's own shape. The
                 // diagnostic names both the wrong (`Ipe.Tea.Web.Cmd`) and correct
                 // (`Ipe.Tea.Cli.Cmd`) module paths.
-                if let Some(action) = repoint_shape_import_action(diag, uri, text, encoding, version) {
+                if let Some(action) =
+                    repoint_shape_import_action(diag, uri, text, encoding, version)
+                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -160,20 +162,25 @@ pub fn code_actions(
                 // The `module` declaration name does not match the path on disk.
                 // The diagnostic message carries the expected name after
                 // `expected `` — replace the declared name token on line 0.
-                if let Some(action) = rename_module_decl_action(diag, uri, text, encoding, version) {
+                if let Some(action) = rename_module_decl_action(diag, uri, text, encoding, version)
+                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
             "IPE-N0036" => {
                 // A removed stdlib surface: replace the call at the diagnostic
                 // span with the migration target name, when one is carried.
-                if let Some(action) = replace_removed_surface_action(diag, uri, text, encoding, version) {
+                if let Some(action) =
+                    replace_removed_surface_action(diag, uri, text, encoding, version)
+                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
             "IPE-N0040" => {
                 // Hand-nested decoder pipeline: offer to rewrite as `|>` chain.
-                if let Some(action) = rewrite_nested_decoder_action(diag, uri, text, encoding, version) {
+                if let Some(action) =
+                    rewrite_nested_decoder_action(diag, uri, text, encoding, version)
+                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -838,6 +845,7 @@ mod tests {
     };
 
     use crate::offset::PositionEncoding;
+    use crate::workspace_edit::Document;
 
     use super::{CodeActionOrCommand, DbView, code_actions};
 
@@ -906,12 +914,14 @@ mod tests {
                 entry,
             },
             &["Main".to_owned()],
-            &uri,
+            Document {
+                uri: &uri,
+                text: src,
+                version: None,
+            },
             range,
             &[diag],
-            src,
             PositionEncoding::Utf16,
-            None,
         );
         assert!(actions.is_empty(), "unknown code → no actions");
     }
@@ -945,12 +955,14 @@ mod tests {
                     entry,
                 },
                 &["Main".to_owned()],
-                &uri,
+                Document {
+                    uri: &uri,
+                    text: src,
+                    version: None,
+                },
                 range,
                 &[diag_at(2, code)],
-                src,
                 PositionEncoding::Utf16,
-                None,
             );
             assert!(
                 actions.is_empty(),
@@ -1007,12 +1019,14 @@ mod tests {
                 entry,
             },
             &["Main".to_owned()],
-            &uri,
+            Document {
+                uri: &uri,
+                text: src,
+                version,
+            },
             range,
             &[module_mismatch_diag()],
-            src,
             PositionEncoding::Utf16,
-            version,
         )
     }
 
@@ -1040,6 +1054,9 @@ mod tests {
         let actions = module_mismatch_actions(None);
         let edit = only_edit(&actions).expect("exactly one code action with an edit");
         assert!(edit.document_changes.is_none(), "{edit:?}");
-        assert!(matches!(&edit.changes, Some(m) if !m.is_empty()), "{edit:?}");
+        assert!(
+            matches!(&edit.changes, Some(m) if !m.is_empty()),
+            "{edit:?}"
+        );
     }
 }

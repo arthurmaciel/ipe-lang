@@ -1367,12 +1367,14 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
     let mut actions = ipe_lsp_features::code_actions::code_actions(
         view,
         &module,
-        &params.text_document.uri,
+        ipe_lsp_features::workspace_edit::Document {
+            uri: &params.text_document.uri,
+            text,
+            version,
+        },
         params.range,
         &params.context.diagnostics,
-        text,
         state.encoding,
-        version,
     );
     actions.extend(ipe_lsp_features::refactor::refactor_actions(
         view,
@@ -1396,7 +1398,7 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
             Some(Ok(lint_config)) => {
                 actions.extend(ipe_lsp_features::source_actions::source_actions(
                     &module,
-                    ipe_lsp_features::source_actions::Document {
+                    ipe_lsp_features::workspace_edit::Document {
                         uri: &params.text_document.uri,
                         text,
                         version,

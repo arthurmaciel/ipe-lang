@@ -18,6 +18,26 @@ use lsp_types::{
     Url, WorkspaceEdit,
 };
 
+/// The open document a provider edits.
+///
+/// Bundles the three values every `WorkspaceEdit`-producing provider needs
+/// together — the URI, the current text, and the version each produced edit
+/// is stamped with (`None` yields an unversioned flat-`changes` edit) — so a
+/// provider's own signature does not thread them as three separate
+/// parameters. The one struct every provider in this crate shares.
+#[derive(Clone, Copy, Debug)]
+pub struct Document<'a> {
+    /// The document's URI.
+    pub uri: &'a Url,
+    /// The document's current text.
+    pub text: &'a str,
+    /// The document version the edit applies to.
+    ///
+    /// Set only when the client accepts versioned `documentChanges` and the
+    /// document is open; the edit is then refused by a client whose copy moved on.
+    pub version: Option<i32>,
+}
+
 /// Build a `WorkspaceEdit` over one or more documents.
 ///
 /// `document_changes_supported` mirrors the client's `documentChanges`
