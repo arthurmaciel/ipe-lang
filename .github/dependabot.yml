@@ -25,9 +25,9 @@ updates:
       prefix: ci
 
   - package-ecosystem: cargo
-    directories:
-      - /
-      - /tools/panic-scan
+    # The one lock that resolves the workspace graph; verify-manifest check 14
+    # refuses a directory that holds no lock of its own graph.
+    directory: /
     schedule:
       interval: weekly
     cooldown:

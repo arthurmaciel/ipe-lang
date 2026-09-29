@@ -304,7 +304,7 @@ checks:
       run:
         - cargo test --manifest-path tools/panic-scan/Cargo.toml
         - cmd: cargo run --release --manifest-path tools/panic-scan/Cargo.toml -- --walk src
-          differs: CI builds the scanner then runs it from its in-tree target dir; cargo run resolves the local target dir
+          differs: CI builds the scanner then runs it from the workspace target dir; cargo run resolves the local target dir
     guards: Soundness
   - context: cargo-deny
     disposition: gate

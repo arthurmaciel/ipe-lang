@@ -1,13 +1,9 @@
-# Detached from the parent workspace (own [workspace] table) so it builds
-# standalone as a pre-commit / CI hook without pulling the compiler crates.
 [package]
 name = "panic-scan"
 version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-
-[workspace]
 
 [dependencies]
 # span-locations gives real 1-based line numbers outside a proc-macro context.

@@ -190,6 +190,13 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       or mixed-type comparison is refused.  `LATEST_WINS_PUSH_GROUPS` names the workflows whose run acts on the
       branch head it reads at run time, each with its reason, and every entry
       must be a push-triggered workflow.
+  14. One lock per dependency graph: a tracked `Cargo.lock` other than the
+      root one may resolve no path package (a workspace member or a path
+      dependency) the root `Cargo.lock` also resolves, since two locks over
+      one graph drift apart the first time an update rewrites only one of
+      them.  Every Dependabot `cargo` directory is a literal path (no glob)
+      holding a tracked `Cargo.lock` that passes that rule, and `/` is one of
+      them, so every update lands in the lock that governs the graph.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
 `git ls-files` locally to list tracked paths.
@@ -1576,6 +1583,127 @@ def check_push_concurrency(errors: list[str], root: str = REPO_ROOT) -> None:
                 )
     for fname in sorted(set(LATEST_WINS_PUSH_GROUPS) - seen):
         errors.append(f"check 13: LATEST_WINS_PUSH_GROUPS names {fname}, which is not a push-triggered workflow")
+
+
+_LOCK_PACKAGE = re.compile(r"^\[\[package\]\]\s*$", re.M)
+_LOCK_FIELD = re.compile(r'^(name|source) = "([^"]*)"\s*$', re.M)
+
+
+def _lock_path_packages(text: str) -> set[str] | str:
+    """The path packages (no `source`) a `Cargo.lock` resolves, or why the
+    text is refused as a lock."""
+    blocks = _LOCK_PACKAGE.split(text)
+    if len(blocks) < 2:
+        return "declares no [[package]]"
+    names: set[str] = set()
+    for i, block in enumerate(blocks[1:], 1):
+        body = block.split("\n[", 1)[0]
+        fields: dict[str, list[str]] = {}
+        for m in _LOCK_FIELD.finditer(body):
+            fields.setdefault(m.group(1), []).append(m.group(2))
+        name = fields.get("name", [])
+        if len(name) != 1 or len(fields.get("source", [])) > 1:
+            return f"[[package]] #{i} has no single name/source"
+        if not fields.get("source"):
+            names.add(name[0])
+    return names
+
+
+def check_one_lock_per_graph(
+    errors: list[str], root: str = REPO_ROOT, tracked: list[str] | None = None
+) -> None:
+    """Check 14 (see the module docstring). `tracked` defaults to the
+    repository's `git ls-files`."""
+    repo = os.path.dirname(root)
+    if tracked is None:
+        tracked = _tracked_paths(repo)
+        if tracked is None:
+            errors.append("check 14: `git ls-files` failed; cannot prove one lock per dependency graph")
+            return
+    tracked_set = set(tracked)
+    locks = sorted(p for p in tracked if posixpath.basename(p) == "Cargo.lock")
+    if "Cargo.lock" not in locks:
+        errors.append("check 14: the root Cargo.lock is not tracked — the workspace graph has no lock")
+        return
+    packages: dict[str, set[str]] = {}
+    for lock in locks:
+        try:
+            with open(os.path.join(repo, lock), encoding="utf-8") as f:
+                parsed = _lock_path_packages(f.read())
+        except (OSError, UnicodeDecodeError) as e:
+            parsed = f"unreadable ({e})"
+        if isinstance(parsed, str):
+            errors.append(f"check 14: {lock}: {parsed}; refused")
+            continue
+        packages[lock] = parsed
+    root_pkgs = packages.get("Cargo.lock")
+    if root_pkgs is None:
+        return
+    authoritative = {"Cargo.lock"}
+    for lock, pkgs in packages.items():
+        if lock == "Cargo.lock":
+            continue
+        shared = sorted(pkgs.intersection(root_pkgs))
+        if shared:
+            errors.append(
+                f"check 14: {lock} resolves {', '.join(shared)}, which the root Cargo.lock "
+                "also resolves — one dependency graph with two locks drifts the first "
+                "time an update rewrites only one; make the crate a workspace member "
+                "and delete this lock"
+            )
+        else:
+            authoritative.add(lock)
+
+    path = os.path.join(root, "dependabot.yml")
+    try:
+        with open(path) as f:
+            doc = strict_yaml.safe_load(f)
+    except FileNotFoundError:
+        errors.append("check 14: .github/dependabot.yml is missing — nothing proposes updates to the root Cargo.lock")
+        return
+    except (OSError, yaml.YAMLError) as e:
+        errors.append(f"check 14: .github/dependabot.yml refused: {e}")
+        return
+    updates = doc.get("updates") if isinstance(doc, dict) else None
+    if not isinstance(updates, list):
+        errors.append("check 14: .github/dependabot.yml has no `updates` list; refused")
+        return
+    dirs: list[object] = []
+    for i, u in enumerate(updates):
+        if not isinstance(u, dict):
+            errors.append(f"check 14: .github/dependabot.yml updates[{i}] is not a mapping; refused")
+            continue
+        if u.get("package-ecosystem") != "cargo":
+            continue
+        one, many = u.get("directory"), u.get("directories")
+        if (one is None) == (many is None) or (many is not None and not isinstance(many, list)):
+            errors.append(
+                f"check 14: .github/dependabot.yml updates[{i}] (cargo) needs exactly one of "
+                "`directory` or a `directories` list; refused"
+            )
+            continue
+        dirs.extend([one] if many is None else many)
+    for d in dirs:
+        if not isinstance(d, str) or not d.startswith("/") or any(c in d for c in "*?[{"):
+            errors.append(
+                f"check 14: .github/dependabot.yml cargo directory {d!r} is not a literal "
+                "absolute path; refused"
+            )
+            continue
+        rel = d.strip("/")
+        lock = posixpath.join(posixpath.normpath(rel), "Cargo.lock") if rel else "Cargo.lock"
+        if lock not in tracked_set:
+            errors.append(
+                f"check 14: .github/dependabot.yml cargo directory {d!r} holds no tracked "
+                "Cargo.lock — its updates would rewrite a manifest no lock of its own governs"
+            )
+        elif lock not in authoritative:
+            errors.append(
+                f"check 14: .github/dependabot.yml cargo directory {d!r} updates {lock}, a "
+                "second lock over the root workspace graph; refused"
+            )
+    if "/" not in dirs:
+        errors.append("check 14: .github/dependabot.yml proposes no cargo update for the root Cargo.lock")
 
 
 def _tracked_paths(repo: str) -> list[str] | None:
@@ -3666,6 +3794,9 @@ def main() -> int:
 
     # ---- 13. push runs: every push commit gets its own concurrency group ----
     check_push_concurrency(errors)
+
+    # ---- 14. one lock per dependency graph; Dependabot updates that lock ----
+    check_one_lock_per_graph(errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:

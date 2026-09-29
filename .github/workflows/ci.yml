@@ -244,7 +244,7 @@ jobs:
         # or `tests.rs` only after confirming its `#[cfg(test)] mod tests;`
         # declaration (or, for integration tests, the crate's `Cargo.toml`),
         # and exits 2 naming the file when that premise does not hold.
-        run: tools/panic-scan/target/release/panic-scan --walk src
+        run: target/release/panic-scan --walk src
 
       - name: No panic-scan-relevant paths changed
         if: steps.classify.outputs.panic_scan == 'false'

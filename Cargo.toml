@@ -35,12 +35,11 @@ members = [
     "tools/regen-cli-transcripts",
     "examples/wasm/language-playground/jail-runner",
     "src/ipe-wrapper",
+    # A member, so this lock is the one that resolves its dependencies:
+    # `ipe-cli` path-depends on it, and a second lock would resolve the same
+    # graph apart from this one. `-p panic-scan` still builds only its own deps.
+    "tools/panic-scan",
 ]
-# `tools/panic-scan` carries its own `[workspace]` so it builds standalone as a
-# pre-commit/CI hook without pulling the compiler crates. Excluding it here lets
-# `ipe-cli` path-depend on it (the `ipe package audit` provenance scan) without
-# cargo seeing two workspace roots.
-exclude = ["tools/panic-scan"]
 
 [workspace.package]
 edition = "2024"

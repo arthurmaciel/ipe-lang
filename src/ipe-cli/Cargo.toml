@@ -132,8 +132,7 @@ include_dir = "0.7"
 # The `ipe package audit` provenance panic-scan reuses the SAME token scanner the
 # repo's abrupt-failure attestation hook runs (`tools/panic-scan`), so the gate
 # and the hook can never diverge on what counts as an authored abrupt-failure
-# construct. `panic-scan` declares its own `[workspace]`, so this path dependency
-# is built as a standalone unit rather than a workspace member.
+# construct.
 panic-scan = { path = "../../tools/panic-scan" }
 # Keyless publisher-identity provenance (`crate::signing`), behind the optional
 # `signing` feature. Offline bundle verification with an (issuer, SAN) identity
