@@ -1253,7 +1253,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// A token directory others could write is reported by `--status` as that directory.
+    /// A token directory any user could write is reported by `--status` as that directory.
     #[cfg(unix)]
     #[test]
     fn an_untrusted_token_dir_is_reported_as_the_dir_not_an_exposed_file() {
@@ -1273,7 +1273,16 @@ mod tests {
         let path = dir.join("token");
         write_token_atomic(HOST_SECRET_STORE, &path, "ghp_private_token").expect("write succeeds");
 
-        for mode in [0o770, 0o707] {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o770))
+            .expect("chmod token dir");
+        assert!(
+            matches!(
+                token_status_of(StoredToken::probe(Some(path.clone()))),
+                TokenStatus::LoggedIn(_)
+            ),
+            "group write under the invoker's own effective group is admitted"
+        );
+        for mode in [0o707, 0o777] {
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode))
                 .expect("chmod token dir");
             let status = token_status_of(StoredToken::probe(Some(path.clone())));
