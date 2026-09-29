@@ -149,13 +149,39 @@ const LAYOUT_FUEL: usize = 1 << 26;
 /// document cannot grow the memo without bound.
 const MEMO_BYTE_CEILING: usize = 64 << 20;
 
-/// What one memoized layout occupies: its bytes plus the key, the `String`
+/// What one memoized layout occupies: its bytes plus the key, the [`Layout`]
 /// header, and the hash-table slot, so a flood of empty layouts is charged too.
 const fn memo_entry_bytes(layout_len: usize) -> usize {
     layout_len
         .saturating_add(size_of::<MemoKey>())
-        .saturating_add(size_of::<String>())
+        .saturating_add(size_of::<Layout>())
         .saturating_add(size_of::<u64>())
+}
+
+/// A whole memoized layout, with the width its tail lines need.
+struct Layout {
+    text: String,
+    /// The widest line after the first, without its indentation.
+    widest_tail: usize,
+}
+
+impl Layout {
+    /// The layout `text`, its tail width measured once as it is kept.
+    fn of(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            widest_tail: widest_tail(text),
+        }
+    }
+}
+
+/// The widest line of `text` after its first, without its indentation.
+fn widest_tail(text: &str) -> usize {
+    text.split('\n')
+        .skip(1)
+        .map(|line| line.trim_start().len())
+        .max()
+        .unwrap_or_default()
 }
 
 /// Every layout decision probes a subtree by a [`trial`] render before rendering
@@ -173,7 +199,7 @@ const fn memo_entry_bytes(layout_len: usize) -> usize {
 /// address. A document a layout builds on the fly is rendered uncached.
 struct Memo {
     nodes: HashSet<usize>,
-    layouts: HashMap<MemoKey, String>,
+    layouts: HashMap<MemoKey, Layout>,
     bytes: usize,
     /// [`has_hard_break`] per node, computed once.
     hard_breaks: HashMap<usize, bool>,
@@ -630,6 +656,27 @@ struct Mark {
 }
 
 impl Mark {
+    /// The mark of a trial beginning on `out` now.
+    fn at(out: &str) -> Self {
+        Self {
+            start: out.len(),
+            stable: out.trim_end_matches(' ').len(),
+        }
+    }
+
+    /// Put `out` back exactly as it was at this mark.
+    ///
+    /// Nothing below the trailing-space run is ever rewritten (a break trims only
+    /// that run; a replay truncates no further), so restoring the run undoes
+    /// everything written since.
+    fn roll_back(self, out: &mut String) {
+        out.truncate(self.stable);
+        out.extend(std::iter::repeat_n(
+            ' ',
+            self.start.saturating_sub(self.stable),
+        ));
+    }
+
     /// Everything the trial has written so far, from the cursor it began at.
     ///
     /// When a break trimmed the trailing spaces before the cursor, what is written
@@ -656,25 +703,25 @@ impl Mark {
 /// Run `render` on `out` with the stop mark `reach` asks for, restoring the
 /// enclosing mark after.
 ///
-/// Every caller discards what `render` writes — a [`trial`] rolls it back, a
-/// fresh buffer is dropped — so the bytes charged for it leave the held total
-/// with it: an enclosing layout never counts a probe's bytes as its children's.
+/// A caller discards what `render` writes — a [`trial`] rolls it back, a fresh
+/// buffer is dropped — so the bytes charged for it leave the held total with it:
+/// an enclosing layout never counts a probe's bytes as its children's. Only an
+/// [`attempt`] that keeps its bytes keeps their charge.
 fn with_stop<T>(
     out: &mut String,
     reach: TrialReach,
     render: impl FnOnce(&mut String, Mark) -> T,
 ) -> T {
-    let start = out.len();
-    let stable = out.trim_end_matches(' ').len();
+    let mark = Mark::at(out);
     let stop = (reach == TrialReach::FirstLine).then_some(StopMark {
         addr: std::ptr::from_ref::<String>(out).addr(),
-        from: stable,
+        from: mark.stable,
     });
     let outer = MEMO.with_borrow_mut(|m| {
         m.as_mut()
             .map(|m| (std::mem::replace(&mut m.stop_mark, stop), m.charged))
     });
-    let read = render(out, Mark { start, stable });
+    let read = render(out, mark);
     MEMO.with_borrow_mut(|m| {
         if let (Some(m), Some((stop_mark, charged))) = (m.as_mut(), outer) {
             m.stop_mark = stop_mark;
@@ -690,20 +737,51 @@ fn with_stop<T>(
 /// The trial writes where the real render writes — the same buffer, column,
 /// cursor, and so the same memo keys — so a decision taken on it is the decision
 /// the real render meets, and every layout it lays out is one the real render
-/// replays. Nothing below the trailing-space run is ever rewritten (a break trims
-/// only that run; a replay truncates no further), so restoring the run undoes
-/// the trial. A [`TrialReach::FirstLine`] trial stops laying out past its first
+/// replays. A [`TrialReach::FirstLine`] trial stops laying out past its first
 /// newline; a [`TrialReach::Whole`] one lays everything out even inside an
 /// enclosing first-line trial.
 fn trial<T>(out: &mut String, reach: TrialReach, render: impl FnOnce(&mut String, Mark) -> T) -> T {
-    let (start, stable) = (out.len(), out.trim_end_matches(' ').len());
+    let mark = Mark::at(out);
     let read = with_stop(out, reach, render);
     // An abandoned render's buffer is discarded whole, so it is left as it is.
     if !fuel_exhausted() {
-        out.truncate(stable);
-        out.extend(std::iter::repeat_n(' ', start.saturating_sub(stable)));
+        mark.roll_back(out);
     }
     read
+}
+
+/// What an [`attempt`] left on its buffer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Attempt {
+    /// The layout was accepted and is the buffer's committed render.
+    Kept,
+    /// The buffer is as it was; `fits` is whether the layout was accepted.
+    RolledBack { fits: bool },
+}
+
+/// Lay a whole layout out on `out` at its live cursor and keep it when `render`
+/// accepts it, so a probe that proves its layout is also its commit.
+///
+/// A kept layout keeps its charge, as the render that would replay it holds.
+/// Inside an open first-line [`trial`] the commit writes only up to its first
+/// newline, so the whole layout is rolled back for the caller to commit.
+fn attempt(out: &mut String, render: impl FnOnce(&mut String) -> bool) -> Attempt {
+    let mark = Mark::at(out);
+    let whole = reach(std::ptr::from_ref::<String>(out).addr(), out) == Reach::Whole;
+    let mut held = None;
+    let fits = with_stop(out, TrialReach::Whole, |out, _| {
+        let fits = render(out);
+        held = (fits && whole).then(held_charged);
+        fits
+    });
+    if let Some(held) = held {
+        set_held_charged(held);
+        return Attempt::Kept;
+    }
+    if !fuel_exhausted() {
+        mark.roll_back(out);
+    }
+    Attempt::RolledBack { fits }
 }
 
 /// Whether an open first-line [`trial`] on `out` already holds its first line, so
@@ -779,7 +857,7 @@ fn memoized(
     let base = out.len().saturating_sub(key.cursor.trailing_spaces);
     let replayed = MEMO.with_borrow(|m| {
         let m = m.as_ref()?;
-        let whole = m.layouts.get(&key).map(String::as_str);
+        let whole = m.layouts.get(&key).map(|l| l.text.as_str());
         let found = if reach == Reach::FirstLine {
             whole
                 .map(first_line)
@@ -824,6 +902,28 @@ fn held_charged() -> usize {
     MEMO.with_borrow(|m| m.as_ref().map_or(0, |m| m.charged))
 }
 
+/// Set the layout bytes charged for what the open buffers hold to `bytes`.
+fn set_held_charged(bytes: usize) {
+    MEMO.with_borrow_mut(|m| {
+        if let Some(m) = m.as_mut() {
+            m.charged = bytes;
+        }
+    });
+}
+
+/// The widest tail line of `written`, the layout just rendered under `key`: read
+/// from the memo when it kept the layout, else measured and charged.
+fn written_widest_tail(key: &MemoKey, written: &str) -> usize {
+    let kept = MEMO.with_borrow(|m| {
+        m.as_ref()
+            .and_then(|m| m.layouts.get(key).map(|l| l.widest_tail))
+    });
+    kept.unwrap_or_else(|| {
+        spend(written.len());
+        widest_tail(written)
+    })
+}
+
 /// Count `bytes` just charged as held by the open buffers.
 fn hold_charged(bytes: usize) {
     MEMO.with_borrow_mut(|m| {
@@ -848,12 +948,11 @@ fn keep_layout(key: MemoKey, reach: Reach, layout: &str) {
             && bytes <= m.byte_ceiling
         {
             m.bytes = bytes;
-            let table = if partial {
-                &mut m.first_lines
+            if partial {
+                m.first_lines.insert(key, kept.to_owned());
             } else {
-                &mut m.layouts
-            };
-            table.insert(key, kept.to_owned());
+                m.layouts.insert(key, Layout::of(kept));
+            }
         }
     });
 }
@@ -2326,27 +2425,43 @@ fn render_assign(
     // value that would otherwise crowd the wide `let name: TYPE = ` prefix. The
     // trailer is charged against the first line only when the RHS does not break
     // internally (a single-line RHS carries the `;` on that one line). Only a
-    // viable glue reads the tail lines, so only then is the whole RHS laid out.
+    // viable glue reads the tail lines, so only then is the whole RHS laid out —
+    // by an [`attempt`] that keeps it, its tail width read from the memo.
     let rhs_indent = indent + CHAIN_BREAK_INDENT;
-    let reach = if glue_viable {
-        TrialReach::Whole
-    } else {
-        TrialReach::FirstLine
+    let head_fits = |body: &str| {
+        let head_w = body.split('\n').next().unwrap_or_default().len();
+        let head_trailer = if body.contains('\n') { 0 } else { trailer };
+        rhs_indent + head_w + head_trailer <= cfg.max_width
     };
-    let rhs_break_fits = trial(out, TrialReach::Whole, |out, _| {
-        open_rhs_break(rhs_indent, out);
-        with_stop(out, reach, |out, mark| {
+    let rhs_break_fits = if glue_viable {
+        let tried = attempt(out, |out| {
+            open_rhs_break(rhs_indent, out);
+            let key = MemoKey {
+                node: node_addr(rhs),
+                cfg,
+                indent: rhs_indent,
+                col: rhs_indent,
+                pass: Pass::Layout { flat: false },
+                cursor: Cursor::of(out),
+            };
+            let mark = Mark::at(out);
             render_at(rhs, cfg, rhs_indent, rhs_indent, false, out);
             let body = mark.written(out);
-            let mut lines = body.split('\n');
-            let head_w = lines.next().unwrap_or_default().len();
-            let head_trailer = if body.contains('\n') { 0 } else { trailer };
-            let head_fits = rhs_indent + head_w + head_trailer <= cfg.max_width;
-            let tail_fits =
-                !glue_viable || lines.all(|line| line.trim_start().len() <= cfg.max_width);
-            head_fits && tail_fits
+            head_fits(body) && written_widest_tail(&key, body) <= cfg.max_width
+        });
+        match tried {
+            Attempt::Kept => return,
+            Attempt::RolledBack { fits } => fits,
+        }
+    } else {
+        trial(out, TrialReach::Whole, |out, _| {
+            open_rhs_break(rhs_indent, out);
+            with_stop(out, TrialReach::FirstLine, |out, mark| {
+                render_at(rhs, cfg, rhs_indent, rhs_indent, false, out);
+                head_fits(mark.written(out))
+            })
         })
-    });
+    };
     if rhs_break_fits {
         open_rhs_break(rhs_indent, out);
         render_at(rhs, cfg, rhs_indent, rhs_indent, false, out);
@@ -4652,9 +4767,10 @@ mod p0_tests {
                 let charged: usize = m
                     .layouts
                     .values()
-                    .chain(m.flat_layouts.values())
-                    .chain(m.first_lines.values())
-                    .map(|l| memo_entry_bytes(l.len()))
+                    .map(|l| l.text.len())
+                    .chain(m.flat_layouts.values().map(String::len))
+                    .chain(m.first_lines.values().map(String::len))
+                    .map(memo_entry_bytes)
                     .sum();
                 assert_eq!(m.bytes, charged, "memo bytes must charge every entry");
                 assert!(m.bytes <= MEMO_BYTE_CEILING, "memo past its ceiling");
@@ -4785,9 +4901,10 @@ mod p0_tests {
                 let charged: usize = m
                     .layouts
                     .values()
-                    .chain(m.flat_layouts.values())
-                    .chain(m.first_lines.values())
-                    .map(|l| memo_entry_bytes(l.len()))
+                    .map(|l| l.text.len())
+                    .chain(m.flat_layouts.values().map(String::len))
+                    .chain(m.first_lines.values().map(String::len))
+                    .map(memo_entry_bytes)
                     .sum();
                 assert_eq!(m.bytes, charged, "memo bytes must charge every entry");
                 assert!(m.bytes <= byte_ceiling, "memo past its ceiling");
