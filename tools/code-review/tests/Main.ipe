@@ -924,7 +924,7 @@ badIndexDbRefused =
 -- A write that fails for a reason other than the key keeps its own error, and
 -- a failed insert whose pair already has a row is the duplicate no-op. A
 -- read-only connection makes every insert fail without a key conflict, with
--- SQLite's read-only error.
+-- SQLite's read-only result code (`SQLITE_READONLY`, 8).
 failedWritesKeepTheirError : Task.Task Error Bool
 failedWritesKeepTheirError =
     let
@@ -937,7 +937,7 @@ failedWritesKeepTheirError =
         failedReadOnly task =
             task
                 |> Task.map (\_ -> False)
-                |> Task.onError (\e -> Task.succeed (String.contains "readonly database" (Error.message e)))
+                |> Task.onError (\e -> Task.succeed (Error.message e == readOnlyWriteError))
     in
     do
         dir <- Task.fromResult (Path.fromString base)
@@ -983,6 +983,11 @@ lostCursorInsertRefreshes =
         removeFileIfAny (dbPath ++ "-wal")
         removeFileIfAny (dbPath ++ "-shm")
         Task.succeed (first == 1 && lost == 1)
+
+
+readOnlyWriteError : String
+readOnlyWriteError =
+    "db: database error [8]"
 
 
 -- The review database at a test file path, opened through the app's own
