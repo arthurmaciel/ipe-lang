@@ -18,7 +18,15 @@ the REST API. A PR that touches a trust root fails unless a code owner's latest
 decisive review APPROVES the PR's current head commit. A code owner cannot
 approve their own PR, so one PR passes without that review: a code owner's
 (GitHub `User` named in CODEOWNERS), from a branch of this repository, whose
-every commit a code owner authored. Every ambiguity (a file list the API truncated, a
+complete commit list ends at the head and whose every commit a code owner or
+this repository's workflow bot authored.
+
+LIMIT: the API links a commit to an account by its email, which any account
+with write access can set, and the workflow bot and `web-flow` stand for any
+write principal (a workflow granted `contents: write`, an API caller naming
+any author). The exemption therefore trusts every write principal alike; it
+separates owners from forks and from outside accounts, not from collaborators.
+Keep write access to the code owners. Every ambiguity (a file list the API truncated, a
 PR that moved since the event, an unparseable merge-queue ref, an HTTP error)
 fails closed.
 
@@ -238,12 +246,12 @@ _LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}(?:\[
 # The API caps a PR's commit listing at this many; past it the list is partial.
 MAX_PR_COMMITS = 250
 # `github-actions[bot]` authors and commits with a workflow token of this
-# repository (release-please's fallback token). A workflow that can write here
-# runs from a trust root on main or from a branch only a write-access account
-# can push, so it widens nothing past the owners' own reach.
+# repository (release-please's fallback token). Any write principal can produce
+# such a commit (a workflow granted `contents: write`, or a local git email), so
+# admitting it trusts write access, not the owners alone (see the LIMIT above).
 _WORKFLOW_BOT = "github-actions[bot]"
-# `web-flow` commits what an account does through GitHub's UI or API (the
-# author is then the acting account).
+# `web-flow` commits what an account does through GitHub's UI or API; the
+# caller chooses the author, so it too stands for any write principal.
 _TRUSTED_COMMITTERS = frozenset({"web-flow", _WORKFLOW_BOT})
 
 
@@ -268,11 +276,14 @@ def _commit_login(commit: object, role: str) -> str | None:
 
 
 def commits_by_owners(pr: dict, commits: list, owners: frozenset[str]) -> bool:
-    """True iff the API listed every commit of the PR and each one's author is
-    a code owner or this repository's workflow bot and its committer one of
-    those or `web-flow`, so no other account's push rides on an owner's PR."""
+    """True iff the API listed every commit of the PR, the last is the PR's
+    head, and each one's author is a code owner or this repository's workflow
+    bot and its committer one of those or `web-flow`."""
     expected = _int(pr, "commits")
     if expected < 1 or expected > MAX_PR_COMMITS or len(commits) != expected:
+        return False
+    last = commits[-1]
+    if not isinstance(last, dict) or last.get("sha") != _sha(pr, "head", "sha"):
         return False
     authors = owners | {_WORKFLOW_BOT}
     committers = owners | _TRUSTED_COMMITTERS

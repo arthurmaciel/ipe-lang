@@ -170,9 +170,10 @@ def _pr(
 _SAME = "<author>"
 
 
-def _commit(author: str | None, committer: str | None = _SAME) -> dict:
+def _commit(author: str | None, committer: str | None = _SAME, sha: str = HEAD) -> dict:
     committer = author if committer == _SAME else committer
     return {
+        "sha": sha,
         "author": None if author is None else {"login": author},
         "committer": None if committer is None else {"login": committer},
     }
@@ -314,6 +315,22 @@ class Decision(unittest.TestCase):
         commits = [_commit("owner", "web-flow"), _commit("github-actions[bot]")]
         self.assertIn("code owner", _decide(self.roots, pr, [{"filename": "Cargo.toml"}], [], commits))
 
+    def test_owner_pr_whose_last_commit_is_not_head_fails(self) -> None:
+        pr = _pr(outside=False, login="Owner")
+        pr["commits"] = 2
+        self.refused_with(pr, [_commit("owner"), _commit("owner", sha=OTHER)])
+        self.refused_with(pr, [_commit("owner"), "not a commit"])
+
+    def test_owner_pr_with_no_commits_fails(self) -> None:
+        pr = _pr(outside=False, login="Owner")
+        pr["commits"] = 0
+        self.refused_with(pr, [])
+
+    def test_owner_pr_with_deleted_head_repo_fails(self) -> None:
+        pr = _pr(outside=False, login="Owner")
+        pr["head"]["repo"] = None
+        self.refused_with(pr, [_commit("owner")])
+
     def test_non_owner_pr_of_owner_commits_fails(self) -> None:
         self.refused_with(_pr(outside=False, login="someone"), [_commit("owner")])
 
@@ -380,6 +397,22 @@ class EventRouting(unittest.TestCase):
         with self.assertRaises(tr.Refused) as cm:
             tr.run_check(_roots(ROOTS), "pull_request_target", ev, FakeApi())  # type: ignore[arg-type]
         self.assertIn("while it was read", str(cm.exception))
+
+    def test_owner_pass_reads_the_commits_endpoint(self) -> None:
+        def run(commits: list) -> str:
+            class FakeApi:
+                def get(self, path: str) -> dict:
+                    return _pr(outside=False, login="Owner")
+
+                def get_all(self, path: str) -> list:
+                    return {"files": [{"filename": "Cargo.toml"}], "reviews": [], "commits": commits}[path.rsplit("/", 1)[1]]
+
+            ev = {"pull_request": {"number": 7, "head": {"sha": HEAD}}}
+            return tr.run_check(_roots(ROOTS), "pull_request_target", ev, FakeApi())  # type: ignore[arg-type]
+
+        self.assertIn("code owner Owner", run([_commit("owner")]))
+        with self.assertRaises(tr.Refused):
+            run([_commit("someone")])
 
 
 class ApiGuards(unittest.TestCase):
