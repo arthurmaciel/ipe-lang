@@ -1,5 +1,6 @@
 module Lib.Index exposing (Unit, drainUnit, loadPending, loadUnitByUid, nameFor, openRead, qualifiedUids)
 
+import Ipe.ByteSize as ByteSize exposing (ByteSize)
 import Ipe.Db
 import Ipe.Db.Decode
 import Ipe.Db.Sql as Sql
@@ -280,7 +281,8 @@ loadSources root rows =
 
 -- Reading a unit's source fails the whole load with a typed error: a queued
 -- unit whose stored path is refused by `RepoPath.resolve`, or whose file
--- cannot be read, is a real problem, not a row to silently skip.
+-- cannot be read or exceeds `sourceCeiling`, is a real problem, not a row to
+-- silently skip.
 loadSource : Root -> RowUnit -> Task.Task Error Unit
 loadSource root row =
     case RepoPath.resolve root row.path of
@@ -289,8 +291,15 @@ loadSource root row =
 
         Ok path ->
             do
-                text <- File.readFile path
+                text <- File.readFileLimit path sourceCeiling
                 Task.succeed (withSource (sliceLines row.lineStart row.lineEnd text) row)
+
+
+-- The largest source file a unit is sliced from; a bigger file under the root
+-- is refused rather than read whole into memory.
+sourceCeiling : ByteSize
+sourceCeiling =
+    ByteSize.mib 16
 
 
 withSource : String -> RowUnit -> Unit

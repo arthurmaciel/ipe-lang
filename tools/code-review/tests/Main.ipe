@@ -3,6 +3,7 @@ module Main exposing (main)
 import Ipe.Db as Db
 import Ipe.Db.Sql as Sql
 import Ipe.Dict as Dict
+import Ipe.Error as Error
 import Ipe.File as File
 import Ipe.Io as Io
 import Ipe.List as List
@@ -817,11 +818,23 @@ relativeRootAccepted =
             )
 
 
-rootRefused : String -> Task.Task Error Bool
-rootRefused raw =
+rootRefused : String -> String -> Task.Task Error Bool
+rootRefused raw reason =
     RepoPath.parseRoot raw
-        |> Task.map (\_ -> False)
-        |> Task.onError (\_ -> Task.succeed True)
+        |> Task.map (\_ -> Nothing)
+        |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
+        |> Task.map (refusedFor reason)
+
+
+-- A parse that failed, and failed for `reason` rather than an unrelated one.
+refusedFor : String -> Maybe String -> Bool
+refusedFor reason refusal =
+    case refusal of
+        Just message ->
+            String.contains reason message
+
+        Nothing ->
+            False
 
 
 -- Blank, missing, and non-directory roots stop at the parse.
@@ -835,37 +848,105 @@ badRootsRefused =
         dir <- Task.fromResult (Path.fromString base)
         File.mkdirAll dir
         writeFileText (base ++ "/plain-file") "x"
-        blank <- rootRefused ""
-        spaces <- rootRefused "   "
-        missing <- rootRefused (base ++ "/does-not-exist")
-        notDir <- rootRefused (base ++ "/plain-file")
+        blank <- rootRefused "" "is empty"
+        spaces <- rootRefused "   " "is empty"
+        missing <- rootRefused (base ++ "/does-not-exist") "not a directory"
+        notDir <- rootRefused (base ++ "/plain-file") "not a directory"
         removeFileIfAny (base ++ "/plain-file")
         Task.succeed (blank && spaces && missing && notDir)
 
 
-settingsRefused : String -> Task.Task Error Bool
-settingsRefused indexDb =
+settingsRefusal : String -> Task.Task Error (Maybe String)
+settingsRefusal indexDb =
     System.setenv "IPE_INDEX_DB" indexDb
         |> Task.andThen (\_ -> Settings.indexSettings)
-        |> Task.map (\_ -> False)
-        |> Task.onError (\_ -> Task.succeed True)
+        |> Task.map (\_ -> Nothing)
+        |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
 
 
--- `IPE_INDEX_DB` values that cannot name a SQLite database stop at the parse.
+settingsRefused : String -> String -> Task.Task Error Bool
+settingsRefused indexDb reason =
+    settingsRefusal indexDb |> Task.map (refusedFor reason)
+
+
+-- `IPE_INDEX_DB` values that cannot name a SQLite database stop at the parse,
+-- each for its own reason, and no refusal repeats the value it refused.
 badIndexDbRefused : Task.Task Error Bool
 badIndexDbRefused =
     do
         cwd <- System.cwd ()
         System.setenv "IPE_INDEX_ROOT" cwd
-        blank <- settingsRefused ""
-        otherScheme <- settingsRefused "postgres://localhost/index"
-        query <- settingsRefused "index.db?mode=rwc"
-        fragment <- settingsRefused "index.db#x"
-        percent <- settingsRefused "index%2e.db"
-        urlQuery <- settingsRefused "sqlite:///tmp/index.db?mode=rwc"
-        urlOtherQuery <- settingsRefused "sqlite:///tmp/index.db?cache=shared"
-        urlEmpty <- settingsRefused "sqlite://"
-        Task.succeed (blank && otherScheme && query && fragment && percent && urlQuery && urlOtherQuery && urlEmpty)
+        blank <- settingsRefused "" "is empty"
+        otherScheme <- settingsRefused "postgres://localhost/index" "not `sqlite://`"
+        query <- settingsRefused "index.db?mode=rwc" "file path containing"
+        fragment <- settingsRefused "index.db#x" "file path containing"
+        percent <- settingsRefused "index%2e.db" "file path containing"
+        urlQuery <- settingsRefused "sqlite:///tmp/index.db?mode=rwc" "with a query"
+        urlOtherQuery <- settingsRefused "sqlite:///tmp/index.db?cache=shared" "with a query"
+        urlEmpty <- settingsRefused "sqlite://" "naming no database"
+        noSlashes <- settingsRefused "sqlite:index.db" "without `//`"
+        fileNoSlashes <- settingsRefused "file:index.db" "without `//`"
+        secret <- settingsRefusal "postgres://admin:s3cr3t-pw@db/index"
+        Task.succeed
+            (blank
+                && otherScheme
+                && query
+                && fragment
+                && percent
+                && urlQuery
+                && urlOtherQuery
+                && urlEmpty
+                && noSlashes
+                && fileNoSlashes
+                && refusedFor "IPE_INDEX_DB" secret
+                && not (refusedFor "s3cr3t-pw" secret)
+                && not (refusedFor "admin" secret)
+            )
+
+
+-- A write that fails for a reason other than the key keeps its own error, and
+-- a failed insert whose pair already has a row is the duplicate no-op. A
+-- read-only connection makes every insert fail without a key conflict.
+failedWritesKeepTheirError : Task.Task Error Bool
+failedWritesKeepTheirError =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-failed-writes"
+
+        dbPath =
+            base ++ "/review.db"
+
+        failed task =
+            task
+                |> Task.map (\_ -> False)
+                |> Task.onError (\_ -> Task.succeed True)
+    in
+    do
+        dir <- Task.fromResult (Path.fromString base)
+        File.mkdirAll dir
+        removeFileIfAny dbPath
+        rw <- LibDb.openAt dbPath
+        LibDb.migrate rw
+        LibDb.insertDecision rw "seen" "h" Approved
+        ro <- LibDb.openAt ("sqlite://" ++ dbPath ++ "?mode=ro")
+        duplicate <- LibDb.insertDecision ro "seen" "h" Approved
+        freshReview <- failed (LibDb.insertDecision ro "fresh" "h" Approved)
+        freshDrain <- failed (LibDb.recordDrain ro "fresh" "h")
+        kept <- LibDb.findDecision rw "fresh" "h"
+        removeFileIfAny dbPath
+        removeFileIfAny (dbPath ++ "-wal")
+        removeFileIfAny (dbPath ++ "-shm")
+        Task.succeed (duplicate == 0 && freshReview && freshDrain && not (hasDecision kept))
+
+
+hasDecision : Maybe Decision -> Bool
+hasDecision m =
+    case m of
+        Just _ ->
+            True
+
+        Nothing ->
+            False
 
 
 -- Every open URL carries exactly the app's mode, for a file path and a
@@ -1497,6 +1578,11 @@ main =
             (\results ->
                 badIndexDbRefused
                     |> Task.map (\ok -> results ++ [ ( "unusable index db locations refused", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                failedWritesKeepTheirError
+                    |> Task.map (\ok -> results ++ [ ( "failed writes keep their error", ok ) ])
             )
         |> Task.andThen
             (\results ->

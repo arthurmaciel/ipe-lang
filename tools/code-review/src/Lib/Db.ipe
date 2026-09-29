@@ -129,9 +129,20 @@ insertDecision db uid bodyHash decision =
 
 
 -- A duplicate (uid, body_hash) pair is a no-op: the first review wins and
--- re-reviewing the same pair never overwrites it.
+-- re-reviewing the same pair never overwrites it. The insert runs first and
+-- the primary key arbitrates, so two concurrent first reviews cannot both
+-- pass a check and one then fail: an insert that fails where the pair's row
+-- exists is the duplicate (0 rows), and one that fails with no row for the
+-- pair keeps its own error. Review rows are never deleted, so a row seen
+-- after a failed insert is the one that won.
 insertIfAbsent : Db -> String -> String -> Decision -> Task.Task Error Int
 insertIfAbsent db uid bodyHash decision =
+    insertNew db uid bodyHash decision
+        |> Task.onError (\insertError -> duplicateOr db uid bodyHash insertError)
+
+
+duplicateOr : Db -> String -> String -> Error -> Task.Task Error Int
+duplicateOr db uid bodyHash insertError =
     do
         existing <- findDecision db uid bodyHash
         case existing of
@@ -139,7 +150,7 @@ insertIfAbsent db uid bodyHash decision =
                 Task.succeed 0
 
             Nothing ->
-                insertNew db uid bodyHash decision
+                Task.fail insertError
 
 
 insertNew : Db -> String -> String -> Decision -> Task.Task Error Int
@@ -287,6 +298,8 @@ drainStore =
 -- insert that loses a race to a concurrent drain of the same pair hits the
 -- primary key; the pair's row then exists, so the update is retried, and the
 -- insert's own error stands only when that retry still matches no row.
+-- Cursor rows are never deleted, so a row the retry matches is the one that
+-- won the race.
 recordDrain : Db -> String -> String -> Task.Task Error Int
 recordDrain db uid bodyHash =
     case drainStore of

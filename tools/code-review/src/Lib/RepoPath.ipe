@@ -87,7 +87,9 @@ rootRefusal raw problem =
 -- A stored `tag:relative` path joined under the root. The first `:`-segment is
 -- the repo tag; the rest is the relative path. Refused: no tag or an empty
 -- one, an empty or absolute relative path, any `..` segment, a path `Ipe.Path`
--- rejects, and a join that does not land strictly below the root.
+-- rejects, and a join that does not land strictly below the root. The check is
+-- lexical: a symlink under the root is followed by the read that uses the
+-- result.
 resolve : Root -> String -> Result PathError Path
 resolve root stored =
     case String.split ":" stored of
@@ -176,7 +178,7 @@ describe err =
             "index path \"" ++ stored ++ "\" is not a valid path"
 
         NotUnderRoot stored ->
-            "index path \"" ++ stored ++ "\" does not name a file under IPE_INDEX_ROOT"
+            "index path \"" ++ stored ++ "\" does not join to a path under IPE_INDEX_ROOT"
 
 
 toError : PathError -> Error

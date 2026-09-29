@@ -26,7 +26,7 @@ See `tools/ipe-index/README.md` for that tool.
 Two environment variables are **required**. `main` parses both at startup and
 exits with an actionable message if either is unset or unusable, so a
 misconfigured run fails closed rather than opening a wrong-path database or
-reading files outside the repo:
+joining a stored path outside the repo:
 
 | Variable         | Meaning                                                       |
 |------------------|---------------------------------------------------------------|
@@ -37,9 +37,16 @@ reading files outside the repo:
 A relative path in any of the three resolves against the working directory. A
 file path containing `?`, `#` or `%` is refused — pass such a location as a
 percent-encoded `sqlite://` URL. A `sqlite://` URL must carry no `?` query and
-must name a database: the app appends the open mode itself. Every stored `tag:relative` path must name a
-file strictly under `IPE_INDEX_ROOT`: an empty, absolute, or `..`-bearing stored
-path is refused with an error naming it.
+must name a database: the app appends the open mode itself. A `sqlite:` or
+`file:` value without `//` is refused. A refused database location is reported
+by variable name only, never by value, since a mistyped URL can carry a
+password.
+
+Every stored `tag:relative` path must join to a path strictly under
+`IPE_INDEX_ROOT`: an empty, absolute, or `..`-bearing stored path is refused with
+an error naming it. The check is lexical — a symlink inside the repo is
+followed, so it can point a read outside the root. A source file larger than
+16 MiB is refused rather than read.
 
 The index DB is opened read-only for listing and read-write (never created) only
 to delete a consumed `change_queue` row. The app creates and owns the review DB.
