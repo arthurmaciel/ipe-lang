@@ -2209,7 +2209,10 @@ pub fn build_emit_manifest(
         // identical to the in-repo tree by construction.
         let embedded = runtime_embed::collect_embedded_crate_text()?;
         for (rel, text) in embedded {
-            manifest.insert(PathBuf::from("ipe_runtime_dep").join(rel), text.clone());
+            manifest.insert(
+                PathBuf::from(ipe_backend_rust::RUNTIME_DEP_DIR).join(rel),
+                text.clone(),
+            );
         }
     }
     manifest.insert(PathBuf::from("Cargo.toml"), emitted.cargo_toml.clone());

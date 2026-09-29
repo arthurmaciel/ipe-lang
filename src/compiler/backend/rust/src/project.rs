@@ -68,6 +68,61 @@ const CARGO_DEP_TOML: &str = include_str!("../templates/Cargo.dep.toml");
 /// enforced by construction and machine-checked by `tests/wasm_dep_floor.rs`.
 const CARGO_WASM_DEP_TOML: &str = include_str!("../templates/Cargo.wasm-dep.toml");
 
+/// The spelling of [`RUNTIME_DEP_DIR`], shared with the manifest-agreement check.
+macro_rules! runtime_dep_dir {
+    () => {
+        "ipe_runtime_dep"
+    };
+}
+
+/// The crate-relative directory every dependency-model manifest names as the
+/// runtime path dependency; whoever builds the emitted crate writes the runtime
+/// crate there.
+pub const RUNTIME_DEP_DIR: &str = runtime_dep_dir!();
+
+/// The manifest line fragment naming [`RUNTIME_DEP_DIR`] as the runtime path.
+const RUNTIME_DEP_PATH_FRAGMENT: &str = concat!("path = \"", runtime_dep_dir!(), "\"");
+
+/// Whether `hay` begins with `needle`, usable in a `const` context.
+const fn bytes_start_with(mut hay: &[u8], mut needle: &[u8]) -> bool {
+    loop {
+        match (hay, needle) {
+            (_, []) => return true,
+            ([h, hay_rest @ ..], [n, needle_rest @ ..]) if *h == *n => {
+                hay = hay_rest;
+                needle = needle_rest;
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Whether `needle` occurs in `hay`, usable in a `const` context.
+const fn bytes_contain(mut hay: &[u8], needle: &[u8]) -> bool {
+    loop {
+        if bytes_start_with(hay, needle) {
+            return true;
+        }
+        match hay {
+            [_, rest @ ..] => hay = rest,
+            [] => return false,
+        }
+    }
+}
+
+// Both dependency-model templates name the runtime at `RUNTIME_DEP_DIR`: the
+// build breaks the instant a template and the constant drift apart.
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if a dependency-model manifest template stops naming `RUNTIME_DEP_DIR` as the runtime path, the runtime-location SEAL invariant [ledger #boundary]
+const _: () = assert!(bytes_contain(
+    CARGO_DEP_TOML.as_bytes(),
+    RUNTIME_DEP_PATH_FRAGMENT.as_bytes()
+));
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if a dependency-model manifest template stops naming `RUNTIME_DEP_DIR` as the runtime path, the runtime-location SEAL invariant [ledger #boundary]
+const _: () = assert!(bytes_contain(
+    CARGO_WASM_DEP_TOML.as_bytes(),
+    RUNTIME_DEP_PATH_FRAGMENT.as_bytes()
+));
+
 /// The generated `ipe_runtime/mod.rs` — the curated set of runtime modules whose
 /// dependencies are satisfied by [`CARGO_TOML`]. The vendored runtime source
 /// ships a fuller `mod.rs` (declaring `uuid` / `web` / `db` / … modules that

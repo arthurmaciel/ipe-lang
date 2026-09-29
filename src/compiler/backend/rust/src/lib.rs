@@ -36,6 +36,7 @@ mod emit_worker;
 mod naming;
 mod preamble;
 mod project;
+pub use project::RUNTIME_DEP_DIR;
 mod render;
 mod runtime_features;
 mod rust_file;

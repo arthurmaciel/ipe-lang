@@ -77,9 +77,7 @@ pub fn compile(source: &str) -> CompileOutcome {
     }
 }
 
-/// The relative directory the emitted manifest names as the runtime path
-/// dependency; the run harness writes the runtime crate there.
-pub const RUNTIME_DEP_DIR: &str = "ipe_runtime_dep";
+pub use ipe_backend_rust::RUNTIME_DEP_DIR;
 
 /// The emitted project of one compile, as crate-relative path to file text.
 ///
