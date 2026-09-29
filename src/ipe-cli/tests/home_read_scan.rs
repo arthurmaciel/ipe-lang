@@ -417,10 +417,16 @@ fn workspace() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// Whether `dir` is an ipe-owned output directory: generated code (an emitted
+/// project and its vendored runtime copy), not source.
+fn is_ipe_output(dir: &Path) -> bool {
+    dir.join(ipe::output_dir::OWNERSHIP_MARKER).is_file()
+}
+
 /// Recursively collect every `.rs` file under `dir` into `out`.
 ///
-/// Build output and hidden directories are skipped; integration-test trees
-/// are skipped too unless `with_tests`.
+/// Build output, ipe output, and hidden directories are skipped;
+/// integration-test trees are skipped too unless `with_tests`.
 fn collect_rs(dir: &Path, with_tests: bool, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -432,7 +438,7 @@ fn collect_rs(dir: &Path, with_tests: bool, out: &mut Vec<PathBuf>) {
                 n == "target"
                     || n.to_string_lossy().starts_with('.')
                     || (!with_tests && n == "tests")
-            });
+            }) || is_ipe_output(&path);
             if !skipped {
                 collect_rs(&path, with_tests, out);
             }
@@ -463,8 +469,8 @@ fn workspace_sources(with_tests: bool) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Recursively collect every `Cargo.toml` under `dir` into `out`, build output
-/// and hidden directories skipped.
+/// Recursively collect every `Cargo.toml` under `dir` into `out`, build output,
+/// ipe output, and hidden directories skipped.
 fn collect_manifests(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -474,7 +480,8 @@ fn collect_manifests(dir: &Path, out: &mut Vec<PathBuf>) {
         if path.is_dir() {
             let skipped = path
                 .file_name()
-                .is_some_and(|n| n == "target" || n.to_string_lossy().starts_with('.'));
+                .is_some_and(|n| n == "target" || n.to_string_lossy().starts_with('.'))
+                || is_ipe_output(&path);
             if !skipped {
                 collect_manifests(&path, out);
             }
@@ -503,6 +510,30 @@ fn workspace_manifests() -> Vec<(String, String)> {
             std::fs::read_to_string(&path).ok().map(|text| (rel, text))
         })
         .collect()
+}
+
+#[test]
+fn the_walk_skips_ipe_output_but_not_its_sibling_source() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("home_read_scan_walk");
+    let _ = std::fs::remove_dir_all(&root);
+    let generated = root.join("out");
+    std::fs::create_dir_all(&generated).expect("create output dir");
+    std::fs::write(
+        generated.join(ipe::output_dir::OWNERSHIP_MARKER),
+        "ipe-output v1\n",
+    )
+    .expect("write marker");
+    std::fs::write(generated.join("emitted.rs"), "").expect("write emitted source");
+    std::fs::write(generated.join("Cargo.toml"), "").expect("write emitted manifest");
+    std::fs::write(root.join("source.rs"), "").expect("write source");
+    std::fs::write(root.join("Cargo.toml"), "").expect("write manifest");
+
+    let mut sources = Vec::new();
+    collect_rs(&root, true, &mut sources);
+    assert_eq!(sources, [root.join("source.rs")]);
+    let mut manifests = Vec::new();
+    collect_manifests(&root, &mut manifests);
+    assert_eq!(manifests, [root.join("Cargo.toml")]);
 }
 
 #[test]
@@ -1633,7 +1664,8 @@ mod lexical {
 
     /// Recursively collect every production `.rs` file under `dir` into `out`.
     ///
-    /// Integration-test trees and build output are skipped: neither ships.
+    /// Integration-test trees, build output, and ipe output are skipped: none
+    /// ships.
     fn collect_production_rs(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
@@ -1643,7 +1675,8 @@ mod lexical {
             if path.is_dir() {
                 let skipped = path
                     .file_name()
-                    .is_some_and(|n| n == "tests" || n == "target");
+                    .is_some_and(|n| n == "tests" || n == "target")
+                    || super::is_ipe_output(&path);
                 if !skipped {
                     collect_production_rs(&path, out);
                 }
