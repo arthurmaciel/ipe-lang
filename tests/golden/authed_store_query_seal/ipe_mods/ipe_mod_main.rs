@@ -229,32 +229,27 @@ pub(crate) fn main_handle_shared_docs(
             Box::new(move |db: Db| -> IpeTask<ServerResponse> {
                 match crate::main_secured_shared_docs() {
                     IpeResult::Err(_) => task_succeed(server_text("policy-error".to_string())),
-                    IpeResult::Ok(secured) => {
-                        task_and_then(
-                            crate::user_ipe_db_store_all_as(principal.clone(), db, secured),
-                            Box::new(move |docs: Vec<RecAuthorBody>| -> IpeTask<ServerResponse> {
-                                task_succeed(server_text(string_join(
-                                    "\n".to_string(),
-                                    list_map_consume(
-                                        {
-                                            let __ipe_fn: Box<
-                                                dyn Fn(RecAuthorBody) -> String
-                                                    + Send
-                                                    + Sync
-                                                    + 'static,
-                                            > = Box::new(
-                                                move |ipe_accessor_arg: RecAuthorBody| -> String {
-                                                    (ipe_accessor_arg).body.clone()
-                                                },
-                                            );
-                                            __ipe_fn
-                                        },
-                                        docs,
-                                    ),
-                                )))
-                            }),
-                        )
-                    }
+                    IpeResult::Ok(secured) => task_and_then(
+                        crate::user_ipe_db_store_all_as(principal.clone(), db, secured),
+                        Box::new(move |docs: Vec<RecAuthorBody>| -> IpeTask<ServerResponse> {
+                            task_succeed(server_text(string_join(
+                                "\n".to_string(),
+                                list_map_consume(
+                                    {
+                                        let __ipe_fn: Box<
+                                            dyn Fn(RecAuthorBody) -> String + Send + Sync + 'static,
+                                        > = Box::new(
+                                            move |ipe_accessor_arg: RecAuthorBody| -> String {
+                                                (ipe_accessor_arg).body.clone()
+                                            },
+                                        );
+                                        __ipe_fn
+                                    },
+                                    docs,
+                                ),
+                            )))
+                        }),
+                    ),
                 }
             }),
         ),
@@ -282,32 +277,27 @@ pub(crate) fn main_handle_my_docs(
             Box::new(move |db: Db| -> IpeTask<ServerResponse> {
                 match crate::main_secured_docs() {
                     IpeResult::Err(_) => task_succeed(server_text("policy-error".to_string())),
-                    IpeResult::Ok(secured) => {
-                        task_and_then(
-                            crate::user_ipe_db_store_all_as(principal.clone(), db, secured),
-                            Box::new(move |docs: Vec<RecAuthorBody>| -> IpeTask<ServerResponse> {
-                                task_succeed(server_text(string_join(
-                                    "\n".to_string(),
-                                    list_map_consume(
-                                        {
-                                            let __ipe_fn: Box<
-                                                dyn Fn(RecAuthorBody) -> String
-                                                    + Send
-                                                    + Sync
-                                                    + 'static,
-                                            > = Box::new(
-                                                move |ipe_accessor_arg: RecAuthorBody| -> String {
-                                                    (ipe_accessor_arg).body.clone()
-                                                },
-                                            );
-                                            __ipe_fn
-                                        },
-                                        docs,
-                                    ),
-                                )))
-                            }),
-                        )
-                    }
+                    IpeResult::Ok(secured) => task_and_then(
+                        crate::user_ipe_db_store_all_as(principal.clone(), db, secured),
+                        Box::new(move |docs: Vec<RecAuthorBody>| -> IpeTask<ServerResponse> {
+                            task_succeed(server_text(string_join(
+                                "\n".to_string(),
+                                list_map_consume(
+                                    {
+                                        let __ipe_fn: Box<
+                                            dyn Fn(RecAuthorBody) -> String + Send + Sync + 'static,
+                                        > = Box::new(
+                                            move |ipe_accessor_arg: RecAuthorBody| -> String {
+                                                (ipe_accessor_arg).body.clone()
+                                            },
+                                        );
+                                        __ipe_fn
+                                    },
+                                    docs,
+                                ),
+                            )))
+                        }),
+                    ),
                 }
             }),
         ),
@@ -423,33 +413,25 @@ pub(crate) fn main_handle_mask_docs(
             Box::new(move |db: Db| -> IpeTask<ServerResponse> {
                 match crate::main_secured_mask_docs() {
                     IpeResult::Err(_) => task_succeed(server_text("policy-error".to_string())),
-                    IpeResult::Ok(secured) => {
-                        task_and_then(
-                            crate::user_ipe_db_store_all_as(principal.clone(), db, secured),
-                            Box::new(move |docs: Vec<RecOwnerSsn>| -> IpeTask<ServerResponse> {
-                                task_succeed(server_text(string_join(
-                                    "\n".to_string(),
-                                    list_map_consume(
-                                        {
-                                            let __ipe_fn: Box<
-                                                dyn Fn(RecOwnerSsn) -> String
-                                                    + Send
-                                                    + Sync
-                                                    + 'static,
-                                            > = Box::new(move |d: RecOwnerSsn| -> String {
-                                                maybe_with_default(
-                                                    "•".to_string(),
-                                                    (d).ssn.clone(),
-                                                )
-                                            });
-                                            __ipe_fn
-                                        },
-                                        docs,
-                                    ),
-                                )))
-                            }),
-                        )
-                    }
+                    IpeResult::Ok(secured) => task_and_then(
+                        crate::user_ipe_db_store_all_as(principal.clone(), db, secured),
+                        Box::new(move |docs: Vec<RecOwnerSsn>| -> IpeTask<ServerResponse> {
+                            task_succeed(server_text(string_join(
+                                "\n".to_string(),
+                                list_map_consume(
+                                    {
+                                        let __ipe_fn: Box<
+                                            dyn Fn(RecOwnerSsn) -> String + Send + Sync + 'static,
+                                        > = Box::new(move |d: RecOwnerSsn| -> String {
+                                            maybe_with_default("•".to_string(), (d).ssn.clone())
+                                        });
+                                        __ipe_fn
+                                    },
+                                    docs,
+                                ),
+                            )))
+                        }),
+                    ),
                 }
             }),
         ),
