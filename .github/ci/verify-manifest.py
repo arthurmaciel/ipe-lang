@@ -90,7 +90,11 @@ Checks performed
      `run:`.  Any other mention (`!= 'true'`, a negation, an `&&`-conjunct,
      an unparseable expression) is refused, as is the release-only disjunct
      with no leading trivial-pass step (every step skipped also reports a
-     pass).
+     pass).  GitHub resolves context properties case-insensitively, so the
+     name is matched without case, and a job output that re-exports
+     `release_only` (to any depth) counts as `release_only`.  A `gate`
+     producer whose every step carries an `if:` is held to the same
+     trivial-pass shape whatever the steps test, since its steps can all skip.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -690,7 +694,7 @@ def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = R
         errors.append(f"gate producer {fname!r} has no workflow file (check 7)")
 
 
-_RELEASE_ONLY = re.compile(r"\brelease_only\b")
+_RELEASE_ONLY_OUTPUT = "release_only"
 _RELEASE_ONLY_RUN = re.compile(r"needs\.[A-Za-z0-9_-]+\.outputs\.release_only == 'true'")
 
 
@@ -736,6 +740,27 @@ def _top_level_disjuncts(cond: str) -> list[str] | None:
     return [" ".join(p.split()) for p in parts]
 
 
+def _release_only_mention(doc: dict) -> re.Pattern[str]:
+    """Case-insensitive whole-word match of `release_only` and of every job
+    output that re-exports it, directly or through another such output."""
+    jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
+    names = {_RELEASE_ONLY_OUTPUT}
+    while True:
+        pattern = re.compile(
+            r"\b(?:" + "|".join(re.escape(n) for n in sorted(names)) + r")\b", re.IGNORECASE
+        )
+        found = {
+            str(key).lower()
+            for job in jobs.values()
+            if isinstance(job, dict) and isinstance(job.get("outputs"), dict)
+            for key, value in job["outputs"].items()
+            if pattern.search(str(value))
+        }
+        if found <= names:
+            return pattern
+        names |= found
+
+
 def check_release_only_skips(gate_contexts: set[str], errors: list[str], root: str = REPO_ROOT) -> None:
     """Check 8 (see the module docstring). Unparseable workflows are refused by
     check 6; here they are skipped only after that refusal is on record."""
@@ -747,10 +772,14 @@ def check_release_only_skips(gate_contexts: set[str], errors: list[str], root: s
     for path in paths:
         fname = os.path.basename(path)
         try:
-            doc = strict_yaml.safe_load(open(path))
+            with open(path) as f:
+                doc = strict_yaml.safe_load(f)
         except yaml.YAMLError:
             continue
-        jobs = doc.get("jobs") if isinstance(doc, dict) else None
+        if not isinstance(doc, dict):
+            continue
+        mention = _release_only_mention(doc)
+        jobs = doc.get("jobs")
         for jid, job in (jobs.items() if isinstance(jobs, dict) else ()):
             if not isinstance(job, dict):
                 continue
@@ -761,12 +790,25 @@ def check_release_only_skips(gate_contexts: set[str], errors: list[str], root: s
             if not gate_contexts.intersection(contexts):
                 continue
             cond = str(job.get("if", ""))
-            if not _RELEASE_ONLY.search(cond):
+            steps = job.get("steps")
+            all_conditional = (
+                isinstance(steps, list)
+                and bool(steps)
+                and all(isinstance(st, dict) and "if" in st for st in steps)
+            )
+            if not mention.search(cond) and not all_conditional:
                 continue
             loc = f"{fname}: gate producer job {str(jid)!r}"
             disjuncts = _top_level_disjuncts(cond)
             runs = [d for d in disjuncts or () if _RELEASE_ONLY_RUN.fullmatch(d)]
-            others = [d for d in disjuncts or () if _RELEASE_ONLY.search(d) and d not in runs]
+            others = [d for d in disjuncts or () if mention.search(d) and d not in runs]
+            if not mention.search(cond):
+                errors.append(
+                    f"{loc}: every step carries an `if:`, so all of them can skip and the "
+                    "job reports a pass without executing anything; give it an "
+                    "unconditional step or the release-only trivial-pass shape (check 8)"
+                )
+                continue
             if disjuncts is None or len(runs) != 1 or others:
                 errors.append(
                     f"{loc}: job-level `if:` may name `release_only` only as one top-level "
@@ -774,7 +816,6 @@ def check_release_only_skips(gate_contexts: set[str], errors: list[str], root: s
                     "required job reports a pass without executing anything (check 8)"
                 )
                 continue
-            steps = job.get("steps")
             first = steps[0] if isinstance(steps, list) and steps else None
             if not (
                 isinstance(first, dict)

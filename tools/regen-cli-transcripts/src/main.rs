@@ -27,7 +27,7 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, ExitStatus, Stdio};
 
 use ipe::cli_transcript;
 
@@ -48,12 +48,28 @@ fn main() -> ExitCode {
 /// tool or its environment — never a transcript, which is only a [`Transcript`].
 #[derive(Debug)]
 enum RegenError {
-    /// A command-line flag is malformed.
-    Usage(String),
-    /// The workspace root could not be located or read.
-    RepoRoot(String),
-    /// `cargo build -p ipe --bin ipe` failed or reported no `ipe` executable.
-    BuildIpe(String),
+    /// A command-line argument is not a known flag.
+    UnknownArg(String),
+    /// A flag was given without its path value.
+    MissingValue(&'static str),
+    /// The `--ipe-bin` path does not resolve to an existing file.
+    IpeBin {
+        path: PathBuf,
+        error: std::io::Error,
+    },
+    /// A candidate workspace `Cargo.toml` could not be read.
+    RepoRootRead {
+        path: PathBuf,
+        error: std::io::Error,
+    },
+    /// No ancestor directory holds a workspace `Cargo.toml`.
+    RepoRootNotFound,
+    /// `cargo` could not be spawned to build `ipe`.
+    CargoSpawn(std::io::Error),
+    /// `cargo build -p ipe --bin ipe` exited unsuccessfully.
+    CargoFailed(ExitStatus),
+    /// `cargo build` succeeded but reported no executable for the `ipe` bin.
+    NoIpeExecutable,
     /// The `ipe` binary could not be spawned.
     Spawn {
         args: Vec<String>,
@@ -71,8 +87,23 @@ enum RegenError {
 impl fmt::Display for RegenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Usage(msg) | Self::RepoRoot(msg) => f.write_str(msg),
-            Self::BuildIpe(msg) => write!(f, "cannot build `ipe`: {msg}"),
+            Self::UnknownArg(arg) => write!(f, "unknown argument `{arg}`"),
+            Self::MissingValue(flag) => write!(f, "{flag} requires a path argument"),
+            Self::IpeBin { path, error } => write!(f, "--ipe-bin {}: {error}", path.display()),
+            Self::RepoRootRead { path, error } => {
+                write!(f, "cannot read {}: {error}", path.display())
+            }
+            Self::RepoRootNotFound => f.write_str("workspace root not found — pass --repo-root"),
+            Self::CargoSpawn(error) => {
+                write!(f, "cannot build `ipe`: cannot spawn `cargo`: {error}")
+            }
+            Self::CargoFailed(status) => write!(
+                f,
+                "cannot build `ipe`: `cargo build -p ipe --bin ipe` failed ({status})"
+            ),
+            Self::NoIpeExecutable => {
+                f.write_str("cannot build `ipe`: cargo reported no executable for the `ipe` binary")
+            }
             Self::Spawn { args, error } => {
                 write!(f, "cannot spawn `ipe {}`: {error}", args.join(" "))
             }
@@ -102,8 +133,9 @@ fn run() -> Result<usize, RegenError> {
     let repo_root = opts.repo_root;
     // Absolute, so the spawn resolves the same file whatever `current_dir` is.
     let ipe_bin = match opts.ipe_bin {
-        Some(path) => std::fs::canonicalize(&path)
-            .map_err(|e| RegenError::Usage(format!("--ipe-bin {}: {e}", path.display())))?,
+        Some(path) => {
+            std::fs::canonicalize(&path).map_err(|error| RegenError::IpeBin { path, error })?
+        }
         None => build_ipe(&repo_root)?,
     };
 
@@ -176,26 +208,24 @@ fn envelope(transcript: &Transcript, repo_root: &Path) -> String {
 
 /// Build `ipe` and return the executable cargo reports, so the transcripts come
 /// from exactly the binary just built wherever the target directory lives.
+/// Cargo's rendered diagnostics go to the inherited stderr, so a failed build
+/// shows its compiler errors.
 fn build_ipe(repo_root: &Path) -> Result<PathBuf, RegenError> {
     let output = Command::new("cargo")
         .args(["build", "--quiet", "-p", "ipe", "--bin", "ipe"])
         .arg("--message-format=json-render-diagnostics")
         .current_dir(repo_root)
+        .stderr(Stdio::inherit())
         .output()
-        .map_err(|e| RegenError::BuildIpe(format!("cannot spawn `cargo`: {e}")))?;
+        .map_err(RegenError::CargoSpawn)?;
     if !output.status.success() {
-        return Err(RegenError::BuildIpe(format!(
-            "`cargo build -p ipe --bin ipe` failed ({})",
-            output.status
-        )));
+        return Err(RegenError::CargoFailed(output.status));
     }
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .find_map(|msg| ipe_executable(&msg))
-        .ok_or_else(|| {
-            RegenError::BuildIpe("cargo reported no executable for the `ipe` binary".to_owned())
-        })
+        .ok_or(RegenError::NoIpeExecutable)
 }
 
 /// The `executable` of a cargo `compiler-artifact` message for the `ipe` bin.
@@ -225,14 +255,12 @@ fn parse_args() -> Result<Options, RegenError> {
     let mut ipe_bin = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
-        let slot = match arg.as_str() {
-            "--repo-root" => &mut repo_root,
-            "--ipe-bin" => &mut ipe_bin,
-            other => return Err(RegenError::Usage(format!("unknown argument `{other}`"))),
+        let (flag, slot) = match arg.as_str() {
+            "--repo-root" => ("--repo-root", &mut repo_root),
+            "--ipe-bin" => ("--ipe-bin", &mut ipe_bin),
+            other => return Err(RegenError::UnknownArg(other.to_owned())),
         };
-        let value = args
-            .next()
-            .ok_or_else(|| RegenError::Usage(format!("{arg} requires a path argument")))?;
+        let value = args.next().ok_or(RegenError::MissingValue(flag))?;
         *slot = Some(PathBuf::from(value));
     }
     let repo_root = match repo_root {
@@ -247,20 +275,18 @@ fn find_workspace_root(start: &Path) -> Result<PathBuf, RegenError> {
     loop {
         let candidate = current.join("Cargo.toml");
         if candidate.exists() {
-            let content = std::fs::read_to_string(&candidate).map_err(|e| {
-                RegenError::RepoRoot(format!("cannot read {}: {e}", candidate.display()))
-            })?;
+            let content =
+                std::fs::read_to_string(&candidate).map_err(|error| RegenError::RepoRootRead {
+                    path: candidate.clone(),
+                    error,
+                })?;
             if content.contains("[workspace]") {
                 return Ok(current.to_owned());
             }
         }
         match current.parent() {
             Some(parent) => current = parent,
-            None => {
-                return Err(RegenError::RepoRoot(
-                    "workspace root not found — pass --repo-root".to_owned(),
-                ));
-            }
+            None => return Err(RegenError::RepoRootNotFound),
         }
     }
 }
