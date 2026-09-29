@@ -560,15 +560,17 @@ fn exposure(
         .collect();
     // An exposed type the module does not import is its own, whether declared
     // in source or supplied by the kernel (`Ipe.Ui.Tui.Attribute`).
-    let own_types: BTreeSet<String> = match exposed_type_names {
-        Some(set) => set.difference(&imported_types).cloned().collect(),
-        None => parsed
-            .unions
-            .iter()
-            .map(|u| name(u.value.name.value))
-            .chain(parsed.aliases.iter().map(|a| name(a.value.name.value)))
-            .collect(),
-    };
+    let own_types: BTreeSet<String> = exposed_type_names.map_or_else(
+        || {
+            parsed
+                .unions
+                .iter()
+                .map(|u| name(u.value.name.value))
+                .chain(parsed.aliases.iter().map(|a| name(a.value.name.value)))
+                .collect()
+        },
+        |set| set.difference(&imported_types).cloned().collect(),
+    );
     (exposed_values, own_types)
 }
 
