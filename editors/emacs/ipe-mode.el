@@ -1,6 +1,6 @@
 ;;; ipe-mode.el --- Major mode for the Ipê language -*- lexical-binding: t; -*-
 
-;; URL: https://github.com/arthurmaciel/ipe-lang
+;; URL: https://github.com/ipe-lang/compiler
 ;; Package-Requires: ((emacs "29.1"))
 ;; SPDX-License-Identifier: Apache-2.0
 

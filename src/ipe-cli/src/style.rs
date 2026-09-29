@@ -20,7 +20,13 @@ use std::io::IsTerminal;
 
 /// The repository home, shown in the CLI header and the "report bugs" footer,
 /// and mirrored by the installer.
-pub const REPO_URL: &str = "https://github.com/arthurmaciel/ipe-lang";
+///
+/// Derived from [`ipe_diagnostics::GITHUB_REPO_SLUG`], the SSOT for every
+/// GitHub URL the compiler and its tooling build.
+#[must_use]
+pub fn repo_url() -> String {
+    format!("https://github.com/{}", ipe_diagnostics::GITHUB_REPO_SLUG)
+}
 
 /// The lead phrase of the "report bugs" footer, before the issues URL.
 pub const REPORT_BUGS_PHRASE: &str = "If you find any bugs, please report them at ";
@@ -28,7 +34,7 @@ pub const REPORT_BUGS_PHRASE: &str = "If you find any bugs, please report them a
 /// The issue tracker URL the "report bugs" footer points at.
 #[must_use]
 pub fn issues_url() -> String {
-    format!("{REPO_URL}/issues")
+    format!("{}/issues", repo_url())
 }
 
 /// The "report bugs" footer, `{REPORT_BUGS_PHRASE}{issues_url()}.`, unstyled.
@@ -39,13 +45,13 @@ pub fn report_bugs_footer() -> String {
     format!("{REPORT_BUGS_PHRASE}{}.", issues_url())
 }
 
-/// The product header line, `Ipê language - v{version} - {REPO_URL}`.
+/// The product header line, `Ipê language - v{version} - {repo_url()}`.
 ///
 /// Rendered with no colour; the help renderer inserts the palette escapes around
 /// the segments. This is the plain skeleton the header text agrees on.
 #[must_use]
 pub fn header_line(version: &str) -> String {
-    format!("Ipê language - v{version} - {REPO_URL}")
+    format!("Ipê language - v{version} - {}", repo_url())
 }
 
 /// The left gutter that indents every human-facing line.
@@ -295,11 +301,12 @@ pub fn command_header(use_color: bool) -> String {
     let version = env!("CARGO_PKG_VERSION");
     let p = Palette::select(use_color);
     format!(
-        "\n{GUTTER}{y}Ipê language{r} - {g}v{version}{r} - {d}{REPO_URL}{r}\n\n",
+        "\n{GUTTER}{y}Ipê language{r} - {g}v{version}{r} - {d}{url}{r}\n\n",
         y = p.bright_yellow,
         g = p.green,
         d = p.dim,
         r = p.reset,
+        url = repo_url(),
     )
 }
 
@@ -393,9 +400,9 @@ mod tests {
 
     #[test]
     fn footer_and_header_carry_the_repo_url() {
-        assert!(report_bugs_footer().contains(REPO_URL));
+        assert!(report_bugs_footer().contains(&repo_url()));
         assert!(report_bugs_footer().ends_with("/issues."));
-        assert!(header_line("9.9.9").contains(REPO_URL));
+        assert!(header_line("9.9.9").contains(&repo_url()));
         assert!(header_line("9.9.9").contains("v9.9.9"));
     }
 
@@ -412,7 +419,7 @@ mod tests {
             "banner carries crate version"
         );
         // The canonical project URL is present.
-        assert!(h.contains(REPO_URL), "banner carries repo URL");
+        assert!(h.contains(&repo_url()), "banner carries repo URL");
         // The plain variant has no ANSI escapes.
         assert!(!h.contains('\x1b'), "plain banner has no ANSI");
     }
@@ -437,12 +444,12 @@ mod tests {
             "version is light green: {h:?}"
         );
         assert!(
-            h.contains(&format!("{}{REPO_URL}{}", c.dim, c.reset)),
+            h.contains(&format!("{}{}{}", c.dim, repo_url(), c.reset)),
             "URL is dim gray: {h:?}"
         );
         assert_eq!(
             command_header(false),
-            format!("\n  Ipê language - v{version} - {REPO_URL}\n\n")
+            format!("\n  Ipê language - v{version} - {}\n\n", repo_url())
         );
     }
 
@@ -450,7 +457,7 @@ mod tests {
     fn report_bugs_footer_is_phrase_then_issues_url() {
         assert_eq!(
             report_bugs_footer(),
-            format!("{REPORT_BUGS_PHRASE}{REPO_URL}/issues.")
+            format!("{REPORT_BUGS_PHRASE}{}/issues.", repo_url())
         );
     }
 

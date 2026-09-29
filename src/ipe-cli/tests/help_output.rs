@@ -424,8 +424,9 @@ fn a_user_error_screen_is_framed_without_the_bug_footer() {
     let r = run(&["build", "--definitely-not-a-flag"]);
     assert!(!r.ok);
     let header = format!(
-        "\n  Ipê language - v{} - https://github.com/arthurmaciel/ipe-lang\n",
-        env!("CARGO_PKG_VERSION")
+        "\n  Ipê language - v{} - {}\n",
+        env!("CARGO_PKG_VERSION"),
+        ipe::style::repo_url()
     );
     assert!(r.stderr.starts_with(&header), "header leads:\n{}", r.stderr);
     assert!(

@@ -12,7 +12,7 @@ pub mod terminal;
 
 // Re-export the whole taxonomy with a glob so no downstream-nameable code can be
 // omitted by a hand-synced list: every `IPE_*` constant, `ALL_CODES`, `Code`,
-// `Severity`, `title`, `explain_page`, and `ISSUE_TRACKER_URL` are named once in
+// `Severity`, `title`, `explain_page`, and `issue_tracker_url` are named once in
 // `code.rs` and surfaced here in one line. `code_reexport_covers_all_codes`
 // pins that every entry in `ALL_CODES` is reachable through this re-export.
 pub use code::*;

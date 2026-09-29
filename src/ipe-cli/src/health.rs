@@ -1555,7 +1555,7 @@ fn apply_one(fix: &Fix) -> Result<String, CliError> {
             ))
         }
         Fix::RunUpgrade { latest, .. } => {
-            let command = format!("curl -fsSL {} | sh", crate::INSTALL_SH_URL);
+            let command = format!("curl -fsSL {} | sh", crate::install_sh_url());
             crate::run_installer(&command)?;
             Ok(format!("upgraded to {latest}"))
         }

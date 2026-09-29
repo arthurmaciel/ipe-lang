@@ -2,7 +2,7 @@
 # editors/emacs/configure.sh — one-shot Ipê integration for Emacs and Doom Emacs.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/emacs/configure.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ipe-lang/compiler/main/editors/emacs/configure.sh | sh
 #   (or from a checkout: sh editors/emacs/configure.sh)
 #
 # What it does:
@@ -34,7 +34,7 @@ if [ -n "$IPE_SRC_ROOT" ]; then
     . "$IPE_SRC_ROOT/editors/lib/ipe-editors.sh"
 else
     _lib="$(mktemp)" || exit 1
-    curl -fsSL "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/$IPE_EDITORS_REF/editors/lib/ipe-editors.sh" -o "$_lib" \
+    curl -fsSL "https://raw.githubusercontent.com/ipe-lang/compiler/$IPE_EDITORS_REF/editors/lib/ipe-editors.sh" -o "$_lib" \
         || { rm -f "$_lib"; printf 'error: cannot download editors/lib/ipe-editors.sh\n' >&2; exit 1; }
     # shellcheck source=/dev/null
     . "$_lib"
@@ -43,7 +43,7 @@ fi
 IPE_TAG="Emacs"
 
 # --- preflight ---------------------------------------------------------------
-need ipe "install the Ipê toolchain first: https://github.com/arthurmaciel/ipe-lang"
+need ipe "install the Ipê toolchain first: https://github.com/ipe-lang/compiler"
 need emacs "install Emacs 29+ first: https://www.gnu.org/software/emacs"
 
 EMACS_MAJOR="$(emacs -Q --batch --eval '(princ emacs-major-version)' 2>/dev/null)" || EMACS_MAJOR=""

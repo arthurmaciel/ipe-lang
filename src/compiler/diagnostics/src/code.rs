@@ -20,11 +20,22 @@
 //! the taxonomy size is derived by counting rows — never a hand-pinned literal.
 //! Adding a code is one table row (plus its `explain/<CODE>.md`); see [`code!`].
 
+/// The compiler's GitHub `org/repo` slug.
+///
+/// Single source of truth for every GitHub URL the compiler and its tooling
+/// build (issue tracker, install script, release feed, CLI banner): every
+/// other such URL is derived from this one constant rather than carrying its
+/// own copy of the slug, so a repository move is a one-line change here.
+pub const GITHUB_REPO_SLUG: &str = "ipe-lang/compiler";
+
 /// Where a reader reports a compiler bug or nudges an unimplemented feature.
 ///
 /// Single source of truth: every humble / ICE message and every `IPE-I*` /
-/// `IPE-L*` explain page footer references this one constant.
-pub const ISSUE_TRACKER_URL: &str = "https://github.com/arthurmaciel/ipe-lang/issues";
+/// `IPE-L*` explain page footer calls this one function, derived from
+/// [`GITHUB_REPO_SLUG`].
+pub fn issue_tracker_url() -> String {
+    format!("https://github.com/{GITHUB_REPO_SLUG}/issues")
+}
 
 /// A stable compiler error code, e.g. `IPE-T0001`.
 ///
@@ -845,8 +856,8 @@ mod tests {
     #[test]
     fn issue_tracker_url_is_a_github_issues_link() {
         assert_eq!(
-            ISSUE_TRACKER_URL,
-            "https://github.com/arthurmaciel/ipe-lang/issues"
+            issue_tracker_url(),
+            format!("https://github.com/{GITHUB_REPO_SLUG}/issues")
         );
     }
 

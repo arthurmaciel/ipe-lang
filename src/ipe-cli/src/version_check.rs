@@ -7,9 +7,15 @@
 use semver::Version;
 
 /// The GitHub releases API for the published `ipe` binaries — the same repo the
-/// installer (`INSTALL_SH_URL`) resolves against.
-const RELEASES_LATEST_API: &str =
-    "https://api.github.com/repos/arthurmaciel/ipe-lang/releases/latest";
+/// installer (`install_sh_url`) resolves against. Derived from
+/// [`ipe_diagnostics::GITHUB_REPO_SLUG`], the SSOT for every GitHub URL this
+/// compiler and its tooling build.
+fn releases_latest_api() -> String {
+    format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        ipe_diagnostics::GITHUB_REPO_SLUG
+    )
+}
 
 /// The running binary vs. the latest release.
 pub struct VersionCheck {
@@ -92,7 +98,7 @@ fn evaluate(current: Version, fetched: Option<Version>) -> VersionCheck {
 /// Fetch the latest release tag over HTTPS and parse it. Any failure (network,
 /// non-2xx, non-JSON body, missing/blank/malformed tag) ⇒ `None`.
 fn fetch_latest_tag() -> Option<Version> {
-    let body = crate::net::get(RELEASES_LATEST_API)?;
+    let body = crate::net::get(&releases_latest_api())?;
     let json: serde_json::Value = serde_json::from_str(&body).ok()?;
     parse_tag(json.get("tag_name")?.as_str()?)
 }

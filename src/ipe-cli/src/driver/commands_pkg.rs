@@ -1741,9 +1741,16 @@ pub fn run_version(rest: &[String]) -> Result<(), CliError> {
 /// The same script the docs' `curl … | sh` install uses; `ipe upgrade` re-runs it
 /// to fetch the latest release binary and install it over the current one. `pub`
 /// so the install-drift test can assert the README `curl` one-liner and this
-/// self-updater URL stay in agreement.
-pub const INSTALL_SH_URL: &str =
-    "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/install.sh";
+/// self-updater URL stay in agreement. Derived from
+/// [`ipe_diagnostics::GITHUB_REPO_SLUG`], the SSOT for every GitHub URL this
+/// compiler and its tooling build.
+#[must_use]
+pub fn install_sh_url() -> String {
+    format!(
+        "https://raw.githubusercontent.com/{}/main/install.sh",
+        ipe_diagnostics::GITHUB_REPO_SLUG
+    )
+}
 
 /// The env var marking an `install.sh` run launched by this wrapper.
 ///
@@ -1848,7 +1855,7 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
     }
 
     let fmt = format.unwrap_or_default();
-    let command = format!("curl -fsSL {INSTALL_SH_URL} | sh");
+    let command = format!("curl -fsSL {} | sh", install_sh_url());
 
     // --dry-run: show the installer command and stop — no version check needed.
     if dry_run {

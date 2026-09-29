@@ -75,9 +75,9 @@ Reconcile the live ruleset to `.github/ci/required-set.json`. Example (review be
 
 ```bash
 # Fetch, edit required_status_checks to match ci/required-set.json, then PATCH.
-gh api repos/arthurmaciel/ipe-lang/rulesets/22326541 > /tmp/rs.json
+gh api repos/ipe-lang/compiler/rulesets/22326541 > /tmp/rs.json
 # ... edit /tmp/rs.json required_status_checks to the contexts in ci/required-set.json ...
-gh api -X PUT repos/arthurmaciel/ipe-lang/rulesets/22326541 --input /tmp/rs.json
+gh api -X PUT repos/ipe-lang/compiler/rulesets/22326541 --input /tmp/rs.json
 ```
 
 `strict_required_status_checks_policy` should stay `false` (heavy `nightly-gate`

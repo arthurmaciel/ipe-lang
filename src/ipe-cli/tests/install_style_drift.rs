@@ -57,12 +57,14 @@ fn installer_mirrors_the_repo_url_and_bug_footer() {
 
     // The installer builds the URL from `REPO="owner/repo"`; assert the SSOT
     // URL is exactly that GitHub base so the two cannot drift.
-    let expected_repo = style::REPO_URL
+    let repo_url = style::repo_url();
+    let expected_repo = repo_url
         .strip_prefix("https://github.com/")
-        .unwrap_or(style::REPO_URL);
+        .unwrap_or(&repo_url)
+        .to_string();
     assert!(
         script.contains(&format!("REPO=\"{expected_repo}\"")),
-        "install.sh REPO must equal the style REPO_URL path segment `{expected_repo}`"
+        "install.sh REPO must equal the style repo_url() path segment `{expected_repo}`"
     );
 
     // The success footer's fixed phrase must match the SSOT footer verbatim,
@@ -80,7 +82,7 @@ fn installer_mirrors_the_repo_url_and_bug_footer() {
     assert!(
         footer.ends_with("/issues."),
         "the style footer must end at `{}/issues.`",
-        style::REPO_URL
+        style::repo_url()
     );
     // The installer renders `.../$REPO/issues.` — assert the literal tail.
     assert!(
@@ -171,7 +173,7 @@ fn installer_banner_success_and_footer_use_the_two_space_gutter() {
 }
 
 /// The two install entry points must stay consistent: the README `curl … | sh`
-/// one-liner and the `ipe upgrade` self-updater (`INSTALL_SH_URL`) must reference
+/// one-liner and the `ipe upgrade` self-updater (`install_sh_url`) must reference
 /// the SAME URL, and it must point at the installer that actually exists at the
 /// repository root. When `install.sh` moved under `tools/scripts/`, the README and
 /// the upgrade URL kept pointing at the old path and silently 404'd — this test
@@ -185,11 +187,11 @@ fn install_entrypoints_agree_on_the_root_installer() {
         "install.sh must live at the repository root: {script_path}"
     );
 
-    // 2. `ipe upgrade` curls exactly this URL — the real constant the command runs.
-    let upgrade_url = ipe::INSTALL_SH_URL;
+    // 2. `ipe upgrade` curls exactly this URL — the real function the command runs.
+    let upgrade_url = ipe::install_sh_url();
     assert!(
         upgrade_url.ends_with("/main/install.sh"),
-        "ipe upgrade INSTALL_SH_URL must point at `main/install.sh`, got `{upgrade_url}`"
+        "ipe upgrade install_sh_url() must point at `main/install.sh`, got `{upgrade_url}`"
     );
 
     // 3. The README `curl … | sh` one-liner must curl that same URL — one source
@@ -201,7 +203,7 @@ fn install_entrypoints_agree_on_the_root_installer() {
         .find(|l| l.contains("curl") && l.contains("install.sh"))
         .expect("README must document a `curl … install.sh | sh` install command");
     assert!(
-        curl_line.contains(upgrade_url),
+        curl_line.contains(&upgrade_url),
         "the README curl one-liner must use the same URL as `ipe upgrade` (`{upgrade_url}`); \
          README line: `{}`",
         curl_line.trim()
