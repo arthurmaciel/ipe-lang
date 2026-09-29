@@ -46,9 +46,14 @@ jobs:
       playground: ${{ steps.filter.outputs.playground }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # A merge-group run needs history back to the queue base for the filter.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '1' }}
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          # A merge-group run diffs against the queue base, not the default branch.
+          base: ${{ github.event.merge_group.base_sha }}
           filters: |
             playground:
               - 'examples/wasm/language-playground/**'
@@ -62,7 +67,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.playground == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.playground == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -83,7 +88,7 @@ jobs:
   playground-jail:
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.playground == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.playground == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     timeout-minutes: 20
     env:
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src

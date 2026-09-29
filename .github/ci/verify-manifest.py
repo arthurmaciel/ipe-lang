@@ -61,6 +61,18 @@ Checks performed
      a deterministic check must never risk). The composite itself must equal
      one canonical structure exactly. Malformed shapes are refused, never
      skipped. Limits are listed on `check_sccache_wiring`.
+  7. Merge-queue safety: every producer of a `gate` context triggers on both
+     `pull_request` and `merge_group`, else the queue waits forever on a
+     required context no merge-group run reports.  A merge-group run gets the
+     base repository's secrets and token, so every `merge_group`-triggered
+     workflow must be secret-free (no `secrets` word anywhere in its text), must
+     not also trigger on `pull_request_target`, and must declare a top-level
+     `permissions:` mapping with no `write` scope.  A job-level `write` scope is
+     admitted only on a job whose `if:` is a pure conjunction requiring
+     `github.event_name == 'pull_request'`.  A bare
+     `github.event_name != 'pull_request'` full-tier test must be followed by
+     `&& github.event_name != 'merge_group'`, so a merge-group run takes the PR
+     tier rather than silently running the full tier.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -493,6 +505,114 @@ def _load_sccache_workflows(root: str, errors: list[str]) -> list[SccacheWorkflo
                 _refuse_shape(f"{fname}: job {str(jid)!r}", "the job", "a mapping", j, errors)
         out.append(SccacheWorkflow(fname, doc, jobs))
     return out
+
+
+# A full-tier test that forgot the merge queue: `!= 'pull_request'` not followed
+# by the matching `merge_group` exclusion.
+_BARE_PR_TIER = re.compile(
+    r"event_name\s*!=\s*['\"]pull_request['\"]"
+    r"(?!\s*&&\s*github\.event_name\s*!=\s*['\"]merge_group['\"])"
+)
+_SECRETS_WORD = re.compile(r"\bsecrets\b", re.IGNORECASE)
+_PR_ONLY_CONJUNCT = re.compile(
+    r"(?:^|&&)\s*github\.event_name\s*==\s*'pull_request'\s*(?:&&|$)"
+)
+
+
+def _triggers(doc: dict) -> set[str] | None:
+    """The workflow's event names, or None when `on:` has no recognised shape.
+    PyYAML 1.1 reads the bare key `on` as boolean True."""
+    on = doc.get(True, doc.get("on"))
+    if isinstance(on, str):
+        return {on}
+    if isinstance(on, list) and all(isinstance(e, str) for e in on):
+        return set(on)
+    if isinstance(on, dict):
+        return {str(k) for k in on}
+    return None
+
+
+def _write_scopes(perms: object) -> bool:
+    """True when a `permissions:` value grants any write scope."""
+    if isinstance(perms, str):
+        return perms.strip().casefold() != "read-all"
+    if isinstance(perms, dict):
+        return any(str(v).strip().casefold() == "write" for v in perms.values())
+    return True
+
+
+def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 7 (see the module docstring). Unparseable workflows are refused by
+    check 6; here they are skipped only after that refusal is on record."""
+    paths = sorted(
+        p
+        for pattern in ("*.yml", "*.yaml")
+        for p in glob.glob(os.path.join(root, "workflows", pattern))
+    )
+    seen: set[str] = set()
+    for path in paths:
+        fname = os.path.basename(path)
+        seen.add(fname)
+        with open(path) as f:
+            text = f.read()
+        try:
+            doc = strict_yaml.safe_load(text)
+        except yaml.YAMLError:
+            continue
+        if not isinstance(doc, dict):
+            continue
+        triggers = _triggers(doc)
+        if triggers is None:
+            errors.append(f"{fname}: `on:` is not a string, list of strings, or mapping")
+            continue
+        if fname in gate_producers:
+            for event in ("pull_request", "merge_group"):
+                if event not in triggers:
+                    errors.append(
+                        f"{fname} produces a required `gate` context but does not trigger "
+                        f"on `{event}` — the merge queue would wait forever on it"
+                    )
+        if "merge_group" not in triggers:
+            continue
+        if "pull_request_target" in triggers:
+            errors.append(
+                f"{fname}: a merge_group workflow may not also trigger on "
+                "`pull_request_target` (base-repo secrets reach untrusted code)"
+            )
+        if _SECRETS_WORD.search(text):
+            errors.append(
+                f"{fname}: a merge_group workflow must be secret-free — a merge-group "
+                "run carries the base repository's secrets"
+            )
+        if "permissions" not in doc:
+            errors.append(f"{fname}: a merge_group workflow must declare top-level `permissions:`")
+        elif _write_scopes(doc["permissions"]):
+            errors.append(
+                f"{fname}: a merge_group workflow's top-level `permissions:` must be "
+                f"read-only, got {doc['permissions']!r}"
+            )
+        jobs = doc.get("jobs")
+        for jid, job in (jobs.items() if isinstance(jobs, dict) else ()):
+            if not isinstance(job, dict) or "permissions" not in job:
+                continue
+            if not _write_scopes(job["permissions"]):
+                continue
+            cond = " ".join(str(job.get("if", "")).split())
+            if "||" in cond or not _PR_ONLY_CONJUNCT.search(cond):
+                errors.append(
+                    f"{fname}: job {str(jid)!r} holds a write scope in a merge_group "
+                    "workflow; its `if:` must be a conjunction requiring "
+                    "`github.event_name == 'pull_request'`"
+                )
+        for m in _BARE_PR_TIER.finditer(text):
+            line = text.count("\n", 0, m.start()) + 1
+            errors.append(
+                f"{fname}:{line}: `github.event_name != 'pull_request'` without "
+                "`&& github.event_name != 'merge_group'` — a merge-group run would "
+                "take the full tier"
+            )
+    for fname in sorted(gate_producers - seen):
+        errors.append(f"gate producer {fname!r} has no workflow file (check 7)")
 
 
 def _env_keys_folded(env: dict) -> set[str]:
@@ -1054,6 +1174,16 @@ def main() -> int:
 
     # ---- 6. sccache wiring: action <-> RUSTC_WRAPPER/SCCACHE_GHA_ENABLED ----
     check_sccache_wiring(errors)
+
+    # ---- 7. merge queue: gate producers trigger on it; its runs stay secret-free ----
+    check_merge_queue(
+        {
+            str(e["producer"])
+            for e in by_context.values()
+            if e.get("disposition") == "gate" and e.get("producer")
+        },
+        errors,
+    )
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:

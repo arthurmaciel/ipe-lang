@@ -19,6 +19,7 @@ on:
       - 'tools/panic-scan/**'
       - '.github/workflows/panic-scan.yml'
   pull_request:
+  merge_group:
   workflow_dispatch: {}
 
 permissions:
