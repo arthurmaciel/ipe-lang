@@ -47,11 +47,8 @@ fn repo_root() -> PathBuf {
 
 fn is_exempt(rel_path: &str) -> bool {
     EXEMPT.iter().any(|e| {
-        if let Some(dir) = e.strip_suffix('/') {
-            rel_path.starts_with(dir)
-        } else {
-            rel_path == *e
-        }
+        e.strip_suffix('/')
+            .map_or_else(|| rel_path == *e, |dir| rel_path.starts_with(dir))
     })
 }
 
