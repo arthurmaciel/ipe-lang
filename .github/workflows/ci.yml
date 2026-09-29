@@ -275,7 +275,7 @@ jobs:
       - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       - run: >-
           cargo nextest run --locked -p ipe --lib -E
-          'test(/^(output_dir|clean|cache|owner_trust|secret_file)::/)
+          'test(/^(output_dir|clean|cache|owner_trust|secret_file|proven_dir)::/)
           | test(=ffi::tests::owned_project_cache_is_refused_when_unverifiable)
           | test(=driver::tests::find_manifest_refuses_an_unverifiable_manifest)
           | test(=login::tests::an_unsupported_token_store_writes_no_token)

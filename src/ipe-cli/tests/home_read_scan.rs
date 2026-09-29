@@ -25,7 +25,7 @@
 //! scan refusing every home-name literal and computed-key read outside its
 //! reasoned allowlist.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Workspace-relative files that own a validated home accessor.
 const ACCESSOR_FILES: &[&str] = &[
@@ -417,13 +417,15 @@ fn workspace() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// Every repository source file under the workspace-relative `tops`: tracked
-/// files plus new ones not yet added, never anything `.gitignore` excludes.
+/// Every scanned file under `src/`, `tools/`, and `examples/` whose path
+/// satisfies `keep`, as `(workspace-relative path, text)`.
 ///
-/// Asking git rather than walking the disk keeps build output out of the scan
-/// wherever it lands: an emitted project under an example's `out/` vendors a
-/// copy of the runtime that is not a source of this repository.
-fn repository_files(tops: &[&str]) -> Vec<PathBuf> {
+/// The set is exactly what git would commit — tracked files plus untracked
+/// files not ignored — so gitignored build output (a vendored runtime copy
+/// under an `out/` dir, a `target/`) is never scanned while a new source file
+/// not yet added still is. Hidden directories are skipped; integration-test
+/// trees are skipped too unless `with_tests`.
+fn scanned_files(with_tests: bool, keep: impl Fn(&str) -> bool) -> Vec<(String, String)> {
     let root = workspace();
     let listed = std::process::Command::new("git")
         .arg("-C")
@@ -434,93 +436,126 @@ fn repository_files(tops: &[&str]) -> Vec<PathBuf> {
             "--cached",
             "--others",
             "--exclude-standard",
-            "--",
         ])
-        .args(tops)
+        .args(["--", "src", "tools", "examples"])
         .output();
     assert!(
-        listed.as_ref().is_ok_and(|out| out.status.success()),
-        "`git ls-files` failed in {}: {listed:?}",
-        root.display()
+        matches!(&listed, Ok(out) if out.status.success()),
+        "git ls-files must list the workspace checkout: {listed:?}"
     );
     let Ok(listed) = listed else {
         return Vec::new();
     };
-    String::from_utf8_lossy(&listed.stdout)
+    // A lossy decode would turn a non-UTF-8 name into a path that is never
+    // read, so the listing must decode exactly.
+    let listed = String::from_utf8(listed.stdout);
+    assert!(
+        listed.is_ok(),
+        "git ls-files listed a non-UTF-8 path: {listed:?}"
+    );
+    let Ok(listed) = listed else {
+        return Vec::new();
+    };
+    listed
         .split('\0')
-        .filter(|rel| !rel.is_empty())
-        .map(|rel| root.join(rel))
-        .filter(|path| path.is_file())
-        .collect()
-}
-
-/// Whether workspace-relative `rel` lies under a directory named `name`.
-fn under_dir(rel: &Path, name: &str) -> bool {
-    rel.parent()
-        .is_some_and(|dir| dir.components().any(|c| c.as_os_str() == name))
-}
-
-/// Whether workspace-relative `rel` lies under a hidden directory.
-fn under_hidden_dir(rel: &Path) -> bool {
-    rel.parent().is_some_and(|dir| {
-        dir.components()
-            .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
-    })
-}
-
-/// Every repository `.rs` file under `tops`, hidden directories skipped;
-/// integration-test trees are skipped too unless `with_tests`.
-fn repository_rs(tops: &[&str], with_tests: bool) -> Vec<PathBuf> {
-    let root = workspace();
-    repository_files(tops)
-        .into_iter()
-        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
-        .filter(|path| {
-            let rel = path.strip_prefix(&root).unwrap_or(path);
-            !under_hidden_dir(rel) && (with_tests || !under_dir(rel, "tests"))
+        .filter(|rel| !rel.is_empty() && keep(rel))
+        .filter(|rel| {
+            let dir = rel.rsplit_once('/').map_or("", |(dir, _)| dir);
+            !dir.split('/')
+                .any(|d| d.starts_with('.') || (!with_tests && d == "tests"))
         })
-        .collect()
+        .filter_map(|rel| match std::fs::read_to_string(root.join(rel)) {
+            Ok(text) => Some(Ok((rel.to_owned(), text))),
+            // `--cached` still lists a tracked file deleted from the worktree;
+            // a dangling symlink still exists, so it is not skipped.
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    && root.join(rel).symlink_metadata().is_err() =>
+            {
+                None
+            }
+            Err(e) => Some(Err(format!("{rel}: {e}"))),
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .unwrap_or_else(|unreadable| {
+            assert!(
+                unreadable.is_empty(),
+                "unreadable scanned file {unreadable}"
+            );
+            Vec::new()
+        })
+}
+
+/// Whether workspace-relative `rel` names a Rust source file.
+fn is_rust_source(rel: &str) -> bool {
+    std::path::Path::new(rel)
+        .extension()
+        .is_some_and(|ext| ext == "rs")
 }
 
 /// Every `.rs` file under `src/`, `tools/`, and `examples/`, keyed by its
 /// workspace-relative `/`-separated path.
 fn workspace_sources(with_tests: bool) -> Vec<(String, String)> {
-    let root = workspace();
-    repository_rs(&["src", "tools", "examples"], with_tests)
-        .into_iter()
-        .filter_map(|path| {
-            let rel = path
-                .strip_prefix(&root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            std::fs::read_to_string(&path).ok().map(|text| (rel, text))
-        })
-        .collect()
+    scanned_files(with_tests, is_rust_source)
 }
 
 /// The workspace root manifest and every `Cargo.toml` under `src/`, `tools/`,
 /// and `examples/`, keyed by its workspace-relative path.
 fn workspace_manifests() -> Vec<(String, String)> {
     let root = workspace();
-    let mut files = vec![root.join("Cargo.toml")];
-    files.extend(
-        repository_files(&["src", "tools", "examples"])
-            .into_iter()
-            .filter(|path| path.file_name().is_some_and(|n| n == "Cargo.toml"))
-            .filter(|path| !under_hidden_dir(path.strip_prefix(&root).unwrap_or(path))),
-    );
-    files
+    let mut files: Vec<(String, String)> = std::fs::read_to_string(root.join("Cargo.toml"))
+        .ok()
+        .map(|text| ("Cargo.toml".to_owned(), text))
         .into_iter()
-        .filter_map(|path| {
-            let rel = path
-                .strip_prefix(&root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            std::fs::read_to_string(&path).ok().map(|text| (rel, text))
-        })
-        .collect()
+        .collect();
+    files.extend(scanned_files(true, |rel| {
+        rel == "Cargo.toml" || rel.ends_with("/Cargo.toml")
+    }));
+    files
+}
+
+#[test]
+fn the_scanned_set_is_the_committable_set() {
+    let with_tests = scanned_files(true, is_rust_source);
+    let production = scanned_files(false, is_rust_source);
+    let this_file = "src/ipe-cli/tests/home_read_scan.rs";
+    assert!(
+        with_tests.iter().any(|(rel, _)| rel == this_file),
+        "the scan must include tracked test sources when asked"
+    );
+    assert!(
+        !production.iter().any(|(rel, _)| rel == this_file),
+        "the production scan must skip integration-test trees"
+    );
+    assert!(
+        ACCESSOR_FILES
+            .iter()
+            .all(|file| production.iter().any(|(rel, _)| rel == file)),
+        "the production scan must include every audited home accessor"
+    );
+
+    let listed = with_tests
+        .iter()
+        .map(|(rel, _)| rel.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let checked = std::process::Command::new("git")
+        .arg("-C")
+        .arg(workspace())
+        .args(["check-ignore", "--stdin"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            if let Some(mut stdin) = child.stdin.take() {
+                std::io::Write::write_all(&mut stdin, listed.as_bytes())?;
+            }
+            child.wait_with_output()
+        });
+    assert!(
+        matches!(&checked, Ok(out) if out.stdout.is_empty()),
+        "the scan must never read gitignored build output: {checked:?}"
+    );
 }
 
 #[test]
@@ -1664,24 +1699,16 @@ mod lexical {
 
     #[test]
     fn no_production_source_reads_the_home_directly() {
-        let workspace = workspace();
-        // Integration-test trees are skipped: they never ship.
-        let files = super::repository_rs(&["src"], false);
+        let files = super::scanned_files(false, |rel| {
+            rel.starts_with("src/") && super::is_rust_source(rel)
+        });
         assert!(
             !files.is_empty(),
             "the scan found no sources; the walk root is wrong"
         );
 
         let mut offenders = Vec::new();
-        for path in files {
-            let rel = path
-                .strip_prefix(&workspace)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            let text = std::fs::read_to_string(&path);
-            assert!(text.is_ok(), "unreadable production source `{rel}`");
-            let Ok(text) = text else { continue };
+        for (rel, text) in files {
             let hits = raw_home_reads(
                 &text,
                 &exempt_in(LITERAL_ALLOWED, &rel),

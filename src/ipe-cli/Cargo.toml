@@ -121,7 +121,7 @@ toml = "0.8"
 # formatting would be a hostile surprise on a file the user owns, so the edit
 # goes through the format-preserving `toml_edit` document model: only the exact
 # key it sets is touched, every comment and layout the user wrote is kept.
-toml_edit = "0.22"
+toml_edit = "0.25"
 # The runtime crate SOURCE (`../runtime/rust`: its `Cargo.toml` + `src/**`) is
 # compiled INTO this binary as a static directory tree, so a copied `ipe`
 # binary carries its own runtime source and never needs a separate download.

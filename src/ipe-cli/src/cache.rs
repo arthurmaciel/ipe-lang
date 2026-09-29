@@ -115,6 +115,8 @@ use ipe_intern::{Interner, SerdeInternerGuard};
 use ipe_ir::Program;
 
 use crate::output_dir::OwnedDir;
+use crate::proven_dir::EntryName;
+use crate::secret_file::OwnerDir;
 use sha2::{Digest, Sha256};
 
 /// Domain-separation tag for the content-address hash — bumped whenever the
@@ -795,55 +797,99 @@ const SALT_BYTES: usize = 32;
 /// The per-user secret naming the default cache partition, created on first use.
 ///
 /// Stored as hex in `$IPE_HOME/build-cache-salt`. The file is created, and
-/// read back, only through a handle proven owner-only by
-/// [`crate::secret_file`]. A symlink, a malformed file, a file another user
-/// could read, a directory another user can write, or a host that cannot keep
-/// the file owner-only yields `None` (the default cache is then disabled),
-/// never a salt another user could read or an attacker could have chosen.
+/// read back, only relative to the `IPE_HOME` handle [`crate::secret_file`]
+/// proved private, through a file handle proven owner-only. A symlink, a
+/// malformed file, a file another user could read, a directory (or ancestor)
+/// another user can write, or a host that cannot keep the file owner-only
+/// yields `None` (the default cache is then disabled), never a salt another
+/// user could read or an attacker could have chosen. A refused `IPE_HOME`
+/// is warned about once, naming why, since the user can fix it.
 fn user_cache_salt() -> Option<String> {
     let home = crate::runtime_embed::ipe_home().ok()?;
-    let path = home.join("build-cache-salt");
-    if fs::symlink_metadata(&path).is_ok() {
-        return read_salt(&path);
+    let dir =
+        match crate::secret_file::create_owner_dir(crate::secret_file::HOST_SECRET_STORE, &home) {
+            Ok(dir) => dir,
+            Err(refusal) => {
+                if let Some(warning) = salt_dir_warning(&refusal) {
+                    crate::screen::chatter(
+                        crate::screen::Stream::Stderr,
+                        crate::screen::Tone::UserError,
+                        &warning,
+                    );
+                }
+                return None;
+            }
+        };
+    let name = EntryName::new(std::ffi::OsStr::new(SALT_FILE_NAME))?;
+    salt_in(&dir, &name)
+}
+
+/// The warning a refused salt directory earns, if the user can act on it.
+///
+/// A link standing for `IPE_HOME`, or a component another user could write,
+/// is named; a host without owner-only files, or a failing filesystem call,
+/// disables the default cache silently.
+fn salt_dir_warning(refusal: &crate::secret_file::SecretFileError) -> Option<crate::text::Message> {
+    use crate::secret_file::{DirRefusal, SecretFileError};
+    match refusal {
+        SecretFileError::Dir(DirRefusal::Symlinked(dir)) => {
+            Some(crate::text::msg::build_cache_dir_symlinked(&dir.display()))
+        }
+        SecretFileError::Dir(DirRefusal::Untrusted(dir)) => {
+            Some(crate::text::msg::build_cache_dir_untrusted(&dir.display()))
+        }
+        SecretFileError::Unsupported
+        | SecretFileError::Io(_)
+        | SecretFileError::NotOwnerOnly(_)
+        | SecretFileError::NotRegularFile(_) => None,
     }
-    crate::secret_file::create_owner_dir(crate::secret_file::HOST_SECRET_STORE, &home).ok()?;
-    create_salt(&path)
+}
+
+/// The name of the salt file inside `IPE_HOME`.
+const SALT_FILE_NAME: &str = "build-cache-salt";
+
+/// The salt kept as `name` in `dir`, created there when the name is vacant.
+fn salt_in(dir: &OwnerDir, name: &EntryName) -> Option<String> {
+    if dir.is_vacant(name).ok()? {
+        create_salt(dir, name)
+    } else {
+        read_salt(dir, name)
+    }
 }
 
 /// The most bytes read from a salt file: its hex digits plus trailing whitespace.
 const SALT_READ_CAP: u64 = 128;
 
-/// The salt stored at `path`, read through a handle proven owner-only.
+/// The salt stored as `name` in `dir`, read through a handle proven owner-only.
 ///
 /// `None` when the file is absent, not private to the invoking user, or not
 /// exactly [`SALT_BYTES`] hex-encoded bytes.
-fn read_salt(path: &Path) -> Option<String> {
+fn read_salt(dir: &OwnerDir, name: &EntryName) -> Option<String> {
     use std::io::Read as _;
-    let file =
-        crate::secret_file::open_existing(crate::secret_file::HOST_SECRET_STORE, path).ok()?;
+    let file = dir.open_existing(name).ok()?;
     let mut text = String::new();
     file.take(SALT_READ_CAP).read_to_string(&mut text).ok()?;
     let text = text.trim().to_owned();
     (text.len() == SALT_BYTES * 2 && text.bytes().all(|b| b.is_ascii_hexdigit())).then_some(text)
 }
 
-/// Create a fresh salt at the unused name `path`, durable before it is used.
+/// Create a fresh salt as the unused `name` in `dir`, durable before it is used.
 ///
 /// A salt file left half-written is removed. A concurrent first build that
-/// won the race to create `path` supplies the salt instead.
-fn create_salt(path: &Path) -> Option<String> {
+/// won the race to create `name` supplies the salt instead.
+fn create_salt(dir: &OwnerDir, name: &EntryName) -> Option<String> {
     use std::io::Write as _;
     let mut bytes = [0u8; SALT_BYTES];
     getrandom::fill(&mut bytes).ok()?;
     let salt = hex::encode(bytes);
-    match crate::secret_file::create_new(crate::secret_file::HOST_SECRET_STORE, path) {
+    match dir.create_new(name) {
         Ok(mut file) => {
             let written = file
                 .write_all(salt.as_bytes())
                 .and_then(|()| file.sync_all());
             drop(file);
             if written.is_err() {
-                let _ = fs::remove_file(path);
+                let _ = dir.remove(name);
                 return None;
             }
             Some(salt)
@@ -851,7 +897,7 @@ fn create_salt(path: &Path) -> Option<String> {
         Err(crate::secret_file::SecretFileError::Io(e))
             if e.kind() == std::io::ErrorKind::AlreadyExists =>
         {
-            read_salt(path)
+            read_salt(dir, name)
         }
         Err(_) => None,
     }
@@ -1022,34 +1068,52 @@ pub fn store_ir(
 mod tests {
     use super::*;
 
-    /// A fresh, empty scratch directory for one salt test.
+    /// A fresh, empty scratch directory for one salt test, held as a secret dir.
     #[cfg(unix)]
-    fn salt_test_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+    fn salt_test_dir(tag: &str) -> (PathBuf, OwnerDir) {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonical temp dir");
+        let dir = base.join(format!(
             "ipe-cache-salt-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("create test dir");
-        dir
+        let held = crate::secret_file::create_owner_dir(
+            crate::secret_file::SecretStore::OwnerOnlyFile,
+            &dir,
+        )
+        .expect("create test dir");
+        (dir, held)
+    }
+
+    /// The entry name `text`, which the test knows to be one plain component.
+    #[cfg(unix)]
+    fn salt_entry(text: &str) -> EntryName {
+        EntryName::new(std::ffi::OsStr::new(text)).expect("a plain component")
     }
 
     #[cfg(unix)]
     #[test]
     fn a_created_salt_is_owner_only_and_read_back() {
-        let dir = salt_test_dir("roundtrip");
-        let path = dir.join("build-cache-salt");
-        let created = create_salt(&path);
+        let (dir, held) = salt_test_dir("roundtrip");
+        let name = salt_entry(SALT_FILE_NAME);
+        let created = salt_in(&held, &name);
         assert!(
             created
                 .as_ref()
                 .is_some_and(|salt| salt.len() == SALT_BYTES * 2),
             "a fresh salt must be created: {created:?}"
         );
-        assert_eq!(read_salt(&path), created, "the salt reads back unchanged");
         assert_eq!(
-            create_salt(&path),
+            read_salt(&held, &name),
+            created,
+            "the salt reads back unchanged"
+        );
+        assert_eq!(salt_in(&held, &name), created, "an existing salt is reused");
+        assert_eq!(
+            create_salt(&held, &name),
             created,
             "a lost creation race reuses the winner's salt"
         );
@@ -1058,31 +1122,84 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_refused_salt_dir_is_warned_about_with_its_typed_reason() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (base, _held) = salt_test_dir("dir-refused");
+        let real = base.join("real");
+        fs::create_dir(&real).expect("create real dir");
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("plant dir symlink");
+        let store = crate::secret_file::SecretStore::OwnerOnlyFile;
+
+        let linked = crate::secret_file::create_owner_dir(store, &link).map(drop);
+        let warning = linked.as_ref().err().and_then(salt_dir_warning);
+        assert_eq!(
+            warning,
+            Some(crate::text::msg::build_cache_dir_symlinked(&link.display())),
+            "a symlinked IPE_HOME is warned about as a link: {linked:?}"
+        );
+
+        let shared = base.join("shared");
+        fs::create_dir(&shared).expect("create shared dir");
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).expect("chmod shared");
+        let exposed = crate::secret_file::create_owner_dir(store, &shared).map(drop);
+        let warning = exposed.as_ref().err().and_then(salt_dir_warning);
+        assert_eq!(
+            warning,
+            Some(crate::text::msg::build_cache_dir_untrusted(
+                &shared.display()
+            )),
+            "a shared IPE_HOME is warned about as untrusted: {exposed:?}"
+        );
+
+        let unsupported = crate::secret_file::create_owner_dir(
+            crate::secret_file::SecretStore::Unsupported,
+            &real,
+        )
+        .map(drop);
+        assert_eq!(
+            unsupported.as_ref().err().and_then(salt_dir_warning),
+            None,
+            "a host without owner-only files disables the cache silently"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_salt_another_user_could_read_or_a_symlink_is_refused() {
         use std::os::unix::fs::PermissionsExt as _;
-        let dir = salt_test_dir("refused");
-        let path = dir.join("build-cache-salt");
-        let created = create_salt(&path);
+        let (dir, held) = salt_test_dir("refused");
+        let name = salt_entry(SALT_FILE_NAME);
+        let path = dir.join(SALT_FILE_NAME);
+        let created = create_salt(&held, &name);
         assert!(created.is_some(), "a fresh salt must be created");
         for mode in [0o644, 0o640] {
             fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("chmod salt");
             assert_eq!(
-                read_salt(&path),
+                salt_in(&held, &name),
                 None,
                 "a mode-{mode:o} salt must be refused"
             );
         }
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("chmod salt");
-        let link = dir.join("linked-salt");
-        std::os::unix::fs::symlink(&path, &link).expect("plant symlink");
-        assert_eq!(read_salt(&link), None, "a symlinked salt must be refused");
-        let malformed = dir.join("malformed-salt");
+        std::os::unix::fs::symlink(&path, dir.join("linked-salt")).expect("plant symlink");
+        assert_eq!(
+            salt_in(&held, &salt_entry("linked-salt")),
+            None,
+            "a symlinked salt must be refused"
+        );
+        let malformed = salt_entry("malformed-salt");
         assert!(
-            create_salt(&malformed).is_some(),
+            create_salt(&held, &malformed).is_some(),
             "create a salt to corrupt"
         );
-        fs::write(&malformed, "not hex").expect("corrupt salt");
-        assert_eq!(read_salt(&malformed), None, "a malformed salt is refused");
+        fs::write(dir.join("malformed-salt"), "not hex").expect("corrupt salt");
+        assert_eq!(
+            salt_in(&held, &malformed),
+            None,
+            "a malformed salt is refused"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
