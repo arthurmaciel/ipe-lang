@@ -300,10 +300,21 @@ SCCACHE_WIRING_TEXT_RE = re.compile(
 # step `{uses: mozilla-actions/sccache-action@<40-hex commit sha>}`, then `SCCACHE_WIRE_STEP`
 # byte-exact. Its wiring is proven by equality, never by pattern.
 SCCACHE_INSTALL_USES_RE = re.compile(re.escape(SCCACHE_ACTION_PREFIX) + r"[0-9a-f]{40}\Z")
+# The cache is an accelerator, never a gate: sccache refuses every compile when
+# its server cannot start (the backend's startup read failing), so rustc is
+# wired through it only once the server is up, and a server that never idles
+# out cannot be restarted into that failure mid-job. Past startup, a backend
+# I/O error compiles locally instead of failing the build.
 SCCACHE_WIRE_RUN = (
     "set -euo pipefail\n"
-    f'echo "{SCCACHE_WRAPPER_VAR}=sccache" >> "$GITHUB_ENV"\n'
-    f'echo "{SCCACHE_GHA_VAR}=true" >> "$GITHUB_ENV"\n'
+    f"if {SCCACHE_GHA_VAR}=true SCCACHE_IDLE_TIMEOUT=0 sccache --start-server; then\n"
+    f'  echo "{SCCACHE_WRAPPER_VAR}=sccache" >> "$GITHUB_ENV"\n'
+    f'  echo "{SCCACHE_GHA_VAR}=true" >> "$GITHUB_ENV"\n'
+    '  echo "SCCACHE_IDLE_TIMEOUT=0" >> "$GITHUB_ENV"\n'
+    '  echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "$GITHUB_ENV"\n'
+    "else\n"
+    '  echo "::warning::sccache server did not start; building without the compile cache"\n'
+    "fi\n"
 )
 SCCACHE_WIRE_STEP = {"name": "Wire rustc through sccache", "shell": "bash", "run": SCCACHE_WIRE_RUN}
 SCCACHE_COMPOSITE_DOC_KEYS = frozenset({"name", "description", "runs"})
