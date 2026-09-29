@@ -70,8 +70,13 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let tmp_base = std::env::temp_dir().join("regen-goldens-emit");
-    let _ = std::fs::remove_dir_all(&tmp_base);
+    let tmp_base = match ipe::scratch::ScratchDir::new("regen-goldens-emit") {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("regen-goldens: cannot create a private scratch directory: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let mut failures = 0usize;
     let mut changed = 0usize;
@@ -80,7 +85,7 @@ fn main() -> ExitCode {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("<unnamed>");
-        let out = tmp_base.join(name);
+        let out = tmp_base.path().join(name);
         let _ = std::fs::remove_dir_all(&out);
         match regenerate_one(dir, &out, &runtime) {
             Ok(n) => {
@@ -95,7 +100,7 @@ fn main() -> ExitCode {
             }
         }
     }
-    let _ = std::fs::remove_dir_all(&tmp_base);
+    drop(tmp_base);
 
     println!(
         "regen-goldens: {} golden(s), {changed} file(s) rewritten, {failures} failure(s)",

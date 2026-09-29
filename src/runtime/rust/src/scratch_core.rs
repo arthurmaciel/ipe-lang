@@ -33,6 +33,23 @@
 // `ScratchError` or a `ScratchRootRefusal`: nothing is created under an
 // untrusted base and nothing is written through a planted link.
 //
+// The OS temp root is private to this module: every caller reaches it through
+// a typed constructor (`ScratchDir::new`, `ScratchDir::new_fitting`,
+// `ScratchFile::create`, `private_temp_file`), so no temporary entry anywhere
+// is created by name outside these guarantees.
+//
+// A stale atomic-replace sibling is reclaimed only when its writer is provably
+// gone, within two limits:
+//
+// - liveness is probed in this process's pid namespace on this host; a writer
+//   in another pid namespace or on another host sharing the directory looks
+//   gone, so only the staleness age protects its sibling, and should that
+//   writer outlive the age, its `AtomicSibling::commit` fails with `NotFound`
+//   rather than losing the write silently;
+// - off Unix there is no portable liveness probe or POSIX owner, so only this
+//   process counts as live and every entry counts as owned: reclamation there
+//   rests on the exact sibling-name shape and the staleness age alone.
+//
 // Regular (`//`) comments, not inner docs: this file is `include!`d verbatim
 // into a sandbox module, where an inner doc is an illegal mid-file attribute.
 
@@ -248,7 +265,7 @@ impl fmt::Display for LeafName {
 /// `Unsupported` on WebAssembly, where the standard library's temp lookup
 /// panics instead of answering.
 #[cfg(target_family = "wasm")]
-pub fn temp_root() -> io::Result<PathBuf> {
+fn temp_root() -> io::Result<PathBuf> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "this target has no OS temp directory",
@@ -260,8 +277,21 @@ pub fn temp_root() -> io::Result<PathBuf> {
 /// # Errors
 /// None on this target; the result matches the WebAssembly arm.
 #[cfg(not(target_family = "wasm"))]
-pub fn temp_root() -> io::Result<PathBuf> {
+fn temp_root() -> io::Result<PathBuf> {
     Ok(std::env::temp_dir())
+}
+
+/// The bases a length-bounded entry may live under: the OS temp root, then, on Unix, the short `/tmp`.
+///
+/// # Errors
+/// `Unsupported` where [`temp_root`] has none.
+fn fitting_bases() -> io::Result<Vec<PathBuf>> {
+    let root = temp_root()?;
+    #[cfg(unix)]
+    let bases = vec![root, PathBuf::from("/tmp")];
+    #[cfg(not(unix))]
+    let bases = vec![root];
+    Ok(bases)
 }
 
 /// Why a scratch location was refused.
@@ -383,6 +413,18 @@ impl From<ScratchRootRefusal> for io::Error {
         Self::new(io::ErrorKind::PermissionDenied, refusal)
     }
 }
+
+/// No candidate base left room for the entry within its path-length limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoFittingBase;
+
+impl fmt::Display for NoFittingBase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("no scratch base leaves room for the entry within its path-length limit")
+    }
+}
+
+impl std::error::Error for NoFittingBase {}
 
 /// Every one of the [`MAX_ATTEMPTS`] fresh names already existed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -871,6 +913,15 @@ pub fn private_file_under(base: &Path, label: &str) -> io::Result<(PathBuf, File
     private_file_under_with(base, label, verify_file_handle)
 }
 
+/// Create a private file directly under the OS temp root, as [`private_file_under`] does.
+///
+/// # Errors
+/// `Unsupported` where the target has no OS temp root; otherwise see
+/// [`private_file_under`].
+pub fn private_temp_file(label: &str) -> io::Result<(PathBuf, File)> {
+    private_file_under(&temp_root()?, label)
+}
+
 /// [`private_file_under`] with the handle verification supplied, so a refusal can be driven in tests.
 fn private_file_under_with(
     base: &Path,
@@ -928,21 +979,31 @@ impl AtomicSibling {
         Self::create_with(target, verify_file_handle)
     }
 
+    /// Create the private sibling that will replace `target`, whose leftovers were already reclaimed.
+    ///
+    /// Unlike [`AtomicSibling::create`] it reads no directory, so a caller on an
+    /// async executor can replace the same target on every write.
+    ///
+    /// # Errors
+    /// See [`AtomicSibling::create`].
+    pub fn create_reclaimed(target: &ReclaimedTarget) -> io::Result<Self> {
+        Self::create_reclaimed_with(target, verify_file_handle)
+    }
+
     /// [`AtomicSibling::create`] with the handle verification supplied, so a refusal can be driven in tests.
     fn create_with(
         target: &Path,
         verify: impl FnOnce(&Path, &File) -> io::Result<()>,
     ) -> io::Result<Self> {
-        let parent = target
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        let label = target
-            .file_name()
-            .and_then(OsStr::to_str)
-            .unwrap_or(FALLBACK_LABEL);
-        #[cfg(not(target_family = "wasm"))]
-        reclaim_stale_siblings(parent, label);
+        Self::create_reclaimed_with(&ReclaimedTarget::new(target), verify)
+    }
+
+    /// [`AtomicSibling::create_reclaimed`] with the handle verification supplied.
+    fn create_reclaimed_with(
+        target: &ReclaimedTarget,
+        verify: impl FnOnce(&Path, &File) -> io::Result<()>,
+    ) -> io::Result<Self> {
+        let (parent, label) = sibling_home(&target.0);
         let (tmp, file) = create_verified(
             parent,
             label,
@@ -952,7 +1013,7 @@ impl AtomicSibling {
             |p: &Path| std::fs::remove_file(p),
         )?;
         Ok(Self {
-            target: target.to_path_buf(),
+            target: target.0.clone(),
             tmp,
             file,
             committed: false,
@@ -996,6 +1057,50 @@ impl Drop for AtomicSibling {
         if !self.committed {
             let _ = std::fs::remove_file(&self.tmp);
         }
+    }
+}
+
+/// The directory an atomic-replace sibling of `target` lives in, and the label naming it.
+fn sibling_home(target: &Path) -> (&Path, &str) {
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let label = target
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(FALLBACK_LABEL);
+    (parent, label)
+}
+
+/// A replacement target whose stale atomic-replace siblings have been reclaimed.
+///
+/// Built once where blocking I/O is allowed, it lets
+/// [`AtomicSibling::create_reclaimed`] replace the target any number of times
+/// without scanning its directory again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReclaimedTarget(PathBuf);
+
+impl ReclaimedTarget {
+    /// Reclaim the stale siblings that dead writers left for `target`.
+    ///
+    /// The sweep is the one [`AtomicSibling::create`] runs first: bounded to
+    /// [`MAX_RECLAIM_ENTRIES`] directory entries, once per directory and
+    /// label per process, and best effort, so it never fails.
+    #[must_use]
+    pub fn new(target: &Path) -> Self {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let (parent, label) = sibling_home(target);
+            reclaim_stale_siblings(parent, label);
+        }
+        Self(target.to_path_buf())
+    }
+
+    /// The target path.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.0
     }
 }
 
@@ -1110,14 +1215,16 @@ fn is_leftover(facts: LeftoverFacts) -> bool {
         && !facts.writer_alive
 }
 
-/// Whether the sibling-named entry with `meta` is [`is_leftover`] at `now`.
+/// The [`LeftoverFacts`] of the sibling-named entry with `meta`, read at `now`.
+///
+/// A modification time after `now`, or an unreadable one, yields an unknown age.
 #[cfg(not(target_family = "wasm"))]
-fn is_reclaimable(
+fn leftover_facts(
     meta: &std::fs::Metadata,
     sibling: SiblingName,
     now: std::time::SystemTime,
-) -> bool {
-    is_leftover(LeftoverFacts {
+) -> LeftoverFacts {
+    LeftoverFacts {
         regular_file: meta.file_type().is_file(),
         owned: owned_by_effective_user(meta),
         age: meta
@@ -1125,7 +1232,17 @@ fn is_reclaimable(
             .ok()
             .and_then(|modified| now.duration_since(modified).ok()),
         writer_alive: writer_may_be_alive(sibling),
-    })
+    }
+}
+
+/// Whether the sibling-named entry with `meta` is [`is_leftover`] at `now`.
+#[cfg(not(target_family = "wasm"))]
+fn is_reclaimable(
+    meta: &std::fs::Metadata,
+    sibling: SiblingName,
+    now: std::time::SystemTime,
+) -> bool {
+    is_leftover(leftover_facts(meta, sibling, now))
 }
 
 /// Record that `key` is being swept; `false` when this process already swept it.
@@ -1229,6 +1346,57 @@ impl ScratchDir {
             |p: &Path| std::fs::remove_dir(p),
         )?;
         Ok(Self(path))
+    }
+
+    /// Create a private directory under the OS temp root, or on Unix `/tmp`, whose `entry` path fits `max_bytes`.
+    ///
+    /// For a path with a hard length ceiling, such as a Unix socket's
+    /// `sockaddr_un`, when the OS temp root is too deep to hold it.
+    ///
+    /// # Errors
+    /// `Unsupported` where the target has no OS temp root; otherwise see
+    /// [`ScratchDir::new_fitting_under`].
+    pub fn new_fitting(label: &str, entry: &LeafName, max_bytes: usize) -> io::Result<Self> {
+        Self::new_fitting_under(&fitting_bases()?, label, entry, max_bytes)
+    }
+
+    /// Create a private directory under the first of `bases` where the path of `entry` inside it fits `max_bytes`.
+    ///
+    /// A base whose given path already leaves no room is skipped untouched; a
+    /// base that resolves longer than given, or that refuses the directory, is
+    /// passed over for the next one, and a too-long directory is removed.
+    ///
+    /// # Errors
+    /// The last base's refusal (see [`ScratchDir::new_under`]); `InvalidInput`
+    /// carrying [`NoFittingBase`] when no base was tried or every resolved
+    /// path was too long.
+    pub fn new_fitting_under(
+        bases: &[PathBuf],
+        label: &str,
+        entry: &LeafName,
+        max_bytes: usize,
+    ) -> io::Result<Self> {
+        let entry_len = scratch_name_len(label)
+            .saturating_add(1)
+            .saturating_add(entry.as_str().len());
+        let mut refused = None;
+        for base in bases {
+            if base
+                .as_os_str()
+                .len()
+                .saturating_add(1)
+                .saturating_add(entry_len)
+                > max_bytes
+            {
+                continue;
+            }
+            match Self::new_under(base, label) {
+                Ok(dir) if dir.child(entry).as_os_str().len() <= max_bytes => return Ok(dir),
+                Ok(_too_long) => {}
+                Err(err) => refused = Some(err),
+            }
+        }
+        Err(refused.unwrap_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, NoFittingBase)))
     }
 
     /// The path of this scratch directory.
@@ -2065,6 +2233,132 @@ mod tests {
         Ok(())
     }
 
+    /// A writer whose sibling was reclaimed underneath it gets `NotFound` from `commit`, never a silent loss.
+    #[test]
+    fn commit_of_a_reclaimed_sibling_fails_not_found() -> io::Result<()> {
+        let tree = Tree::new("reclaimedcommit")?;
+        let target = tree.0.join("shared").join("store.db");
+        std::fs::write(&target, b"old")?;
+        let mut sib = AtomicSibling::create(&target)?;
+        sib.write_all(b"new")?;
+        std::fs::remove_file(sib.tmp_path())?;
+        let committed = sib.commit();
+        assert_eq!(
+            committed.as_ref().err().map(io::Error::kind),
+            Some(io::ErrorKind::NotFound),
+            "{committed:?}"
+        );
+        assert_eq!(std::fs::read(&target)?, b"old", "the target is untouched");
+        Ok(())
+    }
+
+    /// A sibling modified in the future has an unknown age on disk, so it is kept however dead its writer.
+    #[test]
+    fn future_modified_sibling_on_disk_is_not_reclaimable() -> io::Result<()> {
+        let tree = Tree::new("futuremtime")?;
+        let path = tree.0.join("shared").join(sibling_leaf(
+            "store.db",
+            &DEAD_PID.to_string(),
+            &entropy_of('a', 2 * ENTROPY_BYTES),
+        ));
+        let now = std::time::SystemTime::now();
+        let future = now
+            .checked_add(OLD)
+            .ok_or_else(|| io::Error::other("the clock cannot reach the planted time"))?;
+        File::create(&path)?.set_modified(future)?;
+        let dead = SiblingName { pid: DEAD_PID };
+        let facts = leftover_facts(&std::fs::symlink_metadata(&path)?, dead, now);
+        assert_eq!(facts.age, None, "{facts:?}");
+        assert!(
+            facts.regular_file && facts.owned && !facts.writer_alive,
+            "{facts:?}"
+        );
+        assert!(!is_reclaimable(
+            &std::fs::symlink_metadata(&path)?,
+            dead,
+            now
+        ));
+        plant(&path, OLD)?;
+        assert!(
+            is_reclaimable(&std::fs::symlink_metadata(&path)?, dead, now),
+            "the same file, stale, is a leftover: the future time alone kept it"
+        );
+        Ok(())
+    }
+
+    /// A reclaimed target sweeps once on construction, and replacing it never scans the directory again.
+    #[test]
+    fn reclaimed_target_sweeps_once_and_its_writes_never_scan() -> io::Result<()> {
+        let tree = Tree::new("reclaimonce")?;
+        let base = tree.0.join("shared");
+        let target = base.join("store.db");
+        let dead = DEAD_PID.to_string();
+        let first = base.join(sibling_leaf(
+            "store.db",
+            &dead,
+            &entropy_of('a', 2 * ENTROPY_BYTES),
+        ));
+        plant(&first, OLD)?;
+        let reclaimed = ReclaimedTarget::new(&target);
+        assert!(!first.exists(), "construction reclaims the leftover");
+        assert_eq!(reclaimed.path(), target.as_path());
+        let later = base.join(sibling_leaf(
+            "store.db",
+            &dead,
+            &entropy_of('b', 2 * ENTROPY_BYTES),
+        ));
+        plant(&later, OLD)?;
+        let mut sib = AtomicSibling::create_reclaimed(&reclaimed)?;
+        sib.write_all(b"new")?;
+        sib.commit()?;
+        assert_eq!(std::fs::read(&target)?, b"new");
+        assert!(later.is_file(), "a write reads no directory");
+        Ok(())
+    }
+
+    /// A base too long for the entry is skipped untouched; alone it is refused with [`NoFittingBase`].
+    #[test]
+    fn fitting_dir_skips_a_base_too_long_for_its_entry() -> io::Result<()> {
+        let tree = Tree::new("fitting")?;
+        let short = tree.0.join("shared");
+        let long = short.join("d".repeat(200));
+        let entry = LeafName::new(".s.PGSQL.5432")?;
+        let max = std::fs::canonicalize(&short)?
+            .as_os_str()
+            .len()
+            .saturating_add(1)
+            .saturating_add(scratch_name_len("ipe-fit"))
+            .saturating_add(1)
+            .saturating_add(entry.as_str().len());
+        let alone =
+            ScratchDir::new_fitting_under(std::slice::from_ref(&long), "ipe-fit", &entry, max);
+        let refusal = alone.err();
+        assert!(
+            refusal
+                .as_ref()
+                .and_then(io::Error::get_ref)
+                .is_some_and(|inner| inner.is::<NoFittingBase>()),
+            "{refusal:?}"
+        );
+        assert!(!long.exists(), "a skipped base is never created");
+        let dir =
+            ScratchDir::new_fitting_under(&[long.clone(), short.clone()], "ipe-fit", &entry, max)?;
+        assert_eq!(
+            dir.path().parent(),
+            Some(std::fs::canonicalize(&short)?.as_path())
+        );
+        assert!(dir.child(&entry).as_os_str().len() <= max);
+        assert!(!long.exists());
+        let tight = ScratchDir::new_fitting_under(
+            std::slice::from_ref(&short),
+            "ipe-fit",
+            &entry,
+            max.saturating_sub(1),
+        );
+        assert!(tight.is_err(), "one byte short of the entry is refused");
+        Ok(())
+    }
+
     /// A sibling whose parent directory is absent fails and creates nothing.
     #[test]
     fn sibling_of_a_missing_parent_fails_and_creates_nothing() -> io::Result<()> {
@@ -2214,6 +2508,35 @@ mod tests {
 
         fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        }
+
+        /// A real file another user owns reads as not owned, and that fact alone keeps it.
+        ///
+        /// Running as root owns every file, so there the ownership reading is
+        /// checked against the entry's uid alone.
+        #[test]
+        fn a_foreign_owned_file_on_disk_is_not_owned() -> io::Result<()> {
+            let meta = std::fs::symlink_metadata("/etc/passwd")?;
+            let dead = SiblingName { pid: DEAD_PID };
+            let facts = leftover_facts(&meta, dead, std::time::SystemTime::now());
+            let euid = rustix::process::geteuid().as_raw();
+            assert_eq!(facts.owned, meta.uid() == euid, "{facts:?}");
+            if euid != meta.uid() {
+                assert!(!facts.owned);
+                assert!(!is_leftover(LeftoverFacts {
+                    age: Some(OLD),
+                    ..facts
+                }));
+                assert!(
+                    is_leftover(LeftoverFacts {
+                        age: Some(OLD),
+                        owned: true,
+                        ..facts
+                    }),
+                    "ownership alone decides"
+                );
+            }
+            Ok(())
         }
 
         /// Only a pid the kernel reports as no process is a gone writer.

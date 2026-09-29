@@ -287,8 +287,9 @@ impl<Model: Send + 'static, Msg: Send + 'static> SessionStore<Model, Msg>
 /// simple, matched to a DEV loop's low session count, not a production store.
 #[cfg(feature = "web")]
 pub struct FileStore<Model, Msg> {
-    /// Path to the JSON map file (`sid → blob`).
-    path: std::path::PathBuf,
+    /// Path to the JSON map file (`sid → blob`), its stale write siblings
+    /// reclaimed at construction so no write scans the directory.
+    path: crate::scratch_core::ReclaimedTarget,
     /// The persisted `sid → framed-checkpoint-blob` map, mirrored in memory and
     /// rewritten to `path` on every mutation. `last_seen` (unix secs) rides
     /// alongside for idle-TTL eviction.
@@ -321,7 +322,7 @@ impl<Model, Msg> FileStore<Model, Msg> {
             .and_then(|s| serde_json::from_str::<HashMap<String, (String, i64)>>(&s).ok())
             .unwrap_or_default();
         FileStore {
-            path,
+            path: crate::scratch_core::ReclaimedTarget::new(&path),
             disk: Mutex::new(disk),
             mem_cache: RwLock::new(HashMap::new()),
             ttl,
@@ -358,7 +359,7 @@ impl<Model, Msg> FileStore<Model, Msg> {
                 "live",
                 &format!(
                     "session store: file @ {} not written, sessions kept in memory: {err}",
-                    self.path.display()
+                    self.path.path().display()
                 ),
             );
         }
@@ -367,7 +368,7 @@ impl<Model, Msg> FileStore<Model, Msg> {
     /// Serialize `disk` and atomically replace the map file with it.
     fn write_map(&self, disk: &HashMap<String, (String, i64)>) -> std::io::Result<()> {
         let json = serde_json::to_string(disk)?;
-        let mut sibling = crate::scratch_core::AtomicSibling::create(&self.path)?;
+        let mut sibling = crate::scratch_core::AtomicSibling::create_reclaimed(&self.path)?;
         sibling.write_all(json.as_bytes())?;
         sibling.commit()
     }

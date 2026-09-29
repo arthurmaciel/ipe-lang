@@ -391,15 +391,13 @@ pub fn file_temp_dir<E: Send + From<String> + 'static>(prefix: String) -> IpeTas
 
 /// A private temp file tagged with `prefix`, kept past this call.
 fn temp_file_sync(prefix: &str) -> std::io::Result<String> {
-    let root = super::scratch_core::temp_root()?;
-    super::scratch_core::private_file_under(&root, prefix)
+    super::scratch_core::private_temp_file(prefix)
         .map(|(path, _file)| path.to_string_lossy().into_owned())
 }
 
 /// A private temp directory tagged with `prefix`, kept past this call.
 fn temp_dir_sync(prefix: &str) -> std::io::Result<String> {
-    let root = super::scratch_core::temp_root()?;
-    super::scratch_core::ScratchDir::new_under(&root, prefix)
+    super::scratch_core::ScratchDir::new(prefix)
         .map(|dir| dir.into_path().to_string_lossy().into_owned())
 }
 

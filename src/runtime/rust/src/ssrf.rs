@@ -1099,6 +1099,7 @@ pub(crate) use pinned_relay::{PinnedRelay, RelayUnavailable};
 #[cfg(all(feature = "db", unix))]
 mod pinned_relay {
     use super::VettedAddr;
+    use crate::scratch_core::{LeafName, ScratchDir};
     use std::future::Future;
     use std::io;
     use std::os::unix::fs::MetadataExt;
@@ -1211,11 +1212,12 @@ mod pinned_relay {
     /// Returns the directory and its owner's uid, the only uid the relay
     /// serves.
     fn create_private_dir(socket_name: &str) -> Result<(PathBuf, u32), RelayUnavailable> {
-        let bases: Vec<PathBuf> = crate::scratch_core::temp_root()
-            .into_iter()
-            .chain(std::iter::once(PathBuf::from("/tmp")))
-            .collect();
-        create_private_dir_in(&bases, socket_name)
+        let entry = LeafName::new(socket_name).map_err(|_| RelayUnavailable)?;
+        owner_only_dir(ScratchDir::new_fitting(
+            RELAY_DIR_LABEL,
+            &entry,
+            SOCKET_PATH_MAX_BYTES,
+        ))
     }
 
     /// Create an owner-only directory under the first of `bases` that admits one.
@@ -1224,36 +1226,24 @@ mod pinned_relay {
     /// CSPRNG-named, created exclusively 0700 and re-verified); a base whose
     /// socket path would not fit a `sockaddr_un`, or that refuses the
     /// directory, moves on to the next base.
+    #[cfg(test)]
     fn create_private_dir_in(
         bases: &[PathBuf],
         socket_name: &str,
     ) -> Result<(PathBuf, u32), RelayUnavailable> {
-        let entry_len = crate::scratch_core::scratch_name_len(RELAY_DIR_LABEL)
-            .saturating_add(1)
-            .saturating_add(socket_name.len());
-        for base in bases {
-            // Refused before the base is touched, so a too-long base is never created.
-            if base
-                .as_os_str()
-                .len()
-                .saturating_add(1)
-                .saturating_add(entry_len)
-                > SOCKET_PATH_MAX_BYTES
-            {
-                continue;
-            }
-            let Ok(dir) = crate::scratch_core::ScratchDir::new_under(base, RELAY_DIR_LABEL) else {
-                continue;
-            };
-            // The resolved base can be longer than the given one; dropping the
-            // guard removes a directory whose socket path would not fit.
-            if dir.path().join(socket_name).as_os_str().len() > SOCKET_PATH_MAX_BYTES {
-                continue;
-            }
-            let dir = dir.into_path();
-            return owner_only(&dir).map(|owner| (dir, owner));
-        }
-        Err(RelayUnavailable)
+        let entry = LeafName::new(socket_name).map_err(|_| RelayUnavailable)?;
+        owner_only_dir(ScratchDir::new_fitting_under(
+            bases,
+            RELAY_DIR_LABEL,
+            &entry,
+            SOCKET_PATH_MAX_BYTES,
+        ))
+    }
+
+    /// The created scratch directory and its owner, once [`owner_only`] holds.
+    fn owner_only_dir(created: io::Result<ScratchDir>) -> Result<(PathBuf, u32), RelayUnavailable> {
+        let dir = created.map_err(|_| RelayUnavailable)?.into_path();
+        owner_only(&dir).map(|owner| (dir, owner))
     }
 
     /// The owner of `dir`, once it is proven a real directory no other user can enter.

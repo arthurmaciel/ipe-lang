@@ -28,12 +28,14 @@ use syn::{
 
 mod includes;
 mod manifest;
+mod test_lines;
 mod test_path;
 
 pub use includes::{
     IncludeForm, IncludeTarget, IncludedSource, PathRefusal, TestPathInclude, judge_literal,
 };
 pub use manifest::{ManifestError, ManifestTargets, parse_manifest};
+pub use test_lines::test_only_item_lines;
 pub use test_path::{
     TestPathError, UngatedBy, check_manifest, check_test_path, is_template_path, is_test_path,
     is_verified_test_path,
