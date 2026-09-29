@@ -3,15 +3,14 @@
     "SSOT: the (job, check step) pairs whose failure is a deterministic red.",
     "A job counts as deterministically red ONLY when it failed AT its named check",
     "step. A failure in any other step (checkout, toolchain install, sccache,",
-    "rust-cache, setup-mold, crate fetch, a regenerate/build step) or a skipped",
+    "rust-cache, mold install, crate fetch, a regenerate/build step) or a skipped",
     "job behind a failed ancestor is infra-shaped and never counts.",
     "context = the job's status context exactly as `gh api .../jobs` reports it",
     "(its `name:`, or its job id when unset); step = that job's check step",
     "`name:` in ci.yml, byte-exact. The check step must be network-free: same",
     "input, same result, every attempt.",
-    "Consumers: ci.yml `cancel-on-cheap-red` (its `needs:` is exactly these jobs;",
-    "it cancels only on a matched pair) and rerun-failed-once.yml (skips the retry",
-    "only when every failed job matched). ci/verify-manifest.py validates shape,",
+    "Consumer: ci.yml `cancel-on-cheap-red` (its `needs:` is exactly these jobs;",
+    "it cancels only on a matched pair). ci/verify-manifest.py validates shape,",
     "the needs: set, and every step name against ci.yml."
   ],
   "checks": [

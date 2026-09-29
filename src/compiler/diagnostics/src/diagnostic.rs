@@ -30,7 +30,7 @@ use crate::code::{
     IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_P0068, IPE_P0069,
     IPE_P0070, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011,
     IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019,
-    IPE_T0020, Severity,
+    IPE_T0020, IPE_T0021, Severity,
 };
 use crate::span::Span;
 use crate::terminal::TerminalSafe;
@@ -1089,6 +1089,36 @@ pub enum TypeError {
     /// still `cargo build`s (the emitted `ui_layout` would otherwise reject an
     /// `Html` where it wants an `Element`, E0308). [IPE-T0020]
     WebViewReturnsHtml,
+    /// A wildcard `any` parameter whose body-solved type is neither an
+    /// independent free variable nor one ground type the lowerer can pin.
+    ///
+    /// Each use of a signature instantiates its own fresh copy of every
+    /// wildcard, independent of the scheme's other variables, and the lowerer
+    /// mints one independent generic per wildcard occurrence. A wildcard the
+    /// body tied to a type variable, shared with another parameter's `any`, or
+    /// solved to a structure that still carries a variable therefore has no
+    /// single sound lowering: accepting it would emit Rust that fails `cargo`
+    /// (E0308). `parameter` is the 1-based parameter the wildcard sits in.
+    /// [IPE-T0021]
+    WildcardNotIndependent {
+        parameter: usize,
+        dependence: WildcardDependence,
+    },
+}
+
+/// Why a wildcard `any` parameter has no independent lowering, under
+/// [`TypeError::WildcardNotIndependent`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum WildcardDependence {
+    /// The body unified the wildcard with an annotation type variable, named
+    /// when it is one of the signature's own variables.
+    TypeVariable { name: Option<Box<str>> },
+    /// The body unified the wildcard with the wildcard of an earlier
+    /// parameter (1-based) that is no single ground type.
+    SharedWith { parameter: usize },
+    /// The body solved the wildcard to a structure that still carries a type
+    /// variable or an open record.
+    PartialStructure { found: Box<TyDoc> },
 }
 
 /// How `main`'s inadmissible return type should be named in the
@@ -2019,7 +2049,8 @@ impl Diagnostic {
                 | TypeError::RefutablePatternParameter
                 | TypeError::OrPatternBindingMismatch { .. }
                 | TypeError::TaskArity { .. }
-                | TypeError::WebViewReturnsHtml => Severity::Error,
+                | TypeError::WebViewReturnsHtml
+                | TypeError::WildcardNotIndependent { .. } => Severity::Error,
             },
             Self::CompilerBug { .. } => Severity::Bug,
         }
@@ -2259,6 +2290,7 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::OrPatternBindingMismatch { .. } => IPE_T0019,
         TypeError::TaskArity { .. } => IPE_T0016,
         TypeError::WebViewReturnsHtml => IPE_T0020,
+        TypeError::WildcardNotIndependent { .. } => IPE_T0021,
     })
 }
 
@@ -2506,6 +2538,14 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
              `Web.tea` `view`, prefer returning the inner \
              `Element` directly (annotate `view : Model -> Element Msg`) and let \
              the shape apply `Ui.layout` for you."
+                .into(),
+        )],
+        TypeError::WildcardNotIndependent { .. } => vec![HelpLine::Note(
+            "each use of the signature gives every `any` its own independent \
+             type, so an `any` the body ties to another type cannot be emitted \
+             as one Rust type. Name the shared type with a type variable in the \
+             signature (`a -> a -> Bool` instead of `any -> any -> Bool`), or \
+             write the concrete type the body needs (`List Int` instead of `any`)."
                 .into(),
         )],
         TypeError::Mismatch

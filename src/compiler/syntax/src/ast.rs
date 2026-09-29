@@ -130,7 +130,8 @@ pub struct Module {
     pub module_kw: Span,
     /// Dotted module-name segments, e.g. `Main` → `[Main]`.
     pub name: Located<Vec<Symbol>>,
-    /// The `exposing (...)` clause of the `module` header.
+    /// The `exposing (...)` clause of the `module` header, spanning the
+    /// `exposing` keyword through its closing `)`.
     pub exposing: Located<Exposing>,
     pub imports: Vec<Import>,
     pub values: Vec<Located<Value>>,

@@ -28,6 +28,8 @@
 mod constrain;
 mod doc;
 mod exhaust;
+mod homed;
+mod pairing;
 mod solve;
 pub(crate) mod super_bounds;
 mod ty;
@@ -41,11 +43,13 @@ use std::sync::Arc;
 
 use ipe_canon::ModuleExports;
 use ipe_canon::ast as canon;
-use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span, TypeError};
+use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span, TypeError, WildcardDependence};
 use ipe_intern::{Interner, Symbol};
 
-pub use constrain::{kernel_type_table, resolve_scheme};
+pub use constrain::{Builtins, kernel_type_table, resolve_scheme};
 pub use doc::{VarNamer, canon_type_to_doc, letters, ty_to_doc};
+pub use homed::{HomedDiagnostic, HomedWarning};
+pub use pairing::{ArgPairs, ConHead, EmittedHeads, HeadIdentity, TyPairs, paired_ty_children};
 pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
 pub use ty::{
     RETRY_POLICY_FIELDS, RowTail, Ty, TyBounds, is_solver_var, tag_solver_var, untag_solver_var,
@@ -57,6 +61,7 @@ use constrain::{
 };
 use solve::solve_attributed;
 use ty::{Content, FlatType};
+pub use unify::con_heads_compatible;
 use unify::unify;
 use unionfind::{UnionFind, VarId};
 
@@ -116,13 +121,14 @@ pub struct SolvedTypes {
     /// generic parameter.
     pub bounds: BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<Symbol, TyBounds>>,
     /// Non-fatal diagnostics collected during type-checking (e.g. IPE-T0011
-    /// `RedundantCaseBranch`, IPE-L0124). Every diagnostic reaching this field
-    /// is [`Severity::Warning`]: callers MUST print them but MUST NOT treat them
-    /// as compilation failures. Error-severity diagnostics collected during the
-    /// same passes (IPE-T0018 over a closed union) never reach here — [`infer`]
-    /// converts any collected `Severity::Error` into a returned `Err` before
-    /// building this value, so a `SolvedTypes` witnesses a program that compiles.
-    pub warnings: Vec<Diagnostic>,
+    /// `RedundantCaseBranch`, IPE-L0124), each paired with its owning module.
+    ///
+    /// A [`HomedWarning`] is Warning-severity and homed by construction: callers
+    /// MUST print each against the source file of its [`HomedWarning::home`] and
+    /// MUST NOT treat it as a compilation failure. A finding of any other
+    /// severity is refused at construction and returned as the inference error,
+    /// so a `SolvedTypes` witnesses a program that compiles.
+    pub warnings: Vec<HomedWarning>,
     /// Per-typed-binding map from union-find representative id to annotation
     /// variable symbol, keyed by `(home, def_name)`.
     ///
@@ -183,7 +189,7 @@ pub struct SignatureWildcards {
     /// these counts before pairing its `k`-th mint with wildcard `k`.
     pub param_counts: Vec<usize>,
     /// Parameter wildcard index → the ground type the body pinned it to
-    /// ([`ty_is_pinnable`]). A pinned wildcard lowers to that concrete type, so
+    /// ([`ty_is_ground`]). A pinned wildcard lowers to that concrete type, so
     /// every use must instantiate it at exactly that type.
     pub pins: BTreeMap<usize, Ty>,
 }
@@ -212,6 +218,7 @@ pub fn infer(m: &canon::Module, interner: &mut Interner) -> DResult<SolvedTypes>
 ///
 /// On a non-solver error (constraint generation, field-access pass, etc.) the
 /// returned home is `Vec::new()` and callers should fall back to the heuristic.
+/// Every warning in the result carries its home ([`HomedWarning`]).
 ///
 /// # Errors
 /// Same conditions as [`infer`]; on failure the tuple carries both the
@@ -508,14 +515,11 @@ fn infer_core(
         &generated.route_witness_checks
     ));
 
-    // Diagnostics collected during the post-solve deferred passes and the
-    // exhaustiveness pass. Most are `Severity::Warning` (IPE-L0124, IPE-T0011)
-    // and stay in `SolvedTypes::warnings` for the caller to print. The
-    // exhaustiveness pass may also collect a `Severity::Error` (IPE-T0018 over a
-    // closed union); those are partitioned out below and promoted to a returned
-    // `Err`, so the collected channel that survives into `SolvedTypes` carries
-    // only warnings.
-    let mut warnings: Vec<Diagnostic> = Vec::new();
+    // Warnings collected during the post-solve deferred passes and the
+    // exhaustiveness pass (IPE-L0124, IPE-T0011), each homed at construction.
+    // The sink holds only `HomedWarning`s, so an Error-severity finding cannot
+    // enter it: the producing pass returns it as the inference error instead.
+    let mut warnings: Vec<HomedWarning> = Vec::new();
 
     // For routed `Web.tea` calls: if the now-settled Model type has a `page`
     // field, the `notFound` type must match that field's type.  Non-routed
@@ -524,7 +528,7 @@ fn infer_core(
     // and we emit the IPE-L0124 warning (usually a mis-named `page` field). See
     // the `RoutedWebCheck` doc comment for the full rationale.
     let has_routes = !generated.route_witness_checks.is_empty();
-    lift!(resolve_routed_web_checks(
+    resolve_routed_web_checks(
         &mut uf,
         budget,
         interner,
@@ -532,7 +536,7 @@ fn infer_core(
         has_routes,
         generated.route_witness_checks.len(),
         &mut warnings,
-    ));
+    )?;
 
     // A read-back of every region's resolved type, taken HERE (before the final
     // `SolvedTypes` assembly) so the exhaustiveness pass can consult a `case`
@@ -554,31 +558,19 @@ fn infer_core(
     // contract a genuinely unreachable compiler-bug case.
     // The pass collects into `warnings` rather than early-returning on the first
     // finding, so all offending sites are reported in one run. IPE-T0011 is a
-    // Warning and must not abort; IPE-T0018 over a closed union is an Error.
-    // IPE-T0010 (non-exhaustive) still early-returns `Err` from inside the pass.
-    lift!(exhaust::check(
+    // Warning and must not abort; IPE-T0018 over a closed union is an Error the
+    // pass returns (after scanning every definition). IPE-T0010
+    // (non-exhaustive) early-returns `Err` from inside the pass.
+    // Every error the pass returns carries its owning definition's home, so the
+    // driver frames it against that module's source rather than guessing a file
+    // from byte offsets that every linked module shares.
+    exhaust::check(
         m,
         &dep_unions,
         &regions_for_exhaust,
         interner,
-        &mut warnings
-    ));
-
-    // Fail-closed promotion: a diagnostic collected above is only a compilation
-    // failure if it is Error-severity. Partition the sink — Warning-severity
-    // diagnostics ride on in `SolvedTypes::warnings`; the first Error-severity
-    // diagnostic (IPE-T0018 over a closed union) is returned as `Err`, failing
-    // compilation. Without this, an Error pushed onto `warnings` would render
-    // but the program would still compile — the exact silent-accept this feature
-    // exists to prevent. All Error sites are already collected; returning the
-    // first still reports every warning-severity finding and fails the build.
-    let first_error = warnings
-        .iter()
-        .position(|d| d.severity() == ipe_diagnostics::Severity::Error);
-    if let Some(idx) = first_error {
-        let err = warnings.swap_remove(idx);
-        return Err((err, Vec::new()));
-    }
+        &mut warnings,
+    )?;
 
     // Scoped solve only: reify every exported UNTYPED binding's promoted
     // scheme for the module's typed interface. Must run HERE — after the
@@ -889,28 +881,74 @@ fn infer_core(
     // its own `i`-th wildcard. It stays out of `poly_var_map`: a wildcard is no
     // named type parameter of the enclosing function.
     //
-    // A parameter wildcard the body pinned to one ground type (`h x = x + x ==
-    // x` defaults it to `Int`; `f x = String.length x` pins `String`) is no
-    // generic at all: record the pin so the lowerer emits that concrete type and
-    // every use site is held to it ([`check_wildcard_pins`]).
+    // Every parameter wildcard is classified ([`classify_param_wildcard`]): one
+    // the body left an independent free variable stays a generic; one the body
+    // pinned to one ground type (`h x = x + x == x` defaults it to `Int`; `f x =
+    // String.length x` pins `String`) is no generic at all, so the pin is
+    // recorded for the lowerer to emit concretely and every use site is held to
+    // it ([`check_wildcard_pins`]). Any other solved root — a signature type
+    // variable, another parameter's wildcard, a structure that still leaves part
+    // of the type open — has no sound lowering and is refused here (IPE-T0021).
     let mut signature_wildcards: BTreeMap<(Vec<Symbol>, Symbol), SignatureWildcards> =
         BTreeMap::new();
     for entry in &generated.typed_wildcards {
-        let param_wildcards: usize = entry.param_counts.iter().sum();
-        let mut pins = BTreeMap::new();
         for (i, wildcard) in entry.wildcards.iter().enumerate() {
-            match lift!(uf.content(*wildcard)) {
-                Content::Super { bounds: b, .. } if !b.is_empty() => {
-                    let sym = lift!(interner.intern(&wildcard_bound_key(i)));
-                    bounds.entry(entry.key.clone()).or_default().insert(sym, b);
-                }
-                Content::Structure(_) if i < param_wildcards => {
-                    let ty = lift!(zonk(&mut uf, budget, *wildcard));
-                    if ty_is_pinnable(&ty) {
+            if let Content::Super { bounds: b, .. } = lift!(uf.content(*wildcard))
+                && !b.is_empty()
+            {
+                let sym = lift!(interner.intern(&wildcard_bound_key(i)));
+                bounds.entry(entry.key.clone()).or_default().insert(sym, b);
+            }
+        }
+        let rigid_names = poly_var_map.get(&entry.key);
+        let mut pins = BTreeMap::new();
+        // Solved root of each free (or row-record) parameter wildcard → its
+        // 1-based parameter, so a second wildcard on that root is refused.
+        let mut free_roots: BTreeMap<VarId, usize> = BTreeMap::new();
+        let mut wildcards = entry.wildcards.iter().enumerate();
+        for (param, (&count, &bare)) in entry
+            .param_counts
+            .iter()
+            .zip(entry.bare_params.iter())
+            .enumerate()
+        {
+            let parameter = param.saturating_add(1);
+            for (i, wildcard) in wildcards.by_ref().take(count) {
+                let fact = lift!(classify_param_wildcard(
+                    &mut uf,
+                    budget,
+                    interner,
+                    rigid_names,
+                    *wildcard,
+                    bare
+                ));
+                let dependence = match fact {
+                    WildcardFact::Pinned(ty) => {
                         pins.insert(i, ty);
+                        None
                     }
+                    WildcardFact::Free | WildcardFact::RowRecord => {
+                        let root = lift!(uf.find(*wildcard));
+                        let earlier = free_roots.get(&root).copied();
+                        if earlier.is_none() {
+                            free_roots.insert(root, parameter);
+                        }
+                        earlier.map(|parameter| WildcardDependence::SharedWith { parameter })
+                    }
+                    WildcardFact::Dependent(dependence) => Some(dependence),
+                };
+                if let Some(dependence) = dependence {
+                    return Err((
+                        Diagnostic::Type {
+                            span: entry.span,
+                            msg: TypeError::WildcardNotIndependent {
+                                parameter,
+                                dependence,
+                            },
+                        },
+                        Vec::new(),
+                    ));
                 }
-                _ => {}
             }
         }
         signature_wildcards.insert(
@@ -1079,17 +1117,16 @@ fn infer_core(
     ));
     // A pinned parameter wildcard lowers to its one ground type: hold every use
     // — same module, or a dependent one through the interface — to it.
+    // Every wildcard-carrying binding has an entry (possibly empty), so a use
+    // whose binding has none is a drift, never "nothing pinned".
     let mut pins_for_apps: PinTable = signature_wildcards
         .iter()
-        .filter(|(_, w)| !w.pins.is_empty())
         .map(|(key, w)| (key.clone(), w.pins.clone()))
         .collect();
     if let Some(ctx) = scoped {
         for (path, iface) in ctx.deps {
             for (name, scheme) in &iface.values {
-                if !scheme.wildcard_pins.is_empty() {
-                    pins_for_apps.insert((path.clone(), *name), scheme.wildcard_pins.clone());
-                }
+                pins_for_apps.insert((path.clone(), *name), scheme.wildcard_pins.clone());
             }
         }
     }
@@ -1466,6 +1503,10 @@ pub fn wildcard_bound_index(interner: &Interner, sym: Symbol) -> Option<usize> {
 /// `Int` would pass here and fail `cargo` with a type mismatch. A use whose
 /// wildcard stays non-ground (it flows into the caller's own generic) is
 /// rejected too: it cannot be shown to be the pinned type.
+///
+/// A use that instantiates wildcards of a binding the pin table has no entry
+/// for is a compiler bug: the table holds every wildcard-carrying binding, so a
+/// missing entry must never read as "nothing pinned".
 fn check_wildcard_pins(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
@@ -1475,7 +1516,16 @@ fn check_wildcard_pins(
 ) -> DResult<()> {
     for app in apps {
         let Some(binding_pins) = pins.get(&(app.home.clone(), app.name)) else {
-            continue;
+            if app.wildcards.is_empty() {
+                continue;
+            }
+            return Err(Diagnostic::CompilerBug {
+                where_: "ipe_types::check_wildcard_pins",
+                detail: format!(
+                    "use site instantiates {} wildcard(s) of a binding with no pin entry",
+                    app.wildcards.len()
+                ),
+            });
         };
         for (i, pinned) in binding_pins {
             // The definition and its use instantiate one signature, so their
@@ -1507,18 +1557,129 @@ fn check_wildcard_pins(
     Ok(())
 }
 
-/// Whether a solved wildcard type is a pin the lowerer emits concretely.
+/// Whether a resolved type is ground: no type variable and no open record row.
 ///
-/// It must be ground (no type variable), and free of records: a record-typed
-/// wildcard lowers to a structural row generic that admits wider caller
-/// records, so it is no single pinned type.
-fn ty_is_pinnable(ty: &Ty) -> bool {
+/// This is the read-back form of "the type is fully known": the lowerer
+/// concretizes a wildcard parameter's region only when it holds. Inference
+/// classifies a wildcard with `solved_is_ground` instead, which also sees
+/// the open rows [`zonk`] reads back as closed; every type it admits is one
+/// this admits, so the lowerer never concretizes a wildcard inference left
+/// unpinned.
+#[must_use]
+pub fn ty_is_ground(ty: &Ty) -> bool {
     match ty {
-        Ty::Var(_) | Ty::Record(..) => false,
+        Ty::Var(_) | Ty::Record(_, RowTail::Open(_)) => false,
         Ty::Unit => true,
-        Ty::Fun(a, b) => ty_is_pinnable(a) && ty_is_pinnable(b),
-        Ty::Con { args, .. } => args.iter().all(ty_is_pinnable),
-        Ty::Tuple(elems) => elems.iter().all(ty_is_pinnable),
+        Ty::Record(fields, RowTail::Closed) => fields.values().all(ty_is_ground),
+        Ty::Fun(a, b) => ty_is_ground(a) && ty_is_ground(b),
+        Ty::Con { args, .. } => args.iter().all(ty_is_ground),
+        Ty::Tuple(elems) => elems.iter().all(ty_is_ground),
+    }
+}
+
+/// Whether every solver node reachable from `roots` is known: no type
+/// variable, and every record extension ends in the closed-row sentinel.
+///
+/// Read on the union-find, not on a zonked [`Ty`]: [`zonk`] presents every
+/// record as closed, so an open row a field read left behind is invisible
+/// after read-back. A type this admits zonks to one [`ty_is_ground`] admits.
+///
+/// # Errors
+/// A union-find invariant violation, or [`TypeError::StepBudgetExceeded`]
+/// once the shared budget is spent.
+fn solved_is_ground(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    roots: impl IntoIterator<Item = VarId>,
+) -> DResult<bool> {
+    let mut work: Vec<VarId> = roots.into_iter().collect();
+    let mut seen: BTreeSet<VarId> = BTreeSet::new();
+    while let Some(var) = work.pop() {
+        budget.tick()?;
+        let root = uf.find(var)?;
+        if !seen.insert(root) {
+            continue;
+        }
+        match uf.root_content(root)? {
+            Content::Flex | Content::Rigid | Content::Super { .. } => return Ok(false),
+            Content::Structure(FlatType::Unit | FlatType::EmptyRecord) => {}
+            Content::Structure(FlatType::Fun(arg, result)) => {
+                work.push(*arg);
+                work.push(*result);
+            }
+            Content::Structure(FlatType::Con { args, .. }) => work.extend(args.iter().copied()),
+            Content::Structure(FlatType::Tuple(elems)) => work.extend(elems.iter().copied()),
+            Content::Structure(FlatType::Record(fields, ext)) => {
+                work.extend(fields.values().copied());
+                work.push(*ext);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// What a parameter wildcard's solved root makes of it.
+enum WildcardFact {
+    /// An unsolved non-rigid variable: the wildcard stays its own generic.
+    Free,
+    /// A bare `any` parameter solved to a record whose every field is ground:
+    /// it lowers to a structural row generic admitting wider caller records.
+    /// A field holding an unknown leaves the lowerer no concrete field type,
+    /// so such a record is a partial structure instead.
+    RowRecord,
+    /// One ground type the lowerer emits concretely ([`solved_is_ground`]).
+    Pinned(Ty),
+    /// A root no lowering keeps independent; the binding is refused.
+    Dependent(WildcardDependence),
+}
+
+/// Classify one parameter wildcard by its solved root.
+///
+/// `rigid_names` maps the binding's signature-variable roots to their names;
+/// `bare` says whether the wildcard is the parameter's whole annotation.
+fn classify_param_wildcard(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    rigid_names: Option<&BTreeMap<u32, Symbol>>,
+    wildcard: VarId,
+    bare: bool,
+) -> DResult<WildcardFact> {
+    match uf.content(wildcard)? {
+        Content::Flex | Content::Super { rigid: false, .. } => Ok(WildcardFact::Free),
+        Content::Rigid | Content::Super { rigid: true, .. } => {
+            let root = uf.find(wildcard)?;
+            let name = rigid_names
+                .and_then(|names| names.get(&root))
+                .and_then(|sym| interner.resolve(*sym))
+                .map(Box::from);
+            Ok(WildcardFact::Dependent(WildcardDependence::TypeVariable {
+                name,
+            }))
+        }
+        Content::Structure(flat) => {
+            // A bare record's row tail is its extensibility, so only its fields
+            // must be ground; anywhere else an open row is an unknown.
+            let ground = if bare && let FlatType::Record(fields, _) = &flat {
+                if solved_is_ground(uf, budget, fields.values().copied())? {
+                    return Ok(WildcardFact::RowRecord);
+                }
+                false
+            } else {
+                solved_is_ground(uf, budget, [wildcard])?
+            };
+            let ty = zonk(uf, budget, wildcard)?;
+            if ground {
+                Ok(WildcardFact::Pinned(ty))
+            } else {
+                let mut namer = VarNamer::new();
+                Ok(WildcardFact::Dependent(
+                    WildcardDependence::PartialStructure {
+                        found: Box::new(ty_to_doc(&ty, interner, &mut namer)?),
+                    },
+                ))
+            }
+        }
     }
 }
 
@@ -2543,6 +2704,8 @@ fn resolve_route_witness_checks(
 /// The detection criterion (`page` field presence) mirrors `emit_web.rs`'s
 /// `routed_page_field` helper: both agree on what "routed" means, ensuring the
 /// type-check gate and the emit gate fire on exactly the same programs.
+///
+/// Every error and warning carries the home of the `Web.tea` call it concerns.
 fn resolve_routed_web_checks(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
@@ -2550,14 +2713,15 @@ fn resolve_routed_web_checks(
     checks: &[RoutedWebCheck],
     has_routes: bool,
     route_count: usize,
-    warnings: &mut Vec<Diagnostic>,
-) -> DResult<()> {
+    warnings: &mut Vec<HomedWarning>,
+) -> Result<(), HomedDiagnostic> {
     for check in checks {
+        let homed = |d: Diagnostic| (d, check.home.clone());
         // Find the settled root of the Model type variable.
-        let model_root = uf.find(check.model_var)?;
+        let model_root = uf.find(check.model_var).map_err(homed)?;
         // Clone the content to avoid borrowing `uf` across the subsequent
         // `unify` call.
-        let model_content = uf.content(model_root)?;
+        let model_content = uf.content(model_root).map_err(homed)?;
         // Extract the `page` field's VarId from the settled Model Record, if
         // any.  A non-Record descriptor (Flex, Con, etc.) or a Record without
         // a `page` field means this is a non-routed app — silently skip.
@@ -2578,7 +2742,8 @@ fn resolve_routed_web_checks(
                 check.span,
                 check.not_found_var,
                 page_var,
-            )?;
+            )
+            .map_err(homed)?;
         } else if has_routes {
             // Non-routed Model (no `page` field) BUT the program declared a
             // non-empty `routes` list: the routes are forwarded to the
@@ -2592,10 +2757,13 @@ fn resolve_routed_web_checks(
             // equals this app's route count exactly; the rare multi-app case
             // (only sub-apps, which are separate binaries in practice) could
             // over-count, but the warning stays advisory — the build proceeds.
-            warnings.push(Diagnostic::Lower {
-                span: check.span,
-                msg: LowerError::RoutedAppMissingPageField { route_count },
-            });
+            warnings.push(HomedWarning::new(
+                Diagnostic::Lower {
+                    span: check.span,
+                    msg: LowerError::RoutedAppMissingPageField { route_count },
+                },
+                &check.home,
+            )?);
         }
         // Non-routed with no routes → genuinely non-routed → silently skip.
     }
@@ -2707,18 +2875,17 @@ mod tests {
         );
         let (solved, i, m) = infer_src(&src);
         assert!(
-            solved.is_ok(),
+            matches!((&solved, &m), (Ok(_), Some(_))),
             "generic record signature must typecheck: {solved:?}"
         );
         let (Ok(solved), Some(m)) = (solved, m) else {
             return;
         };
-        let Some(wrap) = def_key(&i, &m, "wrap") else {
-            return;
-        };
-        let Some(ty) = solved.env.get(&wrap) else {
-            return;
-        };
+        let wrap = def_key(&i, &m, "wrap").expect("wrap must be defined in canon");
+        let ty = solved
+            .env
+            .get(&wrap)
+            .expect("wrap must have an inferred type");
         // `wrap : a -> { value : a }` — the parameter's type variable and the
         // record field's type variable must be the SAME id. Extract both ids
         // structurally, then assert their identity (so a wrong shape fails the
@@ -2990,12 +3157,11 @@ mod tests {
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
 
-        let Some(update) = def_key(&i, &m, "update") else {
-            return;
-        };
-        let Some(ty) = solved.env.get(&update) else {
-            return;
-        };
+        let update = def_key(&i, &m, "update").expect("update must be defined in canon");
+        let ty = solved
+            .env
+            .get(&update)
+            .expect("update must have an inferred type");
 
         // Msg -> (Int -> Int)
         assert!(matches!(ty, Ty::Fun(..)), "update is an arrow");
@@ -3053,9 +3219,9 @@ mod tests {
         );
 
         // The outer arg is the string literal "x" : String
-        let Some(str_arg) = outer_args.first() else {
-            return;
-        };
+        let str_arg = outer_args
+            .first()
+            .expect("main body call must have at least one arg");
         assert!(
             matches!(&str_arg.value, canon::Expr_::Str(_)),
             "setenv outer arg is a string literal"
@@ -3115,9 +3281,7 @@ mod tests {
         );
 
         // First arm body `count + 1` : Int
-        let Some(first) = branches.first() else {
-            return;
-        };
+        let first = branches.first().expect("case must have at least one arm");
         assert!(
             matches!(first.body.value, canon::Expr_::Binop { .. }),
             "arm body is binop"
@@ -3140,9 +3304,7 @@ mod tests {
         let solved = infer(&m, &mut i);
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
-        let Some(main) = def_key(&i, &m, "main") else {
-            return;
-        };
+        let main = def_key(&i, &m, "main").expect("main must be defined in canon");
         let main_ty = solved.env.get(&main);
         assert!(
             matches!(
@@ -3198,10 +3360,9 @@ mod tests {
     /// mirroring what the real multi-file build driver does
     /// (`ipe::project` discovers + topo-orders files, `ipe_canon::link`
     /// merges them into one program). Each entry is `(dotted module path,
-    /// source)`. Returns `None` on any parse / canonicalise / link failure —
-    /// per this file's existing convention, a `None` here means "test can't
-    /// run" (fails the caller's own `let Some(..) = .. else { return; }`
-    /// guard), it is never itself the assertion.
+    /// source)`. Returns `None` on any parse / canonicalise / link failure;
+    /// callers `.expect(..)` this so a setup failure fails the test loudly
+    /// instead of returning early — it is never itself the assertion.
     fn link_modules(modules_src: &[(&str, &str)]) -> Option<(canon::Module, Interner)> {
         let mut i = Interner::new();
         let mut deps: BTreeMap<Vec<Symbol>, ipe_canon::ModuleExports> = BTreeMap::new();
@@ -3245,11 +3406,10 @@ mod tests {
              import ModA exposing (useInt)\n\n\
              useBool : Bool\n\
              useBool =\n    ident (0 == 0)\n\n\
-             main =\n    Io.println (String.fromInt useInt)\n",
+             main =\n    useInt\n",
         );
-        let Some((m, mut i)) = link_modules(&[LIB1_IDENT, mid, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[LIB1_IDENT, mid, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3282,11 +3442,10 @@ mod tests {
              import ModA exposing (ints)\n\n\
              bools : List Bool\n\
              bools =\n    empty\n\n\
-             main =\n    Io.println (String.fromInt (List.length ints + List.length bools))\n",
+             main =\n    0\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, mid, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, mid, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3308,11 +3467,10 @@ mod tests {
              twice x =\n    ident (ident x)\n\n\
              useInt : Int\n\
              useInt =\n    twice 5\n\n\
-             main =\n    Io.println (String.fromInt useInt)\n",
+             main =\n    useInt\n",
         );
-        let Some((m, mut i)) = link_modules(&[LIB1_IDENT, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[LIB1_IDENT, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3340,11 +3498,10 @@ mod tests {
              import Lib1 exposing (isEven)\n\n\
              result : Bool\n\
              result =\n    isEven 4\n\n\
-             main =\n    Io.println (String.fromInt (if result then 1 else 0))\n",
+             main =\n    result\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3372,11 +3529,10 @@ mod tests {
              import Lib1 exposing (getName)\n\n\
              name : String\n\
              name =\n    getName { name = \"Ada\" }\n\n\
-             main =\n    Io.println name\n",
+             main =\n    name\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3405,11 +3561,10 @@ mod tests {
              import ModA exposing (aName)\n\n\
              bName : String\n\
              bName =\n    getName { name = \"Bea\", age = 9 }\n\n\
-             main =\n    Io.println (aName ++ bName)\n",
+             main =\n    aName ++ bName\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, mid, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, mid, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_err(),
@@ -3441,11 +3596,10 @@ mod tests {
             "Main",
             "module Main exposing (main)\n\n\
              import Lib1 exposing (setName)\n\n\
-             main =\n    Io.println ((setName { name = \"Ada\" } \"Bea\").name)\n",
+             main =\n    (setName { name = \"Ada\" } \"Bea\").name\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3453,10 +3607,8 @@ mod tests {
              helper must typecheck: {r:?}"
         );
         let Ok(solved) = r else { return };
-        let Ok(lib1) = i.intern("Lib1") else { return };
-        let Ok(set_name) = i.intern("setName") else {
-            return;
-        };
+        let lib1 = i.intern("Lib1").expect("intern Lib1");
+        let set_name = i.intern("setName").expect("intern setName");
         // An all-monomorphic scheme is skipped when `untyped_type_params` is
         // populated (empty `quantified` ⇒ no entry), so the post-fix success
         // signal is "no entry OR an empty entry"; pre-fix the gap produced a
@@ -3497,11 +3649,10 @@ mod tests {
              import ModA exposing (sumInt)\n\n\
              sumFloat : Float\n\
              sumFloat =\n    plus 1.0 2.0\n\n\
-             main =\n    Io.println (String.fromInt sumInt)\n",
+             main =\n    sumInt\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, mid, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, mid, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_err(),
@@ -3524,10 +3675,8 @@ mod tests {
                    useInt =\n    f 5\n\
                    useBool : Bool\n\
                    useBool =\n    f (0 == 0)\n\
-                   main =\n    Io.println (String.fromInt useInt)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    useInt\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         // `ident`'s own shared var unifies with `f`'s rigid skolem `a` while
         // `f`'s body is checked, so `ident` is rigid-contaminated. `f` itself
         // is typed (annotated) and genuinely polymorphic — its own two uses
@@ -3559,10 +3708,8 @@ mod tests {
                    type Msg = Increment | Decrement\n\
                    h : Int\n\
                    h = Increment\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3597,17 +3744,18 @@ mod tests {
 
     #[test]
     fn call_arg_mismatch_expected_is_declared_param_found_is_actual_arg() {
-        // `Task.fail : Error -> Task Error a` called with a `String` argument:
-        // the DECLARED parameter type is the *expected* side and the user's
-        // actual argument the *found* side — "expected Error, found String",
-        // never the inversion. The Call arm must orient the constraint so the
-        // declared parameter, not the actual argument, lands on unify's
-        // *expected* side.
+        // `fail : Error -> Task Error a` (a stand-in for `Task.fail`, which lives
+        // in the compiled-source `Ipe.Task` module this unit-level harness
+        // cannot resolve) called with a `String` argument: the DECLARED
+        // parameter type is the *expected* side and the user's actual argument
+        // the *found* side — "expected Error, found String", never the
+        // inversion. The Call arm must orient the constraint so the declared
+        // parameter, not the actual argument, lands on unify's *expected* side.
         let src = "module Main exposing (main)\n\
-                   main =\n    Task.fail \"plain string\"\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   fail : Error -> Task Error a\n\
+                   fail x =\n    fail x\n\n\
+                   main =\n    fail \"plain string\"\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3617,7 +3765,7 @@ mod tests {
                     ..
                 })
             ),
-            "Task.fail \"str\" must be a TypeMismatch, got {r:?}"
+            "fail \"str\" must be a TypeMismatch, got {r:?}"
         );
         let Err(Diagnostic::Type {
             msg: TypeError::TypeMismatch {
@@ -3650,9 +3798,7 @@ mod tests {
         // Number var and would render as a type variable, not a Con.)
         let src = "module Main exposing (main)\n\
                    main =\n    let x = \"s\" in x 1\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3701,9 +3847,7 @@ mod tests {
             "fixture must parse + canonicalise (a None here would make the \
              test vacuous)"
         );
-        let Some((m, mut i)) = parsed else {
-            return;
-        };
+        let Some((m, mut i)) = parsed else { return };
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3733,17 +3877,18 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    f : Int -> Int\n\
                    f n =\n    if n > 0 then n else 0\n\
-                   main =\n    Io.println (String.fromInt (f 1))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    f 1\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(r.is_ok(), "well-typed if must infer: {r:?}");
         let Ok(solved) = r else { return };
-        let Some(f) = def_key(&i, &m, "f") else {
-            return;
-        };
-        let Some(Ty::Fun(arg, ret)) = solved.env.get(&f) else {
+        let f = def_key(&i, &m, "f").expect("f must be defined in canon");
+        let f_ty = solved.env.get(&f);
+        assert!(
+            matches!(f_ty, Some(Ty::Fun(..))),
+            "f must have an arrow type, got {f_ty:?}"
+        );
+        let Some(Ty::Fun(arg, ret)) = f_ty else {
             return;
         };
         assert_eq!(ty_con_name(arg, &i).as_deref(), Some("Int"));
@@ -3756,10 +3901,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    f : Int -> Int\n\
                    f n =\n    if n then 1 else 0\n\
-                   main =\n    Io.println (String.fromInt (f 1))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    f 1\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3781,10 +3924,8 @@ mod tests {
                    type Msg = Increment | Decrement\n\
                    f : Int -> Int\n\
                    f n =\n    if n > 0 then 1 else Increment\n\
-                   main =\n    Io.println (String.fromInt (f 1))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    f 1\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3805,10 +3946,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    g : Int\n\
                    g a = 0\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3838,10 +3977,8 @@ mod tests {
                    type Msg = Increment | Decrement\n\
                    f : Msg -> Int\n\
                    f msg =\n        case msg of\n            Increment -> 1\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3871,10 +4008,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    f : Maybe Int -> Int\n\
                    f (Just x) = x\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3895,10 +4030,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    apply : (Maybe Int -> Int) -> Int\n\
                    apply f = f (Just 1)\n\
-                   main =\n    Io.println (String.fromInt (apply (\\(Just x) -> x)))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    apply (\\(Just x) -> x)\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3919,10 +4052,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    f : Int -> (Int, Int) -> Int\n\
                    f _ (a, b) = a + b\n\
-                   main =\n    Io.println (String.fromInt (f 9 (1, 2)))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    f 9 (1, 2)\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3941,10 +4072,8 @@ mod tests {
                    f : Msg -> Int\n\
                    f msg =\n        case msg of\n            Increment -> 1\n\
                    \x20           Decrement -> 2\n            Increment -> 3\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("redundant branch is a warning (IPE-T0011), not an error");
         assert_eq!(
@@ -3953,7 +4082,11 @@ mod tests {
             "expected exactly one warning, got {:?}",
             types.warnings
         );
-        let warning = types.warnings.first().expect("len==1 asserted above");
+        let warning = types
+            .warnings
+            .first()
+            .map(HomedWarning::diagnostic)
+            .expect("len==1 asserted above");
         assert!(
             matches!(
                 warning,
@@ -3982,10 +4115,8 @@ mod tests {
                    type Color = Red | Green | Blue\n\
                    name : Color -> Int\n\
                    name c =\n        case c of\n            Red | Green | Blue -> 1\n\
-                   main =\n    Io.println (String.fromInt (name Red))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    name Red\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -4003,10 +4134,8 @@ mod tests {
                    type Color = Red | Green | Blue\n\
                    name : Color -> Int\n\
                    name c =\n        case c of\n            Red | Green -> 1\n\
-                   main =\n    Io.println (String.fromInt (name Red))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    name Red\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let err = infer(&m, &mut i)
             .expect_err("an or-group missing a union variant must be non-exhaustive (IPE-T0010)");
         assert!(
@@ -4040,15 +4169,14 @@ mod tests {
                    label c =\n        case c of\n\
                    \x20           Red | Green -> 1\n\
                    \x20           Green | Blue -> 2\n\
-                   main =\n    Io.println (String.fromInt (label Blue))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    label Blue\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("a per-alternative redundancy is a warning, not an error");
         let redundant: Vec<_> = types
             .warnings
             .iter()
+            .map(HomedWarning::diagnostic)
             .filter(|w| {
                 matches!(
                     w,
@@ -4075,15 +4203,14 @@ mod tests {
                    f c =\n        case c of\n\
                    \x20           Red | Red -> 1\n\
                    \x20           Green -> 2\n            Blue -> 3\n\
-                   main =\n    Io.println (String.fromInt (f Green))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    f Green\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("an internally-redundant or-pattern is a warning, not an error");
         let redundant = types
             .warnings
             .iter()
+            .map(HomedWarning::diagnostic)
             .filter(|w| {
                 matches!(
                     w,
@@ -4108,7 +4235,7 @@ mod tests {
                    type Shape = Circle Int | Dot\n\
                    bad : Shape -> Int\n\
                    bad s =\n        case s of\n            Circle r | Dot -> r\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
+                   main =\n    0\n";
         let mut i = Interner::new();
         let parsed = ipe_parse::parse_module(src, &mut i).expect("source parses");
         let r = ipe_canon::canonicalise(&parsed, &mut i);
@@ -4143,7 +4270,7 @@ mod tests {
                    type Shape = Pair Int Int | Dot\n\
                    bad : Shape -> Int\n\
                    bad s =\n        case s of\n            Pair z a | Dot -> z + a\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
+                   main =\n    0\n";
         let mut i = Interner::new();
         let parsed = ipe_parse::parse_module(src, &mut i).expect("source parses");
         let r = ipe_canon::canonicalise(&parsed, &mut i);
@@ -4185,10 +4312,8 @@ mod tests {
                    name c =\n        case c of\n\
                    \x20           Red -> \"red\"\n\
                    \x20           _ -> \"other\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let err = r.expect_err(
             "a closed-union catch-all must FAIL compilation (not just warn) — \
@@ -4224,6 +4349,115 @@ mod tests {
         }
     }
 
+    /// A closed-union catch-all in a NON-entry module is returned with that
+    /// module's home and the span of the `_` arm itself.
+    ///
+    /// Linked spans are file-local byte offsets, so the home is the only thing
+    /// that tells the driver which file to frame the error against; without it
+    /// the error was framed against whichever module's definition enclosed the
+    /// same offsets (an embedded stdlib module, in practice).
+    #[test]
+    fn closed_union_catch_all_error_carries_owning_module_home_and_arm_span() {
+        let lib_src = "module Lib exposing (Color(..), isRed)\n\n\
+                       type Color = Red | Green | Blue\n\n\
+                       isRed : Color -> Bool\n\
+                       isRed c =\n    case c of\n        Red ->\n            True\n\n        \
+                       _ ->\n            False\n";
+        let main_src = "module Main exposing (main)\n\n\
+                        import Lib exposing (Color(..), isRed)\n\n\
+                        main =\n    if isRed Green then 1 else 0\n";
+        #[allow(clippy::expect_used)] // a fixture that fails to link is a broken test, never a skip
+        let (m, mut i) = link_modules(&[("Lib", lib_src), ("Main", main_src)])
+            .expect("fixture modules parse, canonicalise, and link");
+        let r = infer_attributed(&m, &mut i);
+        assert!(r.is_err(), "a closed-union catch-all must fail compilation");
+        let Err((err, home)) = r else {
+            return;
+        };
+        let Ok(lib) = i.intern("Lib") else {
+            return;
+        };
+        assert_eq!(
+            home,
+            vec![lib],
+            "the error must carry the owning module's home, not an empty one"
+        );
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Type {
+                    msg: TypeError::WildcardCoversKnownConstructors { .. },
+                    ..
+                }
+            ),
+            "expected IPE-T0018 WildcardCoversKnownConstructors, got {err:?}"
+        );
+        let Diagnostic::Type { span, .. } = &err else {
+            return;
+        };
+        let arm_offset = lib_src.find("_ ->").and_then(|o| u32::try_from(o).ok());
+        assert_eq!(
+            Some(span.lo),
+            arm_offset,
+            "the error must point at the `_` arm in Lib"
+        );
+    }
+
+    /// A redundant branch (IPE-T0011) in a NON-entry module is a warning homed
+    /// at that module and spanned at the redundant arm's pattern.
+    #[test]
+    fn redundant_branch_warning_in_imported_module_carries_its_home_and_arm_span() {
+        let lib_src = "module Lib exposing (Color(..), label)\n\n\
+                       type Color = Red | Green\n\n\
+                       label : Color -> Int\n\
+                       label c =\n    case c of\n        Red ->\n            1\n\n        \
+                       Green ->\n            2\n\n        \
+                       Red ->\n            3\n";
+        let main_src = "module Main exposing (main)\n\n\
+                        import Lib exposing (Color(..), label)\n\n\
+                        main =\n    label Green\n";
+        #[allow(clippy::expect_used)] // a fixture that fails to link is a broken test, never a skip
+        let (m, mut i) = link_modules(&[("Lib", lib_src), ("Main", main_src)])
+            .expect("fixture modules parse, canonicalise, and link");
+        #[allow(clippy::expect_used)] // a redundant branch is a warning; an `Err` fails the test
+        let types = infer_attributed(&m, &mut i).expect("a redundant branch is only a warning");
+        #[allow(clippy::expect_used)] // interning a short literal cannot exhaust the interner
+        let lib = i.intern("Lib").expect("intern Lib");
+        assert_eq!(
+            types.warnings.len(),
+            1,
+            "expected exactly one warning, got {:?}",
+            types.warnings
+        );
+        let Some(warning) = types.warnings.first() else {
+            return;
+        };
+        assert_eq!(
+            warning.home(),
+            [lib].as_slice(),
+            "the warning must carry the owning module's home"
+        );
+        assert!(
+            matches!(
+                warning.diagnostic(),
+                Diagnostic::Type {
+                    msg: TypeError::RedundantCaseBranch { .. },
+                    ..
+                }
+            ),
+            "expected IPE-T0011 RedundantCaseBranch, got {warning:?}"
+        );
+        let Diagnostic::Type { span, .. } = warning.diagnostic() else {
+            return;
+        };
+        let arm_offset = lib_src.rfind("Red ->").and_then(|o| u32::try_from(o).ok());
+        assert_eq!(
+            Some(span.lo),
+            arm_offset,
+            "the warning must point at the redundant `Red` arm in Lib"
+        );
+    }
+
     /// FAIL-CLOSED, MULTI-SITE: a module with more than one closed-union
     /// catch-all still FAILS compilation. The pass collects every offending site
     /// before the promotion (better UX than aborting on the first), and the
@@ -4243,10 +4477,8 @@ mod tests {
                    toMaybe c =\n        case c of\n\
                    \x20           Green -> Just 1\n\
                    \x20           _ -> Nothing\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let err =
             r.expect_err("a module with multiple closed-union catch-alls must FAIL compilation");
@@ -4284,15 +4516,14 @@ mod tests {
                    \x20           Green -> \"green\"\n\
                    \x20           Blue -> \"blue\"\n\
                    \x20           _ -> \"other\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("fully-covered wildcard is a warning (IPE-T0011), not an error");
         let t0018: Vec<_> = types
             .warnings
             .iter()
+            .map(HomedWarning::diagnostic)
             .filter(|w| {
                 matches!(
                     w,
@@ -4311,6 +4542,7 @@ mod tests {
         let t0011 = types
             .warnings
             .iter()
+            .map(HomedWarning::diagnostic)
             .filter(|w| {
                 matches!(
                     w,
@@ -4339,15 +4571,14 @@ mod tests {
                    \x20           Red -> \"red\"\n\
                    \x20           Green -> \"green\"\n\
                    \x20           Blue -> \"blue\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("exhaustive explicit case must type-check");
         let t0018: Vec<_> = types
             .warnings
             .iter()
+            .map(HomedWarning::diagnostic)
             .filter(|w| {
                 matches!(
                     w,
@@ -4376,15 +4607,14 @@ mod tests {
                    \x20           0 -> \"zero\"\n\
                    \x20           1 -> \"one\"\n\
                    \x20           _ -> \"other\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("wildcard on Int must type-check");
         let t0018: Vec<_> = types
             .warnings
             .iter()
+            .map(HomedWarning::diagnostic)
             .filter(|w| {
                 matches!(
                     w,
@@ -4411,15 +4641,14 @@ mod tests {
                    label b =\n        case b of\n\
                    \x20           True -> \"yes\"\n\
                    \x20           _ -> \"no\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("wildcard on Bool must type-check");
         let t0018 = types
             .warnings
             .iter()
+            .map(HomedWarning::diagnostic)
             .filter(|w| {
                 matches!(
                     w,
@@ -4446,15 +4675,14 @@ mod tests {
                    isEmpty xs =\n        case xs of\n\
                    \x20           [] -> \"empty\"\n\
                    \x20           _ -> \"non-empty\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("wildcard on List must type-check");
         let t0018 = types
             .warnings
             .iter()
+            .map(HomedWarning::diagnostic)
             .filter(|w| {
                 matches!(
                     w,
@@ -4483,10 +4711,8 @@ mod tests {
                    name : Color -> String\n\
                    name c =\n        case c of\n\
                    \x20           _ -> \"other\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let err = r.expect_err(
             "a bare `_ ->`-only case over a closed union must FAIL compilation — \
@@ -4532,15 +4758,14 @@ mod tests {
                    name : Color -> String\n\
                    name c =\n        case c of\n\
                    \x20           Debug._ -> \"other\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let types = infer(&m, &mut i)
             .expect("`Debug._` is the dev-only escape hatch — it type-checks (no IPE-T0018)");
         let t0018 = types
             .warnings
             .iter()
+            .map(HomedWarning::diagnostic)
             .filter(|w| {
                 matches!(
                     w,
@@ -4580,16 +4805,15 @@ mod tests {
                    view : Int -> List Int\n\
                    view n =\n        wrap [ n, n + 1 ] [ n - 1 ]\n\
                    wrap : List Int -> List Int -> List Int\n\
-                   wrap a b =\n        List.append a b\n\
-                   main =\n    Io.println (String.fromInt (step Reset 0))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   wrap a b =\n        a ++ b\n\
+                   main =\n    step Reset 0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("an exhaustive, non-redundant program must type-check");
         let redundant: Vec<_> = types
             .warnings
             .iter()
+            .map(HomedWarning::diagnostic)
             .filter(|w| {
                 matches!(
                     w,
@@ -4634,12 +4858,14 @@ mod tests {
             .expect("fresh model var");
         let not_found_var = uf.fresh(Content::Flex).expect("fresh notFound var");
 
+        let home = vec![interner.intern("Main").expect("intern Main")];
         let check = RoutedWebCheck {
             model_var,
             not_found_var,
             span: Span::DUMMY,
+            home: home.clone(),
         };
-        let mut warnings: Vec<Diagnostic> = Vec::new();
+        let mut warnings: Vec<HomedWarning> = Vec::new();
         resolve_routed_web_checks(
             &mut uf,
             &mut budget,
@@ -4656,7 +4882,13 @@ mod tests {
             1,
             "expected exactly one IPE-L0124 warning, got {warnings:?}"
         );
-        let w = warnings.first().expect("len==1 asserted above");
+        let homed = warnings.first().expect("len==1 asserted above");
+        assert_eq!(
+            homed.home(),
+            home.as_slice(),
+            "the warning carries the home of its `Web.tea` call"
+        );
+        let w = homed.diagnostic();
         assert!(
             matches!(
                 w,
@@ -4694,8 +4926,9 @@ mod tests {
             model_var,
             not_found_var,
             span: Span::DUMMY,
+            home: vec![interner.intern("Main").expect("intern Main")],
         };
-        let mut warnings: Vec<Diagnostic> = Vec::new();
+        let mut warnings: Vec<HomedWarning> = Vec::new();
         resolve_routed_web_checks(
             &mut uf,
             &mut budget,
@@ -4712,6 +4945,52 @@ mod tests {
         );
     }
 
+    /// An IPE-L0124 finding on a `Web.tea` check with no owning module is
+    /// refused as a compiler bug rather than surfacing as an unframeable warning.
+    #[test]
+    fn routed_app_warning_without_home_is_refused() {
+        let mut interner = Interner::new();
+        let count_sym = interner.intern("count").expect("intern count");
+        let mut budget = Budget::unbounded();
+        let mut uf = UnionFind::new();
+
+        let count_var = uf.fresh(Content::Flex).expect("fresh count var");
+        let ext = uf
+            .fresh(Content::Structure(FlatType::EmptyRecord))
+            .expect("fresh ext");
+        let mut fields = BTreeMap::new();
+        fields.insert(count_sym, count_var);
+        let model_var = uf
+            .fresh(Content::Structure(FlatType::Record(fields, ext)))
+            .expect("fresh model var");
+        let not_found_var = uf.fresh(Content::Flex).expect("fresh notFound var");
+
+        let check = RoutedWebCheck {
+            model_var,
+            not_found_var,
+            span: Span::DUMMY,
+            home: Vec::new(),
+        };
+        let mut warnings: Vec<HomedWarning> = Vec::new();
+        let result = resolve_routed_web_checks(
+            &mut uf,
+            &mut budget,
+            &interner,
+            &[check],
+            /* has_routes */ true,
+            /* route_count */ 1,
+            &mut warnings,
+        );
+        assert!(
+            matches!(result, Err((Diagnostic::CompilerBug { .. }, _))),
+            "a homeless warning must be refused, got {result:?}"
+        );
+        assert!(
+            warnings.is_empty(),
+            "nothing reaches the sink, got {warnings:?}"
+        );
+    }
+
     #[test]
     fn nested_non_exhaustive_case_names_the_missing_nested_pattern() {
         // `Som (Som x)` only matches when the inner value is `Som`, so the value
@@ -4723,10 +5002,8 @@ mod tests {
                    f : Opt (Opt Int) -> Int\n\
                    f o =\n        case o of\n            Som (Som x) -> x\n\
                    \x20           Non -> 0\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -4763,10 +5040,8 @@ mod tests {
                    f : Opt (Opt Int) -> Int\n\
                    f o =\n        case o of\n            Som x -> 1\n\
                    \x20           Som (Som y) -> y\n            Non -> 0\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("redundant branch is a warning (IPE-T0011), not an error");
         assert_eq!(
@@ -4775,7 +5050,11 @@ mod tests {
             "expected exactly one warning, got {:?}",
             types.warnings
         );
-        let warning = types.warnings.first().expect("len==1 asserted above");
+        let warning = types
+            .warnings
+            .first()
+            .map(HomedWarning::diagnostic)
+            .expect("len==1 asserted above");
         assert!(
             matches!(
                 warning,
@@ -4803,10 +5082,8 @@ mod tests {
                    f : Opt (Opt Int) -> Int\n\
                    f o =\n        case o of\n            Som (Som x) -> x\n\
                    \x20           Som Non -> 0\n            Non -> 0\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         // Exhaustiveness passes: the two `Som` arms discriminate on their nested
         // sub-pattern and together with `Non` cover every value. So `infer` must
         // succeed (the lowerer then emits one Rust arm per source arm).
@@ -4821,10 +5098,8 @@ mod tests {
         // `f x = x x` forces `a = a -> b`, tripping the occurs check.
         let src = "module Main exposing (main)\n\
                    f x = x x\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -4856,8 +5131,7 @@ mod tests {
     #[test]
     fn exhaustive_case_passes_the_check() {
         // The golden program's `update` covers every `Msg` constructor.
-        let opt = canon_golden();
-        let Some((m, mut i)) = opt else { return };
+        let (m, mut i) = canon_golden().expect("golden fixture must parse and canonicalise");
         assert!(
             infer(&m, &mut i).is_ok(),
             "an exhaustive, non-redundant program must pass the new pass"
@@ -5125,9 +5399,7 @@ mod tests {
     fn accessing_a_missing_field_is_no_such_field() {
         // `{ x = 1 }` has no `y`: a closed record rejects the access (IPE-T0012).
         let source = "module Main exposing (v)\nv =\n    let p = { x = 1 } in p.y\n";
-        let Some((m, mut i)) = canon_src(source) else {
-            return;
-        };
+        let (m, mut i) = canon_src(source).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -5145,9 +5417,7 @@ mod tests {
     fn accessing_a_field_on_a_non_record_is_no_such_field() {
         // `p` is an `Int`, so `p.x` has no field to read (IPE-T0012).
         let source = "module Main exposing (v)\nv =\n    let p = 5 in p.x\n";
-        let Some((m, mut i)) = canon_src(source) else {
-            return;
-        };
+        let (m, mut i) = canon_src(source).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -5180,9 +5450,7 @@ mod tests {
         // update of an absent field (IPE-T0012).
         let source =
             "module Main exposing (v)\nv =\n    let p = { x = 1, y = 2 } in { p | z = 0 }\n";
-        let Some((m, mut i)) = canon_src(source) else {
-            return;
-        };
+        let (m, mut i) = canon_src(source).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -5201,9 +5469,7 @@ mod tests {
         // `p.x` is an `Int`; updating it to a record `{ a = 1 }` cannot unify, so
         // the whole binding is a type error.
         let source = "module Main exposing (v)\nv =\n    let p = { x = 1, y = 2 } in { p | x = { a = 1 } }\n";
-        let Some((m, mut i)) = canon_src(source) else {
-            return;
-        };
+        let (m, mut i) = canon_src(source).expect("fixture must parse and canonicalise");
         assert!(
             infer(&m, &mut i).is_err(),
             "updating a field to a value of the wrong type must be a type error"
@@ -5214,9 +5480,7 @@ mod tests {
     fn updating_a_field_on_a_non_record_is_no_such_field() {
         // `p` is an `Int`, so `{ p | x = 1 }` has no field to update (IPE-T0012).
         let source = "module Main exposing (v)\nv =\n    let p = 5 in { p | x = 1 }\n";
-        let Some((m, mut i)) = canon_src(source) else {
-            return;
-        };
+        let (m, mut i) = canon_src(source).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -5235,9 +5499,7 @@ mod tests {
         // `{ x = 1 } == { y = 1 }`: closed records unify only at equal field
         // sets, so this is a type error.
         let source = "module Main exposing (v)\nv : Bool\nv =\n    { x = 1 } == { y = 1 }\n";
-        let Some((m, mut i)) = canon_src(source) else {
-            return;
-        };
+        let (m, mut i) = canon_src(source).expect("fixture must parse and canonicalise");
         assert!(
             infer(&m, &mut i).is_err(),
             "records with different field sets must not unify"
@@ -5300,10 +5562,8 @@ mod tests {
                    useInt =\n    identity 5\n\
                    useBool : Bool\n\
                    useBool =\n    identity (0 == 0)\n\
-                   main =\n    Io.println (String.fromInt useInt)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    useInt\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -5311,12 +5571,8 @@ mod tests {
         );
         let Ok(solved) = r else { return };
         // The two consumers settle at their concrete result types.
-        let Some(use_int) = def_key(&i, &m, "useInt") else {
-            return;
-        };
-        let Some(use_bool) = def_key(&i, &m, "useBool") else {
-            return;
-        };
+        let use_int = def_key(&i, &m, "useInt").expect("useInt must be defined in canon");
+        let use_bool = def_key(&i, &m, "useBool").expect("useBool must be defined in canon");
         assert_eq!(
             solved
                 .env
@@ -5392,10 +5648,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    bad : a -> b\n\
                    bad x =\n    x\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             matches!(
                 infer(&m, &mut i),
@@ -5419,10 +5673,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    f : a -> a\n\
                    f x =\n    x + 1\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             matches!(
                 infer(&m, &mut i),
@@ -5514,13 +5766,19 @@ mod tests {
                    useInt =\n    ident 5\n\
                    useBool : Bool\n\
                    useBool =\n    ident (0 == 0)\n\
-                   main =\n    Io.println (String.fromInt useInt)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    useInt\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
+        let r = infer(&m, &mut i);
         assert!(
-            infer(&m, &mut i).is_err(),
-            "an unannotated binding used at Int and Bool must be rejected (monomorphic)"
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::TypeMismatch { .. },
+                    ..
+                })
+            ),
+            "an unannotated binding used at Int and Bool must be rejected (monomorphic) \
+             with a TypeMismatch, got {r:?}"
         );
     }
 
@@ -5548,10 +5806,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    double : a -> a\n\
                    double x =\n    x + x\n\
-                   main =\n    Io.println (String.fromInt (double 21))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    double 21\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let solved = infer(&m, &mut i);
         assert!(solved.is_ok(), "double must type-check, got {solved:?}");
         let Ok(solved) = solved else { return };
@@ -5572,10 +5828,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    maxOf : a -> a -> a\n\
                    maxOf p q =\n    if p > q then p else q\n\
-                   main =\n    Io.println (String.fromInt (maxOf 3 7))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    maxOf 3 7\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let solved = infer(&m, &mut i);
         assert!(solved.is_ok(), "maxOf must type-check, got {solved:?}");
         let Ok(solved) = solved else { return };
@@ -5598,10 +5852,8 @@ mod tests {
                    double x =\n    x + x\n\
                    doubleFloat : Float -> Float\n\
                    doubleFloat x =\n    double x\n\
-                   main =\n    Io.println (String.fromInt (double 21))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    double 21\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             infer(&m, &mut i).is_ok(),
             "double used at Int and Float must type-check"
@@ -5617,10 +5869,8 @@ mod tests {
                    double x =\n    x + x\n\
                    doubleBool : Bool -> Bool\n\
                    doubleBool x =\n    double x\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             matches!(
                 infer(&m, &mut i),
@@ -5667,10 +5917,8 @@ mod tests {
                    toF x =\n    x\n\
                    v : Float\n\
                    v =\n    toF 100\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             infer(&m, &mut i).is_ok(),
             "an integer literal `100` must satisfy a `Float` parameter"
@@ -5687,10 +5935,8 @@ mod tests {
                    toI x =\n    x\n\
                    v : Int\n\
                    v =\n    toI 1.5\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             infer(&m, &mut i).is_err(),
             "a float literal `1.5` must not satisfy an `Int` parameter"
@@ -5707,10 +5953,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    f : a -> a\n\
                    f x =\n    x + 1\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             matches!(
                 infer(&m, &mut i),
@@ -5823,21 +6067,18 @@ mod tests {
             "Main",
             "module Main exposing (main)\n\n\
              import Lib1 exposing (listLen)\n\n\
-             main =\n    Io.println (String.fromInt (listLen [ 90, 35 ]))\n",
+             main =\n    listLen [ 90, 35 ]\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
             "a polymorphic-list-element cross-module untyped def must typecheck: {r:?}"
         );
         let Ok(solved) = r else { return };
-        let Ok(lib1) = i.intern("Lib1") else { return };
-        let Ok(list_len) = i.intern("listLen") else {
-            return;
-        };
+        let lib1 = i.intern("Lib1").expect("intern Lib1");
+        let list_len = i.intern("listLen").expect("intern listLen");
         let quantified = solved.untyped_type_params.get(&(vec![lib1], list_len));
         assert!(
             quantified.is_some_and(|v| v.len() == 1),
@@ -5888,9 +6129,8 @@ mod tests {
              result =\n    Wrap stamp\n";
         let main = ("Main", main_src);
 
-        let Some((m, mut i)) = link_modules(&[lib, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
 
         // The mismatching sub-term is the `stamp` in the FINAL `Wrap stamp`;
         // the caret must land inside this byte range, never on `Just uid`.
@@ -6480,6 +6720,176 @@ h x =
             sole_bound(&solved, &mut i, "insertOne").is_some_and(TyBounds::has_sql_param),
             "`insertOne`'s wildcard must carry the SQL-parameter obligation"
         );
+    }
+
+    /// The IPE-T0021 dependence `solved` refused its binding with, if any.
+    fn wildcard_refusal(solved: &DResult<SolvedTypes>) -> Option<(usize, &WildcardDependence)> {
+        match solved {
+            Err(Diagnostic::Type {
+                msg:
+                    TypeError::WildcardNotIndependent {
+                        parameter,
+                        dependence,
+                    },
+                ..
+            }) => Some((*parameter, dependence)),
+            _ => None,
+        }
+    }
+
+    /// A parameter wildcard the body unifies with a signature type variable is
+    /// that variable, never an independent generic, so the binding is refused
+    /// and the diagnostic names the variable.
+    #[test]
+    fn wildcard_tied_to_a_type_variable_is_refused() {
+        let src = format!(
+            "{M2C_HDR}k : a -> any -> List a\nk x y =\n    [ x, y ]\n\nmain =\n    k 1 2\n"
+        );
+        let (solved, _i, _m) = infer_src(&src);
+        assert!(
+            matches!(
+                wildcard_refusal(&solved),
+                Some((2, WildcardDependence::TypeVariable { name: Some(n) })) if &**n == "a"
+            ),
+            "a wildcard unified with `a` must be refused as IPE-T0021: {solved:?}"
+        );
+    }
+
+    /// Two parameter wildcards the body unifies with each other are one type,
+    /// so the later one is refused as shared with the earlier parameter.
+    #[test]
+    fn wildcards_aliased_to_each_other_are_refused() {
+        let src =
+            format!("{M2C_HDR}g : any -> any -> Bool\ng x y =\n    x == y\n\nmain =\n    g 1 2\n");
+        let (solved, _i, _m) = infer_src(&src);
+        assert!(
+            matches!(
+                wildcard_refusal(&solved),
+                Some((2, WildcardDependence::SharedWith { parameter: 1 }))
+            ),
+            "two aliased wildcards must be refused as IPE-T0021: {solved:?}"
+        );
+    }
+
+    /// A wildcard the body solves to a structure that still holds a free
+    /// variable or an open record row — bare, nested in `List any`, a record
+    /// nested in a tuple, or a bare record whose field is not ground — has no
+    /// single lowering, so the binding is refused.
+    #[test]
+    fn wildcard_solved_to_a_partial_structure_is_refused() {
+        for (what, def, parameter) in [
+            (
+                "a tuple with an open slot",
+                "f : any -> Int\nf p =\n    case p of\n        ( a, _ ) ->\n            a + 1\n",
+                1,
+            ),
+            (
+                "a nested tuple with an open slot",
+                "f : List any -> Bool\nf xs =\n    case xs of\n        [ ( a, _ ) ] ->\n            a\n\n        _ ->\n            False\n",
+                1,
+            ),
+            (
+                "a record nested in a tuple",
+                "f : any -> Int\nf p =\n    case p of\n        ( a, r ) ->\n            a + r.x\n",
+                1,
+            ),
+            (
+                "a nested record read through a tuple after a concrete parameter",
+                "f : Int -> any -> Int\nf n p =\n    case p of\n        ( a, r ) ->\n            n + a + r.x\n",
+                2,
+            ),
+            (
+                "a bare record whose field holds a tuple with an open slot",
+                "f : any -> Int\nf p =\n    case p.pair of\n        ( a, _ ) ->\n            a + 1\n",
+                1,
+            ),
+            (
+                "a bare record whose field is an open record",
+                "f : any -> Int\nf p =\n    p.inner.y + 1\n",
+                1,
+            ),
+        ] {
+            let src = format!("{M2C_HDR}{def}\nmain =\n    0\n");
+            let (solved, _i, _m) = infer_src(&src);
+            assert!(
+                matches!(
+                    wildcard_refusal(&solved),
+                    Some((p, WildcardDependence::PartialStructure { .. })) if p == parameter
+                ),
+                "{what} must be refused as IPE-T0021: {solved:?}"
+            );
+        }
+    }
+
+    /// The acceptance side: an identity wildcard threaded to the return, two
+    /// independent wildcards, two wildcards the body pins to the same ground
+    /// type, and a bare record wildcard the body field-reads all type-check.
+    #[test]
+    fn independent_threaded_or_pinned_wildcards_are_accepted() {
+        for (what, def, use_) in [
+            (
+                "an identity",
+                "thread : any -> any\nthread x =\n    x\n",
+                "thread 1",
+            ),
+            (
+                "two independent wildcards",
+                "constFn : any -> any -> Int\nconstFn x y =\n    0\n",
+                "constFn 1 \"s\"",
+            ),
+            (
+                "two wildcards pinned to one ground type",
+                "add : any -> any -> Int\nadd x y =\n    x + y + 1\n",
+                "add 1 2",
+            ),
+            (
+                "a field-read bare record",
+                "getName : any -> String\ngetName p =\n    p.name\n",
+                "getName { name = \"a\", age = 1 }",
+            ),
+        ] {
+            let src = format!("{M2C_HDR}{def}\nmain =\n    {use_}\n");
+            let (solved, _i, _m) = infer_src(&src);
+            assert!(solved.is_ok(), "{what} must type-check: {solved:?}");
+        }
+    }
+
+    /// Two wildcards the body pins to one ground type each record that pin.
+    #[test]
+    fn wildcards_sharing_a_ground_root_are_both_pinned() {
+        let src = format!(
+            "{M2C_HDR}add : any -> any -> Int\nadd x y =\n    x + y + 1\n\nmain =\n    add 1 2\n"
+        );
+        let (solved, mut i, _m) = infer_src(&src);
+        let solved = solved.expect("`add 1 2` must type-check");
+        let sig = signature_wildcards_of(&solved, &mut i, "add");
+        assert!(
+            matches!(sig, Some(w) if w.param_counts == [1, 1] && w.pins.len() == 2),
+            "`add` must pin both wildcards: {sig:?}"
+        );
+    }
+
+    /// Groundness admits closed records of ground fields and refuses a bare
+    /// variable, an open row, and a variable nested in a record field.
+    #[test]
+    fn ty_is_ground_refuses_variables_and_open_rows() {
+        let mut i = Interner::new();
+        let x = i.intern("x").expect("intern a field name");
+        let int_ty = Ty::Con {
+            module: Vec::new(),
+            name: i.intern("Int").expect("intern a primitive name"),
+            args: Vec::new(),
+        };
+        let record = |field: Ty, tail: RowTail| Ty::Record(BTreeMap::from([(x, field)]), tail);
+        assert!(ty_is_ground(&record(int_ty.clone(), RowTail::Closed)));
+        assert!(ty_is_ground(&Ty::Tuple(vec![int_ty.clone(), Ty::Unit])));
+        assert!(!ty_is_ground(&Ty::Var(0)));
+        assert!(!ty_is_ground(&record(int_ty.clone(), RowTail::Open(1))));
+        assert!(!ty_is_ground(&record(Ty::Var(2), RowTail::Closed)));
+        assert!(!ty_is_ground(&Ty::Tuple(vec![
+            int_ty,
+            record(Ty::Unit, RowTail::Open(3))
+        ])));
     }
 
     /// The gate itself: the interpolation obligation admits exactly the scalar

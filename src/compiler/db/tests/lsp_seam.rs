@@ -25,7 +25,7 @@
 
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -168,20 +168,34 @@ fn lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory() {
 /// the LSP inherits it for free.
 ///
 /// Deterministic, no wall-clock race (same technique as the watch proof):
-/// an event callback signals the worker's FIRST `WillExecute`, guaranteeing
-/// the cancelling edit lands while the worker still has salsa checkpoints
-/// ahead of it (`parse` → `resolve_imports` → `canonicalize` ×2 →
+/// an event callback signals the worker's FIRST `WillExecute` and parks the
+/// worker there until the edit sets salsa's cancellation flag, so the edit
+/// lands while the worker still has salsa checkpoints ahead of it (`parse` → `resolve_imports` → `canonicalize` ×2 →
 /// `module_interface` → `linked_program` → `typecheck`).
 #[test]
 fn lsp_diagnostics_query_is_cancelled_by_the_next_keystroke_and_converges_to_latest_state() {
     let (first_exec_tx, first_exec_rx) = mpsc::channel::<()>();
+    let (flag_set_tx, flag_set_rx) = mpsc::channel::<()>();
+    let flag_set_rx = Mutex::new(flag_set_rx);
     let signalled = Arc::new(AtomicBool::new(false));
     let signalled_in_callback = Arc::clone(&signalled);
     let mut db = IpeDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
-        if matches!(event.kind, salsa::EventKind::WillExecute { .. })
-            && !signalled_in_callback.swap(true, Ordering::SeqCst)
-        {
-            let _ = first_exec_tx.send(());
+        match event.kind {
+            salsa::EventKind::WillExecute { .. }
+                if !signalled_in_callback.swap(true, Ordering::SeqCst) =>
+            {
+                let _ = first_exec_tx.send(());
+                // Park the worker until the edit raises the cancellation flag,
+                // so its next checkpoint observes the flag however fast the
+                // remaining queries run.
+                if let Ok(rx) = flag_set_rx.lock() {
+                    let _ = rx.recv_timeout(Duration::from_secs(10));
+                }
+            }
+            salsa::EventKind::DidSetCancellationFlag => {
+                let _ = flag_set_tx.send(());
+            }
+            _ => {}
         }
     }));
 

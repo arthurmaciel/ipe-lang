@@ -44,7 +44,7 @@ const MAX_LABEL_CHARS: usize = 64;
 const FALLBACK_LABEL: &str = "scratch";
 
 /// The variable naming the current user's profile directory on Windows.
-pub const PROFILE_VAR: &str = "USERPROFILE";
+pub const PROFILE_VAR: &str = crate::home::WINDOWS_HOME_VAR;
 
 /// Why a scratch location was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

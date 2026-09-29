@@ -327,10 +327,8 @@ impl<'a> Parser<'a> {
         let name = self.parse_module_name()?;
 
         // The `exposing` keyword must follow the module name.
-        match self.peek() {
-            Some(t) if t.kind == Tok::Exposing => {
-                self.bump(Construct::ModuleHeader)?;
-            }
+        let exposing_kw = match self.peek() {
+            Some(t) if t.kind == Tok::Exposing => self.bump(Construct::ModuleHeader)?.span,
             Some(t) => {
                 return Err(Self::malformed_header(
                     t.span,
@@ -343,8 +341,9 @@ impl<'a> Parser<'a> {
                     HeaderDefect::MissingExposing,
                 ));
             }
-        }
-        let (exposing, _) = self.parse_exposing()?;
+        };
+        let (exposing, exposing_close) = self.parse_exposing()?;
+        let exposing = Located::new(Self::span_merge(exposing_kw, exposing_close), exposing);
 
         // Imports may be preceded by a `{-| … -}` doc-comment. One before an
         // `import` documents the module, not the import, and is dropped; one
@@ -376,12 +375,11 @@ impl<'a> Parser<'a> {
             decls.push(self.parse_decl(first_doc.take())?);
         }
 
-        let header_span = Self::span_merge(module_tok.span, name.span);
         let (values, unions, aliases, foreigns) = self.assemble(decls)?;
         Ok(Module {
             module_kw: module_tok.span,
             name,
-            exposing: Located::new(header_span, exposing),
+            exposing,
             imports,
             values,
             unions,

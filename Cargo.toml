@@ -44,7 +44,7 @@ exclude = ["tools/panic-scan"]
 
 [workspace.package]
 edition = "2024"
-version = "0.3.2" # x-release-please-version
+version = "0.3.3" # x-release-please-version
 license = "Apache-2.0"
 
 # THE SSOT for the workspace clippy policy. Every `cargo clippy` — in CI and in
@@ -89,6 +89,36 @@ multiple_crate_versions = "allow"
 # interactive debugging of the library crates.
 [profile.test]
 debug = 0
+# The test suites are compile-bound pipelines run hundreds of times, so light
+# optimisation cuts their run time far more than it adds to build time. The
+# runtime checks the soundness gate relies on stay on explicitly: an optimised
+# test build still aborts on integer overflow and still runs `debug_assert!`.
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
 
 [profile.dev]
 debug = 1
+
+# Hashing crates optimised in `dev`/`test`: the build-cache epoch SHA-256s the running exe per process.
+# The list is sha2's runtime-code dependency closure; re-derive it when sha2 is bumped.
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.digest]
+opt-level = 3
+
+[profile.dev.package.block-buffer]
+opt-level = 3
+
+[profile.dev.package.crypto-common]
+opt-level = 3
+
+[profile.dev.package.generic-array]
+opt-level = 3
+
+[profile.dev.package.hybrid-array]
+opt-level = 3
+
+[profile.dev.package.cpufeatures]
+opt-level = 3

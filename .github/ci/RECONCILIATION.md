@@ -13,11 +13,12 @@ automated by a workflow token).
 
 ## Intended required set (= manifest `gate` + `gate-external` contexts)
 
-See `ci/required-set.json`, 33 contexts:
+See `ci/required-set.json`, 39 contexts:
 
 ```
 admission-changes
 artifact-guard
+build-tools
 capabilities-docs-drift
 cargo-deny
 changes
@@ -27,6 +28,7 @@ clippy
 diagnostic-tone
 doc-string example gate
 e2e-all
+editors-configure
 env-docs-drift
 explain-page example gate (ADR 0059)
 first-party check floor (ipe type-check only)
@@ -38,17 +40,21 @@ linux-x64 (seccomp socket-deny + bubblewrap)
 macos-arm64 (sandbox-exec / Seatbelt)
 manifest-lock-consistency
 markdown-parity
+nightly-green
 panic-scan
 playground-changes
 playground-jail
 quick-check
 registry-admission
+requirements-docs-drift
+runtime-feature-combos
 runtime-full-features
 seal-slice
 seal-smoke
 stdlib-docs-drift
 test
 wasm-floor
+windows-check
 ```
 
 ## Delta vs live `main-protection` ruleset (id 22326541)
@@ -57,15 +63,15 @@ Measured against the ruleset's current `required_status_checks`.
 
 **Add to the required set** (`gate` in the manifest, absent from the ruleset):
 
-- `changes`, `admission-changes`, `playground-changes` — the path classifiers of
-  `ci.yml`, `admission-sandbox.yml`, `playground.yml`. A failed or cancelled
-  classifier skips every job that `needs` it, and a skipped required check
-  passes; requiring the classifier makes that state block the merge (fail
-  closed). Each has a workflow-unique name so the context has one producer.
-- `cli-docs-drift`, `cli-transcripts-drift`, `markdown-parity` — deterministic
-  generated-docs / snapshot diffs.
-- `grammar` — tree-sitter grammar drift guard.
-- `manifest-lock-consistency` — Cargo.lock/Cargo.toml version lockstep.
+- `build-tools` — compiles the doc/golden regenerator binaries the docs-drift
+  gates `need`; a failed or skipped build step would otherwise skip those gates
+  and pass them (fail open), the same property as the path classifiers.
+- `editors-configure` — every `editors/*/configure.sh` path, including the Zed
+  extension build for `wasm32-wasip2`.
+- `nightly-green` — red until the latest nightly on `main` is green (or the
+  change's own commit passed a dispatched full gate); the one required context
+  that carries the `nightly-gate` checks.
+- `requirements-docs-drift` — generated requirements-docs diff.
 
 No removals: every live required context is a manifest `gate` and stays.
 
@@ -82,7 +88,8 @@ gh api -X PUT repos/arthurmaciel/ipe-lang/rulesets/22326541 --input /tmp/rs.json
 
 `strict_required_status_checks_policy` should stay `false` (heavy `nightly-gate`
 contexts must not be forced onto every PR); nightly-gate reds are enforced by the
-fail-closed `promotion-ready` job on the next promotion, not by branch protection.
+required `nightly-green` context, which is red until the latest nightly on main is
+green (or the change's own commit passed a dispatched full gate).
 
 ## Nightly-gate contexts (NOT branch-protection required)
 

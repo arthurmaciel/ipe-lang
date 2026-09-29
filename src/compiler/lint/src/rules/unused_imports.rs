@@ -119,7 +119,7 @@ fn finding(ctx: &Ctx, import: &Import) -> Finding {
     match removal_range(ctx.source, import) {
         Some((lo, hi)) => ctx.with_fix(
             RULE,
-            import.import_kw,
+            import.span,
             message,
             help,
             Fix {
@@ -128,7 +128,7 @@ fn finding(ctx: &Ctx, import: &Import) -> Finding {
                 replacement: String::new(),
             },
         ),
-        None => ctx.advisory(RULE, import.import_kw, message, help),
+        None => ctx.advisory(RULE, import.span, message, help),
     }
 }
 

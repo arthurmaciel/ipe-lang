@@ -4,8 +4,8 @@ name: Playground jail
 # sandbox security tests so a change that breaks either fails CI.
 #
 # Trigger strategy (mirrors the wasm-floor job in ci.yml):
-#   • On PRs: only when playground-relevant paths change (off the required
-#     path for unrelated PRs).
+#   • On PRs: unless the fail-closed classifier (.github/ci/change_class.py,
+#     `playground` scope) proves every changed path irrelevant.
 #   • On push to main/master and nightly: always.
 #
 # Two jobs:
@@ -37,40 +37,47 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  # Path filter: skip on PRs that touch nothing playground-relevant.
+  # Change classification: `playground` is `false` only when every changed path
+  # is PROSE or an unrelated `src/` tree (.github/ci/change_class.py). Any other
+  # path (examples/, .github/, tools/, root files), an unreadable diff, or a
+  # classifier crash runs the jail.
   changes:
     # Unique context: a required `changes` shared with ci.yml would be ambiguous.
     name: playground-changes
     runs-on: ubuntu-latest
     outputs:
-      playground: ${{ steps.filter.outputs.playground }}
+      # An unset output (classifier crash) reads as `true`: absent proof, run.
+      playground: ${{ steps.classify.outputs.playground != 'false' }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v3
-        id: filter
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          filters: |
-            playground:
-              - 'examples/wasm/language-playground/**'
-              - 'src/wasm/**'
-              - 'src/compiler/sandbox/**'
-              - 'src/compiler/env/**'
-              - '.github/workflows/playground.yml'
+          # The tested merge commit and its base parent, for the changed-path diff;
+          # a merge-group run needs history back to the queue base.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
+      - name: Classify changed paths
+        id: classify
+        # A crash leaves the output unset, which the job output reads as `true`.
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 .github/ci/change_class.py --playground
 
   # Build the wasm bundle and the jail-runner binary. This is the primary rot
   # guard: a compile break here fails fast without needing bwrap on the runner.
   build:
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.playground == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.playground == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: wasm32-unknown-unknown
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Build ipe-wasm (wasm32-unknown-unknown)
         run: cargo build -p ipe-wasm --target wasm32-unknown-unknown --release
@@ -83,16 +90,16 @@ jobs:
   playground-jail:
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.playground == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.playground == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     timeout-minutes: 20
     env:
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
 
       - name: Install bubblewrap
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap

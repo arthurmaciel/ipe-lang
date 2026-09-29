@@ -906,8 +906,8 @@ fn audit_scratch_dir(package: &str) -> Result<PathBuf, CliError> {
 ///   the plan (§1a) an emitted-Rust hit is OUR CI's concern, never the author's,
 ///   so the author-facing package gate does not scan it here: the emitted surface
 ///   is already covered by the compiler's own `tools/panic-scan` CI over the
-///   backend's `src/` templates (`.github/workflows/panic-scan.yml`). That
-///   separation is not incidental — the backend's FIXED epilogue emits one
+///   backend's `src/` templates (the `panic-scan` job in
+///   `.github/workflows/ci.yml`). That separation is not incidental — the backend's FIXED epilogue emits one
 ///   deliberate, `#[allow(unreachable_code)]`-guarded polyfill `panic!` into
 ///   every project's `main.rs`, so scanning emitted output as an author gate
 ///   would reject every package for a construct that is neither the author's nor

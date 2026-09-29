@@ -3709,6 +3709,17 @@ main = 1\n";
         }
     }
 
+    /// The module header's `exposing` span covers the keyword through the
+    /// closing `)`, even when the list wraps across lines.
+    #[test]
+    fn module_exposing_span_covers_the_whole_clause() {
+        let clause = "exposing\n    ( main\n    , helper -- )\n    )";
+        let src = format!("module Main {clause}\n\nmain = 1\n\nhelper = 2\n");
+        let mut i = Interner::new();
+        let m = parse_module(&src, &mut i).expect("fixture must parse");
+        assert_eq!(spanned(&src, m.exposing.span), clause);
+    }
+
     #[test]
     fn word_span_bare_dot_is_empty_at_cursor() {
         let src = "Font.";

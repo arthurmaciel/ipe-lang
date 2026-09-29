@@ -1,0 +1,16 @@
+module Main exposing (main)
+
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+score : any -> Int
+score pair =
+    case pair of
+        ( n, point ) ->
+            n + point.x
+
+
+main : Task ()
+main =
+    Io.println (String.fromInt (score ( 1, { x = 2, y = 3 } )))

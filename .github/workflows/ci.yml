@@ -5,7 +5,7 @@ name: Build & test
 # Split by TRIGGER and by PATH, so a PR pays only for the gates a change of its
 # shape can break, and `main` stays green by construction:
 #   • PULL REQUEST — the required gate runs for ALL authors, scoped by the
-#     `changes` paths-filter. It covers code CORRECTNESS and code SOUNDNESS
+#     fail-closed `changes` classifier. It covers code CORRECTNESS and code SOUNDNESS
 #     before a merge: fmt, clippy, quick-check, test (nextest unit/integration),
 #     the docs-drift gates, the first-party check-floor + shapes build gate,
 #     seal-smoke (build+run ONE emitted example, a fast SEAL proxy), the runtime
@@ -13,14 +13,15 @@ name: Build & test
 #     (`wasm` filter), and the ASAN/TSAN sanitizers (`emit` filter — PRINCIPLE 3:
 #     a codegen/runtime change is exactly what introduces memory UB or a data
 #     race, so those gate PRE-merge). It ALSO runs the full SEAL at PR time —
-#     the 14-shard e2e, the 8-way seal-slice, seal-modset (vendored), and the
-#     arm64 Tier-2 refuse-to-certify proof — each keyed on the `code` superset
-#     (not `emit`): a SEAL break is not emit-only, since a canon/types/lower
-#     acceptance change can make a program ipe-accept-then-cargo-fail, so gating
-#     on `code` closes that blind spot while each job's internal early-exit and
-#     the warm `test-prep` archive keep build depth cheap on a non-emit PR. A
-#     docs/CI/yaml-only PR (no matching path) skips them all; a developer runs
-#     the same set locally to match CI.
+#     the 14-shard e2e (and the seal-slice proof that its shards cover every
+#     archived test), seal-modset (vendored), and the arm64 Tier-2
+#     refuse-to-certify proof — each keyed on the `code` superset (not `emit`):
+#     a SEAL break is not emit-only, since a canon/types/lower acceptance change
+#     can make a program ipe-accept-then-cargo-fail. The warm `test-prep`
+#     archive keeps them from recompiling the workspace. A
+#     PR touching only the guarded PROSE set (.github/ci/change_class.py) skips
+#     them all; any other path runs them; a developer runs the same set locally
+#     to match CI.
 #   • RELEASE-ONLY PR — a same-repo PR whose diff is only release-please version
 #     metadata (`changes.release_only`, .github/ci/release_only.py) skips the
 #     heavy emitted-build/SEAL/sanitizer tiers: its tree is the already-gated
@@ -33,7 +34,7 @@ name: Build & test
 #     the FF promotion waits on and catch regressions on the nightly dep/upstream
 #     sweep.
 #
-# Job-level `if:` keys on the `changes` paths-filter output (all authors) for the
+# Job-level `if:` keys on the `changes` classifier output (all authors) for the
 # correctness/soundness gates and on github.event_name for the nightly infra/
 # flaky-env jobs. E2E is sharded across runners; a job that wants sccache adds
 # `uses: ./.github/actions/sccache` (installs the binary and wires
@@ -48,10 +49,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue's run on the combined tree. It takes the PR tier (every
+  # `!= 'pull_request'` full-tier test below also excludes `merge_group`); the
+  # push to main that follows the queue merge runs the full tier.
+  merge_group:
   # The nightly heavy sweep is dispatched by nightly-full-gate.yml (a single
   # scheduled entry point the rerun-failed-once orchestration can watch). A dispatch is
-  # not a pull_request, so the heavy `if: github.event_name != 'pull_request'`
-  # jobs run under it.
+  # neither a pull_request nor a merge_group, so the heavy full-tier jobs run
+  # under it.
   workflow_dispatch: {}
 
 # Least-privilege GITHUB_TOKEN, set at the top so it also caps the token a fork
@@ -67,7 +72,7 @@ permissions:
 concurrency:
   # On pull requests, cancel the previous run for the same ref so devs get fast
   # feedback without wasting runner minutes. On push/tags, never cancel: the
-  # heavy jobs (the full e2e/seal-slice matrices, the Tier-2 jails) produce the
+  # heavy jobs (the full e2e matrix, the Tier-2 jails) produce the
   # main-required contexts the FF promotion waits on — killing an in-progress
   # push run would leave those contexts un-green and stall promotion.
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -78,39 +83,47 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  # Path filters. On a PR each filter's output gates whether its dependent jobs
-  # run; on push/schedule the jobs always run (see each job's `if:`).
-  #   • wasm  — keeps the wasm build OFF the required PR path for non-wasm changes.
-  #   • code  — a conservative SUPERSET of every build input. When it is false a
-  #     PR touches only docs/prose that NO test reads at runtime, so `test`,
-  #     `clippy`, and `seal-smoke` are safe to skip. When in doubt it runs: the
-  #     filter lists all source/manifest/workflow paths, and the ONE prose-file
-  #     build-input gotcha `AGENTS.md` — it is `include_str!("../../../AGENTS.md")`
-  #     into ipe-cli's init.rs, and the `init_subcommand` test asserts on its
-  #     bytes, so a change to it MUST re-run the gates. (The explain/*.md
-  #     diagnostic pages live under src/** already, so they need no special case.)
+  # Change classification. On a PR each scope's output gates whether its
+  # dependent jobs run; on push/schedule the jobs always run (see each job's
+  # `if:`). `.github/ci/change_class.py` is the SSOT and fails closed: a scope is
+  # `false` only on proof that EVERY changed path is irrelevant to it. `code` may
+  # skip only on the PROSE set, which the guard step proves no crate, include!,
+  # drift check, script, or workflow reads; the narrow scopes (wasm, editors,
+  # emit) also skip on enumerated source trees. Any other path, an unreadable
+  # diff, or a classifier crash runs every scope.
   changes:
     runs-on: ubuntu-latest
     outputs:
-      wasm: ${{ steps.filter.outputs.wasm }}
-      code: ${{ steps.filter.outputs.code }}
+      # An unset output (classifier crash) reads as `true`: absent proof, run.
+      wasm: ${{ steps.classify.outputs.wasm != 'false' }}
+      code: ${{ steps.classify.outputs.code != 'false' }}
       # `editors` — the editor setup scripts/configs, incl. the Zed extension's
       # Rust source Zed itself compiles for wasm32-wasip2.
-      editors: ${{ steps.filter.outputs.editors }}
+      editors: ${{ steps.classify.outputs.editors != 'false' }}
       # `emit` — true when the backend, runtime, stdlib, or emitted-crate support
-      # paths changed.  Used by the e2e job on the PR path to decide whether the
-      # heavy goldens (webview/server/watch — each drives a multi-minute cold
-      # `cargo build`) are reachable by this diff; a parser-only or canon-only
-      # change cannot affect the SEAL of those goldens, so the 5 heavy shards are
-      # skipped on a PR when this is false.  On push/nightly the heavy shards
-      # always run (full SEAL); the filter is only a PR-path optimisation.
-      emit: ${{ steps.filter.outputs.emit }}
-      release_only: ${{ steps.release.outputs.release_only }}
+      # paths changed. Scopes the runtime feature-combo/full-feature builds and
+      # the sanitizers; the SEAL tiers key on `code`, never on this.
+      emit: ${{ steps.classify.outputs.emit != 'false' }}
+      # `release_only` — normalised to `true`/`false` here, once, so no consumer
+      # ever splices the raw writer value into a `run:` script.
+      release_only: ${{ steps.release.outputs.release_only == 'true' }}
+      # `e2e_plan` — every e2e shard's nextest selection, from the SSOT
+      # `.github/ci/e2e_shard.py`; the shards run it and `seal-slice` proves it
+      # partitions the archive.
+      e2e_plan: ${{ steps.e2e-plan.outputs.plan }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # The tested merge commit and its base parent, for the release-only diff.
-          fetch-depth: 2
+          # The tested merge commit and its base parent, for the changed-path diff;
+          # a merge-group run needs history back to the queue base.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
+      # Non-skippable: this job is a required context, so a PR that makes a
+      # PROSE path readable (or moves a crate under one) cannot merge.
+      - name: Guard the prose set
+        run: python3 .github/ci/prose_guard.py
+      - name: Plan the e2e shard selections
+        id: e2e-plan
+        run: python3 .github/ci/e2e_shard.py --plan
       # `release_only` — true only for a same-repo PR whose changed files are all
       # release-please version metadata (see .github/ci/release_only.py). Keyed on
       # the diff, never the branch name, so no PR can opt itself out of a tier.
@@ -124,58 +137,15 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: python3 .github/ci/release_only.py
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            wasm:
-              - 'src/runtime/**'
-              - 'src/compiler/backend/**'
-              - 'src/wasm/**'
-              - 'runtime/**'
-              - 'crates/ipe_backend_rust/**'
-              - '**/*wasm*'
-              - '.github/workflows/ci.yml'
-            code:
-              - 'src/**'
-              - 'crates/**'
-              - 'runtime/**'
-              - 'tests/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - '**/Cargo.toml'
-              - 'rust-toolchain.toml'
-              - '.github/workflows/**'
-              # AGENTS.md is a BUILD input: include_str!'d into ipe-cli's init.rs
-              # and asserted by the init_subcommand test. Every other root *.md /
-              # docs/** / misc/** file is prose no test reads — safe to skip.
-              - 'AGENTS.md'
-            editors:
-              - 'editors/**'
-              - '.github/workflows/ci.yml'
-            # `emit` — a conservative superset of every path that can change what
-            # the heavy e2e goldens (server/webview/watch) build or run.  Covers the
-            # backend emitter, the runtime the emitted crates link against, the stdlib
-            # veneer sources, the e2e/oracle test harness, and examples/ (fixture
-            # changes can change a golden's expected output).  When false on a PR,
-            # the diff cannot affect the heavy SEAL goldens, so those shards are
-            # safely skipped; when in doubt it runs (fail-closed).
-            emit:
-              - 'src/compiler/backend/**'
-              - 'src/compiler/lower/**'
-              - 'src/compiler/ir/**'
-              - 'src/compiler/kernels/**'
-              - 'src/runtime/**'
-              - 'src/stdlib/**'
-              - 'runtime/**'
-              - 'crates/ipe_backend_rust/**'
-              - 'tests/**'
-              - 'examples/**'
-              - 'tools/oracle/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - '**/Cargo.toml'
-              - '.github/workflows/ci.yml'
+      - name: Classify changed paths
+        id: classify
+        # A crash leaves every output unset, which the job outputs read as `true`.
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 .github/ci/change_class.py --code --emit --wasm --editors
 
   # Fail-closed guard against clone bloat: a commit that tracks a build artifact
   # (a target/ directory, an .rlib/.rmeta/.o/.a/.so/.dylib/.wasm blob) or any file
@@ -187,7 +157,7 @@ jobs:
   artifact-guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Reject committed build artifacts
         run: .github/ci/artifact-guard.sh
 
@@ -198,14 +168,14 @@ jobs:
   manifest-lock-consistency:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Check Cargo.lock agrees with Cargo.toml versions
         run: .github/ci/manifest-lock-consistency.sh
 
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           components: rustfmt
@@ -215,43 +185,106 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
     needs: changes
-    # Change-gated: a docs-only PR (no code path in the `code` filter) skips
+    # Change-gated: a prose-only PR (`code` false) skips
     # clippy; it always runs on push/nightly.
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Fetch crates
         run: cargo fetch
       - name: Run clippy
         run: cargo clippy --offline --all-targets --workspace -- -D warnings
+
+  # Token-level scan for authored abrupt-failure constructs in the compiler and
+  # runtime's own Rust — the second, independent gate behind clippy (see
+  # docs/adr/0037-no-authored-abrupt-failure.md). It lexes rather than greps, so
+  # it is free of string/comment false positives and line-split false negatives.
+  # A hard gate: any banned construct in production Rust fails the run. It lives
+  # in this workflow so the heavy test shards can `needs:` it. No author gate and
+  # no job-level `if:`: the job always starts and its own fail-closed classifier
+  # (.github/ci/change_class.py, `panic_scan` scope) decides whether the scan may
+  # skip; a PR it proves irrelevant exits green via the no-op step, and any
+  # doubt runs the scan.
+  panic-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The tested merge commit and its base parent, for the changed-path diff;
+          # a merge-group run needs history back to the queue base.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
+
+      - name: Classify changed paths
+        id: classify
+        # A crash leaves the output unset, which every `!= 'false'` below reads as run.
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 .github/ci/change_class.py --panic-scan
+
+      - uses: ./.github/actions/rust-toolchain-pinned
+        if: steps.classify.outputs.panic_scan != 'false'
+
+      - name: Test the scanner
+        if: steps.classify.outputs.panic_scan != 'false'
+        run: cargo test --manifest-path tools/panic-scan/Cargo.toml
+
+      - name: Build the scanner
+        if: steps.classify.outputs.panic_scan != 'false'
+        run: cargo build --release --manifest-path tools/panic-scan/Cargo.toml
+
+      - name: Scan production Rust
+        if: steps.classify.outputs.panic_scan != 'false'
+        # `.rs` under src/ (the runtime lives at src/runtime/). The scanner owns
+        # the test-path and template-path rules: it skips a `tests/` directory
+        # or `tests.rs` only after confirming its `#[cfg(test)] mod tests;`
+        # declaration (or, for integration tests, the crate's `Cargo.toml`),
+        # and exits 2 naming the file when that premise does not hold.
+        run: tools/panic-scan/target/release/panic-scan --walk src
+
+      - name: No panic-scan-relevant paths changed
+        if: steps.classify.outputs.panic_scan == 'false'
+        run: echo "No panic-scan-relevant paths changed; gate is a no-op for this PR."
 
   # The CLI's Windows-only code (held output-directory handles, reparse-point
   # refusal) never compiles on a Linux runner, so a cfg(windows) break would
   # otherwise surface only at release. Type-checks the CLI and its tests for
   # Windows on every code change, then runs the owned-tree suites (output
   # directory, clean, cache), whose link and junction refusals only a Windows
-  # filesystem can exercise, and the owner-trust refusals (FFI cache and
-  # discovered manifest), which are the discovery rule only off Unix.
+  # filesystem can exercise, the owner-trust refusals (FFI cache and
+  # discovered manifest), which are the discovery rule only off Unix, and the
+  # secret-file refusals, which are the only outcome off Unix (no token, key or
+  # salt file is ever created there).
   windows-check:
     runs-on: windows-latest
     needs: changes
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check --locked -p ipe --all-targets
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       - run: >-
           cargo nextest run --locked -p ipe --lib -E
-          'test(/^(output_dir|clean|cache|owner_trust)::/)
+          'test(/^(output_dir|clean|cache|owner_trust|secret_file)::/)
           | test(=ffi::tests::owned_project_cache_is_refused_when_unverifiable)
-          | test(=driver::tests::find_manifest_refuses_an_unverifiable_manifest)'
+          | test(=driver::tests::find_manifest_refuses_an_unverifiable_manifest)
+          | test(=login::tests::an_unsupported_token_store_writes_no_token)
+          | test(=ssh_signing_key::tests::an_unsupported_secret_store_generates_no_key)
+          | test(=ssh_signing_key::tests::an_unsupported_secret_store_stages_no_key_file)'
+      - run: cargo nextest run --locked -p ipe_sandbox --lib -E 'test(/^home::tests::/)'
 
   # No compiler-internal jargon or raw Rust types leak into user-facing text
   # (rendered diagnostic goldens + `ipe explain` pages). Pure git + ripgrep, no
@@ -261,9 +294,9 @@ jobs:
     needs: changes
     # Change-gated like clippy: a PR that touches no code path skips it; it
     # always runs on push/nightly.
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # ripgrep — tools/scripts/lint-diagnostic-tone.sh requires it (fails
       # closed via require_tool when absent instead of passing vacuously).
       - name: Install ripgrep
@@ -285,22 +318,24 @@ jobs:
   #   ```ipe ipe:error  intentional bad example — gate fails if it compiles
   #   ```ipe ipe:skip   pseudocode / FFI / multi-file — skipped entirely
   # Change-gated: explain pages live under src/** (already in the `code` filter),
-  # so a docs-only PR that touches nothing in src/** legitimately skips this gate.
+  # so a prose-only PR legitimately skips this gate.
   explain-examples:
     name: explain-page example gate (ADR 0059)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
     # Change-gated: runs on a PR that touches src/**, plus nightly.
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/mold
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build ipe
         run: cargo build --release -p ipe
       - name: Compile every explain-page example
@@ -317,16 +352,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
     # Change-gated: runs on a PR that touches src/**, plus nightly.
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/mold
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build ipe
         run: cargo build --release -p ipe
       - name: Type-check every doc-string example
@@ -351,18 +388,20 @@ jobs:
     # for a trusted author (heavy runs at promotion); an untrusted-author PR runs
     # it at PR time (third-party full gate).
     if: >-
-      github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/mold
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       # The fixtures shell out to `git init/commit/push`; give the runner an
       # identity so those commands do not fail on a fresh machine.
       - name: Configure git identity for fixtures
@@ -382,9 +421,11 @@ jobs:
   quick-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Fetch crates
         run: cargo fetch
       - name: Check the workspace compiles
@@ -405,24 +446,41 @@ jobs:
     needs: [changes, quick-check]
     # Code-build correctness gate on the PR boundary: runs on any PR that touches
     # an emit-relevant path (backend/runtime/stdlib), and always on push/nightly.
-    # Path-scoping means a docs/CI-only PR skips it.
-    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    # Path-scoping means a prose-only PR skips it. A release-please PR (version
+    # metadata only) is handled INSIDE the job below via per-step `if:`, not by
+    # skipping the job outright — a required context must report a genuinely
+    # executed pass, never rely on GitHub's skip-counts-as-pass quirk.
+    if: needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
-      - uses: actions/checkout@v7
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "runtime-feature-combos: release-please-only diff (version metadata, no runtime-feature-relevant source changed); trivial pass, not a skip."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
         with:
           components: clippy
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.release_only != 'true'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: needs.changes.outputs.release_only != 'true'
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # db WITHOUT web — the load-bearing invariant.
-      - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db --all-targets -- -D warnings
+      - if: needs.changes.outputs.release_only != 'true'
+        run: cargo clippy -p ipe-runtime-rust --no-default-features --features db --all-targets -- -D warnings
       # db WITH web — the pair must also stay co-buildable.
-      - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db,web --all-targets -- -D warnings
+      - if: needs.changes.outputs.release_only != 'true'
+        run: cargo clippy -p ipe-runtime-rust --no-default-features --features db,web --all-targets -- -D warnings
       # The dev-loop time-travel debugger over each frontend — the debugger render
       # sites live only under these combos, so CI must build them or the combo can
       # break while main stays green.
-      - run: cargo clippy -p ipe-runtime-rust --features debugger,tui --all-targets -- -D warnings
-      - run: cargo clippy -p ipe-runtime-rust --features debugger,web --all-targets -- -D warnings
+      - if: needs.changes.outputs.release_only != 'true'
+        run: cargo clippy -p ipe-runtime-rust --features debugger,tui --all-targets -- -D warnings
+      - if: needs.changes.outputs.release_only != 'true'
+        run: cargo clippy -p ipe-runtime-rust --features debugger,web --all-targets -- -D warnings
 
   # WASM floor: the pure kernel set (incl. the whole Ipe.Ui render surface) and
   # the json leg must keep compiling to wasm32-unknown-unknown — the substrate
@@ -434,21 +492,37 @@ jobs:
     needs: [changes, quick-check]
     # Code-build correctness gate on the PR boundary: runs on any PR that touches
     # a wasm-relevant path, and always on push/schedule. Path-scoping keeps it off
-    # a non-wasm PR.
-    if: (needs.changes.outputs.wasm == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    # a non-wasm PR. A release-please PR (version metadata only) is handled INSIDE
+    # the job below via per-step `if:`, not by skipping the job outright — a
+    # required context must report a genuinely executed pass, never rely on
+    # GitHub's skip-counts-as-pass quirk.
+    if: needs.changes.outputs.wasm == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
-      - uses: actions/checkout@v7
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "wasm-floor: release-please-only diff (version metadata, no wasm-relevant source changed); trivial pass, not a skip."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
         with:
           targets: wasm32-unknown-unknown, wasm32-wasip1
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown
-      - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown --features json
+        if: needs.changes.outputs.release_only != 'true'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: needs.changes.outputs.release_only != 'true'
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - if: needs.changes.outputs.release_only != 'true'
+        run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown
+      - if: needs.changes.outputs.release_only != 'true'
+        run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown --features json
       # The development-only debugger must not drag tokio onto wasm: `debugger`
       # implies `async`, but tokio is native-only, so `wasm-client,debugger`
       # links the recorder over the closed browser floor without a tokio graph.
-      - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown --no-default-features --features wasm-client,debugger
+      - if: needs.changes.outputs.release_only != 'true'
+        run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown --no-default-features --features wasm-client,debugger
       # Co-located WASI (`wasm32-wasip1`) effect floor: this build is what makes
       # the runtime's `_WASI_EFFECT_FLOOR_SEAL` / `_WASI_TIME_FLOOR_SEAL` consts
       # LIVE — they compile only on a wasip1 build with `wasm-client` off, so the
@@ -462,12 +536,14 @@ jobs:
       # `compression`/`csv_kernel`/`config`) are NOT WASI-viable and are
       # deliberately excluded — the WASI accept-path selects only the sealed
       # floor.
-      - run: cargo build -p ipe-runtime-rust --target wasm32-wasip1 --no-default-features
+      - if: needs.changes.outputs.release_only != 'true'
+        run: cargo build -p ipe-runtime-rust --target wasm32-wasip1 --no-default-features
       # The full WASI-admitted floor (available_on(WasmWasi)): pure families +
       # crypto-core/secret/char-category. Building it here keeps THE SEAL live —
       # a future regression that breaks any admitted feature on wasip1 reddens CI
       # instead of shipping an ipe-accept-then-cargo-fail.
-      - run: cargo build -p ipe-runtime-rust --target wasm32-wasip1 --no-default-features --features time,log,json,uuid,random,decimal,regex,crypto-core,secret,char-category
+      - if: needs.changes.outputs.release_only != 'true'
+        run: cargo build -p ipe-runtime-rust --target wasm32-wasip1 --no-default-features --features time,log,json,uuid,random,decimal,regex,crypto-core,secret,char-category
 
   # Every editors/*/configure.sh happy path, plus the one step none of them
   # proved before: Zed's "install dev extension" compiles editors/zed-ipe as a
@@ -480,16 +556,27 @@ jobs:
   editors-configure:
     runs-on: ubuntu-latest
     needs: changes
-    if: (needs.changes.outputs.editors == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    # A release-please PR (version metadata only) is handled INSIDE the job below
+    # via per-step `if:`, not by skipping the job outright — a required context
+    # must report a genuinely executed pass, never rely on GitHub's
+    # skip-counts-as-pass quirk.
+    if: needs.changes.outputs.editors == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "editors-configure: release-please-only diff (version metadata, no editors-relevant source changed); trivial pass, not a skip."
       # Full history: the drift check resolves the Zed grammar pin as a commit.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
         with:
           fetch-depth: 0
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
         with:
           targets: wasm32-wasip2
-      - run: bash editors/tests/configure-test.sh
+      - if: needs.changes.outputs.release_only != 'true'
+        run: bash editors/tests/configure-test.sh
 
   # ── test: build-once, shard-run ──────────────────────────────────────────────
   # The workspace's ~170 test binaries each statically link the full compiler
@@ -507,19 +594,21 @@ jobs:
   test-prep:
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/mold
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       # Compile every test binary ONCE into a self-contained archive.
       - run: cargo nextest archive --workspace --archive-file nextest.tar.zst
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nextest-archive
           path: nextest.tar.zst
@@ -530,16 +619,19 @@ jobs:
 
   test-run:
     runs-on: ubuntu-latest
-    needs: test-prep
+    # Fast gates first: no shard starts until every fast deterministic gate is
+    # green, so a format, lint, lock or panic-scan red never launches the heavy
+    # tier. A red one skips the shards, which the `test` aggregator refuses.
+    needs: [test-prep, fmt, clippy, manifest-lock-consistency, panic-scan]
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: taiki-e/install-action@nextest
-      - uses: actions/download-artifact@v7
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nextest-archive
       # Run this shard's disjoint partition from the prebuilt archive — no
@@ -566,7 +658,7 @@ jobs:
             exit 1
           fi
           # A skipped `test-prep`/`test-run` is legitimate ONLY when the change
-          # gate deliberately skipped them (docs-only PR); in that case `test`
+          # gate deliberately skipped them (prose-only PR); in that case `test`
           # passes vacuously. Any failure/cancellation is a hard stop.
           prep='${{ needs.test-prep.result }}'
           run='${{ needs.test-run.result }}'
@@ -577,8 +669,9 @@ jobs:
             echo "test gate FAILED (test-prep=$prep test-run=$run)" >&2
             exit 1
           fi
-          if [ "$prep" = skipped ] && [ "$code" != true ] && [ "$event" = pull_request ]; then
-            echo "docs-only PR: no code paths changed, test suite skipped vacuously."
+          if [ "$prep" = skipped ] && [ "$code" != true ] \
+             && { [ "$event" = pull_request ] || [ "$event" = merge_group ]; }; then
+            echo "prose-only change: no code paths changed, test suite skipped vacuously."
             exit 0
           fi
           if [ "$prep" != success ] || [ "$run" != success ]; then
@@ -596,7 +689,7 @@ jobs:
   seal-smoke:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -606,15 +699,16 @@ jobs:
       # incremental instead of cold-building axum/tokio/serde per example.
       IPE_SEAL_TARGET: ${{ github.workspace }}/.cache/seal-shared-target
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/mold
       - uses: ./.github/actions/sccache
       # Cache the shared emitted-crate target too (keyed on this job), so the
       # runtime + its deps stay warm across runs and later emitted builds are
       # incremental. The default workspace target is cached by the entry above.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ github.workspace }}/.cache/seal-shared-target
       - name: Build ipe
         run: cargo build --release -p ipe
@@ -659,7 +753,7 @@ jobs:
     name: first-party shapes (build gate)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -667,12 +761,13 @@ jobs:
       # runtime dep tree compiles once, later shape builds go incremental.
       IPE_SHAPES_TARGET: ${{ github.workspace }}/.cache/shapes-shared-target
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/mold
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ github.workspace }}/.cache/shapes-shared-target
       - name: Build ipe
         run: cargo build --release -p ipe
@@ -735,16 +830,18 @@ jobs:
     name: first-party check floor (ipe type-check only)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/mold
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # ripgrep — scripts/lib/examples.sh's classification helpers require it.
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
@@ -776,15 +873,30 @@ jobs:
     # full-feature graph). `full` ⊇ `live`, so this is the one place feature-gated
     # regressions (e.g. a workspace-wide serde_json flag flip changing signed-token
     # bytes) are caught. Runs on any emit-relevant PR and always on push/nightly;
-    # path-scoping keeps it off a docs/CI-only PR.
-    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    # path-scoping keeps it off a prose-only PR. A release-please PR (version
+    # metadata only) is handled INSIDE the job below via per-step `if:`, not by
+    # skipping the job outright — a required context must report a genuinely
+    # executed pass, never rely on GitHub's skip-counts-as-pass quirk.
+    if: needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
-      - uses: actions/checkout@v7
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "runtime-full-features: release-please-only diff (version metadata, no emit-relevant source changed); trivial pass, not a skip."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
+        if: needs.changes.outputs.release_only != 'true'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: needs.changes.outputs.release_only != 'true'
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
+        if: needs.changes.outputs.release_only != 'true'
+      - if: needs.changes.outputs.release_only != 'true'
+        run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
 
   # ── Sanitizers (the UB net) ─────────────────────────────────────────────────
   # ASAN (AddressSanitizer + LeakSanitizer): memory-safety UB — out-of-bounds,
@@ -831,12 +943,12 @@ jobs:
   # emit-relevant PR. Sharded 1/6 via nextest partitioning; `asan-all` is the
   # single stable context (mirrors `e2e-all`) that branch protection could require
   # once these are proven green — deliberately NOT added to the required ruleset
-  # yet. Path-scoping keeps it off a docs/CI-only PR; always runs on push/nightly.
+  # yet. Path-scoping keeps it off a prose-only PR; always runs on push/nightly.
   asan:
     name: asan (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -846,12 +958,14 @@ jobs:
       RUSTDOCFLAGS: -Zsanitizer=address
       ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@be39649afda95dbf70f87cce95f68b8d5797b296 # nightly
         with:
           components: rust-src
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       - name: ASAN shard ${{ matrix.shard }}/6 (build-std, instrumented std)
         run: |
           cargo +nightly nextest run \
@@ -895,25 +1009,27 @@ jobs:
   # or cargo-spawning child is as hostile to TSAN as to ASAN). Small enough to
   # run as a single job, not sharded. Runtime-soundness gate on the PR boundary
   # (PRINCIPLE 3): a codegen/runtime change is what introduces data races, so TSAN
-  # gates PRE-merge on any emit-relevant PR; path-scoping keeps it off a docs/CI-
-  # only PR; always runs on push/nightly.
+  # gates PRE-merge on any emit-relevant PR; path-scoping keeps it off a
+  # prose-only PR; always runs on push/nightly.
   tsan:
     name: tsan
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     env:
       RUSTFLAGS: -Zsanitizer=thread
       RUSTDOCFLAGS: -Zsanitizer=thread
       # TSAN's own reports; `halt_on_error=1` fails on the first race.
       TSAN_OPTIONS: halt_on_error=1
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@be39649afda95dbf70f87cce95f68b8d5797b296 # nightly
         with:
           components: rust-src
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       - name: TSAN (build-std, concurrency-bearing crates)
         run: |
           cargo +nightly nextest run \
@@ -956,14 +1072,15 @@ jobs:
     # downloads and RUNS from that archive under IPE_E2E=1 (which changes only
     # runtime behaviour, not the archived binaries), so no shard recompiles the
     # workspace.
-    needs: [changes, quick-check, test-prep]
-    # On the PR gate for ANY code change (all authors). A SEAL break is not
-    # emit-only: a canon/types/lower acceptance change can make a program
-    # ipe-accept that the backend then cannot cargo-build, so keying on the
-    # `code` superset (not `emit`) closes that blind spot. Build depth stays
-    # cheap on non-emit PRs via the internal `emit` early-exit below (the heavy
-    # cold-build shards self-skip; the light shards cover the non-emit surface).
-    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    # Fast gates first, as `test-run`: a red fast deterministic gate skips every
+    # shard, which `e2e-all` and `seal-slice` refuse.
+    needs: [changes, quick-check, test-prep, fmt, clippy, manifest-lock-consistency, panic-scan]
+    # On the PR gate for ANY code change (all authors), every shard at full
+    # depth. A SEAL break is not emit-only: a canon/types/lower acceptance change
+    # can make a program ipe-accept that the backend then cannot cargo-build, and
+    # the heavy goldens are where such a program is built, so no shard is skipped
+    # on a narrower scope than `code`.
+    if: (needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     # Wall-clock cap on the shard. Each per-test `cargo build` is already bounded
     # (nextest ci `slow-timeout` + `e2e_support`'s per-build 240s ceiling), but
     # nothing capped the SHARD as a whole, so it inherited GitHub's 360-min
@@ -975,38 +1092,26 @@ jobs:
     timeout-minutes: 45
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
-      # The ~13 goldens whose emitted project drives a real, multi-minute cold
-      # `cargo build` (webview/wry, server/axum, the live-HTTP set, the watch
-      # daemons). The `ci` nextest profile serializes exactly this set into the
-      # `heavy-server-e2e` group (max-threads=1), so when count-partitioning
-      # clustered several of them into one shard they ran one-after-another —
-      # the 50-95 min straggler class. Shards 1-5 run ONLY this set (spread
-      # `count:k/5` so each heavy runner serializes ~1/5 of them in parallel with
-      # the others); shards 6-14 run the complement, which is heavy-free and so
-      # runs at full `--test-threads=2` width. Selection + partition are disjoint
-      # and exhaustive, so the union across all shards is byte-identical to the
-      # old `count:k/8` union — zero SEAL coverage dropped, every accepted golden
-      # still built+run exactly once.
-      E2E_HEAVY: 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(watch_cancellation) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(g_http_live) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/mold
       # The shard driver is `cargo nextest run`; the runner has no nextest unless
       # this installs it (every other nextest-driven job installs it too).
-      - uses: taiki-e/install-action@nextest
-      - uses: actions/download-artifact@v7
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nextest-archive
       # Cache the shared emitted-crate target across runs so the runtime dep tree
       # (axum/tokio/sqlx/serde) stays warm and each shard's goldens link
       # incrementally instead of cold-building it. Keyed per shard by rust-cache.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ github.workspace }}/.cache/oracle-shared-target
       # Reclaim runner disk before the E2E build: each emitted golden crate pulls
       # the full runtime dep tree (axum/tokio/sqlx/serde) into the shared target.
@@ -1041,45 +1146,15 @@ jobs:
           # ONE target, so the dep tree compiles once and every later golden
           # only links its own `main.rs`.
           IPE_ORACLE_SHARED_TARGET: ${{ github.workspace }}/.cache/oracle-shared-target
-        # Run this shard's partition from the prebuilt archive (`--workspace-remap
-        # .` re-roots archived paths at this checkout) — no from-scratch compile.
-        # `--test-threads=2`: every E2E test under IPE_E2E=1 drives a memory-heavy
-        # emitted-project `cargo build`, and each such build itself parallelizes
-        # across the runner's cores; capping to 2 concurrent tests keeps two heavy
-        # builds (~all cores) in flight at once instead of one-per-core, which OOMs
-        # the 4-core/16GB runner into a 10-15x thrash and a timeout.
-        #
-        # Shards 1-5 are the HEAVY leg: `-E "$E2E_HEAVY"` selects only the
-        # cold-build goldens and `count:k/5` spreads them across five parallel
-        # runners (was: all clustered into 2-3 count-partitions). Shards 6-14 are
-        # the LIGHT leg: `-E "not ($E2E_HEAVY)"` selects the heavy-free complement
-        # and `count:(k-5)/9` partitions it nine ways. Heavy ∪ Light = every test,
-        # partitioned exactly once, so the SEAL union is identical to the old
-        # `count:k/8` scheme — no coverage dropped, just re-timed.
-        #
-        # Change-based selection (PR path only): the matrix runs on every code
-        # PR, but when the `emit` paths-filter is false the diff cannot reach the
-        # backend/runtime/stdlib paths the heavy goldens exercise, so the 5 heavy
-        # cold-build shards exit 0 immediately.  The light shards (6-14) always
-        # run on a code PR — they cover the compiler's non-emit surface (a
-        # canon/types acceptance change reaches the SEAL here) and are cheap.  On
-        # push/nightly the full 14-shard suite runs regardless (the `emit`
-        # variable is unused outside a PR event).
-        run: |
-          event="${{ github.event_name }}"
-          emit="${{ needs.changes.outputs.emit }}"
-          if [ "${{ matrix.shard }}" -le 5 ]; then
-            # Heavy leg: skip on PR when no emit-relevant paths changed.
-            if [ "$event" = "pull_request" ] && [ "$emit" != "true" ]; then
-              echo "Skipping heavy SEAL shard ${{ matrix.shard }}/5: no emit-relevant paths changed on this PR."
-              exit 0
-            fi
-            cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast \
-              -E "$E2E_HEAVY" --partition count:${{ matrix.shard }}/5 --test-threads=2
-          else
-            cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast \
-              -E "not ($E2E_HEAVY)" --partition count:$((${{ matrix.shard }} - 5))/9 --test-threads=2
-          fi
+          # This shard's entry of the `changes` job's `e2e_plan`, whose SSOT is
+          # `.github/ci/e2e_shard.py`: shards 1-5 spread the heavy cold-build
+          # goldens, shards 6-14 the heavy-free complement, all from the
+          # prebuilt archive (no recompile). `seal-slice` proves the plan
+          # partitions the archive's test set exactly, and manifest-guard
+          # (`e2e_shard.py --lint`) pins this matrix and this wiring.
+          SHARD_FILTER: ${{ fromJSON(needs.changes.outputs.e2e_plan)[matrix.shard].filter }}
+          SHARD_PARTITION: ${{ fromJSON(needs.changes.outputs.e2e_plan)[matrix.shard].partition }}
+        run: cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --test-threads=2 --no-tests=fail -E "$SHARD_FILTER" --partition "$SHARD_PARTITION"
 
   # Stable aggregation gate for the sharded SEAL. The `e2e` matrix expands to one
   # shard-named job per partition, so no single shard name is a durable
@@ -1087,9 +1162,9 @@ jobs:
   # This job depends on every shard and is GREEN only when all passed — one stable context name
   # (`e2e-all`) branch protection can require so a SEAL regression blocks a
   # landing. The `always()` guard makes a skipped/failed/cancelled shard a
-  # FAILURE here, never a false green; a legitimate skip (the `e2e` matrix itself
-  # skips on a no-code PR — docs/CI/yaml only) passes vacuously so that path is
-  # unaffected.
+  # FAILURE here, never a false green. A skip passes vacuously only where the
+  # `e2e` job's own `if:` is false (a code-free PR or merge-group run, or a
+  # release-only PR); a skip behind a red need (a fast gate, quick-check) fails.
   # A bare, stable `name` so the required-check context is exactly `e2e-all`
   # (branch protection matches the check name literally; a parenthetical would
   # make the required-context string brittle).
@@ -1117,14 +1192,25 @@ jobs:
             exit 1
           fi
           result='${{ needs.e2e.result }}'
+          code='${{ needs.changes.outputs.code }}'
+          release_only='${{ needs.changes.outputs.release_only }}'
+          event='${{ github.event_name }}'
           case "$result" in
             success)
               echo "e2e-all: every shard passed — THE SEAL holds."
               ;;
             skipped)
-              # The e2e matrix skips on a no-code PR (docs/CI/yaml only);
-              # nothing to aggregate, so this passes vacuously.
-              echo "e2e-all: e2e shards skipped for this event — vacuously green."
+              # A skip is legitimate ONLY where `e2e`'s own `if:` is false: a
+              # PR/merge-group run the classifier proved code-free, or a
+              # release-only PR. Any other skip is a red need (a fast gate,
+              # quick-check) and proves nothing.
+              if { [ "$code" != true ] && { [ "$event" = pull_request ] || [ "$event" = merge_group ]; }; } \
+                 || [ "$release_only" = true ]; then
+                echo "e2e-all: e2e shards skipped by the classifier for this event — vacuously green."
+              else
+                echo "e2e-all FAILED: e2e shards skipped behind a red need (code=$code release_only=$release_only event=$event)" >&2
+                exit 1
+              fi
               ;;
             *)
               echo "e2e-all FAILED: e2e shards result=$result (a SEAL regression or an infra failure)" >&2
@@ -1133,112 +1219,22 @@ jobs:
           esac
 
   # ── SEAL slice ────────────────────────────────────────────────────────────
-  # A representative slice of THE SEAL: the `seal_modset` binary (the compact
-  # per-shape emit→build proof) plus a representative partition of the golden E2E
-  # suite, split across eight parallel sub-shards so the slice's wall-clock stays
-  # low WITHOUT dropping coverage. Enough surface to catch an emit/const-fold/
-  # golden regression (the classes this guard exists for); the full 14-shard `e2e`
-  # matrix + tier2 jails carry the exhaustive proof. Gates every code PR (all
-  # authors) and runs on nightly too, producing the main-required `seal-slice`
-  # context the FF promotion waits on. The `seal-slice` aggregation job below is
-  # the single stable status: green only when every sub-shard passed.
-  seal-slice-shard:
-    name: seal-slice-shard (${{ matrix.shard }}/8)
-    runs-on: ubuntu-latest
-    # Reuse `test-prep`'s single-compile archive (see the e2e job) rather than
-    # rebuilding the workspace per sub-shard.
-    needs: [changes, quick-check, test-prep]
-    # On the PR gate for ANY code change (all authors). A SEAL break is not
-    # emit-only — a canon/types/lower acceptance change can flip a program to
-    # ipe-accept-then-cargo-fail — so keying on the `code` superset (not `emit`)
-    # closes that blind spot. This slice runs golden-e2e partitions from the warm
-    # `test-prep` archive (no from-scratch compile), so a code PR stays cheap.
-    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
-    # Wall-clock cap on the sub-shard (same rationale as the `e2e` job). This
-    # slice is a golden-e2e partition against the warm shared target — lighter
-    # than a heavy `e2e` shard — so 30 min (≈2× the warm-cache max) fails a hung
-    # sub-shard fast without tripping a healthy one.
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
-    env:
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
-      # The same heavy-golden set as the `e2e` job: the goldens whose emitted
-      # projects drive a cold multi-minute `cargo build` (webview/wry, server/axum,
-      # watch daemons, live-HTTP).  Under a plain count:k/48 partition these tend
-      # to cluster into the same sub-shards and push wall-clock past the 30 min
-      # cap.  The heavy/light split below pins them to dedicated sub-shards (1-3)
-      # so each sub-shard's wall-clock stays ≤ 30 min.
-      SEAL_HEAVY: 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(watch_cancellation) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(g_http_live) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
-      - uses: taiki-e/install-action@nextest
-      - uses: actions/download-artifact@v7
-        with:
-          name: nextest-archive
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-directories: ${{ github.workspace }}/.cache/oracle-shared-target
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/share/swift || true
-          sudo rm -rf /opt/hostedtoolcache/CodeQL /opt/microsoft /opt/google/chrome /opt/az || true
-          sudo swapoff -a || true; sudo rm -f /swapfile /mnt/swapfile || true
-          sudo apt-get clean || true
-      # The webview goldens link wry/tao; without GTK/WebKit the emitted Webview
-      # project fails to cargo-build (a CI-only SEAL breach).
-      - name: Install webview link deps (wry/tao — GLib/GTK/WebKit)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev
-      # Duration-balanced split — mirrors the `e2e` job's heavy/light scheme:
-      #   Sub-shards 1-3 (HEAVY leg): select only $SEAL_HEAVY and spread them
-      #     count:k/3, so each runner serializes ~1/3 of the cold-build goldens
-      #     in parallel with the others.  seal_modset runs once on sub-shard 1.
-      #   Sub-shards 4-8 (LIGHT leg): select the complement (heavy-free) and
-      #     partition count:(k-3)/5 nine ways; at full --test-threads=2 width
-      #     these are well under 30 min.
-      # Heavy ∪ Light = every test (minus build_run_column, same as before),
-      # partitioned exactly once — no SEAL coverage dropped.
-      - name: SEAL slice (seal_modset on shard 1 + golden e2e sub-shard ${{ matrix.shard }}/8)
-        env:
-          IPE_E2E: "1"
-          IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
-          IPE_ORACLE_SHARED_TARGET: ${{ github.workspace }}/.cache/oracle-shared-target
-        # Run both selections from the prebuilt archive — no from-scratch compile.
-        # `--test-threads=2` caps concurrent heavy emitted-project builds so the
-        # sub-shard stays inside runner memory (see the e2e job for the rationale).
-        run: |
-          if [ "${{ matrix.shard }}" -le 3 ]; then
-            # Heavy leg: cold-build goldens spread across 3 runners.
-            if [ "${{ matrix.shard }}" = "1" ]; then
-              cargo nextest run --archive-file nextest.tar.zst --workspace-remap . -E 'binary(seal_modset)' --profile ci --test-threads=2
-            fi
-            cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --test-threads=2 \
-              -E "$SEAL_HEAVY" --partition count:${{ matrix.shard }}/3
-          else
-            # Light leg: heavy-free complement spread across 5 runners.
-            cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --test-threads=2 \
-              -E "not ($SEAL_HEAVY) and not test(build_run_column_over_a_representative_slice)" \
-              --partition count:$((${{ matrix.shard }} - 3))/5
-          fi
-
-  # Stable aggregation status for the sharded SEAL slice. The matrix expands to
-  # one sub-shard-named job per partition, so no single sub-shard name is a durable target;
-  # this job is GREEN only when every sub-shard passed. The `always()` guard makes
-  # a skipped/failed/cancelled sub-shard a FAILURE here, while a legitimate
-  # skip (a no-code PR — docs/CI/yaml only) passes vacuously.
+  # The main-required `seal-slice` context. Its executor is `e2e`: the e2e shards
+  # run every archived test under IPE_E2E=1, so this job composes their result
+  # instead of re-running a subset of the same binaries. What it adds is the
+  # coverage proof: `tools/scripts/e2e-shard-cover.py` lists the run's own
+  # archive and fails unless the `e2e_plan` the shards ran partitions its test
+  # set exactly (every test in exactly one shard), so "e2e runs every test" is
+  # checked on every run, not assumed. Fail closed as `e2e-all`: a skip passes only where the classifier,
+  # not a red need, skipped the shards.
   seal-slice:
     name: seal-slice
     runs-on: ubuntu-latest
-    needs: [changes, seal-slice-shard, test-prep]
+    needs: [changes, e2e, test-prep]
+    timeout-minutes: 20
     if: always()
     steps:
-      - name: Gate on every seal-slice sub-shard
+      - name: Gate on the e2e shards
         run: |
           # Fail closed: a skip below is legitimate only when the path classifier
           # ran and succeeded; a failed/cancelled `changes` skips every tier.
@@ -1247,26 +1243,53 @@ jobs:
             echo "seal-slice FAILED: changes result=$changes (path classifier did not succeed; no skip is proven legitimate)" >&2
             exit 1
           fi
-          # A failed `test-prep` skips every sub-shard (they `needs` it); catch it
+          # A failed `test-prep` skips every e2e shard (they `needs` it); catch it
           # here so the archive-build failure can't slip through as a vacuous skip.
           prep='${{ needs.test-prep.result }}'
           if [ "$prep" = failure ] || [ "$prep" = cancelled ]; then
             echo "seal-slice FAILED: test-prep result=$prep (the shared nextest archive never built)" >&2
             exit 1
           fi
-          result='${{ needs.seal-slice-shard.result }}'
+          result='${{ needs.e2e.result }}'
+          code='${{ needs.changes.outputs.code }}'
+          release_only='${{ needs.changes.outputs.release_only }}'
+          event='${{ github.event_name }}'
           case "$result" in
             success)
-              echo "seal-slice: every sub-shard passed — the PR SEAL slice holds."
+              echo "seal-slice: every e2e shard passed."
               ;;
             skipped)
-              echo "seal-slice: sub-shards skipped for this event — vacuously green."
+              # Legitimate only where `e2e`'s own `if:` is false, as in `e2e-all`.
+              if { [ "$code" != true ] && { [ "$event" = pull_request ] || [ "$event" = merge_group ]; }; } \
+                 || [ "$release_only" = true ]; then
+                echo "seal-slice: e2e shards skipped by the classifier for this event — vacuously green."
+              else
+                echo "seal-slice FAILED: e2e shards skipped behind a red need (code=$code release_only=$release_only event=$event)" >&2
+                exit 1
+              fi
               ;;
             *)
-              echo "seal-slice FAILED: sub-shard result=$result (a SEAL regression or an infra failure)" >&2
+              echo "seal-slice FAILED: e2e result=$result (a SEAL regression or an infra failure)" >&2
               exit 1
               ;;
           esac
+      # The coverage proof needs the archive, so it runs whenever the archive
+      # was built — on every run whose e2e shards could have run.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.test-prep.result == 'success'
+      - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.test-prep.result == 'success'
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
+        if: needs.test-prep.result == 'success'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.test-prep.result == 'success'
+        with:
+          name: nextest-archive
+      - name: Prove the e2e shards partition the archived test set
+        if: needs.test-prep.result == 'success'
+        env:
+          E2E_PLAN: ${{ needs.changes.outputs.e2e_plan }}
+        run: python3 tools/scripts/e2e-shard-cover.py
 
   # Vendored-emit SEAL gate: runs the `seal_modset` suite under the vendored
   # runtime-source emit model (`IPE_RUNTIME_VENDORED=1`). The normal e2e shards
@@ -1287,19 +1310,21 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
     # On the PR gate for ANY code change (all authors).
-    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
       IPE_E2E: "1"
       IPE_RUNTIME_VENDORED: "1"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/mold
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       - name: Run seal_modset under the vendored emit model
         run: |
           cargo nextest run -p ipe \
@@ -1335,15 +1360,17 @@ jobs:
     runs-on: ubuntu-latest
     # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
     if: >-
-      github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
 
       - name: Install the Linux jail primitives (bubblewrap + python3)
         run: |
@@ -1426,14 +1453,16 @@ jobs:
     # codegen change to it must redden a PR here, not only post-merge — keyed on
     # the `code` superset. Pure aarch64 unit + audit_native tests (no jail),
     # so it is stable code-correctness, not flaky-env.
-    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
 
       # Assert we really are on aarch64 — the whole point is proving the UNWIRED
       # arch's fail-closed path, so a silent runner-arch drift to x86_64 (where a
@@ -1463,6 +1492,38 @@ jobs:
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
         run: cargo nextest run -p ipe --test audit_native --profile ci
 
+  # Compiles the six doc/golden regenerator binaries ONCE and shares them as an
+  # artifact, so the drift jobs below run the prebuilt binary instead of each
+  # independently paying its own `cargo run` (== a full compile) for the same
+  # crates. needs quick-check so a workspace that does not even compile never
+  # pays for this build.
+  build-tools:
+    runs-on: ubuntu-latest
+    needs: [changes, quick-check]
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/rust-toolchain-pinned
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the doc/golden regenerator binaries
+        run: |
+          cargo build -p ipe_docs --bin gen-stdlib-docs --bin gen-env-docs --bin gen-capabilities-docs --bin gen-requirements-docs
+          cargo build -p ipe --bin gen-cli-docs
+          cargo build -p regen-cli-transcripts
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-build-tools
+          path: |
+            target/debug/gen-stdlib-docs
+            target/debug/gen-env-docs
+            target/debug/gen-capabilities-docs
+            target/debug/gen-requirements-docs
+            target/debug/gen-cli-docs
+            target/debug/regen-cli-transcripts
+          retention-days: 1
+
   # Drift gate for docs/reference/stdlib.md + docs/reference/stdlib/<Module>.md.
   #
   # Runs the gen-stdlib-docs generator against the committed `.md` files and
@@ -1474,14 +1535,17 @@ jobs:
   # push/nightly.
   stdlib-docs-drift:
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    needs: [changes, quick-check, build-tools]
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-build-tools
       - name: Regenerate docs/reference/stdlib.md and docs/reference/stdlib/
-        run: cargo run -p ipe_docs --bin gen-stdlib-docs -- --repo-root "${{ github.workspace }}"
+        run: |
+          chmod +x gen-stdlib-docs
+          ./gen-stdlib-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
         run: git diff --exit-code docs/reference/stdlib.md docs/reference/stdlib/
 
@@ -1496,14 +1560,17 @@ jobs:
   # push/nightly.
   env-docs-drift:
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    needs: [changes, quick-check, build-tools]
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-build-tools
       - name: Regenerate docs/reference/env.md
-        run: cargo run -p ipe_docs --bin gen-env-docs -- --repo-root "${{ github.workspace }}"
+        run: |
+          chmod +x gen-env-docs
+          ./gen-env-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
         run: git diff --exit-code docs/reference/env.md
 
@@ -1518,14 +1585,17 @@ jobs:
   # push/nightly.
   capabilities-docs-drift:
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    needs: [changes, quick-check, build-tools]
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-build-tools
       - name: Regenerate docs/reference/capabilities.md
-        run: cargo run -p ipe_docs --bin gen-capabilities-docs -- --repo-root "${{ github.workspace }}"
+        run: |
+          chmod +x gen-capabilities-docs
+          ./gen-capabilities-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
         run: git diff --exit-code docs/reference/capabilities.md
 
@@ -1540,14 +1610,17 @@ jobs:
   # pure prose-only PR skips this vacuously; it always runs on push/nightly.
   cli-docs-drift:
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    needs: [changes, quick-check, build-tools]
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-build-tools
       - name: Regenerate docs/reference/cli.md
-        run: cargo run -p ipe --bin gen-cli-docs -- --repo-root "${{ github.workspace }}"
+        run: |
+          chmod +x gen-cli-docs
+          ./gen-cli-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
         run: git diff --exit-code docs/reference/cli.md
 
@@ -1563,14 +1636,17 @@ jobs:
   # vacuously; it always runs on push/nightly.
   requirements-docs-drift:
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    needs: [changes, quick-check, build-tools]
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-build-tools
       - name: Regenerate docs/reference/requirements.md
-        run: cargo run -p ipe_docs --bin gen-requirements-docs -- --repo-root "${{ github.workspace }}"
+        run: |
+          chmod +x gen-requirements-docs
+          ./gen-requirements-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
         run: git diff --exit-code docs/reference/requirements.md
 
@@ -1589,14 +1665,29 @@ jobs:
   # runs on push/nightly.
   cli-transcripts-drift:
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    needs: [changes, quick-check, build-tools]
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # regen-cli-transcripts records every transcript from the prebuilt `ipe`
+      # passed as --ipe-bin, so a toolchain/crate download or compile failure
+      # reddens the `Build ipe` step, never the regenerate step. The tool itself
+      # exits non-zero, writing no golden, when `ipe` cannot be spawned or is
+      # killed by a signal, so a tool failure never surfaces as golden drift.
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build ipe
+        run: cargo build -p ipe --bin ipe
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-build-tools
       - name: Regenerate the CLI transcript goldens
-        run: cargo run -p regen-cli-transcripts -- --repo-root "${{ github.workspace }}"
+        run: |
+          chmod +x regen-cli-transcripts
+          ./regen-cli-transcripts --repo-root "${{ github.workspace }}" \
+            --ipe-bin "${{ github.workspace }}/target/debug/ipe"
       - name: Fail if the regenerated goldens differ from the committed ones
         run: git diff --exit-code src/ipe-cli/tests/golden/cli/
 
@@ -1618,12 +1709,14 @@ jobs:
   markdown-parity:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Regenerate the Markdown parity snapshot via an ipe run
         run: tools/scripts/regen-markdown-parity.sh
       - name: Fail if the regenerated snapshot differs from the committed one
@@ -1638,14 +1731,15 @@ jobs:
   #
   # Latency: a job starts only after EVERY `needs:` entry has finished, so the
   # cancel lands when the slowest member finishes (the docs-drift jobs:
-  # quick-check, then a debug `cargo run` regenerate), not when the first red
-  # appears. Members that need a release build are deliberately left out so
-  # that bound stays a few minutes rather than the length of a release build.
+  # quick-check, then build-tools, then a prebuilt-binary regenerate — plus a
+  # debug `ipe` build for the transcripts), not when the first red appears. Members that need a release build are deliberately
+  # left out so that bound stays a few minutes rather than the length of a
+  # release build.
   #
   # Classification is per FAILED STEP, not per job: every member also runs
   # network-bound setup (checkout, toolchain install, sccache, rust-cache, the
   # crate fetch), and `failure()` is also true when an ANCESTOR outside the set
-  # failed (e.g. `changes`, a network-bound paths-filter, whose failure skips
+  # failed (e.g. `changes`, whose checkout is network-bound, whose failure skips
   # its dependants). Neither is a deterministic red. The step below lists the
   # run's failed jobs with their failed steps and cancels only when some
   # failed job's failed step is that job's check step in
@@ -1658,7 +1752,7 @@ jobs:
   # fork PR rather than attempted and denied.
   #
   # `.github/ci/deterministic-checks.json` is the SSOT of (job, check step)
-  # pairs, shared with `rerun-failed-once.yml`; `ci/verify-manifest.py` (run in
+  # pairs; `ci/verify-manifest.py` (run in
   # `manifest-guard.yml`) fails the build if this job's `needs:` differs from
   # that file's job set or a listed step name is not in the job's steps.
   cancel-on-cheap-red:
@@ -1684,18 +1778,24 @@ jobs:
       actions: write
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          sparse-checkout: .github/ci/deterministic-checks.json
+          sparse-checkout: |
+            .github/ci/deterministic-checks.json
+            .github/ci/deterministic_checks_output.py
           sparse-checkout-cone-mode: false
+
+      - name: Publish the deterministic check pairs
+        id: ssot
+        run: python3 .github/ci/deterministic_checks_output.py
 
       - name: Cancel the run when a deterministic check step is red
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
-          SSOT: .github/ci/deterministic-checks.json
+          CHECKS: ${{ steps.ssot.outputs.checks }}
         run: |
           set -uo pipefail
           failed="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
@@ -1706,9 +1806,9 @@ jobs:
           # Data-only exact match: a failed job is a deterministic red iff its
           # (name, failed step) pair is in the SSOT. Output is exactly `true`
           # or `false`; anything else (a jq error included) means no cancel.
-          verdict="$(printf '%s\n' "$failed" | jq -rs --slurpfile ssot "$SSOT" '
+          verdict="$(printf '%s\n' "$failed" | jq -rs --argjson ssot "$CHECKS" '
             [ .[] | . as $job
-              | any($ssot[0].checks[]; .context == $job.name and (.step as $s | any($job.steps[]; . == $s)))
+              | any($ssot[]; .context == $job.name and (.step as $s | any($job.steps[]; . == $s)))
             ] | any')" || verdict=error
           if [ "$verdict" != "true" ]; then
             echo "no failed job on run $RUN_ID failed at a deterministic check step (verdict: $verdict) — not cancelling."
@@ -1740,21 +1840,22 @@ jobs:
     needs: [changes, quick-check]
     # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
     if: >-
-      github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
       IPE_GEO_CLIPBOARD_PORT: "18080"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/mold
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ github.workspace }}/.cache/browser-e2e-target
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
       - name: Install Playwright + Chromium
@@ -1772,26 +1873,26 @@ jobs:
           IPE="$PWD/target/release/ipe"
           OUT="${{ runner.temp }}/geo-clipboard-emitted"
           "$IPE" build examples/shapes/web/geo-clipboard/package.ipe --out "$OUT"
-          echo "IPE_GEO_CLIPBOARD_EMITTED=$OUT/rust" >> "$GITHUB_ENV"
+          bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_GEO_CLIPBOARD_EMITTED "$OUT/rust"
       - name: Cargo-build emitted project
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/browser-e2e-target
         run: |
           set -euo pipefail
-          cd "$IPE_GEO_CLIPBOARD_EMITTED"
+          cd "$CI_JOB_GEO_CLIPBOARD_EMITTED"
           cargo build --release
           # CARGO_TARGET_DIR is redirected to a shared cache dir above, so the
           # release artifacts land there — never the emitted project's ./target.
           BIN="$(find "$CARGO_TARGET_DIR/release" -maxdepth 1 -type f -perm /111 ! -name '*.d' | head -1)"
-          echo "GEO_CLIPBOARD_BIN=$BIN" >> "$GITHUB_ENV"
+          bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_GEO_CLIPBOARD_BIN "$BIN"
       - name: Spawn geo-clipboard server
         run: |
           set -euo pipefail
           IPE_WEB_PORT="$IPE_GEO_CLIPBOARD_PORT" \
           IPE_CSRF=off \
           IPE_CONSOLE_EMBED=off \
-          "$GEO_CLIPBOARD_BIN" &
-          echo "GEO_SERVER_PID=$!" >> "$GITHUB_ENV"
+          "$CI_JOB_GEO_CLIPBOARD_BIN" &
+          bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_GEO_SERVER_PID "$!"
           ready=""
           for i in $(seq 1 40); do
             if curl -sf "http://127.0.0.1:$IPE_GEO_CLIPBOARD_PORT/" >/dev/null 2>&1; then
@@ -1811,10 +1912,10 @@ jobs:
         run: npx playwright test --config playwright.config.mjs
       - name: Kill server
         if: always()
-        run: kill "$GEO_SERVER_PID" 2>/dev/null || true
+        run: kill "$CI_JOB_GEO_SERVER_PID" 2>/dev/null || true
       - name: Upload screenshots
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: browser-e2e-screenshots
           path: tools/scripts/browser-e2e/artifacts/

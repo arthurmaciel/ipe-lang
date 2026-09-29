@@ -657,9 +657,17 @@ impl CacheSite {
                 if !owned {
                     return None;
                 }
-                read_without_links(out_dir, &[CACHE_DIR_NAME, salt.as_str(), epoch, file_name])
+                read_without_links(
+                    out_dir,
+                    &[CACHE_DIR_NAME, salt.as_str(), epoch, file_name],
+                    crate::io_bounded::BUILD_CACHE_ENTRY_CAP,
+                )
             }
-            Self::Explicit(dir) => read_without_links(dir, &[epoch, file_name]),
+            Self::Explicit(dir) => read_without_links(
+                dir,
+                &[epoch, file_name],
+                crate::io_bounded::BUILD_CACHE_ENTRY_CAP,
+            ),
         }
     }
 }
@@ -668,7 +676,13 @@ impl CacheRoot {
     /// Best-effort write of entry `file_name` under `epoch`.
     ///
     /// Every failure is swallowed, a refused symlink included.
+    ///
+    /// An entry past [`crate::io_bounded::BUILD_CACHE_ENTRY_CAP`] is skipped, since a read
+    /// of it would be a miss anyway.
     fn write(&self, epoch: &str, file_name: &str, bytes: &[u8]) {
+        if !within_cap(bytes, crate::io_bounded::BUILD_CACHE_ENTRY_CAP) {
+            return;
+        }
         match self {
             Self::InOwned { dir, salt } => {
                 let rel = Path::new(CACHE_DIR_NAME)
@@ -684,11 +698,17 @@ impl CacheRoot {
     }
 }
 
+/// Whether `bytes` fits within `cap` bytes.
+fn within_cap(bytes: &[u8], cap: u64) -> bool {
+    u64::try_from(bytes.len()).is_ok_and(|len| len <= cap)
+}
+
 /// Read `base/<parts...>` when each part is one plain name and no level is a symlink.
 ///
 /// The opened file must be the regular file the lstat saw, so a link swapped
-/// in after the check is a miss too.
-fn read_without_links(base: &Path, parts: &[&str]) -> Option<Vec<u8>> {
+/// in after the check is a miss too. At most `cap + 1` bytes are read, and a
+/// file past `cap` is a miss.
+fn read_without_links(base: &Path, parts: &[&str], cap: u64) -> Option<Vec<u8>> {
     use std::io::Read as _;
     let mut path = base.to_path_buf();
     let mut seen = None;
@@ -708,15 +728,16 @@ fn read_without_links(base: &Path, parts: &[&str]) -> Option<Vec<u8>> {
         seen = Some(meta);
     }
     let seen = seen.filter(fs::Metadata::is_file)?;
-    let mut file =
-        crate::io_bounded::open_regular(&path, crate::io_bounded::FinalLink::Refuse).ok()?;
+    let file = crate::io_bounded::open_regular(&path, crate::io_bounded::FinalLink::Refuse).ok()?;
     let opened = file.metadata().ok()?;
     if !same_file(&seen, &opened) {
         return None;
     }
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).ok()?;
-    Some(bytes)
+    file.take(cap.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    within_cap(&bytes, cap).then_some(bytes)
 }
 
 /// Whether two metadata records name the same file.
@@ -773,49 +794,65 @@ const SALT_BYTES: usize = 32;
 
 /// The per-user secret naming the default cache partition, created on first use.
 ///
-/// Stored as hex in `$IPE_HOME/build-cache-salt` (owner-only). A symlink or a
-/// malformed file there yields `None` (the default cache is then disabled),
-/// never a salt an attacker could have chosen.
+/// Stored as hex in `$IPE_HOME/build-cache-salt`. The file is created, and
+/// read back, only through a handle proven owner-only by
+/// [`crate::secret_file`]. A symlink, a malformed file, a file another user
+/// could read, a directory another user can write, or a host that cannot keep
+/// the file owner-only yields `None` (the default cache is then disabled),
+/// never a salt another user could read or an attacker could have chosen.
 fn user_cache_salt() -> Option<String> {
-    use std::io::{Read as _, Write as _};
     let home = crate::runtime_embed::ipe_home().ok()?;
     let path = home.join("build-cache-salt");
-    let read = |path: &Path| -> Option<String> {
-        let meta = fs::symlink_metadata(path).ok()?;
-        if !meta.file_type().is_file() {
-            return None;
-        }
-        let mut text = String::new();
-        fs::File::open(path)
-            .ok()?
-            .take(128)
-            .read_to_string(&mut text)
-            .ok()?;
-        let text = text.trim().to_owned();
-        (text.len() == SALT_BYTES * 2 && text.bytes().all(|b| b.is_ascii_hexdigit()))
-            .then_some(text)
-    };
     if fs::symlink_metadata(&path).is_ok() {
-        return read(&path);
+        return read_salt(&path);
     }
+    crate::secret_file::create_owner_dir(crate::secret_file::HOST_SECRET_STORE, &home).ok()?;
+    create_salt(&path)
+}
+
+/// The most bytes read from a salt file: its hex digits plus trailing whitespace.
+const SALT_READ_CAP: u64 = 128;
+
+/// The salt stored at `path`, read through a handle proven owner-only.
+///
+/// `None` when the file is absent, not private to the invoking user, or not
+/// exactly [`SALT_BYTES`] hex-encoded bytes.
+fn read_salt(path: &Path) -> Option<String> {
+    use std::io::Read as _;
+    let file =
+        crate::secret_file::open_existing(crate::secret_file::HOST_SECRET_STORE, path).ok()?;
+    let mut text = String::new();
+    file.take(SALT_READ_CAP).read_to_string(&mut text).ok()?;
+    let text = text.trim().to_owned();
+    (text.len() == SALT_BYTES * 2 && text.bytes().all(|b| b.is_ascii_hexdigit())).then_some(text)
+}
+
+/// Create a fresh salt at the unused name `path`, durable before it is used.
+///
+/// A salt file left half-written is removed. A concurrent first build that
+/// won the race to create `path` supplies the salt instead.
+fn create_salt(path: &Path) -> Option<String> {
+    use std::io::Write as _;
     let mut bytes = [0u8; SALT_BYTES];
     getrandom::fill(&mut bytes).ok()?;
     let salt = hex::encode(bytes);
-    fs::create_dir_all(&home).ok()?;
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    match options.open(&path) {
+    match crate::secret_file::create_new(crate::secret_file::HOST_SECRET_STORE, path) {
         Ok(mut file) => {
-            file.write_all(salt.as_bytes()).ok()?;
+            let written = file
+                .write_all(salt.as_bytes())
+                .and_then(|()| file.sync_all());
+            drop(file);
+            if written.is_err() {
+                let _ = fs::remove_file(path);
+                return None;
+            }
             Some(salt)
         }
-        // A concurrent first build won the race: use the salt it wrote.
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read(&path),
+        Err(crate::secret_file::SecretFileError::Io(e))
+            if e.kind() == std::io::ErrorKind::AlreadyExists =>
+        {
+            read_salt(path)
+        }
         Err(_) => None,
     }
 }
@@ -984,6 +1021,70 @@ pub fn store_ir(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fresh, empty scratch directory for one salt test.
+    #[cfg(unix)]
+    fn salt_test_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-cache-salt-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create test dir");
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_created_salt_is_owner_only_and_read_back() {
+        let dir = salt_test_dir("roundtrip");
+        let path = dir.join("build-cache-salt");
+        let created = create_salt(&path);
+        assert!(
+            created
+                .as_ref()
+                .is_some_and(|salt| salt.len() == SALT_BYTES * 2),
+            "a fresh salt must be created: {created:?}"
+        );
+        assert_eq!(read_salt(&path), created, "the salt reads back unchanged");
+        assert_eq!(
+            create_salt(&path),
+            created,
+            "a lost creation race reuses the winner's salt"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_salt_another_user_could_read_or_a_symlink_is_refused() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = salt_test_dir("refused");
+        let path = dir.join("build-cache-salt");
+        let created = create_salt(&path);
+        assert!(created.is_some(), "a fresh salt must be created");
+        for mode in [0o644, 0o640] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("chmod salt");
+            assert_eq!(
+                read_salt(&path),
+                None,
+                "a mode-{mode:o} salt must be refused"
+            );
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("chmod salt");
+        let link = dir.join("linked-salt");
+        std::os::unix::fs::symlink(&path, &link).expect("plant symlink");
+        assert_eq!(read_salt(&link), None, "a symlinked salt must be refused");
+        let malformed = dir.join("malformed-salt");
+        assert!(
+            create_salt(&malformed).is_some(),
+            "create a salt to corrupt"
+        );
+        fs::write(&malformed, "not hex").expect("corrupt salt");
+        assert_eq!(read_salt(&malformed), None, "a malformed salt is refused");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     fn entry_file_path(cache_root: &Path, epoch: &str, key: &str) -> PathBuf {
         cache_root.join(epoch).join(entry_file_name(key))
@@ -2344,6 +2445,54 @@ mod tests {
             "a traversing file name writes nothing"
         );
         assert!(!root.exists(), "a refused write creates nothing");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A cache entry one byte past the cap is a miss; one at the cap is read whole.
+    #[test]
+    fn a_cache_entry_past_the_cap_is_a_miss() {
+        let base = std::env::temp_dir().join(format!("ipe_cache_cap_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("e1")).unwrap();
+        fs::write(base.join("e1").join("at.json"), [b'x'; 8]).unwrap();
+        fs::write(base.join("e1").join("over.json"), [b'x'; 9]).unwrap();
+        #[cfg(unix)] // a cache hit needs a file identity check
+        assert_eq!(
+            read_without_links(&base, &["e1", "at.json"], 8),
+            Some(vec![b'x'; 8]),
+            "an entry at the cap is read whole"
+        );
+        assert_eq!(
+            read_without_links(&base, &["e1", "over.json"], 8),
+            None,
+            "an entry past the cap is a miss"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// The write-side check agrees with the read cap at the boundary.
+    #[test]
+    fn only_an_entry_within_the_cap_fits() {
+        assert!(within_cap(&[0; 8], 8), "at the cap fits");
+        assert!(!within_cap(&[0; 9], 8), "one past the cap does not");
+        assert!(within_cap(&[], 0), "an empty entry fits a zero cap");
+    }
+
+    /// A planted entry past the build-cache cap is never loaded through the site.
+    #[test]
+    fn a_planted_oversized_entry_is_never_loaded() {
+        let base = std::env::temp_dir().join(format!("ipe_cache_oversized_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("e1")).unwrap();
+        let file = fs::File::create(base.join("e1").join("big.json")).unwrap();
+        file.set_len(crate::io_bounded::BUILD_CACHE_ENTRY_CAP + 1)
+            .unwrap();
+        drop(file);
+        assert_eq!(
+            explicit_site(&base).read("e1", "big.json"),
+            None,
+            "a sparse entry past the cap is a miss"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 }

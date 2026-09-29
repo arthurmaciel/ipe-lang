@@ -485,6 +485,8 @@ code! {
     IPE_T0019 = "IPE-T0019", "each alternative of an or-pattern must bind the same variables", "IPE-T0019";
     /// an `Html` value is used where an `Element` is required (wrap it in `Ui.html`)
     IPE_T0020 = "IPE-T0020", "this is `Html` where an `Element` is required", "IPE-T0020";
+    /// a wildcard `any` parameter the body ties to another type (name it with a type variable)
+    IPE_T0021 = "IPE-T0021", "this `any` is tied to another type, so it cannot stay a wildcard", "IPE-T0021";
 
     // -----------------------------------------------------------------------
     // Lower / not-yet-supported (IPE-L####)

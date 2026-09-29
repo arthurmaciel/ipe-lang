@@ -44,7 +44,7 @@ const PROJECT_MANIFEST_TOML: &str = "ipe.toml";
 ///
 /// # Errors
 ///
-/// [`CliError::Usage`] when a discovered cache fails the ownership check;
+/// [`CliError::TrustRefused`] when a discovered cache fails the ownership check;
 /// [`CliError::Io`] when a component cannot be opened.
 pub fn find_cache_root(start: &Path) -> Result<Option<TrustedCache>, CliError> {
     let mut dir = if start.is_dir() {
@@ -69,9 +69,9 @@ pub fn find_cache_root(start: &Path) -> Result<Option<TrustedCache>, CliError> {
 /// `blame_path`. Absent cache ⇒ empty catalog.
 ///
 /// # Errors
-/// [`CliError::Usage`] relaying the catalog loader's diagnostic (a tampered
-/// or half-written cache is refused, never silently skipped), or refusing a
-/// cache entry that fails the owner rule.
+/// [`CliError::TrustRefused`] relaying the catalog loader's diagnostic (a
+/// tampered or half-written cache is refused, never silently skipped), or
+/// refusing a cache entry that fails the owner rule.
 pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliError> {
     load_located_catalog(blame_path).map(|(catalog, _)| catalog)
 }
@@ -653,21 +653,23 @@ pub fn prepare_ffi(
     // crate may claim either — refused at load, before anything is injected.
     for c in &catalog {
         if c.module_name == ipe_canon::asserted::ASSERTED_MODULE {
-            return Err(CliError::Usage(text::msg::ffi_reserved_module_claimed(
-                &c.slug,
-                &ipe_canon::asserted::ASSERTED_MODULE,
-            )));
+            return Err(CliError::TrustRefused(
+                owner_trust::TrustRefusal::FfiReservedModule {
+                    slug: c.slug.clone(),
+                },
+            ));
         }
         if let Some(ident) = c
             .wrapper_idents
             .iter()
             .find(|w| w.starts_with(ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX))
         {
-            return Err(CliError::Usage(text::msg::ffi_reserved_wrapper_prefix(
-                &c.slug,
-                &ident,
-                &ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX,
-            )));
+            return Err(CliError::TrustRefused(
+                owner_trust::TrustRefusal::FfiReservedWrapperPrefix {
+                    slug: c.slug.clone(),
+                    ident: ident.clone(),
+                },
+            ));
         }
     }
     // One Ipê home per foreign type: collapse same-defining-path nominals
@@ -4249,10 +4251,14 @@ version = \"1\"
         )
         .expect("manifest");
         let result = find_cache_root(&tmp);
-        assert!(matches!(result, Err(CliError::Usage(_))), "{result:?}");
-        if let Err(CliError::Usage(msg)) = result {
-            assert_eq!(msg, text::msg::ffi_cache_unverifiable(&cache.display()));
-        }
+        assert!(
+            matches!(
+                &result,
+                Err(CliError::TrustRefused(owner_trust::TrustRefusal::FfiCacheUnverifiable(p)))
+                    if *p == cache
+            ),
+            "{result:?}"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -4273,10 +4279,14 @@ version = \"1\"
         // _bindings.rs — and confirm discovery refuses it.
         std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
         let r = find_cache_root(&tmp);
-        assert!(matches!(r, Err(CliError::Usage(_))), "{r:?}");
-        if let Err(CliError::Usage(msg)) = r {
-            assert_eq!(msg, text::msg::ffi_cache_untrusted(&cache.display()));
-        }
+        assert!(
+            matches!(
+                &r,
+                Err(CliError::TrustRefused(owner_trust::TrustRefusal::FfiCacheUntrusted(p)))
+                    if *p == cache
+            ),
+            "{r:?}"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

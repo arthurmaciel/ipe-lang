@@ -6,16 +6,24 @@ description: >-
   RUSTC_WRAPPER/SCCACHE_GHA_ENABLED may be set — `ci/verify-manifest.py`
   refuses both anywhere else. A job whose deterministic check step must stay
   network-free (ci/deterministic-checks.json) must not use this action:
-  sccache's GitHub Actions cache backend does network I/O.
+  sccache's GitHub Actions cache backend does network I/O. The cache never
+  gates a build: when the sccache server cannot start (the cache backend
+  refusing service), rustc is left unwrapped and the job compiles uncached.
 
 runs:
   using: composite
   steps:
-    - uses: mozilla-actions/sccache-action@v0.0.9
+    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
     - name: Wire rustc through sccache
       shell: bash
       run: |
         set -euo pipefail
-        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-        echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+        if SCCACHE_GHA_ENABLED=true SCCACHE_IDLE_TIMEOUT=0 sccache --start-server; then
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "SCCACHE_IDLE_TIMEOUT=0" >> "$GITHUB_ENV"
+          echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "$GITHUB_ENV"
+        else
+          echo "::warning::sccache server did not start; building without the compile cache"
+        fi

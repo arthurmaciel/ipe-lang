@@ -1073,8 +1073,7 @@ mod tests {
     #[test]
     fn fixes_are_idempotent() {
         // A nested call the prefer-pipeline rule rewrites; re-running finds none.
-        let src =
-            "module Main exposing (main)\n\nmain =\n    List.map fmt (List.filter live records)\n";
+        let src = "module Main exposing (main)\n\nmain =\n    String.concat (List.map fmt (List.filter live records))\n";
         let outcome = apply_fixes(&[module(src)], &LintConfig::default());
         assert_eq!(outcome.applied, 1, "one pipeline rewrite expected");
         let fixed = outcome
@@ -1091,17 +1090,16 @@ mod tests {
 
     /// When a nested call is a direct operand of a binary operator, the
     /// `--fix` replacement must be wrapped in parentheses.  Without parens,
-    /// `n * (List.map f (List.filter p xs))` would become
-    /// `n * xs |> List.filter p |> List.map f`, which re-parses as
-    /// `(n * xs) |> … |> …` — a completely different program.
+    /// `n * String.length (List.map f (List.filter p xs))` would become
+    /// `n * xs |> List.filter p |> List.map f |> String.length`, which re-parses
+    /// as `(n * xs) |> … |> …` — a completely different program.
     #[test]
     fn pipeline_fix_in_binop_operand_wraps_in_parens() {
-        // `n * List.map f (List.filter p xs)` — the nested call is a
-        // right-hand operand of `*`.
+        // The nested call is a right-hand operand of `*`.
         let src = concat!(
             "module Main exposing (main)\n\n",
             "main =\n",
-            "    n * List.map f (List.filter p xs)\n",
+            "    n * String.length (List.map f (List.filter p xs))\n",
         );
         let outcome = apply_fixes(&[module(src)], &LintConfig::default());
         assert_eq!(outcome.applied, 1, "one pipeline rewrite expected");
@@ -1112,7 +1110,7 @@ mod tests {
         // The replacement must be parenthesised so `*` still binds its original
         // operands.
         assert!(
-            fixed.contains("* (xs |> List.filter p |> List.map f)"),
+            fixed.contains("* (xs |> List.filter p |> List.map f |> String.length)"),
             "pipeline in binop operand must be parenthesised, got:\n{fixed}"
         );
     }
@@ -1124,7 +1122,7 @@ mod tests {
         let src = concat!(
             "module Main exposing (main)\n\n",
             "main =\n",
-            "    List.map fmt (List.filter live records)\n",
+            "    String.concat (List.map fmt (List.filter live records))\n",
         );
         let outcome = apply_fixes(&[module(src)], &LintConfig::default());
         assert_eq!(outcome.applied, 1, "one pipeline rewrite expected");
@@ -1245,7 +1243,7 @@ mod tests {
             "module Main exposing (listen)\n\n",
             "listen : Int -> String\n",
             "listen port =\n",
-            "    List.map fmt (List.filter live records)\n",
+            "    String.concat (List.map fmt (List.filter live records))\n",
         );
         let local_outcome = apply_fixes(&[module(src)], &LintConfig::default());
         // Build the post-local module list (as apply_and_report now does).
@@ -2132,6 +2130,59 @@ mod tests {
         assert!(
             flags_prim_param("http_timeout_2", "Int"),
             "`http_timeout_2 : Int` must be flagged (timeout token, snake + digit)"
+        );
+    }
+
+    // ── unused-imports span tests ─────────────────────────────────────────────
+
+    /// The source text of the single `unused-imports` finding for `src`.
+    fn unused_import_text(src: &str) -> Option<String> {
+        let report = run(&[module(src)], &LintConfig::default());
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.rule == "unused-imports")?;
+        src.get(finding.span.lo as usize..finding.span.hi as usize)
+            .map(str::to_owned)
+    }
+
+    /// The finding covers the whole declaration, never less: a `)` inside a
+    /// `--` comment in the list does not end it early, a `{- -}` block
+    /// between clauses does not stop it short, and the alias form ends at the
+    /// alias.
+    #[test]
+    fn unused_import_span_is_the_whole_declaration() {
+        for decl in [
+            "import Ipe.Url exposing\n    ( fromString -- keeps ) the old name\n    , toString\n    )",
+            "import Ipe.Url\n    {- ( note ) -}\n    as U\n    {- ) -}\n    exposing (fromString)",
+            "import Ipe.Url as U",
+        ] {
+            let src = format!(
+                "module Main exposing (main)\n\n{decl} -- ( trailing\n\nmain = \"hello\" -- )\n"
+            );
+            assert_eq!(
+                unused_import_text(&src).as_deref(),
+                Some(decl),
+                "in {src:?}"
+            );
+        }
+    }
+
+    /// The refusal: a `(` inside a comment in the list plus a stray `)` in a
+    /// later comment must not stretch the finding into the next declaration,
+    /// so a suppression on that unrelated later line cannot hide it.
+    #[test]
+    fn unrelated_later_suppression_does_not_hide_unused_import() {
+        let decl = "import Ipe.Url exposing (fromString -- (\n    )";
+        let src = format!(
+            "module Main exposing (main)\n\n{decl}\n\n\
+             -- ipe-lint: allow unused-imports\n\
+             main = \"hello\" -- )\n"
+        );
+        assert_eq!(
+            unused_import_text(&src).as_deref(),
+            Some(decl),
+            "a suppression outside the declaration must not silence it"
         );
     }
 }
