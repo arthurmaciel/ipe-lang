@@ -78,12 +78,11 @@ wasm-external-cargo = { max-threads = 1 }
 
 # The heavy-server-e2e members cold-`cargo build` a full axum/tokio crate and
 # bind a real TCP port. Serialization (max-threads = 1) removes the shared-target
-# lock contention. With the warm dependency cache each member's emitted crate
-# builds fresh but links against a pre-built dep tree, so a member finishes in a
-# few minutes and a single retry is enough to let a rare transient teardown/serve
-# timeout self-heal without masking a real regression (a genuinely broken emit
-# fails both attempts). One retry, not more: a retry multiplies a HUNG test's
-# wall-clock by its per-test cap, so a single retry bounds a hang's blast radius.
+# lock contention. No test retries — here or in any profile: a test that fails
+# once and passes on a retry is nondeterministic, and a retry would report it
+# green. It fails its shard instead; `.github/ci/rerun_policy.py --lint` refuses
+# any `retries` setting, and the workflow-level rerun fires only on an
+# infrastructure signature, never on a test failure.
 #
 # `slow-timeout` here (900s) is a wide OUTER net, deliberately NOT the fail-fast
 # hang guard: the emitted-build harness (`e2e_support::run_bounded_build`) now
@@ -98,7 +97,6 @@ wasm-external-cargo = { max-threads = 1 }
 [[profile.ci.overrides]]
 filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(g_http_live) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
 test-group = 'heavy-server-e2e'
-retries = 1
 slow-timeout = { period = "60s", terminate-after = 15 }
 
 [[profile.ci.overrides]]
@@ -138,9 +136,9 @@ slow-timeout = { period = "60s", terminate-after = 30 }
 filter = 'binary(stdlib_coverage_dynamic)'
 slow-timeout = { period = "60s", terminate-after = 15 }
 
-# The parity probes compile every golden fixture twice (clean + incremental),
-# per shard — a shard legitimately approaches the default 600s ceiling under CI
-# load, so give the parity binaries a wider terminate window.
+# The parity probes compile every golden fixture of their shard twice (clean +
+# incremental); under CI load a shard can outrun the default ceiling, so give
+# the parity binaries a wider terminate window.
 [[profile.ci.overrides]]
 filter = 'binary(clean_vs_incremental_parity) | binary(per_module_typecheck_parity)'
 slow-timeout = { period = "60s", terminate-after = 20 }

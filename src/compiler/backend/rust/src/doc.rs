@@ -507,58 +507,81 @@ impl Doc {
         }
     }
 
-    /// Append every text leaf of this document, in order, to `out`. This is the
-    /// SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the legacy
-    /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
+    /// Append every text leaf of this document, in order, to `out`.
+    ///
+    /// This is the SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the
+    /// legacy emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
     /// contribute a single space so adjacency is preserved under normalization
     /// ([`Doc::Softline`] contributes nothing, as it never separates tokens).
     pub fn collect_leaves(&self, out: &mut String) {
+        self.write_leaves(&mut LeafSink::new(LeafMode::Seal, out));
+    }
+
+    /// The document with no layout decision made, as valid Rust.
+    ///
+    /// Its leaves in order, exactly as [`Doc::collect_leaves`] writes them, with
+    /// two differences that are pure whitespace: a [`Doc::HardLine`] is a
+    /// newline, and a newline closes any line comment a leaf left open before
+    /// the next layout-owned byte (a break, a joiner, a delimiter) is written.
+    /// It is the token sequence the SEAL certifies, and no byte the layout owns
+    /// can land inside a comment, so it is valid Rust. One walk over the tree,
+    /// linear in the document's bytes: the renderer's layout of last resort
+    /// when the fit search runs out of fuel.
+    pub fn plain_layout(&self) -> String {
+        let mut out = String::new();
+        self.write_leaves(&mut LeafSink::new(LeafMode::Plain, &mut out));
+        out
+    }
+
+    /// Write every leaf in order through `sink`, which owns the break bytes.
+    fn write_leaves<W: LeafWriter>(&self, sink: &mut W) {
         match self {
-            Self::Text(s) => out.push_str(s),
-            Self::Line | Self::HardLine => out.push(' '),
+            Self::Text(s) => sink.leaf(s),
+            Self::Line => sink.layout(" "),
+            Self::HardLine => sink.hard_line(),
             // Invisible to the SEAL: the trailing comma it stands for is not a
             // token the legacy string emitter produces, so it must not appear in
             // the leaf sequence the SEAL compares.
-            Self::Softline | Self::IfBroken(_) => {}
+            Self::Softline | Self::IfBroken(_) => sink.layout(""),
             Self::Concat(docs) => {
                 for d in docs {
-                    d.collect_leaves(out);
+                    sink.child(d);
                 }
             }
-            Self::Nest(_, inner) | Self::Group(inner) => inner.collect_leaves(out),
+            Self::Nest(_, inner) | Self::Group(inner) => sink.child(inner),
             // The braces ARE part of the leaf sequence: the string emitter always
             // writes them, so they must appear in the SEAL comparison (unlike the
             // trailing comma above, which the string emitter never writes). A space
             // pads each brace so token adjacency survives normalization.
             Self::BraceBody(inner) => {
-                out.push_str("{ ");
-                inner.collect_leaves(out);
-                out.push_str(" }");
+                sink.layout("{ ");
+                sink.child(inner);
+                sink.layout(" }");
             }
             // The trailing comma IS a leaf (the string emitter writes it after every
             // arm body); the synthesized braces are NOT (the string emitter never
             // writes them, so they stay invisible like `IfBroken`).
             Self::MatchArmTail { body, .. } => {
-                body.collect_leaves(out);
-                out.push(',');
+                sink.child(body);
+                sink.layout(",");
             }
             // The break after `= ` is pure whitespace (SEAL-invisible, like a
             // `HardLine`): the string emitter writes `prefix rhs` with a single
             // separating space, which normalizes equal to either broken layout.
             Self::Assign { prefix, rhs, .. } => {
-                prefix.collect_leaves(out);
-                rhs.collect_leaves(out);
+                sink.child(prefix);
+                sink.child(rhs);
             }
             Self::Chain { operands } => {
                 for (i, op) in operands.iter().enumerate() {
                     if let Some(o) = &op.leading_op {
                         if i > 0 {
-                            out.push(' ');
+                            sink.layout(" ");
                         }
-                        out.push_str(o);
-                        out.push(' ');
+                        sink.layout(o);
+                        sink.layout(" ");
                     }
-                    op.doc.collect_leaves(out);
+                    sink.child(&op.doc);
                 }
             }
             // The open/close delimiters and each element ARE leaves; elements are
@@ -567,16 +590,7 @@ impl Doc {
             // emitter never writes it), exactly like the plain delimited group's.
             Self::CallArgs {
                 open, elems, close, ..
-            } => {
-                open.collect_leaves(out);
-                for (i, e) in elems.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    e.collect_leaves(out);
-                }
-                close.collect_leaves(out);
-            }
+            } => write_delimited(sink, open, elems, "", close),
             // Same accounting as `CallArgs`: `open`, each field joined by `, `, and
             // `close` are leaves; the trailing comma is SEAL-invisible. A space pads
             // the braces so `Name { a: 1 }` normalizes with the hugging spaces.
@@ -584,18 +598,7 @@ impl Doc {
                 open,
                 fields,
                 close,
-            } => {
-                open.collect_leaves(out);
-                out.push(' ');
-                for (i, e) in fields.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    e.collect_leaves(out);
-                }
-                out.push(' ');
-                close.collect_leaves(out);
-            }
+            } => write_delimited(sink, open, fields, " ", close),
             // `Ptr<Head + T1 + T2 + …>` — the same token sequence the string emitter
             // writes for the flat annotation. The angle-break's trailing comma is
             // SEAL-invisible (the string emitter never writes it).
@@ -605,21 +608,21 @@ impl Doc {
                 traits,
                 close,
             } => {
-                ptr_open.collect_leaves(out);
-                head.collect_leaves(out);
+                sink.child(ptr_open);
+                sink.child(head);
                 for t in traits {
-                    out.push_str(" + ");
-                    t.collect_leaves(out);
+                    sink.layout(" + ");
+                    sink.child(t);
                 }
-                close.collect_leaves(out);
+                sink.child(close);
             }
             // The parens ARE leaves (the string emitter writes `({f})`), whether or
             // not the render drops them — the same rendered-vs-leaves divergence as
             // `IfBroken` / `BraceBody`.
             Self::ElidableParen { inner } => {
-                out.push('(');
-                inner.collect_leaves(out);
-                out.push(')');
+                sink.layout("(");
+                sink.child(inner);
+                sink.layout(")");
             }
             // The alternatives joined ` | ` — the string emitter's exact bytes.
             // The vertical layout's newlines are pure whitespace and its `| `
@@ -627,50 +630,168 @@ impl Doc {
             Self::OrPattern { alts } => {
                 for (i, alt) in alts.iter().enumerate() {
                     if i > 0 {
-                        out.push_str(" | ");
+                        sink.layout(" | ");
                     }
-                    out.push_str(alt);
+                    sink.leaf(alt);
                 }
             }
             // `receiver.method(…)` with no break — the string emitter writes them
             // adjacent, and the method-on-its-own-line layout is pure whitespace
             // (SEAL-invisible), so both layouts normalize to the same leaves.
             Self::MethodChain { receiver, method } => {
-                receiver.collect_leaves(out);
-                method.collect_leaves(out);
+                sink.child(receiver);
+                sink.child(method);
             }
             // The `(if … { … } else { … })` tokens the string emitter writes
             // adjacently. The block form's newlines are pure whitespace and its
             // brace tokens are identical, so both layouts normalize to the same
             // leaves — the branch bodies carry their own leaves in between.
             Self::IfElse { cond, then_, else_ } => {
-                Self::collect_if_else_leaves(cond, then_, else_, out);
+                sink.layout("(if ");
+                sink.child(cond);
+                sink.layout(" { ");
+                sink.child(then_);
+                sink.layout(" } else { ");
+                sink.child(else_);
+                sink.layout(" })");
             }
         }
-    }
-
-    /// Append the `(if cond { then } else { else })` leaf tokens for a
-    /// [`Doc::IfElse`], with each branch's own leaves in between — the exact
-    /// adjacent token sequence the string emitter writes, identical in the inline
-    /// and block layouts.
-    fn collect_if_else_leaves(cond: &Self, then_: &Self, else_: &Self, out: &mut String) {
-        out.push_str("(if ");
-        cond.collect_leaves(out);
-        out.push_str(" { ");
-        then_.collect_leaves(out);
-        out.push_str(" } else { ");
-        else_.collect_leaves(out);
-        out.push_str(" })");
     }
 
     /// The whitespace-normalized leaf string: runs of whitespace collapsed to a
     /// single space, trimmed. Two documents with the same token sequence
     /// (ignoring layout) normalize equal — this is the SEAL comparison key.
+    #[cfg(test)]
     pub fn normalized_leaves(&self) -> String {
         let mut raw = String::new();
         self.collect_leaves(&mut raw);
         whitespace_normalize(&raw)
     }
+
+    /// The [`LeafNorm`] of this node's SEAL leaf stream, each child's read from `child`.
+    ///
+    /// Only this node's own leaves and separators are scanned; every child
+    /// contributes the summary `child` returns for it, so a caller that keeps
+    /// each node's summary summarises a whole tree in one bottom-up pass. The
+    /// work reported is one step plus the bytes scanned.
+    #[must_use]
+    pub fn leaf_norm_with(&self, child: impl FnMut(&Self) -> LeafNorm) -> (LeafNorm, usize) {
+        let mut sink = NormSink {
+            norm: LeafNorm::Empty,
+            work: 1,
+            child,
+        };
+        self.write_leaves(&mut sink);
+        (sink.norm, sink.work)
+    }
+}
+
+/// The whitespace-normalized length of a leaf stream, closed under concatenation.
+///
+/// [`whitespace_normalize`] keeps every non-whitespace char, drops leading and
+/// trailing whitespace, and writes one space between two kept chars exactly when
+/// whitespace separates them. So the normalized length of `a` followed by `b`
+/// is a function of the two summaries alone ([`LeafNorm::then`]), and a node's
+/// summary composes from its children's without re-reading their leaves.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum LeafNorm {
+    /// No char at all.
+    #[default]
+    Empty,
+    /// Whitespace only.
+    Space,
+    /// At least one non-whitespace char.
+    Content {
+        /// The normalized length in bytes.
+        len: usize,
+        /// Whitespace precedes the first non-whitespace char.
+        lead_ws: bool,
+        /// Whitespace follows the last non-whitespace char.
+        trail_ws: bool,
+    },
+}
+
+impl LeafNorm {
+    /// The summary of `s`.
+    #[must_use]
+    pub fn of(s: &str) -> Self {
+        s.chars().fold(Self::Empty, |acc, c| {
+            acc.then(if c.is_ascii_whitespace() {
+                Self::Space
+            } else {
+                Self::Content {
+                    len: c.len_utf8(),
+                    lead_ws: false,
+                    trail_ws: false,
+                }
+            })
+        })
+    }
+
+    /// The summary of this stream followed by `next`.
+    #[must_use]
+    pub fn then(self, next: Self) -> Self {
+        match (self, next) {
+            (Self::Empty, other) | (other, Self::Empty) => other,
+            (Self::Space, Self::Space) => Self::Space,
+            (Self::Space, Self::Content { len, trail_ws, .. }) => Self::Content {
+                len,
+                lead_ws: true,
+                trail_ws,
+            },
+            (Self::Content { len, lead_ws, .. }, Self::Space) => Self::Content {
+                len,
+                lead_ws,
+                trail_ws: true,
+            },
+            (
+                Self::Content {
+                    len: before,
+                    lead_ws,
+                    trail_ws: gap_before,
+                },
+                Self::Content {
+                    len: after,
+                    lead_ws: gap_after,
+                    trail_ws,
+                },
+            ) => Self::Content {
+                len: before
+                    .saturating_add(usize::from(gap_before || gap_after))
+                    .saturating_add(after),
+                lead_ws,
+                trail_ws,
+            },
+        }
+    }
+
+    /// The length of the normalized stream.
+    #[must_use]
+    pub const fn width(self) -> usize {
+        match self {
+            Self::Empty | Self::Space => 0,
+            Self::Content { len, .. } => len,
+        }
+    }
+}
+
+/// Write `open`, each of `elems` joined by `, `, and `close` through `sink`, with
+/// `pad` inside each delimiter.
+fn write_delimited<W: LeafWriter>(sink: &mut W, open: &Doc, elems: &[Doc], pad: &str, close: &Doc) {
+    sink.child(open);
+    if !pad.is_empty() {
+        sink.layout(pad);
+    }
+    for (i, e) in elems.iter().enumerate() {
+        if i > 0 {
+            sink.layout(", ");
+        }
+        sink.child(e);
+    }
+    if !pad.is_empty() {
+        sink.layout(pad);
+    }
+    sink.child(close);
 }
 
 /// Collapse every run of ASCII whitespace to a single space and trim the ends.
@@ -691,4 +812,135 @@ pub fn whitespace_normalize(s: &str) -> String {
         }
     }
     out
+}
+
+/// Which leaf stream a [`LeafSink`] writes.
+#[derive(Clone, Copy)]
+enum LeafMode {
+    /// The SEAL oracle: every break is one space.
+    Seal,
+    /// The fallback layout: unconditional breaks are newlines, and no
+    /// layout-owned byte is written inside a line comment.
+    Plain,
+}
+
+/// What [`Doc::write_leaves`] streams a node's leaf sequence through.
+///
+/// The one definition of the SEAL leaf stream is [`Doc::write_leaves`]; every
+/// writer sees the same calls in the same order, and a child subtree reaches the
+/// writer as one [`LeafWriter::child`] call, so a writer may stand a kept
+/// summary in for the child's leaves.
+trait LeafWriter: Sized {
+    /// Write a leaf's bytes verbatim.
+    fn leaf(&mut self, s: &str);
+
+    /// Write a layout-owned separator.
+    fn layout(&mut self, s: &str);
+
+    /// Write an unconditional break.
+    fn hard_line(&mut self);
+
+    /// Write the whole leaf stream of `doc`, a child of the node being written.
+    fn child(&mut self, doc: &Doc) {
+        doc.write_leaves(self);
+    }
+}
+
+/// The writer the SEAL oracle and the fallback layout stream through.
+///
+/// Leaf bytes pass through verbatim in both modes, so the token sequence never
+/// depends on the mode. Every other byte is layout-owned and always sits on a
+/// token boundary, so in [`LeafMode::Plain`] a newline may precede it: that is
+/// how a line comment a leaf opened is closed before the layout writes code the
+/// comment would swallow.
+struct LeafSink<'a> {
+    out: &'a mut String,
+    mode: LeafMode,
+    /// Whether the current output line may sit inside a `//` comment.
+    ///
+    /// Tracked only in [`LeafMode::Plain`]. Over-approximate (a `//` inside a
+    /// string literal counts), which costs at most a harmless newline.
+    comment_open: bool,
+}
+
+impl<'a> LeafSink<'a> {
+    const fn new(mode: LeafMode, out: &'a mut String) -> Self {
+        Self {
+            out,
+            mode,
+            comment_open: false,
+        }
+    }
+}
+
+impl LeafWriter for LeafSink<'_> {
+    fn leaf(&mut self, s: &str) {
+        let spliced = self.out.ends_with('/') && s.starts_with('/');
+        self.out.push_str(s);
+        if matches!(self.mode, LeafMode::Plain) {
+            self.comment_open = match s.rfind('\n') {
+                Some(at) => s.get(at..).is_some_and(|tail| tail.contains("//")),
+                None => self.comment_open || spliced || s.contains("//"),
+            };
+        }
+    }
+
+    /// Ends any open line comment first.
+    fn layout(&mut self, s: &str) {
+        if self.comment_open {
+            self.out.push('\n');
+            self.out.push_str(s.trim_start_matches(' '));
+            self.comment_open = false;
+        } else {
+            self.out.push_str(s);
+        }
+    }
+
+    fn hard_line(&mut self) {
+        match self.mode {
+            LeafMode::Seal => self.out.push(' '),
+            LeafMode::Plain => {
+                self.out.push('\n');
+                self.comment_open = false;
+            }
+        }
+    }
+}
+
+/// The writer [`Doc::leaf_norm_with`] summarises one node's SEAL stream through.
+///
+/// It folds exactly the bytes a [`LeafMode::Seal`] [`LeafSink`] would write into
+/// a [`LeafNorm`] (a break is one space), except that each child's bytes are
+/// replaced by the summary `child` returns for it.
+struct NormSink<F> {
+    norm: LeafNorm,
+    /// One step plus the bytes scanned so far.
+    work: usize,
+    child: F,
+}
+
+impl<F> NormSink<F> {
+    fn push(&mut self, s: &str) {
+        self.norm = self.norm.then(LeafNorm::of(s));
+        self.work = self.work.saturating_add(s.len());
+    }
+}
+
+impl<F: FnMut(&Doc) -> LeafNorm> LeafWriter for NormSink<F> {
+    fn leaf(&mut self, s: &str) {
+        self.push(s);
+    }
+
+    fn layout(&mut self, s: &str) {
+        self.push(s);
+    }
+
+    fn hard_line(&mut self) {
+        self.push(" ");
+    }
+
+    fn child(&mut self, doc: &Doc) {
+        let norm = (self.child)(doc);
+        self.norm = self.norm.then(norm);
+    }
 }

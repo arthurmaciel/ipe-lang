@@ -390,24 +390,22 @@ pub(crate) fn user_ipe_db_store_from_codec<T1: Clone>(
 ) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreDraft<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match crate::user_ipe_codec_shape(codec.clone()) {
-        IpeCodecShape::SRecord(cols) => {
-            crate::user_ipe_db_store_build_store(
-                table,
-                list_map_consume(
-                    {
-                        let __ipe_fn: Box<
-                            dyn Fn((String, IpeCodecColType)) -> IpeDbStoreColumn
-                                + Send
-                                + Sync
-                                + 'static,
-                        > = Box::new(crate::user_ipe_db_store_column_from_shape);
-                        __ipe_fn
-                    },
-                    cols,
-                ),
-                codec,
-            )
-        }
+        IpeCodecShape::SRecord(cols) => crate::user_ipe_db_store_build_store(
+            table,
+            list_map_consume(
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn((String, IpeCodecColType)) -> IpeDbStoreColumn
+                            + Send
+                            + Sync
+                            + 'static,
+                    > = Box::new(crate::user_ipe_db_store_column_from_shape);
+                    __ipe_fn
+                },
+                cols,
+            ),
+            codec,
+        ),
         IpeCodecShape::SScalar(_) => IpeResult::Err(crate::user_ipe_db_store_not_a_record_error()),
         IpeCodecShape::SBlob => IpeResult::Err(crate::user_ipe_db_store_not_a_record_error()),
     }
@@ -438,21 +436,19 @@ pub(crate) fn user_ipe_db_store_build_store<T1: Clone>(
             IpeMaybe::Just(bad) => IpeResult::Err(
                 crate::user_ipe_db_store_invalid_ident_error("column".to_string(), bad),
             ),
-            IpeMaybe::Nothing => {
-                IpeResult::Ok(IpeDbStoreDraft::Draft(
-                    RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
-                        codec: codec,
-                        currentColumns: columns.clone(),
-                        frozenColumns: columns,
-                        frozenTable: table.clone(),
-                        indexes: Vec::<IpeDbStoreIndexSpec>::new(),
-                        ops: Vec::<IpeDbStoreSchemaOp>::new(),
-                        pk: IpeResult::Ok(IpeDbStorePrimaryKeyDecl::NoPk),
-                        specs: Vec::<IpeDbStoreColumnSpec>::new(),
-                        table: table,
-                    },
-                ))
-            }
+            IpeMaybe::Nothing => IpeResult::Ok(IpeDbStoreDraft::Draft(
+                RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
+                    codec: codec,
+                    currentColumns: columns.clone(),
+                    frozenColumns: columns,
+                    frozenTable: table.clone(),
+                    indexes: Vec::<IpeDbStoreIndexSpec>::new(),
+                    ops: Vec::<IpeDbStoreSchemaOp>::new(),
+                    pk: IpeResult::Ok(IpeDbStorePrimaryKeyDecl::NoPk),
+                    specs: Vec::<IpeDbStoreColumnSpec>::new(),
+                    table: table,
+                },
+            )),
         }
     })
 }
@@ -498,21 +494,19 @@ pub(crate) fn user_ipe_db_store_public<T1: Clone>(
 ) -> IpeDbStoreStore<T1> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match draft {
-        IpeDbStoreDraft::Draft(r) => {
-            IpeDbStoreStore::Store(
-                RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
-                    codec: (r.clone()).codec.clone(),
-                    currentColumns: (r.clone()).currentColumns.clone(),
-                    frozenColumns: (r.clone()).frozenColumns.clone(),
-                    frozenTable: (r.clone()).frozenTable.clone(),
-                    indexes: (r.clone()).indexes.clone(),
-                    ops: (r.clone()).ops.clone(),
-                    pk: (r.clone()).pk.clone(),
-                    specs: (r.clone()).specs.clone(),
-                    table: (r).table.clone(),
-                },
-            )
-        }
+        IpeDbStoreDraft::Draft(r) => IpeDbStoreStore::Store(
+            RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
+                codec: (r.clone()).codec.clone(),
+                currentColumns: (r.clone()).currentColumns.clone(),
+                frozenColumns: (r.clone()).frozenColumns.clone(),
+                frozenTable: (r.clone()).frozenTable.clone(),
+                indexes: (r.clone()).indexes.clone(),
+                ops: (r.clone()).ops.clone(),
+                pk: (r.clone()).pk.clone(),
+                specs: (r.clone()).specs.clone(),
+                table: (r).table.clone(),
+            },
+        ),
     }
 }
 pub(crate) fn user_ipe_db_store_key_decl_fault(
@@ -692,18 +686,15 @@ pub(crate) fn user_ipe_db_store_cond_fragment_in(
         }
         IpeDbStoreCond::NotCond(inner) => {
             let inner = *inner;
-            ipe_result_map(
-                crate::user_ipe_db_store_cond_fragment_in(view, inner),
-                {
-                    let __ipe_fn: Box<
-                        dyn Fn(ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
-                            + Send
-                            + Sync
-                            + 'static,
-                    > = Box::new(sql_not);
-                    __ipe_fn
-                },
-            )
+            ipe_result_map(crate::user_ipe_db_store_cond_fragment_in(view, inner), {
+                let __ipe_fn: Box<
+                    dyn Fn(ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                        + Send
+                        + Sync
+                        + 'static,
+                > = Box::new(sql_not);
+                __ipe_fn
+            })
         }
     }
 }
@@ -760,47 +751,45 @@ pub(crate) fn user_ipe_db_store_fold_conds(
                 let rest = rest.to_vec();
                 match crate::user_ipe_db_store_cond_fragment_in(view.clone(), first) {
                     IpeResult::Err(e) => IpeResult::Err(e),
-                    IpeResult::Ok(head) => {
-                        ipe_result_map(
-                            crate::user_ipe_db_store_fold_conds(
-                                view,
-                                ({
-                                    let join = join.clone();
-                                    {
-                                        let __ipe_fn: Box<
-                                            dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
-                                                + Send
-                                                + Sync
-                                                + 'static,
-                                        > = Box::new(
-                                            move |eta_0: ipe_runtime::db::SqlFragment, eta_1: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
-                                                (join.clone())(eta_0, eta_1)
-                                            },
-                                        );
-                                        __ipe_fn
-                                    }
-                                }),
-                                emptyFragment,
-                                rest,
-                            ),
+                    IpeResult::Ok(head) => ipe_result_map(
+                        crate::user_ipe_db_store_fold_conds(
+                            view,
                             ({
                                 let join = join.clone();
                                 {
                                     let __ipe_fn: Box<
-                                        dyn Fn(ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                                        dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
                                             + Send
                                             + Sync
                                             + 'static,
                                     > = Box::new(
-                                        move |tail: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
-                                            (join)(head.clone(), tail)
+                                        move |eta_0: ipe_runtime::db::SqlFragment, eta_1: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
+                                            (join.clone())(eta_0, eta_1)
                                         },
                                     );
                                     __ipe_fn
                                 }
                             }),
-                        )
-                    }
+                            emptyFragment,
+                            rest,
+                        ),
+                        ({
+                            let join = join.clone();
+                            {
+                                let __ipe_fn: Box<
+                                    dyn Fn(ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                                        + Send
+                                        + Sync
+                                        + 'static,
+                                > = Box::new(
+                                    move |tail: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
+                                        (join)(head.clone(), tail)
+                                    },
+                                );
+                                __ipe_fn
+                            }
+                        }),
+                    ),
                 }
             }
         }
@@ -1481,49 +1470,47 @@ pub(crate) fn user_ipe_db_store_fold_preds(
                 match crate::user_ipe_db_store_pred_fragment_in(principal.clone(), outerTable.clone(), view.clone(), first)
                 {
                     IpeResult::Err(e) => IpeResult::Err(e),
-                    IpeResult::Ok(head) => {
-                        ipe_result_map(
-                            crate::user_ipe_db_store_fold_preds(
-                                principal,
-                                outerTable,
-                                view,
-                                ({
-                                    let join = join.clone();
-                                    {
-                                        let __ipe_fn: Box<
-                                            dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
-                                                + Send
-                                                + Sync
-                                                + 'static,
-                                        > = Box::new(
-                                            move |eta_0: ipe_runtime::db::SqlFragment, eta_1: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
-                                                (join.clone())(eta_0, eta_1)
-                                            },
-                                        );
-                                        __ipe_fn
-                                    }
-                                }),
-                                emptyFragment,
-                                rest,
-                            ),
+                    IpeResult::Ok(head) => ipe_result_map(
+                        crate::user_ipe_db_store_fold_preds(
+                            principal,
+                            outerTable,
+                            view,
                             ({
                                 let join = join.clone();
                                 {
                                     let __ipe_fn: Box<
-                                        dyn Fn(ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                                        dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
                                             + Send
                                             + Sync
                                             + 'static,
                                     > = Box::new(
-                                        move |tail: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
-                                            (join)(head.clone(), tail)
+                                        move |eta_0: ipe_runtime::db::SqlFragment, eta_1: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
+                                            (join.clone())(eta_0, eta_1)
                                         },
                                     );
                                     __ipe_fn
                                 }
                             }),
-                        )
-                    }
+                            emptyFragment,
+                            rest,
+                        ),
+                        ({
+                            let join = join.clone();
+                            {
+                                let __ipe_fn: Box<
+                                    dyn Fn(ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                                        + Send
+                                        + Sync
+                                        + 'static,
+                                > = Box::new(
+                                    move |tail: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
+                                        (join)(head.clone(), tail)
+                                    },
+                                );
+                                __ipe_fn
+                            }
+                        }),
+                    ),
                 }
             }
         }
@@ -1546,37 +1533,33 @@ pub(crate) fn user_ipe_db_store_deny_all() -> IpeDbStorePolicy {
 pub(crate) fn user_ipe_db_store_read_only(p: IpeDbStorePred) -> IpeDbStorePolicy {
     let _ipe_recursion_guard = crate::recursion_guard();
     match crate::user_ipe_db_store_deny_all() {
-        IpeDbStorePolicy::Policy(r) => {
-            IpeDbStorePolicy::Policy(
-                RecDeleteImmutablesInsertMasksOwnersReadUpdate {
-                    delete: (r.clone()).delete.clone(),
-                    immutables: (r.clone()).immutables.clone(),
-                    insert: (r.clone()).insert.clone(),
-                    masks: (r.clone()).masks.clone(),
-                    owners: (r.clone()).owners.clone(),
-                    read: p,
-                    update: (r).update.clone(),
-                },
-            )
-        }
+        IpeDbStorePolicy::Policy(r) => IpeDbStorePolicy::Policy(
+            RecDeleteImmutablesInsertMasksOwnersReadUpdate {
+                delete: (r.clone()).delete.clone(),
+                immutables: (r.clone()).immutables.clone(),
+                insert: (r.clone()).insert.clone(),
+                masks: (r.clone()).masks.clone(),
+                owners: (r.clone()).owners.clone(),
+                read: p,
+                update: (r).update.clone(),
+            },
+        ),
     }
 }
 pub(crate) fn user_ipe_db_store_owner_column_named(col: String) -> IpeDbStorePolicy {
     let _ipe_recursion_guard = crate::recursion_guard();
     match crate::user_ipe_db_store_deny_all() {
-        IpeDbStorePolicy::Policy(r) => {
-            IpeDbStorePolicy::Policy(
-                RecDeleteImmutablesInsertMasksOwnersReadUpdate {
-                    delete: IpeDbStorePred::POwner(col.clone()),
-                    immutables: (r.clone()).immutables.clone(),
-                    insert: IpeDbStorePred::POwner(col.clone()),
-                    masks: (r).masks.clone(),
-                    owners: vec![col.clone()],
-                    read: IpeDbStorePred::POwner(col.clone()),
-                    update: IpeDbStorePred::POwner(col),
-                },
-            )
-        }
+        IpeDbStorePolicy::Policy(r) => IpeDbStorePolicy::Policy(
+            RecDeleteImmutablesInsertMasksOwnersReadUpdate {
+                delete: IpeDbStorePred::POwner(col.clone()),
+                immutables: (r.clone()).immutables.clone(),
+                insert: IpeDbStorePred::POwner(col.clone()),
+                masks: (r).masks.clone(),
+                owners: vec![col.clone()],
+                read: IpeDbStorePred::POwner(col.clone()),
+                update: IpeDbStorePred::POwner(col),
+            },
+        ),
     }
 }
 pub(crate) fn user_ipe_db_store_mask_named(
@@ -1586,19 +1569,17 @@ pub(crate) fn user_ipe_db_store_mask_named(
 ) -> IpeDbStorePolicy {
     let _ipe_recursion_guard = crate::recursion_guard();
     match policy {
-        IpeDbStorePolicy::Policy(r) => {
-            IpeDbStorePolicy::Policy(
-                RecDeleteImmutablesInsertMasksOwnersReadUpdate {
-                    delete: (r.clone()).delete.clone(),
-                    immutables: (r.clone()).immutables.clone(),
-                    insert: (r.clone()).insert.clone(),
-                    masks: list_append((r.clone()).masks.clone(), vec![(col, pred)]),
-                    owners: (r.clone()).owners.clone(),
-                    read: (r.clone()).read.clone(),
-                    update: (r).update.clone(),
-                },
-            )
-        }
+        IpeDbStorePolicy::Policy(r) => IpeDbStorePolicy::Policy(
+            RecDeleteImmutablesInsertMasksOwnersReadUpdate {
+                delete: (r.clone()).delete.clone(),
+                immutables: (r.clone()).immutables.clone(),
+                insert: (r.clone()).insert.clone(),
+                masks: list_append((r.clone()).masks.clone(), vec![(col, pred)]),
+                owners: (r.clone()).owners.clone(),
+                read: (r.clone()).read.clone(),
+                update: (r).update.clone(),
+            },
+        ),
     }
 }
 pub(crate) fn user_ipe_db_store_and_policy(
@@ -1608,33 +1589,31 @@ pub(crate) fn user_ipe_db_store_and_policy(
     let _ipe_recursion_guard = crate::recursion_guard();
     match base {
         IpeDbStorePolicy::Policy(b) => match extra {
-            IpeDbStorePolicy::Policy(e) => {
-                IpeDbStorePolicy::Policy(
-                    RecDeleteImmutablesInsertMasksOwnersReadUpdate {
-                        delete: IpeDbStorePred::PAll(Box::new(vec![
-                            (b.clone()).delete.clone(),
-                            (e.clone()).delete.clone(),
-                        ])),
-                        immutables: list_append(
-                            (b.clone()).immutables.clone(),
-                            (e.clone()).immutables.clone(),
-                        ),
-                        insert: IpeDbStorePred::PAll(Box::new(vec![
-                            (b.clone()).insert.clone(),
-                            (e.clone()).insert.clone(),
-                        ])),
-                        masks: list_append((b.clone()).masks.clone(), (e.clone()).masks.clone()),
-                        owners: list_append((b.clone()).owners.clone(), (e.clone()).owners.clone()),
-                        read: IpeDbStorePred::PAll(Box::new(vec![
-                            (b.clone()).read.clone(),
-                            (e.clone()).read.clone(),
-                        ])),
-                        update: IpeDbStorePred::PAll(Box::new(
-                            vec![(b).update.clone(), (e).update.clone()],
-                        )),
-                    },
-                )
-            }
+            IpeDbStorePolicy::Policy(e) => IpeDbStorePolicy::Policy(
+                RecDeleteImmutablesInsertMasksOwnersReadUpdate {
+                    delete: IpeDbStorePred::PAll(Box::new(vec![
+                        (b.clone()).delete.clone(),
+                        (e.clone()).delete.clone(),
+                    ])),
+                    immutables: list_append(
+                        (b.clone()).immutables.clone(),
+                        (e.clone()).immutables.clone(),
+                    ),
+                    insert: IpeDbStorePred::PAll(Box::new(vec![
+                        (b.clone()).insert.clone(),
+                        (e.clone()).insert.clone(),
+                    ])),
+                    masks: list_append((b.clone()).masks.clone(), (e.clone()).masks.clone()),
+                    owners: list_append((b.clone()).owners.clone(), (e.clone()).owners.clone()),
+                    read: IpeDbStorePred::PAll(Box::new(vec![
+                        (b.clone()).read.clone(),
+                        (e.clone()).read.clone(),
+                    ])),
+                    update: IpeDbStorePred::PAll(
+                        Box::new(vec![(b).update.clone(), (e).update.clone()]),
+                    ),
+                },
+            ),
         },
     }
 }
@@ -1686,20 +1665,18 @@ pub(crate) fn user_ipe_db_store_first_non_nullable_mask_column(
 ) -> IpeMaybe<String> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match policy {
-        IpeDbStorePolicy::Policy(r) => {
-            crate::user_ipe_db_store_first_non_nullable_mask_column_in(
-                view,
-                list_map_consume(
-                    {
-                        let __ipe_fn: Box<
-                            dyn Fn((String, IpeDbStorePred)) -> String + Send + Sync + 'static,
-                        > = Box::new(crate::user_ipe_db_store_mask_column);
-                        __ipe_fn
-                    },
-                    (r).masks.clone(),
-                ),
-            )
-        }
+        IpeDbStorePolicy::Policy(r) => crate::user_ipe_db_store_first_non_nullable_mask_column_in(
+            view,
+            list_map_consume(
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn((String, IpeDbStorePred)) -> String + Send + Sync + 'static,
+                    > = Box::new(crate::user_ipe_db_store_mask_column);
+                    __ipe_fn
+                },
+                (r).masks.clone(),
+            ),
+        ),
     }
 }
 pub(crate) fn user_ipe_db_store_first_non_nullable_mask_column_in(
@@ -1783,38 +1760,36 @@ pub(crate) fn user_ipe_db_store_first_unknown_policy_exists_share_column(
 pub(crate) fn user_ipe_db_store_policy_columns(policy: IpeDbStorePolicy) -> Vec<String> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match policy {
-        IpeDbStorePolicy::Policy(r) => {
-            list_concat(vec![
-                crate::user_ipe_db_store_pred_columns((r.clone()).read.clone()),
-                crate::user_ipe_db_store_pred_columns((r.clone()).insert.clone()),
-                crate::user_ipe_db_store_pred_columns((r.clone()).update.clone()),
-                crate::user_ipe_db_store_pred_columns((r.clone()).delete.clone()),
-                (r.clone()).owners.clone(),
-                (r.clone()).immutables.clone(),
-                list_map_consume(
-                    {
-                        let __ipe_fn: Box<
-                            dyn Fn((String, IpeDbStorePred)) -> String + Send + Sync + 'static,
-                        > = Box::new(crate::user_ipe_db_store_mask_column);
-                        __ipe_fn
-                    },
-                    (r.clone()).masks.clone(),
-                ),
-                list_concat_map(
-                    {
-                        let __ipe_fn: Box<
-                            dyn Fn((String, IpeDbStorePred)) -> Vec<String> + Send + Sync + 'static,
-                        > = Box::new(move |pair: (String, IpeDbStorePred)| -> Vec<String> {
-                            crate::user_ipe_db_store_pred_columns(
-                                crate::user_ipe_db_store_mask_pred(pair),
-                            )
-                        });
-                        __ipe_fn
-                    },
-                    (r).masks.clone(),
-                ),
-            ])
-        }
+        IpeDbStorePolicy::Policy(r) => list_concat(vec![
+            crate::user_ipe_db_store_pred_columns((r.clone()).read.clone()),
+            crate::user_ipe_db_store_pred_columns((r.clone()).insert.clone()),
+            crate::user_ipe_db_store_pred_columns((r.clone()).update.clone()),
+            crate::user_ipe_db_store_pred_columns((r.clone()).delete.clone()),
+            (r.clone()).owners.clone(),
+            (r.clone()).immutables.clone(),
+            list_map_consume(
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn((String, IpeDbStorePred)) -> String + Send + Sync + 'static,
+                    > = Box::new(crate::user_ipe_db_store_mask_column);
+                    __ipe_fn
+                },
+                (r.clone()).masks.clone(),
+            ),
+            list_concat_map(
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn((String, IpeDbStorePred)) -> Vec<String> + Send + Sync + 'static,
+                    > = Box::new(move |pair: (String, IpeDbStorePred)| -> Vec<String> {
+                        crate::user_ipe_db_store_pred_columns(
+                            crate::user_ipe_db_store_mask_pred(pair),
+                        )
+                    });
+                    __ipe_fn
+                },
+                (r).masks.clone(),
+            ),
+        ]),
     }
 }
 pub(crate) fn user_ipe_db_store_mask_column(pair: (String, IpeDbStorePred)) -> String {
@@ -1982,25 +1957,23 @@ pub(crate) fn user_ipe_db_store_all_as<T1: 'static + Send + Sync + Clone>(
     let _ipe_recursion_guard = crate::recursion_guard();
     match secured {
         IpeDbStoreSecured::Secured(store, policy) => match store.clone() {
-            IpeDbStoreStore::Store(r) => {
-                crate::user_ipe_db_store_masked_read(
-                    principal.clone(),
-                    conn,
-                    store.clone(),
-                    policy.clone(),
-                    crate::user_ipe_db_store_policy_fragment(
-                        principal,
-                        {
-                            let __ipe_fn: Box<
-                                dyn Fn(IpeDbStorePolicy) -> IpeDbStorePred + Send + Sync + 'static,
-                            > = Box::new(crate::user_ipe_db_store_read_pred);
-                            __ipe_fn
-                        },
-                        store,
-                        policy,
-                    ),
-                )
-            }
+            IpeDbStoreStore::Store(r) => crate::user_ipe_db_store_masked_read(
+                principal.clone(),
+                conn,
+                store.clone(),
+                policy.clone(),
+                crate::user_ipe_db_store_policy_fragment(
+                    principal,
+                    {
+                        let __ipe_fn: Box<
+                            dyn Fn(IpeDbStorePolicy) -> IpeDbStorePred + Send + Sync + 'static,
+                        > = Box::new(crate::user_ipe_db_store_read_pred);
+                        __ipe_fn
+                    },
+                    store,
+                    policy,
+                ),
+            ),
         },
     }
 }
