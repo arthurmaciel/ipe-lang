@@ -31,5 +31,6 @@ pub mod semantic_tokens;
 pub mod signature_help;
 pub mod source_actions;
 pub mod symbols;
+pub mod workspace_edit;
 
 pub use offset::PositionEncoding;

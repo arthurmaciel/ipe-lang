@@ -39,20 +39,24 @@
 //! - `refactor.extract` / `refactor.inline`: both need free-variable capture
 //!   analysis with no compiler feedback loop available to verify against.
 
-use std::collections::HashMap;
-
 use ipe_db::{Db as _, IpeDatabase};
 use ipe_diagnostics::Span;
 use ipe_syntax::{Expr, Expr_, Pattern_};
-use lsp_types::{
-    CodeAction, CodeActionKind, CodeActionOrCommand, Range, TextEdit, Url, WorkspaceEdit,
-};
+use lsp_types::{CodeAction, CodeActionKind, CodeActionOrCommand, Range, TextEdit, Url};
 
 use crate::code_actions::DbView;
 use crate::offset::{PositionEncoding, position_to_offset, span_to_range};
+use crate::workspace_edit::single_edit;
 
-type Provider =
-    fn(DbView<'_>, &[String], &Url, Range, &str, PositionEncoding) -> Option<CodeAction>;
+type Provider = fn(
+    DbView<'_>,
+    &[String],
+    &Url,
+    Range,
+    &str,
+    PositionEncoding,
+    Option<i32>,
+) -> Option<CodeAction>;
 
 /// The one registry of `refactor.rewrite` providers.
 ///
@@ -98,10 +102,11 @@ pub fn refactor_actions(
     range: Range,
     text: &str,
     encoding: PositionEncoding,
+    version: Option<i32>,
 ) -> Vec<CodeActionOrCommand> {
     REGISTRY
         .iter()
-        .filter_map(|(_, provider)| provider(view, module, uri, range, text, encoding))
+        .filter_map(|(_, provider)| provider(view, module, uri, range, text, encoding, version))
         .map(CodeActionOrCommand::CodeAction)
         .collect()
 }
@@ -119,6 +124,7 @@ fn function_lambda_rewrite_action(
     range: Range,
     text: &str,
     encoding: PositionEncoding,
+    version: Option<i32>,
 ) -> Option<CodeAction> {
     let DbView { db, root, .. } = view;
     let files = root.files(db);
@@ -175,7 +181,7 @@ fn function_lambda_rewrite_action(
         )
     };
 
-    proven_action(db, uri, text, span, &new_text, &title, encoding)
+    proven_action(db, uri, text, span, &new_text, &title, encoding, version)
 }
 
 /// `case c of { True -> e1; False -> e2 }` ⇄ `if c then e1 else e2`, for the
@@ -187,6 +193,7 @@ fn if_case_bool_rewrite_action(
     range: Range,
     text: &str,
     encoding: PositionEncoding,
+    version: Option<i32>,
 ) -> Option<CodeAction> {
     let DbView { db, root, .. } = view;
     let files = root.files(db);
@@ -234,6 +241,7 @@ fn if_case_bool_rewrite_action(
                 &new_text,
                 "Convert `case` on `Bool` to `if`",
                 encoding,
+                version,
             )
         }
         Expr_::If(branches, else_body) => {
@@ -255,6 +263,7 @@ fn if_case_bool_rewrite_action(
                 &new_text,
                 "Convert `if` to `case`",
                 encoding,
+                version,
             )
         }
         _ => None,
@@ -278,6 +287,7 @@ fn proven_action(
     new_text: &str,
     title: &str,
     encoding: PositionEncoding,
+    version: Option<i32>,
 ) -> Option<CodeAction> {
     let lo = span.lo as usize;
     let hi = span.hi as usize;
@@ -297,17 +307,11 @@ fn proven_action(
         range: span_to_range(text, span, encoding),
         new_text: new_text.to_owned(),
     };
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
     Some(CodeAction {
         title: title.to_owned(),
         kind: Some(CodeActionKind::REFACTOR_REWRITE),
         diagnostics: None,
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
+        edit: Some(single_edit(uri, version, edit)),
         command: None,
         is_preferred: None,
         disabled: None,
@@ -457,6 +461,7 @@ mod tests {
             range,
             SRC,
             PositionEncoding::Utf8,
+            None,
         )
         .expect("lambda body with no top-level params offers a rewrite");
         let result = apply(SRC, &action, &uri);
@@ -491,6 +496,7 @@ mod tests {
             range,
             SRC,
             PositionEncoding::Utf8,
+            None,
         )
         .expect("named top-level function offers a rewrite to lambda");
         let result = apply(SRC, &action, &uri);
@@ -525,6 +531,7 @@ mod tests {
             range,
             SRC,
             PositionEncoding::Utf8,
+            None,
         )
         .expect("exhaustive True/False case offers a rewrite to if");
         let result = apply(SRC, &action, &uri);
@@ -559,6 +566,7 @@ mod tests {
             range,
             SRC,
             PositionEncoding::Utf8,
+            None,
         )
         .expect("single-branch if offers a rewrite to case");
         let result = apply(SRC, &action, &uri);
@@ -595,6 +603,7 @@ mod tests {
                 range,
                 SRC,
                 PositionEncoding::Utf8,
+                None,
             )
             .is_none(),
             "a non-exhaustive-Bool arm shape must offer no rewrite"
@@ -623,6 +632,7 @@ mod tests {
                 range,
                 SRC,
                 PositionEncoding::Utf8,
+                None,
             )
             .is_none(),
             "an else-if chain is not this rewrite's shape"
@@ -659,6 +669,7 @@ mod tests {
                 range,
                 SRC,
                 PositionEncoding::Utf8,
+                None,
             )
             .is_none(),
             "a cursor on blank space between declarations offers no rewrite"
@@ -671,6 +682,7 @@ mod tests {
                 range,
                 SRC,
                 PositionEncoding::Utf8,
+                None,
             )
             .is_none(),
             "a cursor on blank space between declarations offers no rewrite"
@@ -697,11 +709,72 @@ mod tests {
             range,
             SRC,
             PositionEncoding::Utf8,
+            None,
         );
         assert_eq!(
             actions.len(),
             1,
             "only the matching provider fires for this cursor: {actions:?}"
         );
+    }
+
+    #[test]
+    fn a_known_version_yields_versioned_document_changes() {
+        const SRC: &str = "module Main exposing (main)\n\nmain =\n    \\x -> x + 1\n";
+        let db = IpeDatabase::new();
+        let f = file(&db, &["Main"], SRC);
+        let root = root_of(&db, &[(&["Main"], f)]);
+        let view = DbView {
+            db: &db,
+            root,
+            entry: f,
+        };
+        let uri = lsp_types::Url::parse(URI).expect("uri");
+        let range = range_at(SRC, "\\x");
+        let action = function_lambda_rewrite_action(
+            view,
+            &["Main".to_owned()],
+            &uri,
+            range,
+            SRC,
+            PositionEncoding::Utf8,
+            Some(4),
+        )
+        .expect("lambda body with no top-level params offers a rewrite");
+        let edit = action.edit.expect("action carries an edit");
+        assert!(edit.changes.is_none(), "{edit:?}");
+        assert!(
+            matches!(&edit.document_changes, Some(lsp_types::DocumentChanges::Edits(edits))
+                if matches!(edits.as_slice(), [e] if e.text_document.version == Some(4))),
+            "{edit:?}"
+        );
+    }
+
+    #[test]
+    fn no_known_version_falls_back_to_unversioned_flat_changes() {
+        const SRC: &str = "module Main exposing (main)\n\nmain =\n    \\x -> x + 1\n";
+        let db = IpeDatabase::new();
+        let f = file(&db, &["Main"], SRC);
+        let root = root_of(&db, &[(&["Main"], f)]);
+        let view = DbView {
+            db: &db,
+            root,
+            entry: f,
+        };
+        let uri = lsp_types::Url::parse(URI).expect("uri");
+        let range = range_at(SRC, "\\x");
+        let action = function_lambda_rewrite_action(
+            view,
+            &["Main".to_owned()],
+            &uri,
+            range,
+            SRC,
+            PositionEncoding::Utf8,
+            None,
+        )
+        .expect("lambda body with no top-level params offers a rewrite");
+        let edit = action.edit.expect("action carries an edit");
+        assert!(edit.document_changes.is_none(), "{edit:?}");
+        assert!(matches!(&edit.changes, Some(m) if !m.is_empty()), "{edit:?}");
     }
 }

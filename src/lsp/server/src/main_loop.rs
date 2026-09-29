@@ -223,6 +223,18 @@ impl State {
         Some((module, file))
     }
 
+    /// `uri`'s known overlay version, or `None` when the client hasn't
+    /// advertised `documentChanges` support or the document isn't an open
+    /// overlay. The single source every provider's `WorkspaceEdit` reads to
+    /// decide whether an edit can be versioned.
+    fn document_version(&self, uri: &Url) -> Option<i32> {
+        uri.to_file_path()
+            .ok()
+            .filter(|_| self.document_changes)
+            .and_then(|path| self.overlays.get(&normalize(&path)))
+            .map(|o| o.version)
+    }
+
     fn new(workspace_root: Option<PathBuf>, encoding: PositionEncoding) -> Self {
         Self {
             workspace_root,
@@ -784,14 +796,17 @@ fn rename_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let uri_of = |m: &[String]| state.uri_for_module(m);
     let text_of =
         |m: &[String]| -> Option<String> { ctx.root.files(db).get(m).map(|f| f.text(db).clone()) };
+    let version_of = |uri: &Url| state.document_version(uri);
     let req = ipe_lsp_features::rename::RenameRequest {
         byte: ctx.byte,
         new_name: &params.new_name,
         encoding: state.encoding,
+        document_changes_supported: state.document_changes,
     };
     let resolver = ipe_lsp_features::rename::ModuleResolver {
         uri_of_module: &uri_of,
         text_of_module: &text_of,
+        version_of: &version_of,
     };
     let Some(ws_edit) = ipe_lsp_features::rename::rename(
         db,
@@ -1348,6 +1363,7 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
         entry: entry_file,
     };
     let only = params.context.only.as_deref();
+    let version = state.document_version(&params.text_document.uri);
     let mut actions = ipe_lsp_features::code_actions::code_actions(
         view,
         &module,
@@ -1356,6 +1372,7 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
         &params.context.diagnostics,
         text,
         state.encoding,
+        version,
     );
     actions.extend(ipe_lsp_features::refactor::refactor_actions(
         view,
@@ -1364,6 +1381,7 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
         params.range,
         text,
         state.encoding,
+        version,
     ));
     ipe_lsp_features::action_kind::retain_offered(&mut actions, only);
     // Whole-document `source.*` rewrites run only when `only` names a source
@@ -1376,14 +1394,6 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
         match lint_config {
             None => {}
             Some(Ok(lint_config)) => {
-                let version = params
-                    .text_document
-                    .uri
-                    .to_file_path()
-                    .ok()
-                    .filter(|_| state.document_changes)
-                    .and_then(|path| state.overlays.get(&normalize(&path)))
-                    .map(|o| o.version);
                 actions.extend(ipe_lsp_features::source_actions::source_actions(
                     &module,
                     ipe_lsp_features::source_actions::Document {

@@ -5,17 +5,13 @@
 //! [`ipe_lint::organize_imports`]'s block edit, or the [`ipe_lint::minimal_edit`]
 //! of [`ipe_lint::fix_all`]'s result, into an LSP [`WorkspaceEdit`].
 
-use std::collections::HashMap;
-
 use ipe_diagnostics::Span;
 use ipe_lint::{BlockEdit, LintConfig, SourceModule};
-use lsp_types::{
-    CodeAction, CodeActionKind, CodeActionOrCommand, DocumentChanges, OneOf,
-    OptionalVersionedTextDocumentIdentifier, TextDocumentEdit, TextEdit, Url, WorkspaceEdit,
-};
+use lsp_types::{CodeAction, CodeActionKind, CodeActionOrCommand, TextEdit, Url};
 
 use crate::action_kind::offered;
 use crate::offset::{PositionEncoding, span_to_range};
+use crate::workspace_edit::single_edit;
 
 /// The `source.*` kinds this crate can produce.
 ///
@@ -118,24 +114,7 @@ fn push_edit(
         range: span_to_range(doc.text, Span { lo, hi }, encoding),
         new_text: edit.replacement.clone(),
     };
-    let workspace_edit = doc.version.map_or_else(
-        || WorkspaceEdit {
-            changes: Some(HashMap::from([(doc.uri.clone(), vec![text_edit.clone()])])),
-            document_changes: None,
-            change_annotations: None,
-        },
-        |version| WorkspaceEdit {
-            changes: None,
-            document_changes: Some(DocumentChanges::Edits(vec![TextDocumentEdit {
-                text_document: OptionalVersionedTextDocumentIdentifier {
-                    uri: doc.uri.clone(),
-                    version: Some(version),
-                },
-                edits: vec![OneOf::Left(text_edit.clone())],
-            }])),
-            change_annotations: None,
-        },
-    );
+    let workspace_edit = single_edit(doc.uri, doc.version, text_edit);
     actions.push(CodeActionOrCommand::CodeAction(CodeAction {
         title: title.to_owned(),
         kind: Some(kind),
@@ -150,6 +129,8 @@ fn push_edit(
 
 #[cfg(test)]
 mod tests {
+    use lsp_types::{DocumentChanges, WorkspaceEdit};
+
     use super::*;
 
     const UNSORTED: &str = "module Main exposing (main)\n\nimport Zeta\nimport Alpha\n\nmain =\n    (Zeta.a, Alpha.b)\n";

@@ -193,6 +193,7 @@ fn add_import_quick_fix_inserts_the_missing_import_and_clears_the_diagnostic() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -276,6 +277,7 @@ fn add_import_quick_fix_sorts_among_existing_imports() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -367,6 +369,7 @@ fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -441,6 +444,7 @@ fn n0023_quick_fix_renames_module_declaration_to_expected_name() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -509,6 +513,7 @@ fn n0036_quick_fix_replaces_removed_surface_with_migration_target() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -562,6 +567,7 @@ fn n0036_no_replacement_produces_no_action() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     assert!(
         actions.is_empty(),
@@ -622,6 +628,7 @@ fn t0020_quick_fix_wraps_expression_in_ui_html() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -699,6 +706,7 @@ fn rewrite_two_step_decoder_produces_pipeline_form() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -805,6 +813,7 @@ fn unused_imports_quick_fix_removes_the_import_line() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -859,6 +868,7 @@ fn lint_quick_fix_refuses_diagnostic_with_no_fix_data() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     assert!(
         actions.is_empty(),
@@ -900,6 +910,7 @@ fn unused_imports_quick_fix_removes_a_multiline_exposing_import() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -965,6 +976,7 @@ fn unused_imports_quick_fix_removes_a_wrapped_exposing_list() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -1027,6 +1039,7 @@ fn unused_imports_quick_fix_removes_a_multiline_as_import() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -1143,6 +1156,7 @@ fn unused_imports_quick_fix_offered_with_cursor_on_module_name() {
         std::slice::from_ref(&diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     assert_offers_remove_action(&actions);
 }
@@ -1169,6 +1183,7 @@ fn unused_imports_quick_fix_offered_with_cursor_on_exposing_list() {
         std::slice::from_ref(&diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     assert_offers_remove_action(&actions);
 }
@@ -1195,6 +1210,7 @@ fn unused_imports_quick_fix_offered_with_cursor_on_alias() {
         std::slice::from_ref(&diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     assert_offers_remove_action(&actions);
 }
@@ -1222,6 +1238,7 @@ fn unused_imports_quick_fix_refuses_the_following_unrelated_line() {
         std::slice::from_ref(&diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     assert!(
         actions.is_empty(),
@@ -1250,6 +1267,7 @@ fn apply_unused_import_fix(src: &str) -> String {
         std::slice::from_ref(&diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let edit = actions
         .iter()
@@ -1333,6 +1351,7 @@ fn prefer_pipeline_quick_fix_rewrites_the_nested_call() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -1385,6 +1404,7 @@ fn unused_bindings_quick_fix_prefixes_the_name() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     let action = actions
         .into_iter()
@@ -1443,6 +1463,7 @@ fn unsafe_convention_offers_no_lsp_action() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     assert!(
         actions.is_empty(),
@@ -1484,6 +1505,7 @@ fn prim_param_sig_fix_only_offers_no_lsp_action() {
         std::slice::from_ref(&lsp_diag),
         src,
         PositionEncoding::Utf16,
+        None,
     );
     assert!(
         actions.is_empty(),
