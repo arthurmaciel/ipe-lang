@@ -85,6 +85,15 @@ checks:
     disposition: gate
     producer: ci.yml
     guards: SEAL
+  - context: build-tools
+    disposition: gate
+    producer: ci.yml
+    guards: >-
+      Security — a build step that a required gate `needs` must itself be
+      required, or its failure/skip silently fail-opens the gates depending on
+      it (the same fail-closed-classifier property as `changes` below).
+      Compiles the six doc/golden regenerator binaries once and shares them
+      via artifact across the docs-drift gates.
   - context: stdlib-docs-drift
     disposition: gate
     producer: ci.yml
