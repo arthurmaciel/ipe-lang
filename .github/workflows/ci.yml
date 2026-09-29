@@ -427,7 +427,7 @@ jobs:
     # metadata only) is handled INSIDE the job below via per-step `if:`, not by
     # skipping the job outright — a required context must report a genuinely
     # executed pass, never rely on GitHub's skip-counts-as-pass quirk.
-    if: needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request' || needs.changes.outputs.release_only == 'true'
+    if: needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
       - name: Release-please version/changelog-only diff — trivial pass
         if: needs.changes.outputs.release_only == 'true'
@@ -473,7 +473,7 @@ jobs:
     # the job below via per-step `if:`, not by skipping the job outright — a
     # required context must report a genuinely executed pass, never rely on
     # GitHub's skip-counts-as-pass quirk.
-    if: needs.changes.outputs.wasm == 'true' || github.event_name != 'pull_request' || needs.changes.outputs.release_only == 'true'
+    if: needs.changes.outputs.wasm == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
       - name: Release-please version/changelog-only diff — trivial pass
         if: needs.changes.outputs.release_only == 'true'
@@ -537,7 +537,7 @@ jobs:
     # via per-step `if:`, not by skipping the job outright — a required context
     # must report a genuinely executed pass, never rely on GitHub's
     # skip-counts-as-pass quirk.
-    if: needs.changes.outputs.editors == 'true' || github.event_name != 'pull_request' || needs.changes.outputs.release_only == 'true'
+    if: needs.changes.outputs.editors == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
       - name: Release-please version/changelog-only diff — trivial pass
         if: needs.changes.outputs.release_only == 'true'
@@ -850,7 +850,7 @@ jobs:
     # metadata only) is handled INSIDE the job below via per-step `if:`, not by
     # skipping the job outright — a required context must report a genuinely
     # executed pass, never rely on GitHub's skip-counts-as-pass quirk.
-    if: needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request' || needs.changes.outputs.release_only == 'true'
+    if: needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
       - name: Release-please version/changelog-only diff — trivial pass
         if: needs.changes.outputs.release_only == 'true'
@@ -1737,6 +1737,18 @@ jobs:
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
       - uses: actions/checkout@v7
+      # regen-cli-transcripts records each transcript through a nested
+      # `cargo run -p ipe --bin ipe`, so this job still needs the pinned
+      # toolchain and an `ipe` build of its own. Building `ipe` in a separate
+      # step keeps every toolchain/crate download and compile failure out of the
+      # regenerate step: a failed nested `cargo run` would otherwise be recorded
+      # as a golden and surface as a (deterministic) drift red.
+      - uses: ./.github/actions/rust-toolchain-pinned
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build ipe
+        run: cargo build -p ipe --bin ipe
       - uses: actions/download-artifact@v7
         with:
           name: ci-build-tools
@@ -1787,8 +1799,8 @@ jobs:
   #
   # Latency: a job starts only after EVERY `needs:` entry has finished, so the
   # cancel lands when the slowest member finishes (the docs-drift jobs:
-  # quick-check, then build-tools, then a prebuilt-binary regenerate), not when
-  # the first red appears. Members that need a release build are deliberately
+  # quick-check, then build-tools, then a prebuilt-binary regenerate — plus a
+  # debug `ipe` build for the transcripts), not when the first red appears. Members that need a release build are deliberately
   # left out so that bound stays a few minutes rather than the length of a
   # release build.
   #
