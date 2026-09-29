@@ -69,8 +69,9 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          # The tested merge commit and its base parent, for the release-only diff.
-          fetch-depth: 2
+          # The tested merge commit and its base parent, for the release-only diff;
+          # a merge-group run needs history back to the queue base for the filter.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
       # `release_only` — true only for a same-repo PR whose changed files are all
       # release-please version metadata (see .github/ci/release_only.py). Keyed on
       # the diff, never the branch name, so no PR can opt itself out of a tier.
@@ -87,6 +88,8 @@ jobs:
       - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         id: filter
         with:
+          # A merge-group run diffs against the queue base, not the default branch.
+          base: ${{ github.event.merge_group.base_sha }}
           filters: |
             code:
               - 'src/**'
@@ -128,8 +131,8 @@ jobs:
     if: >-
       (
       needs.changes.outputs.code == 'true'
-      || github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
       )
       && needs.changes.outputs.release_only != 'true'
 
@@ -173,8 +176,8 @@ jobs:
     if: >-
       (
       needs.changes.outputs.code == 'true'
-      || github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
       )
       && needs.changes.outputs.release_only != 'true'
 
@@ -217,8 +220,8 @@ jobs:
     if: >-
       (
       needs.changes.outputs.code == 'true'
-      || github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
       )
       && needs.changes.outputs.release_only != 'true'
 
@@ -264,8 +267,8 @@ jobs:
     if: >-
       (
       needs.changes.outputs.code == 'true'
-      || github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
       )
       && needs.changes.outputs.release_only != 'true'
 
@@ -369,8 +372,8 @@ jobs:
     if: >-
       (
       needs.changes.outputs.code == 'true'
-      || github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
       )
       && needs.changes.outputs.release_only != 'true'
 

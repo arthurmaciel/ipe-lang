@@ -25,6 +25,9 @@ on:
       - "Static binaries"       # static.yml
       - "Install"               # install-smoke.yml
     types: [completed]
+    # A red merge-group run already ejects its PR from the queue; it is not a
+    # main-branch health signal. The queue's runs are on its temporary branches.
+    branches-ignore: ["gh-readonly-queue/**"]
   workflow_dispatch: {}
 
 permissions:

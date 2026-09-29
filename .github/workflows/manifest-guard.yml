@@ -17,6 +17,7 @@ on:
       - '.github/actions/**'
       - '.github/ci/**'
   pull_request:
+  merge_group:
   workflow_dispatch: {}
 
 permissions:

@@ -36,7 +36,8 @@ jobs:
     # retry it removes could never have turned the run green.
     if: >-
       github.event.workflow_run.conclusion == 'failure' &&
-      github.event.workflow_run.run_attempt == 1
+      github.event.workflow_run.run_attempt == 1 &&
+      github.event.workflow_run.event != 'merge_group'
     steps:
       # No `ref:` override — this checks out the default branch (the ref that
       # triggered THIS workflow_run event), never the completed run's own

@@ -30,6 +30,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
   schedule:
     - cron: '13 5 * * *'       # nightly, offset from ci.yml's 04:00 UTC sweep
   workflow_dispatch: {}
