@@ -101,6 +101,7 @@ overflow-checks = true
 debug = 1
 
 # Hashing crates optimised in `dev`/`test`: the build-cache epoch SHA-256s the running exe per process.
+# The list is sha2's runtime-code dependency closure; re-derive it when sha2 is bumped.
 [profile.dev.package.sha2]
 opt-level = 3
 
