@@ -104,7 +104,9 @@ jobs:
       # paths changed. Scopes the runtime feature-combo/full-feature builds and
       # the sanitizers; the SEAL tiers key on `code`, never on this.
       emit: ${{ steps.classify.outputs.emit != 'false' }}
-      release_only: ${{ steps.release.outputs.release_only }}
+      # `release_only` — normalised to `true`/`false` here, once, so no consumer
+      # ever splices the raw writer value into a `run:` script.
+      release_only: ${{ steps.release.outputs.release_only == 'true' }}
       # `e2e_plan` — every e2e shard's nextest selection, from the SSOT
       # `.github/ci/e2e_shard.py`; the shards run it and `seal-slice` proves it
       # partitions the archive.
@@ -1229,6 +1231,7 @@ jobs:
     name: seal-slice
     runs-on: ubuntu-latest
     needs: [changes, e2e, test-prep]
+    timeout-minutes: 20
     if: always()
     steps:
       - name: Gate on the e2e shards

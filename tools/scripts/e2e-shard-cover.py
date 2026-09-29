@@ -24,6 +24,7 @@ from collections import Counter
 ARCHIVE_ARGS = ("--archive-file", "nextest.tar.zst", "--workspace-remap", ".", "--profile", "ci")
 MAX_SHARDS = 256
 MAX_PLAN_CHARS = 64 * 1024
+LIST_TIMEOUT_S = 300
 
 
 class CoverError(Exception):
@@ -107,7 +108,7 @@ def partition_errors(full: list[str], shards: dict[int, list[str]], count: int) 
 
 def _list(extra: list[str]) -> list[str]:
     cmd = ["cargo", "nextest", "list", *ARCHIVE_ARGS, "--message-format", "json", *extra]
-    proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=LIST_TIMEOUT_S)
     if proc.returncode != 0:
         raise CoverError(f"`{' '.join(cmd)}` exited {proc.returncode}:\n{proc.stderr}")
     return matched_tests(proc.stdout)
