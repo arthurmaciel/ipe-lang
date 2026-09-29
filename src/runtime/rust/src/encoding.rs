@@ -150,8 +150,8 @@ pub fn url_encode(s: String) -> String {
 /// well-formed percent-escape shape (`%XX`, RFC 3986 §2.1). A stray `%`, a
 /// truncated `%A`, or a non-hex `%ZZ` is malformed. The `percent-encoding`
 /// decoder passes such input through as literal bytes and never errors, so
-/// `urlDecode` scans FIRST and rejects malformed input at this untrusted
-/// boundary (fail-closed) rather than silently returning the raw text.
+/// `strict_percent_decode` scans FIRST and rejects malformed input at this
+/// untrusted boundary (fail-closed) rather than silently returning the raw text.
 fn is_well_formed_percent(s: &str) -> bool {
     let b = s.as_bytes();
     let mut i = 0;

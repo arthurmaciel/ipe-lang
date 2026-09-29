@@ -897,6 +897,10 @@ badIndexDbRefused =
         urlDeepAboveRoot <- settingsRefused "sqlite:///tmp/../../.." "root directory"
         urlRoot <- settingsRefused "sqlite:///" "root directory"
         pathAboveRoot <- settingsRefused "/.." "root directory"
+        urlDot <- settingsRefused "sqlite:///." "root directory"
+        urlDotSlash <- settingsRefused "sqlite:///./" "root directory"
+        urlDoubleSlash <- settingsRefused "sqlite:////" "root directory"
+        urlEncodedAboveRoot <- settingsRefused "sqlite:///%2e%2e" "root directory"
         noSlashes <- settingsRefused "sqlite:index.db" "without `//`"
         fileNoSlashes <- settingsRefused "file:index.db" "without `//`"
         secret <- settingsRefusal "postgres://admin:s3cr3t-pw@db/index"
@@ -921,6 +925,10 @@ badIndexDbRefused =
                 && urlDeepAboveRoot
                 && urlRoot
                 && pathAboveRoot
+                && urlDot
+                && urlDotSlash
+                && urlDoubleSlash
+                && urlEncodedAboveRoot
                 && noSlashes
                 && fileNoSlashes
                 && refusedFor "IPE_INDEX_DB" secret
