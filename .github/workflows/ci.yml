@@ -1543,7 +1543,7 @@ jobs:
           chmod +x gen-stdlib-docs
           ./gen-stdlib-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
-        run: git diff --exit-code docs/reference/stdlib.md docs/reference/stdlib/
+        run: tools/scripts/generated-unchanged.sh docs/reference/stdlib.md docs/reference/stdlib/
 
   # Drift gate for docs/reference/env.md.
   #
@@ -1568,7 +1568,7 @@ jobs:
           chmod +x gen-env-docs
           ./gen-env-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
-        run: git diff --exit-code docs/reference/env.md
+        run: tools/scripts/generated-unchanged.sh docs/reference/env.md
 
   # Drift gate for docs/reference/capabilities.md.
   #
@@ -1593,7 +1593,7 @@ jobs:
           chmod +x gen-capabilities-docs
           ./gen-capabilities-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
-        run: git diff --exit-code docs/reference/capabilities.md
+        run: tools/scripts/generated-unchanged.sh docs/reference/capabilities.md
 
   # Drift gate for docs/reference/cli.md.
   #
@@ -1618,7 +1618,7 @@ jobs:
           chmod +x gen-cli-docs
           ./gen-cli-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
-        run: git diff --exit-code docs/reference/cli.md
+        run: tools/scripts/generated-unchanged.sh docs/reference/cli.md
 
   # Drift gate for docs/reference/requirements.md.
   #
@@ -1644,7 +1644,7 @@ jobs:
           chmod +x gen-requirements-docs
           ./gen-requirements-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
-        run: git diff --exit-code docs/reference/requirements.md
+        run: tools/scripts/generated-unchanged.sh docs/reference/requirements.md
 
   # Drift gate for the byte-exact CLI transcript goldens.
   #
@@ -1687,7 +1687,7 @@ jobs:
           ./regen-cli-transcripts --repo-root "${{ github.workspace }}" \
             --ipe-bin "$RUNNER_TEMP/ipe-release/ipe"
       - name: Fail if the regenerated goldens differ from the committed ones
-        run: git diff --exit-code src/ipe-cli/tests/golden/cli/
+        run: tools/scripts/generated-unchanged.sh src/ipe-cli/tests/golden/cli/
 
   # Semantic-parity gate for the doc-side Markdown parser.
   #
@@ -1717,7 +1717,7 @@ jobs:
       - name: Regenerate the Markdown parity snapshot via an ipe run
         run: tools/scripts/regen-markdown-parity.sh
       - name: Fail if the regenerated snapshot differs from the committed one
-        run: git diff --exit-code src/ipe-docs/src/markdown/parity/snapshot.txt
+        run: tools/scripts/generated-unchanged.sh src/ipe-docs/src/markdown/parity/snapshot.txt
 
   # A PR run whose outcome a deterministic gate has already decided red gets no
   # benefit from letting the expensive matrix tier (e2e, seal-slice, asan/tsan,

@@ -201,7 +201,7 @@ checks:
       run:
         - cmd: cargo run -p ipe_docs --bin gen-stdlib-docs -- --repo-root {repo_root}
           differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
-        - git diff --exit-code docs/reference/stdlib.md docs/reference/stdlib/
+        - tools/scripts/generated-unchanged.sh docs/reference/stdlib.md docs/reference/stdlib/
   - context: env-docs-drift
     disposition: gate
     producer: ci.yml
@@ -210,7 +210,7 @@ checks:
       run:
         - cmd: cargo run -p ipe_docs --bin gen-env-docs -- --repo-root {repo_root}
           differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
-        - git diff --exit-code docs/reference/env.md
+        - tools/scripts/generated-unchanged.sh docs/reference/env.md
   - context: capabilities-docs-drift
     disposition: gate
     producer: ci.yml
@@ -219,7 +219,7 @@ checks:
       run:
         - cmd: cargo run -p ipe_docs --bin gen-capabilities-docs -- --repo-root {repo_root}
           differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
-        - git diff --exit-code docs/reference/capabilities.md
+        - tools/scripts/generated-unchanged.sh docs/reference/capabilities.md
   - context: cli-docs-drift
     disposition: gate
     producer: ci.yml
@@ -228,7 +228,7 @@ checks:
       run:
         - cmd: cargo run -p ipe --bin gen-cli-docs -- --repo-root {repo_root}
           differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
-        - git diff --exit-code docs/reference/cli.md
+        - tools/scripts/generated-unchanged.sh docs/reference/cli.md
   - context: requirements-docs-drift
     disposition: gate
     producer: ci.yml
@@ -237,7 +237,7 @@ checks:
       run:
         - cmd: cargo run -p ipe_docs --bin gen-requirements-docs -- --repo-root {repo_root}
           differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
-        - git diff --exit-code docs/reference/requirements.md
+        - tools/scripts/generated-unchanged.sh docs/reference/requirements.md
   - context: cli-transcripts-drift
     disposition: gate
     producer: ci.yml
@@ -246,7 +246,7 @@ checks:
       run:
         - cmd: cargo run -p regen-cli-transcripts -- --repo-root {repo_root}
           differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally, and CI points it at build-tools' release ipe via --ipe-bin
-        - git diff --exit-code src/ipe-cli/tests/golden/cli/
+        - tools/scripts/generated-unchanged.sh src/ipe-cli/tests/golden/cli/
   - context: markdown-parity
     disposition: gate
     producer: ci.yml
@@ -254,7 +254,7 @@ checks:
       tier: quick
       run:
         - tools/scripts/regen-markdown-parity.sh
-        - git diff --exit-code src/ipe-docs/src/markdown/parity/snapshot.txt
+        - tools/scripts/generated-unchanged.sh src/ipe-docs/src/markdown/parity/snapshot.txt
   - context: runtime-full-features
     disposition: gate
     producer: ci.yml

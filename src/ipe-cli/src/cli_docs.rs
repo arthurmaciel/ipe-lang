@@ -8,8 +8,9 @@
 //! same tables the dispatcher and the terminal `--help` screen read. The
 //! reference therefore cannot describe a command the CLI does not accept, nor
 //! miss a flag the CLI does: adding a command or a flag to `help::COMMANDS`
-//! moves this output, and the drift gate (`gen-cli-docs` + `git diff
-//! --exit-code`) reddens the build until the committed `cli.md` is regenerated.
+//! moves this output, and the drift gate (`gen-cli-docs` +
+//! `tools/scripts/generated-unchanged.sh`) reddens the build until the
+//! committed `cli.md` is regenerated.
 //!
 //! The output is byte-deterministic: sections, groups, and commands appear in
 //! registry order, so the same tables always produce byte-identical Markdown.

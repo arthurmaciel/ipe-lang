@@ -51,6 +51,7 @@ check_push_concurrency = verify_manifest.check_push_concurrency
 check_one_lock_per_graph = verify_manifest.check_one_lock_per_graph
 check_one_ipe_build = verify_manifest.check_one_ipe_build
 check_scoped_package_coverage = verify_manifest.check_scoped_package_coverage
+check_drift_sees_untracked = verify_manifest.check_drift_sees_untracked
 
 with open(os.path.join(HERE, "github-env-allowlist.txt")) as _f:
     VALID_ENV_ALLOWLIST = _f.read()
@@ -3957,6 +3958,89 @@ class TestScopedPackageCoverage(unittest.TestCase):
         with mock.patch.object(verify_manifest.change_class, "PROSE_FILES", frozenset({"src/dx/NOTES.md"})):
             self.files["src/dx/NOTES.md"] = "x\n"
             self.assertEqual(self.errors(scope=("src/rt/**", "src/shared/**", "src/dx/src/**", "src/dx/Cargo.toml")), [])
+
+
+
+_DU_WF = """\
+on: pull_request
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./gen --repo-root .
+      - run: tools/scripts/generated-unchanged.sh docs/reference/x.md docs/reference/x/
+"""
+_DU_MANIFEST = """\
+checks:
+  - context: drift
+    disposition: gate
+    producer: ci.yml
+    local:
+      tier: quick
+      run:
+        - cmd: cargo run -p gen -- --repo-root {repo_root}
+          differs: local build
+        - tools/scripts/generated-unchanged.sh docs/reference/x.md
+"""
+
+
+class TestDriftSeesUntracked(unittest.TestCase):
+    """Check 17: drift assertions never rest on `git diff --exit-code`."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = self._tmp.name
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, wf: str = _DU_WF, manifest: str = _DU_MANIFEST) -> list[str]:
+        _write(os.path.join(self.root, "workflows", "ci.yml"), wf)
+        _write(os.path.join(self.root, "ci", "check-manifest.yml"), manifest)
+        errors: list[str] = []
+        check_drift_sees_untracked(errors, root=self.root)
+        return errors
+
+    def test_valid_passes(self) -> None:
+        self.assertEqual(self.errors(), [])
+
+    def test_repo_passes(self) -> None:
+        errors: list[str] = []
+        check_drift_sees_untracked(errors)
+        self.assertEqual(errors, [])
+
+    def test_workflow_git_diff_exit_code_refused_in_every_spelling(self) -> None:
+        for line in (
+            "git diff --exit-code docs/reference/x.md",
+            "git -C . diff --stat --exit-code docs/",
+            "/usr/bin/git --no-pager diff --exit-code -- docs/",
+            'g""it diff "--exit-code" docs/',
+            "true && git diff --exit-code docs/",
+            "bash <<'EOF'\n          git diff --exit-code docs/\n          EOF",
+        ):
+            with self.subTest(line=line):
+                wf = _DU_WF.replace("tools/scripts/generated-unchanged.sh docs/reference/x.md docs/reference/x/", line)
+                errors = self.errors(wf=wf)
+                self.assertTrue(any("check 17: ci.yml job 'drift'" in e for e in errors), errors)
+
+    def test_manifest_local_git_diff_exit_code_refused(self) -> None:
+        for item in (
+            "        - git diff --exit-code docs/reference/x.md\n",
+            "        - cmd: git diff --exit-code docs/reference/x.md\n          differs: x\n",
+        ):
+            with self.subTest(item=item):
+                bad = _DU_MANIFEST.replace("        - tools/scripts/generated-unchanged.sh docs/reference/x.md\n", item)
+                errors = self.errors(manifest=bad)
+                self.assertTrue(any("manifest context 'drift'" in e for e in errors), errors)
+
+    def test_other_git_diffs_pass(self) -> None:
+        for line in ("git diff --stat", "git diff --name-only origin/main", "git log --exit-code"):
+            with self.subTest(line=line):
+                self.assertEqual(self.errors(wf=_DU_WF.replace("./gen --repo-root .", line)), [])
+
+    def test_unreadable_inputs_refused(self) -> None:
+        self.assertTrue(any("check 17: cannot read" in e for e in self.errors(wf="jobs: [\n")))
+        self.assertTrue(any("no `checks:` list" in e for e in self.errors(manifest="checks: 1\n")))
 
 
 if __name__ == "__main__":

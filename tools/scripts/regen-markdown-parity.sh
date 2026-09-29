@@ -7,7 +7,7 @@
 # against. The snapshot is therefore produced by an actual `ipe` run — never
 # hand-authored — so `Ipe.Markdown` stays the single source of truth and any
 # drift reddens CI (see the `markdown-parity` job: regenerate then
-# `git diff --exit-code`).
+# `tools/scripts/generated-unchanged.sh`).
 #
 # Usage:
 #   tools/scripts/regen-markdown-parity.sh [path-to-ipe-binary]

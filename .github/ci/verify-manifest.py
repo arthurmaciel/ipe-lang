@@ -219,6 +219,12 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       LIMIT: a path built at run time (a bare `"../.."` ancestor joined to a
       computed name, or no `../` literal at all), and a scoped
       job with no cargo package selection, are not seen.
+  17. Drift checks see new files: no workflow `run:` and no manifest
+      `local:` command asserts regenerated output with
+      `git diff --exit-code`, which is blind to a file the generator writes
+      that git does not track yet; `tools/scripts/generated-unchanged.sh`
+      (tracked changes plus untracked files) is the one drift assertion.
+      LIMIT: a `git diff` reached through an alias or a script is not seen.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
 `git ls-files` locally to list tracked paths.
@@ -1874,6 +1880,65 @@ def check_one_ipe_build(errors: list[str], root: str = REPO_ROOT) -> None:
                     f"check 15: job {jid!r} downloads {wanted} without `needs: {IPE_BUILD_PRODUCER}`; "
                     "it could start before the artifact exists"
                 )
+
+
+DRIFT_ASSERTION = "tools/scripts/generated-unchanged.sh"
+
+
+def _untracked_blind_diffs(lines: list[str]) -> list[str]:
+    """The quote-removed commands in `lines` that assert with
+    `git diff --exit-code`."""
+    out: list[str] = []
+    for line in lines:
+        words = line.split()
+        for k, w in enumerate(words):
+            if posixpath.basename(w) != "git":
+                continue
+            rest = words[k + 1 :]
+            if "diff" in rest and "--exit-code" in rest[rest.index("diff") + 1 :]:
+                out.append(line)
+                break
+    return out
+
+
+def check_drift_sees_untracked(errors: list[str], root: str = REPO_ROOT, manifest: str | None = None) -> None:
+    """Check 17 (see the module docstring). Refuses, never skips, a file it
+    cannot read."""
+    fix = f"assert with {DRIFT_ASSERTION}, which also fails on untracked output"
+    for wf in sorted(glob.glob(os.path.join(root, "workflows", "*.yml"))):
+        name = os.path.basename(wf)
+        try:
+            with open(wf) as f:
+                doc = strict_yaml.safe_load(f)
+        except (OSError, yaml.YAMLError) as e:
+            errors.append(f"check 17: cannot read {wf}: {e}")
+            continue
+        jobs = doc.get("jobs") if isinstance(doc, dict) else None
+        if not isinstance(jobs, dict):
+            continue
+        for jid, job in jobs.items():
+            steps = job.get("steps") if isinstance(job, dict) else None
+            runs = [st["run"] for st in steps or [] if isinstance(st, dict) and isinstance(st.get("run"), str)]
+            for line in _untracked_blind_diffs(_quote_removed(runs)):
+                errors.append(f"check 17: {name} job {jid!r} runs `{line}`, blind to new generated files; {fix}")
+    where = manifest or os.path.join(root, "ci", "check-manifest.yml")
+    try:
+        with open(where) as f:
+            mdoc = strict_yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as e:
+        errors.append(f"check 17: cannot read {where}: {e}")
+        return
+    checks = mdoc.get("checks") if isinstance(mdoc, dict) else None
+    if not isinstance(checks, list):
+        errors.append(f"check 17: {where} has no `checks:` list")
+        return
+    for entry in checks:
+        local = entry.get("local") if isinstance(entry, dict) else None
+        run = local.get("run") if isinstance(local, dict) else None
+        cmds = [c.get("cmd") if isinstance(c, dict) else c for c in run or []]
+        texts = [c for c in cmds if isinstance(c, str)]
+        for line in _untracked_blind_diffs(_quote_removed(texts)):
+            errors.append(f"check 17: manifest context {entry.get('context')!r} runs `{line}` locally, blind to new generated files; {fix}")
 
 
 _SCOPE_REF = re.compile(r"needs\.changes\.outputs\.([A-Za-z_][A-Za-z0-9_-]*)")
@@ -4144,6 +4209,9 @@ def main() -> int:
 
     # ---- 16. a path-scoped job's scope covers every file it compiles ----
     check_scoped_package_coverage(errors)
+
+    # ---- 17. a drift check also sees untracked generated files ----
+    check_drift_sees_untracked(errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:
