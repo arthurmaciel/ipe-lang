@@ -14,9 +14,12 @@ typed refusal, never a silently different match.
 `check` (run by `.github/workflows/trust-root-diff.yml` on
 `pull_request_target` and `merge_group`) never sees head code: it reads the
 event payload GitHub wrote, then the PR, its file list, and its reviews over
-the REST API. A PR whose head lives outside this repository and that touches
-a trust root fails unless a code owner's latest decisive review APPROVES the
-PR's current head commit. Every ambiguity (a file list the API truncated, a
+the REST API. A PR that touches a trust root fails unless a code owner's latest
+decisive review APPROVES the PR's current head commit. Two authors pass
+without that review, both only from a branch of this repository: a code owner
+(GitHub `User` named in CODEOWNERS), and GitHub's `dependabot[bot]` app when
+every touched trust root is a version bump (sha-pinned `uses:` lines,
+dependency version strings, crates.io lockfile entries). Every ambiguity (a file list the API truncated, a
 PR that moved since the event, an unparseable merge-queue ref, an HTTP error)
 fails closed.
 
@@ -216,6 +219,143 @@ def _sha(obj: object, *keys: str) -> str:
     return v
 
 
+@dataclass(frozen=True)
+class Owner:
+    """A code owner (a `User` whose login CODEOWNERS names)."""
+
+    login: str
+
+
+@dataclass(frozen=True)
+class Dependabot:
+    """GitHub's own `dependabot[bot]` app identity, which no account can take."""
+
+
+@dataclass(frozen=True)
+class Other:
+    """Any other author: a collaborator, a fork, or another bot."""
+
+    login: str
+
+
+Author = Owner | Dependabot | Other
+
+DEPENDABOT_LOGIN = "dependabot[bot]"
+_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}(?:\[bot\])?$")
+
+
+def parse_author(pr: dict, owners: frozenset[str]) -> Author:
+    """The PR author, read once from `user.login` + `user.type`. A missing or
+    malformed field is a refusal, never an `Other` that might later pass."""
+    login = _field(pr, "user", "login")
+    kind = _field(pr, "user", "type")
+    if not isinstance(login, str) or not _LOGIN_RE.match(login) or not isinstance(kind, str):
+        raise Refused("PR author has a malformed `user.login` or `user.type`")
+    if kind == "Bot":
+        return Dependabot() if login == DEPENDABOT_LOGIN else Other(login)
+    if kind == "User" and login.casefold() in owners:
+        return Owner(login)
+    return Other(login)
+
+
+# A workflow line Dependabot rewrites: a `uses:` step pinned to a full commit
+# sha, with an optional trailing version comment.
+_USES_PIN = re.compile(r"^\s*(?:-\s+)?uses:\s*[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}(?:\s+#.*)?$")
+_PIN_TAIL = re.compile(r"@[0-9a-f]{40}(?:\s+#.*)?$")
+# A version requirement as Cargo spells one (an optional operator, then a
+# digit), in the only two places a dependency carries it: `name = "..."` or an
+# inline table's `version = "..."`. A digit-led feature name is not one.
+_VERSION_STR = re.compile(r'(?P<key>(?:^\s*[A-Za-z0-9_-]+|\bversion)\s*=\s*)"[=^~<>]*\s*[0-9][0-9A-Za-z.+-]*"')
+# Manifest keys that move a package's source or build: a line carrying one is
+# never a version bump, whatever else it matches.
+_CARGO_SOURCE_KEYS = re.compile(r"\b(?:git|path|registry|branch|rev|tag|build|links|package|workspace|edition|rust-version)\s*=")
+_LOCK_LINE = re.compile(
+    r'^(?:\[\[package\]\]|name = "[A-Za-z0-9_-]+"|version = "[0-9][0-9A-Za-z.+-]*"'
+    r'|source = "registry\+https://github\.com/rust-lang/crates\.io-index"'
+    r'|checksum = "[0-9a-f]{64}"|dependencies = \[|\]|\s+"[A-Za-z0-9_-]+(?: [0-9][0-9A-Za-z.+-]*)?",?|)$'
+)
+
+
+def _changed_line_pairs(patch: str) -> list[tuple[str, str]] | None:
+    """Each hunk's removed lines paired in order with the added lines that
+    replace them, or `None` when a run of removals is not matched one-for-one
+    by a run of additions (a line added or dropped outright)."""
+    pairs: list[tuple[str, str]] = []
+    minus: list[str] = []
+    plus: list[str] = []
+
+    def flush() -> bool:
+        if len(minus) != len(plus):
+            return False
+        pairs.extend(zip(minus, plus))
+        minus.clear()
+        plus.clear()
+        return True
+
+    for line in patch.split("\n"):
+        if line.startswith("-"):
+            if plus and not flush():
+                return None
+            minus.append(line[1:])
+        elif line.startswith("+"):
+            plus.append(line[1:])
+        elif line.startswith("\\"):
+            continue
+        elif not flush():
+            return None
+    return pairs if flush() else None
+
+
+def _is_workflow(path: str) -> bool:
+    parts = path.split("/")
+    return len(parts) == 3 and parts[:2] == [".github", "workflows"] and parts[2].endswith((".yml", ".yaml"))
+
+
+def _dependabot_edit(path: str, patch: object) -> bool:
+    """True iff this one file's diff is a Dependabot-shaped version bump: a
+    workflow's `uses:` sha pins, a manifest's version strings, or a lockfile's
+    crates.io entries. An absent patch (GitHub omits it past a size limit)
+    proves nothing and fails."""
+    if not isinstance(patch, str) or not patch:
+        return False
+    name = path.rsplit("/", 1)[-1]
+    if name == "Cargo.lock":
+        return all(
+            _LOCK_LINE.match(line[1:])
+            for line in patch.split("\n")
+            if line.startswith(("-", "+"))
+        )
+    pairs = _changed_line_pairs(patch)
+    if not pairs:
+        return False
+    if _is_workflow(path):
+        return all(
+            _USES_PIN.match(old) and _USES_PIN.match(new) and _PIN_TAIL.sub("", old) == _PIN_TAIL.sub("", new)
+            for old, new in pairs
+        )
+    if name == "Cargo.toml":
+        return all(
+            not _CARGO_SOURCE_KEYS.search(old)
+            and not _CARGO_SOURCE_KEYS.search(new)
+            and _VERSION_STR.search(new)
+            and _VERSION_STR.sub(r'\g<key>""', old) == _VERSION_STR.sub(r'\g<key>""', new)
+            for old, new in pairs
+        )
+    return False
+
+
+def dependabot_only(files: list, touched: list[str]) -> bool:
+    """Every touched trust root is a Dependabot-shaped version bump."""
+    patches: dict[str, object] = {}
+    for f in files:
+        name = _field(f, "filename")
+        if isinstance(name, str):
+            patches[name] = f.get("patch") if isinstance(f, dict) else None
+    # A rename's `previous_filename` has no patch entry of its own, so a
+    # trust root renamed away fails here.
+    return all(p in patches and _dependabot_edit(p, patches[p]) for p in touched)
+
+
 def is_outside(pr: dict) -> bool:
     """True unless the head branch provably lives in the base repository. A
     deleted head repository (`head.repo: null`) counts as outside."""
@@ -274,14 +414,18 @@ def decide(roots: TrustRoots, pr: dict, files: list, reviews: list) -> str:
     touched = sorted(p for p in changed_paths(pr, files) if roots.is_trust_root(p))
     if not touched:
         return "no trust root touched"
-    if not is_outside(pr):
-        return f"{len(touched)} trust root(s) touched from a branch of this repository (ruleset review applies)"
+    author = parse_author(pr, roots.owners)
+    inside = not is_outside(pr)
+    if inside and isinstance(author, Owner):
+        return f"{len(touched)} trust root(s) touched by code owner {author.login}"
+    if inside and isinstance(author, Dependabot) and dependabot_only(files, touched):
+        return f"{len(touched)} trust root(s) touched by a Dependabot version bump"
     if owner_approved(reviews, roots.owners, head_sha):
         return f"{len(touched)} trust root(s) touched; code owner approved {head_sha}"
     shown = ", ".join(touched[:20]) + (" ..." if len(touched) > 20 else "")
     raise Refused(
-        f"PR from outside the repository touches trust root(s) [{shown}] without a code owner's "
-        f"approval of head {head_sha}; after that approval, re-run this job"
+        f"PR touches trust root(s) [{shown}] without a code owner's approval of head {head_sha}; "
+        f"after that approval, re-run this job"
     )
 
 
