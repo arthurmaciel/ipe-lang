@@ -82,7 +82,8 @@ gh api -X PUT repos/arthurmaciel/ipe-lang/rulesets/22326541 --input /tmp/rs.json
 
 `strict_required_status_checks_policy` should stay `false` (heavy `nightly-gate`
 contexts must not be forced onto every PR); nightly-gate reds are enforced by the
-fail-closed `promotion-ready` job on the next promotion, not by branch protection.
+required `nightly-green` context, which is red until the latest nightly on main is
+green (or the change's own commit passed a dispatched full gate).
 
 ## Nightly-gate contexts (NOT branch-protection required)
 

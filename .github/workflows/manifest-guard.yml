@@ -61,6 +61,12 @@ jobs:
       - name: Prove the rerun-policy refusals (unit tests)
         run: python3 .github/ci/test_rerun_policy.py -v
 
+      - name: A red nightly blocks the next merge (nightly-green wiring)
+        run: python3 .github/ci/nightly_green.py lint
+
+      - name: Prove the nightly-green refusals (unit tests)
+        run: python3 .github/ci/test_nightly_green.py -v
+
       - name: The derived required-set is in sync with the manifest
         run: |
           python3 - <<'PY'

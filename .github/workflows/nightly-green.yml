@@ -1,0 +1,44 @@
+name: nightly-green
+
+# A red nightly blocks the next merge. `nightly-green` is a required context:
+# it passes only on proof the full gate ("Build & test" dispatched by
+# nightly-full-gate.yml, which runs every `nightly-gate` job) is green — either
+# the latest completed nightly on main concluded `success` within 48h, or this
+# change's own commit passed a dispatched full gate (the recovery path for the
+# PR that fixes a red nightly: `gh workflow run 'Build & test' --ref <branch>`,
+# then re-run this check). Absence is not a pass. The rule lives in
+# `.github/ci/nightly_green.py`; its `lint` (manifest-guard) pins this wiring.
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  actions: read     # list the "Build & test" runs
+  contents: read
+  pull-requests: read  # merge_group: resolve the queued PR's head commit
+
+concurrency:
+  group: nightly-green-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nightly-green:
+    name: nightly-green
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Only the verdict module is materialised; no credential stays in git.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/ci/nightly_green.py
+          sparse-checkout-cone-mode: false
+
+      - name: Require a green full gate (latest nightly, or this commit)
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/ci/nightly_green.py verdict

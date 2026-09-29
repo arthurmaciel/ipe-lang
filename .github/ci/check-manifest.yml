@@ -7,9 +7,9 @@
 #
 # Dispositions
 #   gate          Blocks (a required status context) and runs per relevant change.
-#   nightly-gate  Heavy; runs nightly, not on every PR. A
-#                 red blocks the NEXT promotion via the fail-closed
-#                 `promotion-ready` job (absence != pass). Never silently advisory.
+#   nightly-gate  Heavy; runs nightly, not on every PR. A red blocks the NEXT
+#                 merge via the required `nightly-green` gate (absence != pass).
+#                 Never silently advisory.
 #   informational Never blocks. MANDATORY low-noise surface (the ci-health
 #                 dedup issue + summary) and a named owner. May NOT guard a
 #                 Security / Soundness / SEAL invariant.
@@ -155,6 +155,17 @@ checks:
     disposition: gate
     producer: admission-sandbox.yml
     guards: Security
+
+  # ── Nightly enforcement (per-change gate) ─────────────────────────────────
+  # Red unless the latest nightly on main is green and fresh, or this change's
+  # own commit passed a dispatched full gate — so a red `nightly-gate` job
+  # blocks the next merge (`.github/ci/nightly_green.py`).
+  - context: nightly-green
+    disposition: gate
+    producer: nightly-green.yml
+    guards: >-
+      Soundness / SEAL — every `nightly-gate` proof (jail, sanitizers,
+      seal-modset, browser-e2e) holds on main before another change lands.
 
   # ── Editor tooling (per-change gate) ──────────────────────────────────────
   # The tree-sitter grammar must accept every reference `.ipe` file (stdlib +
