@@ -541,7 +541,7 @@ impl<'ast> Visit<'ast> for Scan {
             of_trait: item
                 .trait_
                 .as_ref()
-                .and_then(|(_, path, _)| path.segments.last())
+                .and_then(|(path, _)| path.segments.last())
                 .map(|s| name_of(&s.ident)),
             func: None,
         };
