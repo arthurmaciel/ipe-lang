@@ -295,8 +295,9 @@ fn random_full_surface_resolves() {
 // so it must EQUAL the enforced scheme. The probe below proves that equality
 // through the real pipeline: `annN : <annotation>` / `annN = M.member` fails the
 // compile when the annotation contradicts or over-generalises the scheme, and
-// the solved `annN` vs the unannotated `infN = M.member` differ (up to
-// type-variable renaming) when the annotation is merely more specific.
+// the accepted `annN` vs the scheme of the kernel `infN = M.member` resolves to
+// differ (up to type-variable renaming) when the annotation is merely more
+// specific.
 
 /// Which exposed values of a module resolve to a kernel scheme.
 #[derive(Clone, Copy)]
@@ -320,8 +321,9 @@ struct ProbeModule {
     dotted: String,
     /// The module's own `import` lines (the kernel-alias import excluded).
     imports: String,
-    /// ` exposing (T, …)` over the module's exposed types, or empty.
-    exposed_types: String,
+    /// The exposed types the module itself owns (not re-exposed imports); the
+    /// probe writes them `M.T` (a veneer's types are reachable only qualified).
+    own_types: BTreeSet<String>,
     members: Vec<AliasMember>,
 }
 
@@ -416,32 +418,52 @@ fn alias_members(dotted: &str, source: &str, scope: AliasScope) -> Result<ProbeM
         .map_err(|e| format!("{dotted}: failed to parse: {e:?}"))?;
     let name = |s| interner.resolve(s).unwrap_or_default().to_owned();
 
-    let (exposed_values, exposed_types): (Option<BTreeSet<String>>, String) =
-        match &parsed.exposing.value {
-            Exposing::All => (None, " exposing (..)".to_owned()),
-            Exposing::List(items) => {
-                let values = items
-                    .iter()
-                    .filter_map(|item| match &item.value {
-                        Exposed::Value(n) => Some(name(*n)),
-                        Exposed::Type(_, _) => None,
-                    })
-                    .collect();
-                let types: Vec<String> = items
-                    .iter()
-                    .filter_map(|item| match &item.value {
-                        Exposed::Type(n, _) => Some(name(*n)),
-                        Exposed::Value(_) => None,
-                    })
-                    .collect();
-                let clause = if types.is_empty() {
-                    String::new()
-                } else {
-                    format!(" exposing ({})", types.join(", "))
-                };
-                (Some(values), clause)
-            }
-        };
+    let exposed: Option<Vec<&Exposed>> = match &parsed.exposing.value {
+        Exposing::All => None,
+        Exposing::List(items) => Some(items.iter().map(|item| &item.value).collect()),
+    };
+    let exposed_values: Option<BTreeSet<String>> = exposed.as_ref().map(|items| {
+        items
+            .iter()
+            .filter_map(|e| match e {
+                Exposed::Value(n) => Some(name(*n)),
+                Exposed::Type(_, _) => None,
+            })
+            .collect()
+    });
+    let exposed_type_names: Option<BTreeSet<String>> = exposed.as_ref().map(|items| {
+        items
+            .iter()
+            .filter_map(|e| match e {
+                Exposed::Type(n, _) => Some(name(*n)),
+                Exposed::Value(_) => None,
+            })
+            .collect()
+    });
+    let imported_types: BTreeSet<String> = parsed
+        .imports
+        .iter()
+        .filter_map(|import| match &import.exposing.value {
+            Exposing::List(items) => Some(items),
+            Exposing::All => None,
+        })
+        .flatten()
+        .filter_map(|item| match &item.value {
+            Exposed::Type(n, _) => Some(name(*n)),
+            Exposed::Value(_) => None,
+        })
+        .collect();
+    // An exposed type the module does not import is its own, whether declared
+    // in source or supplied by the kernel (`Ipe.Ui.Tui.Attribute`).
+    let own_types: BTreeSet<String> = match exposed_type_names {
+        Some(set) => set.difference(&imported_types).cloned().collect(),
+        None => parsed
+            .unions
+            .iter()
+            .map(|u| name(u.value.name.value))
+            .chain(parsed.aliases.iter().map(|a| name(a.value.name.value)))
+            .collect(),
+    };
 
     let mut kernel_alias: Option<ipe_intern::Symbol> = None;
     let mut imports = String::new();
@@ -496,7 +518,7 @@ fn alias_members(dotted: &str, source: &str, scope: AliasScope) -> Result<ProbeM
     Ok(ProbeModule {
         dotted: dotted.to_owned(),
         imports,
-        exposed_types,
+        own_types,
         members,
     })
 }
@@ -508,16 +530,49 @@ fn probe_path() -> Vec<String> {
     vec!["Probe".to_owned()]
 }
 
+/// `annotation` with every bare, unqualified `own_types` name written `M.T`.
+fn qualify(annotation: &str, own_types: &BTreeSet<String>) -> String {
+    let mut out = String::with_capacity(annotation.len());
+    let mut word = String::new();
+    let mut prev: Option<char> = None;
+    let mut before_word: Option<char> = None;
+    let flush = |word: &mut String, before: Option<char>, next: Option<char>, out: &mut String| {
+        if !word.is_empty() {
+            if before != Some('.') && next != Some('.') && own_types.contains(word.as_str()) {
+                out.push_str("M.");
+            }
+            out.push_str(word);
+            word.clear();
+        }
+    };
+    for c in annotation.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            if word.is_empty() {
+                before_word = prev;
+            }
+            word.push(c);
+        } else {
+            flush(&mut word, before_word, Some(c), &mut out);
+            out.push(c);
+        }
+        prev = Some(c);
+    }
+    flush(&mut word, before_word, None, &mut out);
+    out
+}
+
 fn probe_source(m: &ProbeModule, members: &[AliasMember]) -> String {
     let mut s = format!(
-        "module Probe exposing (..)\n{}import {} as M{}\n",
-        m.imports, m.dotted, m.exposed_types
+        "module Probe exposing (..)\n{}import {} as M\n",
+        m.imports, m.dotted
     );
     for (i, member) in members.iter().enumerate() {
         let _ = write!(
             s,
             "\n\nann{i} : {}\nann{i} =\n    M.{}\n\n\ninf{i} =\n    M.{}\n",
-            member.annotation, member.name, member.name
+            qualify(&member.annotation, &m.own_types),
+            member.name,
+            member.name
         );
     }
     s
@@ -526,9 +581,15 @@ fn probe_source(m: &ProbeModule, members: &[AliasMember]) -> String {
 /// A drift: the member index plus why its annotation is not the scheme.
 type Drift = (usize, String);
 
-/// Compile one probe (routed through a `main`-less helper, so `Ipe.Tea.*`
-/// shapes stay legal) and compare each `annN` against `infN`; `Err` is the
-/// compile failure.
+/// Type-check one probe (routed through a `main`-less helper, so `Ipe.Tea.*`
+/// shapes stay legal) and compare each accepted `annN` against the scheme of
+/// the kernel the pipeline resolves `infN = M.member` to; `Err` is the
+/// rendered resolution or type error.
+///
+/// The scheme is read from the kernel table inference instantiates, not from
+/// `infN`'s solved type: an unannotated top-level binding is numeric-,
+/// interpolation- and UI-msg-defaulted, which would pin `number`/`msg` to a
+/// ground type the scheme never states.
 fn run_probe(probe: &str, count: usize) -> Result<Vec<Drift>, String> {
     let mut user = UserSources::new();
     user.insert(entry_path(), PROBE_MAIN.to_owned());
@@ -536,35 +597,61 @@ fn run_probe(probe: &str, count: usize) -> Result<Vec<Drift>, String> {
     let (sources, injected) = prepared(&user);
     let db = ipe_db::IpeDatabase::new();
     let root = ipe::create_source_root(&db, &sources, &injected, &BTreeSet::new());
-    let config = native_config(&db);
-    ipe::compile_prepared(
-        &db,
-        root,
-        &sources,
-        &entry_path(),
-        Path::new("<resolvability>"),
-        config,
-    )
-    .map_err(|e| e.to_string())?;
     let files = root.files(&db);
     let (Some(entry), Some(module)) = (files.get(&entry_path()), files.get(&probe_path())) else {
         return Err("probe graph lacks `Main` or `Probe`".to_owned());
     };
+    let render_diag = |d: &ipe_diagnostics::Diagnostic| {
+        ipe_diagnostics::render(d, "<resolvability>/Probe.ipe", probe)
+    };
     let types = ipe_db::typecheck_module(&db, root, *entry, *module)
-        .map_err(|(d, _)| format!("typecheck_module failed: {d:?}"))?;
+        .clone()
+        .map_err(|(d, _)| render_diag(&d))?;
+    let canon = ipe_db::canonicalize(&db, root, *module)
+        .clone()
+        .map_err(|d| render_diag(&d))?;
+    let kernel_table = ipe_db::kernel_types(&db, root)
+        .clone()
+        .map_err(|d| render_diag(&d))?;
     let interner = db.interner().lock();
-    let by_name: BTreeMap<String, &Ty> = types
+    let annotated: BTreeMap<String, &Ty> = types
         .env
         .iter()
         .filter_map(|(k, t)| interner.resolve(*k).map(|n| (n.to_owned(), t)))
         .collect();
+    // `infN = M.member` names the kernel the pipeline routes `M.member` to.
+    let resolved: BTreeMap<String, &ipe_canon::ast::Expr_> = canon
+        .module
+        .defs
+        .iter()
+        .filter_map(|def| match def {
+            ipe_canon::ast::Def::Untyped { name, body, .. } => interner
+                .resolve(name.value)
+                .map(|n| (n.to_owned(), &body.value)),
+            ipe_canon::ast::Def::Typed { .. } => None,
+        })
+        .collect();
     let mut drifts = Vec::new();
     for i in 0..count {
-        let (Some(ann), Some(inf)) = (
-            by_name.get(&format!("ann{i}")),
-            by_name.get(&format!("inf{i}")),
+        let (Some(ann), Some(route)) = (
+            annotated.get(&format!("ann{i}")),
+            resolved.get(&format!("inf{i}")),
         ) else {
-            drifts.push((i, "probe binding missing from the solved env".to_owned()));
+            drifts.push((
+                i,
+                "probe binding missing from the solved program".to_owned(),
+            ));
+            continue;
+        };
+        let ipe_canon::ast::Expr_::VarKernel {
+            id: Some(kernel), ..
+        } = route
+        else {
+            drifts.push((i, "does not resolve to a registered kernel".to_owned()));
+            continue;
+        };
+        let Some((_, inf)) = kernel_table.iter().find(|(k, _)| k == kernel) else {
+            drifts.push((i, format!("kernel `{kernel:?}` carries no type scheme")));
             continue;
         };
         if !alpha_eq(ann, inf, &interner, &mut VarPairs::default()) {
@@ -621,6 +708,16 @@ fn module_drifts(m: &ProbeModule) -> Vec<String> {
     }
 }
 
+/// Members whose annotation a probe cannot restate, each with the refusal that
+/// forbids it. The gate re-probes each one and requires that exact refusal, so
+/// an entry that stops being necessary fails the gate instead of lingering.
+const UNPROBEABLE: &[(&str, &str)] = &[(
+    // A user annotation may not leave a `CustomElement` seal polymorphic; only
+    // the stdlib boundary member itself is generic over `down` / `up`.
+    "Ipe.Ffi.Js.CustomElement.node",
+    "IPE-N0039",
+)];
+
 /// Every exposed kernel-resolved value's annotation EQUALS the scheme the
 /// compiler enforces for `Module.member`.
 ///
@@ -641,9 +738,31 @@ fn kernel_alias_annotations_equal_enforced_schemes() {
         );
     let mut failures: Vec<String> = Vec::new();
     let mut probed: BTreeSet<String> = BTreeSet::new();
+    let mut exempted: BTreeSet<String> = BTreeSet::new();
     for (dotted, source, scope) in modules {
         match alias_members(dotted, source, scope) {
-            Ok(m) => {
+            Ok(mut m) => {
+                let (exempt, checked): (Vec<AliasMember>, Vec<AliasMember>) =
+                    m.members.into_iter().partition(|member| {
+                        let path = format!("{}.{}", m.dotted, member.name);
+                        UNPROBEABLE.iter().any(|(p, _)| *p == path)
+                    });
+                m.members = checked;
+                for member in &exempt {
+                    let path = format!("{}.{}", m.dotted, member.name);
+                    let code = UNPROBEABLE
+                        .iter()
+                        .find(|(p, _)| *p == path)
+                        .map_or("", |(_, c)| c);
+                    match run_probe(&probe_source(&m, std::slice::from_ref(member)), 1) {
+                        Err(e) if e.contains(code) => {
+                            exempted.insert(path);
+                        }
+                        other => failures.push(format!(
+                            "{path}: listed UNPROBEABLE for {code} but the probe gave {other:?}"
+                        )),
+                    }
+                }
                 for member in &m.members {
                     probed.insert(format!("{}.{}", m.dotted, member.name));
                 }
@@ -658,6 +777,12 @@ fn kernel_alias_annotations_equal_enforced_schemes() {
             probed.iter().any(|p| p.starts_with(&prefix)),
             "veneer {} contributed no probed member — the gate would skip it",
             veneer.name,
+        );
+    }
+    for (path, _) in UNPROBEABLE {
+        assert!(
+            exempted.contains(*path),
+            "UNPROBEABLE entry `{path}` names no exposed kernel alias"
         );
     }
     for pinned in ["Ipe.File.readFile", "Ipe.Random.int", "Ipe.System.exit"] {
@@ -682,7 +807,7 @@ fn alias_gate_flags_an_over_specific_annotation() {
     let m = ProbeModule {
         dotted: "Ipe.System".to_owned(),
         imports: String::new(),
-        exposed_types: String::new(),
+        own_types: BTreeSet::new(),
         members: vec![AliasMember {
             name: "exit".to_owned(),
             annotation: "Int -> Int".to_owned(),
@@ -702,7 +827,7 @@ fn alias_gate_flags_a_contradicting_annotation() {
     let m = ProbeModule {
         dotted: "Ipe.File".to_owned(),
         imports: "import Ipe.Error exposing (Error)\n".to_owned(),
-        exposed_types: String::new(),
+        own_types: BTreeSet::new(),
         members: vec![AliasMember {
             name: "readFile".to_owned(),
             annotation: "String -> Task Error String".to_owned(),
@@ -721,7 +846,7 @@ fn alias_gate_accepts_an_alpha_renamed_annotation() {
     let m = ProbeModule {
         dotted: "Ipe.System".to_owned(),
         imports: String::new(),
-        exposed_types: String::new(),
+        own_types: BTreeSet::new(),
         members: vec![AliasMember {
             name: "exit".to_owned(),
             annotation: "Int -> zzz".to_owned(),
@@ -775,5 +900,86 @@ fn file_read_file_limit_rejects_a_bare_int_ceiling() {
     assert!(
         outcome.as_ref().is_err_and(|e| e.contains("ByteSize")),
         "a bare-`Int` ceiling must be a type error naming `ByteSize`: {outcome:?}",
+    );
+}
+
+/// A `Main` that imports the `Styles` helper, so the helper is type-checked.
+const STYLES_MAIN: &str = "module Main exposing (main)\nimport Ipe.Io as Io\nimport Styles\n\n\
+                           main : Task Error ()\nmain =\n    Io.println \"ok\"\n";
+
+fn compile_styles(styles: &str) -> Result<(), String> {
+    compile_main_with_helper(
+        STYLES_MAIN,
+        &[(vec!["Styles".to_owned()], styles.to_owned())],
+    )
+}
+
+/// The terminal engines' documented `Attribute msg` is nameable: qualified,
+/// exposed bare, and through the `Ipe.Ui.Cells` re-export, each unifying with
+/// the attributes the engine's builders mint.
+#[test]
+fn terminal_attribute_types_are_nameable() {
+    let styles = concat!(
+        "module Styles exposing (banner, bare, legacy, legacyView, line)\n",
+        "import Ipe.Color.Ansi as Ansi\n",
+        "import Ipe.Ui.Cells as Cells\n",
+        "import Ipe.Ui.Cli as Cli\n",
+        "import Ipe.Ui.Tui as Tui exposing (Attribute, Screen)\n\n",
+        "emphasis : List (Tui.Attribute msg)\n",
+        "emphasis =\n    [ Tui.bold, Tui.color Ansi.red ]\n\n",
+        "banner : Screen msg\n",
+        "banner =\n    Tui.el emphasis (Tui.text \"hi\")\n\n",
+        "bare : List (Attribute msg)\n",
+        "bare =\n    [ Tui.dim ]\n\n",
+        "legacy : List (Cells.Attribute msg)\n",
+        "legacy =\n    [ Tui.underline ]\n\n",
+        "legacyView : Cells.Screen msg\n",
+        "legacyView =\n    Cells.el legacy (Cells.text \"x\")\n\n",
+        "lineAttrs : List (Cli.Attribute msg)\n",
+        "lineAttrs =\n    [ Cli.bold ]\n\n",
+        "line : Cli.Lines msg\n",
+        "line =\n    Cli.line lineAttrs \"x\"\n",
+    );
+    let outcome = compile_styles(styles);
+    assert!(
+        outcome.is_ok(),
+        "terminal `Attribute msg` annotations must type-check: {:?}",
+        outcome.err(),
+    );
+}
+
+/// Refusal: the two terminal engines' attributes stay distinct types — a Cli
+/// attribute in a Tui builder is a type error, not a silent coercion.
+#[test]
+fn terminal_attribute_types_stay_distinct() {
+    let styles = concat!(
+        "module Styles exposing (banner)\n",
+        "import Ipe.Ui.Cli as Cli\n",
+        "import Ipe.Ui.Tui as Tui\n\n",
+        "banner : Tui.Screen msg\n",
+        "banner =\n    Tui.el [ Cli.bold ] (Tui.text \"hi\")\n",
+    );
+    let outcome = compile_styles(styles);
+    assert!(
+        outcome.as_ref().is_err_and(|e| e.contains("IPE-T0001")),
+        "a Cli attribute in a Tui builder must be a type mismatch: {outcome:?}",
+    );
+}
+
+/// Refusal: a Tui colour attribute takes a terminal-palette `AnsiColor`, so the
+/// sRGB `Tui.Color` is rejected rather than rendered as a colour the terminal
+/// may not have.
+#[test]
+fn tui_color_attribute_rejects_an_srgb_color() {
+    let styles = concat!(
+        "module Styles exposing (tint)\n",
+        "import Ipe.Ui.Tui as Tui\n\n",
+        "tint : Tui.Attribute msg\n",
+        "tint =\n    Tui.color Tui.white\n",
+    );
+    let outcome = compile_styles(styles);
+    assert!(
+        outcome.as_ref().is_err_and(|e| e.contains("IPE-T0001")),
+        "an sRGB `Tui.Color` in `Tui.color` must be a type mismatch: {outcome:?}",
     );
 }

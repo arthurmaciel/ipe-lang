@@ -52,7 +52,7 @@ unsafeExecRaw = Kernel.kernel "Db_unsafeExecRaw"
 -- | `unsafeQuery conn sql binds` — the query TEXT is caller-authored verbatim;
 -- only the `binds` are parameterised. `Db.queryDecode` with `Sql.*` is the safe
 -- default.
-unsafeQuery : Db -> String -> List SqlValue -> Task Error (List (Dict String String))
+unsafeQuery : Db -> String -> List a -> Task Error (List (Dict String String))
 unsafeQuery = Kernel.kernel "Db_unsafeQuery"
 
 

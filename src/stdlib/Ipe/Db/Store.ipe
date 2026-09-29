@@ -3688,7 +3688,7 @@ lower =
 --         |> Store.select (\( _, author ) -> coalesce author.name (literal "unknown"))
 --         |> Store.selectToList db
 --         -- SQL: SELECT COALESCE(a1.name, ?) AS p0 FROM …
-coalesce : Projection a -> Projection a -> Projection a
+coalesce : a -> a -> a
 coalesce =
     Kernel.kernel "Store_coalesce"
 

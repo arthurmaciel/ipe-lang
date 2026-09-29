@@ -1230,7 +1230,11 @@ impl Env {
         // are resolvable even in a source that names only one of them, along
         // with the closed engine tags `Web` / `Tui` / `Cli` an alias rewrites
         // into so the alias arm can look them up without a mutable interner.
+        // `TuiAttr` / `CliAttr` are the builtins a terminal engine's public
+        // `Attribute` resolves to.
         interner.intern("View")?;
+        interner.intern("TuiAttr")?;
+        interner.intern("CliAttr")?;
         interner.intern("Element")?;
         interner.intern("Screen")?;
         interner.intern("Lines")?;
