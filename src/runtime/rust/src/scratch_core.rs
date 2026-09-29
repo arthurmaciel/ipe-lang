@@ -97,11 +97,12 @@ pub enum LeafNameRefusal {
     TooLong,
     /// The name is `.` or `..`, or does not parse as one plain component.
     DotName,
-    /// The name carries a separator, a stream marker, or a control character.
+    /// The name carries a separator, a stream marker, a Windows-reserved
+    /// character (`< > " | ? *`), or a control character.
     ForbiddenChar(char),
     /// The name ends in `.` or a space, which Windows silently strips.
     TrailingDotOrSpace,
-    /// The name is a Windows device name (`CON`, `NUL`, `COM1`, and so on).
+    /// The name is a Windows device name (`CON`, `NUL`, `COM1`, `CONIN$`, and so on).
     ReservedDevice,
 }
 
@@ -129,10 +130,45 @@ impl From<LeafNameRefusal> for io::Error {
 }
 
 /// Windows device names, reserved in every directory and under any extension.
-const RESERVED_DEVICES: [&str; 22] = [
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+///
+/// Compared ASCII-case-insensitively; the superscript digits Windows also
+/// accepts after `COM`/`LPT` match exactly.
+const RESERVED_DEVICES: [&str; 30] = [
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "COM1",
+    "COM2",
+    "COM3",
+    "COM4",
+    "COM5",
+    "COM6",
+    "COM7",
+    "COM8",
+    "COM9",
+    "COM\u{b9}",
+    "COM\u{b2}",
+    "COM\u{b3}",
+    "LPT1",
+    "LPT2",
+    "LPT3",
+    "LPT4",
+    "LPT5",
+    "LPT6",
+    "LPT7",
+    "LPT8",
+    "LPT9",
+    "LPT\u{b9}",
+    "LPT\u{b2}",
+    "LPT\u{b3}",
+    "CONIN$",
+    "CONOUT$",
 ];
+
+/// Characters no leaf name may carry: separators, the stream marker, and the
+/// characters Windows reserves in a file name.
+const FORBIDDEN_LEAF_CHARS: [char; 9] = ['/', '\\', ':', '<', '>', '"', '|', '?', '*'];
 
 /// One validated path component: the only name a scratch directory joins.
 ///
@@ -158,7 +194,7 @@ impl LeafName {
         }
         if let Some(c) = name
             .chars()
-            .find(|&c| matches!(c, '/' | '\\' | ':') || c.is_control())
+            .find(|&c| FORBIDDEN_LEAF_CHARS.contains(&c) || c.is_control())
         {
             return Err(LeafNameRefusal::ForbiddenChar(c));
         }
@@ -633,15 +669,17 @@ fn verify_private(path: &Path, meta: &std::fs::Metadata, kind: EntryKind) -> io:
 
 /// Confine a caller label to one bounded, non-empty path component.
 ///
-/// ASCII alphanumerics, `-` and `_` are kept, every other character becomes `_`,
-/// and at most [`MAX_LABEL_CHARS`] characters survive, so a label can never add
-/// a path component, name `.`/`..`, or reach an alternate data stream.
+/// ASCII alphanumerics, `-`, `_` and `.` are kept, every other character
+/// becomes `_`, and at most [`MAX_LABEL_CHARS`] characters survive, so a label
+/// can never add a path component or reach an alternate data stream. A label is
+/// never a whole name (a `-<entropy>` suffix always follows it), so a kept `.`
+/// cannot form `.`/`..`; every assembled name is still parsed as a [`LeafName`].
 fn confined_label(label: &str) -> String {
     let confined: String = label
         .chars()
         .take(MAX_LABEL_CHARS)
         .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
                 c
             } else {
                 '_'
@@ -655,15 +693,41 @@ fn confined_label(label: &str) -> String {
     }
 }
 
-/// `<label>-<pid>-<32 hex chars>`, the hex drawn from `fill`; WebAssembly, having no pid, omits it.
+/// The suffix of every atomic-replace sibling name, `.<label>-<pid>-<hex>.ipe-tmp`.
+///
+/// Such a name is hidden (it starts with `.`) and carries this suffix, so a file
+/// watcher or a directory listing can recognise and skip it; `ipe watch`
+/// mirrors this value and the CLI asserts the two agree at build time.
+pub const TEMP_SIBLING_SUFFIX: &str = ".ipe-tmp";
+
+/// The shape of a created scratch name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NameShape {
+    /// `<label>-<pid>-<32 hex chars>`: a scratch directory or file.
+    Plain,
+    /// `.<label>-<pid>-<32 hex chars>.ipe-tmp`: a hidden atomic-replace sibling.
+    HiddenTemp,
+}
+
+/// The name of shape `shape` for `label`, its 32 hex chars drawn from `fill`; WebAssembly, having no pid, omits it.
+///
+/// # Errors
+/// The [`EntropyUnavailable`] error when `fill` fails; `InvalidInput` with a
+/// [`LeafNameRefusal`] when the assembled name is not one plain leaf (a label
+/// whose first dot-segment is a Windows device name, such as `nul.x`).
 fn scratch_name(
     label: &str,
+    shape: NameShape,
     fill: &mut impl FnMut(&mut [u8]) -> Result<(), EntropyUnavailable>,
-) -> io::Result<String> {
+) -> io::Result<LeafName> {
     use std::fmt::Write as _;
     let mut entropy = [0u8; ENTROPY_BYTES];
     fill(&mut entropy)?;
-    let mut name = confined_label(label);
+    let mut name = String::new();
+    if shape == NameShape::HiddenTemp {
+        name.push('.');
+    }
+    name.push_str(&confined_label(label));
     #[cfg(not(target_family = "wasm"))]
     {
         let _ = write!(name, "-{}", std::process::id());
@@ -672,10 +736,13 @@ fn scratch_name(
     for byte in entropy {
         let _ = write!(name, "{byte:02x}");
     }
-    Ok(name)
+    if shape == NameShape::HiddenTemp {
+        name.push_str(TEMP_SIBLING_SUFFIX);
+    }
+    LeafName::new(&name).map_err(io::Error::from)
 }
 
-/// The length in bytes of every name this process gives an entry tagged `label`.
+/// The length in bytes of every scratch directory or file name this process gives an entry tagged `label`.
 ///
 /// Lets a caller bounded by a path-length ceiling (a `sockaddr_un`) refuse a
 /// base before anything is created under it.
@@ -698,11 +765,12 @@ pub fn scratch_name_len(label: &str) -> usize {
 fn create_unique<T>(
     base: &Path,
     label: &str,
+    shape: NameShape,
     mut fill: impl FnMut(&mut [u8]) -> Result<(), EntropyUnavailable>,
     mut create: impl FnMut(&Path) -> io::Result<T>,
 ) -> io::Result<(PathBuf, T)> {
     for _ in 0..MAX_ATTEMPTS {
-        let path = base.join(scratch_name(label, &mut fill)?);
+        let path = base.join(scratch_name(label, shape, &mut fill)?);
         match create(&path) {
             Ok(entry) => return Ok((path, entry)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
@@ -710,6 +778,43 @@ fn create_unique<T>(
         }
     }
     Err(io::Error::new(io::ErrorKind::AlreadyExists, NamesExhausted))
+}
+
+/// Create an entry as [`create_unique`] does, then hold it to `verify`; a refused entry is removed.
+///
+/// The name was created exclusively by this call, so the entry under it is
+/// ours: a refusal (a filesystem that cannot hold owner-only modes, say) drops
+/// the handle and removes the entry with `remove` before the refusal is
+/// returned, so a refused creation leaves nothing behind. `remove` is
+/// non-recursive (`remove_file` / `remove_dir`), never following into content
+/// another party may have placed in a refused directory.
+fn create_verified<T>(
+    base: &Path,
+    label: &str,
+    shape: NameShape,
+    create: impl FnMut(&Path) -> io::Result<T>,
+    verify: impl FnOnce(&Path, &T) -> io::Result<()>,
+    remove: fn(&Path) -> io::Result<()>,
+) -> io::Result<(PathBuf, T)> {
+    let (path, entry) = create_unique(base, label, shape, scratch_host::fill_entropy, create)?;
+    match verify(&path, &entry) {
+        Ok(()) => Ok((path, entry)),
+        Err(refusal) => {
+            drop(entry);
+            let _ = remove(&path);
+            Err(refusal)
+        }
+    }
+}
+
+/// The verification every created scratch file passes: its open handle is a private regular file.
+fn verify_file_handle(path: &Path, file: &File) -> io::Result<()> {
+    verify_private(path, &file.metadata()?, EntryKind::File)
+}
+
+/// The verification every created scratch directory passes.
+fn verify_created_dir(path: &Path, (): &()) -> io::Result<()> {
+    verify_private_dir(path)
 }
 
 /// Create the directory `path` exclusively with mode 0700; only the final component is created.
@@ -760,35 +865,135 @@ fn exclusive_open(path: &Path) -> io::Result<File> {
 /// # Errors
 /// See [`ScratchDir::new_under`]; also `PermissionDenied` with a
 /// [`ScratchError`] when the opened handle is not a private regular file of the
-/// effective user.
+/// effective user (the refused file is removed first); `InvalidInput` with a
+/// [`LeafNameRefusal`] when the label makes a device name.
 pub fn private_file_under(base: &Path, label: &str) -> io::Result<(PathBuf, File)> {
-    let base = trusted_base(base)?;
-    let (path, file) = create_unique(&base, label, scratch_host::fill_entropy, exclusive_open)?;
-    verify_private(&path, &file.metadata()?, EntryKind::File)?;
-    Ok((path, file))
+    private_file_under_with(base, label, verify_file_handle)
 }
 
-/// Create a private, unguessably named file beside `target`, to be written and renamed over it.
+/// [`private_file_under`] with the handle verification supplied, so a refusal can be driven in tests.
+fn private_file_under_with(
+    base: &Path,
+    label: &str,
+    verify: impl FnOnce(&Path, &File) -> io::Result<()>,
+) -> io::Result<(PathBuf, File)> {
+    let base = trusted_base(base)?;
+    create_verified(
+        &base,
+        label,
+        NameShape::Plain,
+        exclusive_open,
+        verify,
+        |p: &Path| std::fs::remove_file(p),
+    )
+}
+
+// ── AtomicSibling ────────────────────────────────────────────────────────────
+
+/// An atomic replacement of `target`: a private sibling written, then renamed over it.
+///
+/// The sibling is created beside `target` under a hidden, unguessable name
+/// (`.<target name>-<pid>-<32 hex>.ipe-tmp`, see [`TEMP_SIBLING_SUFFIX`]),
+/// exclusively, never through a final symlink, with mode 0600, and verified
+/// private; a sibling that fails verification is removed before the refusal
+/// returns. Until [`AtomicSibling::commit`] renames it over `target`, dropping
+/// the guard removes the sibling, so no failure between creation and rename
+/// (a refused verdict, a short write, a failed rename) leaves it behind. Only a
+/// process that dies inside that window can leave one, under a name the
+/// suffix identifies.
 ///
 /// The directory is the caller's chosen destination, so it is not held to the
-/// scratch-base trust rules; the name still carries CSPRNG entropy and the file
-/// is opened exclusively, never through a final symlink, with mode 0600, so a
-/// name planted in advance can neither redirect nor block the write.
-///
-/// # Errors
-/// As [`private_file_under`], without the base verification.
-pub fn exclusive_sibling(target: &Path) -> io::Result<(PathBuf, File)> {
-    let parent = target
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let label = target
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or(FALLBACK_LABEL);
-    let (path, file) = create_unique(parent, label, scratch_host::fill_entropy, exclusive_open)?;
-    verify_private(&path, &file.metadata()?, EntryKind::File)?;
-    Ok((path, file))
+/// scratch-base trust rules; the name still carries CSPRNG entropy, so a name
+/// planted in advance can neither redirect nor block the write.
+#[derive(Debug)]
+pub struct AtomicSibling {
+    target: PathBuf,
+    tmp: PathBuf,
+    file: File,
+    committed: bool,
+}
+
+impl AtomicSibling {
+    /// Create the private sibling that will replace `target`.
+    ///
+    /// # Errors
+    /// `PermissionDenied` with a [`ScratchError`] when the created sibling is not
+    /// a private regular file of the effective user (on a filesystem that cannot
+    /// hold owner-only modes, for one) — the sibling is removed first; the
+    /// [`EntropyUnavailable`] error when the OS CSPRNG is unavailable;
+    /// `AlreadyExists` carrying [`NamesExhausted`] when every fresh name
+    /// collided; any other open error.
+    pub fn create(target: &Path) -> io::Result<Self> {
+        Self::create_with(target, verify_file_handle)
+    }
+
+    /// [`AtomicSibling::create`] with the handle verification supplied, so a refusal can be driven in tests.
+    fn create_with(
+        target: &Path,
+        verify: impl FnOnce(&Path, &File) -> io::Result<()>,
+    ) -> io::Result<Self> {
+        let parent = target
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let label = target
+            .file_name()
+            .and_then(OsStr::to_str)
+            .unwrap_or(FALLBACK_LABEL);
+        let (tmp, file) = create_verified(
+            parent,
+            label,
+            NameShape::HiddenTemp,
+            exclusive_open,
+            verify,
+            |p: &Path| std::fs::remove_file(p),
+        )?;
+        Ok(Self {
+            target: target.to_path_buf(),
+            tmp,
+            file,
+            committed: false,
+        })
+    }
+
+    /// The sibling's path.
+    #[must_use]
+    pub fn tmp_path(&self) -> &Path {
+        &self.tmp
+    }
+
+    /// Append `bytes` to the sibling.
+    ///
+    /// # Errors
+    /// Any write error; the sibling is still removed when the guard drops.
+    pub fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        use std::io::Write as _;
+        self.file.write_all(bytes)
+    }
+
+    /// Flush the sibling and rename it over the target.
+    ///
+    /// The handle stays open across the rename (the standard library opens
+    /// files shareable for deletion on Windows, so the rename is allowed there
+    /// too) and closes when the guard drops.
+    ///
+    /// # Errors
+    /// Any flush or rename error; the sibling is removed when the guard drops.
+    pub fn commit(mut self) -> io::Result<()> {
+        use std::io::Write as _;
+        self.file.flush()?;
+        std::fs::rename(&self.tmp, &self.target)?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for AtomicSibling {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.tmp);
+        }
+    }
 }
 
 // ── ScratchDir ───────────────────────────────────────────────────────────────
@@ -813,21 +1018,37 @@ impl ScratchDir {
     /// Create a private directory directly under the resolved `base`, creating `base` when absent.
     ///
     /// The name is `<label>-<pid>-<32 hex CSPRNG chars>`; `label` is a diagnostic
-    /// tag only, confined to one bounded component (ASCII alphanumerics, `-` and
-    /// `_`; others become `_`; at most 64 characters).
+    /// tag only, confined to one bounded component (ASCII alphanumerics, `-`,
+    /// `_` and `.`; others become `_`; at most 64 characters).
     ///
     /// # Errors
     /// `PermissionDenied` with a [`ScratchError`] when `base` (or an ancestor) or
-    /// the created directory fails verification, or with a [`ScratchRootRefusal`]
-    /// when a non-unix `base` cannot be proven inside the user's profile; the
+    /// the created directory fails verification (a refused directory is removed
+    /// first), or with a [`ScratchRootRefusal`] when a non-unix `base` cannot be
+    /// proven inside the user's profile; `InvalidInput` with a
+    /// [`LeafNameRefusal`] when the label makes a device name; the
     /// [`EntropyUnavailable`] error when the OS CSPRNG is unavailable; `AlreadyExists`
     /// carrying [`NamesExhausted`] when every fresh name collided; any other I/O
     /// error.
     pub fn new_under(base: &Path, label: &str) -> io::Result<Self> {
+        Self::new_under_with(base, label, verify_created_dir)
+    }
+
+    /// [`ScratchDir::new_under`] with the directory verification supplied, so a refusal can be driven in tests.
+    fn new_under_with(
+        base: &Path,
+        label: &str,
+        verify: impl FnOnce(&Path, &()) -> io::Result<()>,
+    ) -> io::Result<Self> {
         let base = trusted_base(base)?;
-        let (path, ()) = create_unique(&base, label, scratch_host::fill_entropy, exclusive_mkdir)?;
-        // A refused entry is not ours to remove.
-        verify_private_dir(&path)?;
+        let (path, ()) = create_verified(
+            &base,
+            label,
+            NameShape::Plain,
+            exclusive_mkdir,
+            verify,
+            |p: &Path| std::fs::remove_dir(p),
+        )?;
         Ok(Self(path))
     }
 
@@ -1259,6 +1480,7 @@ mod tests {
         let result = create_unique(
             &tree.0,
             "ipe-test",
+            NameShape::Plain,
             |_: &mut [u8]| {
                 Err(EntropyUnavailable {
                     detail: "test source".to_owned(),
@@ -1288,9 +1510,15 @@ mod tests {
             buf.fill(0);
             Ok::<(), EntropyUnavailable>(())
         };
-        create_unique(&tree.0, "ipe-test", zeros, exclusive_mkdir)?;
+        create_unique(
+            &tree.0,
+            "ipe-test",
+            NameShape::Plain,
+            zeros,
+            exclusive_mkdir,
+        )?;
         let mut attempts = 0usize;
-        let second = create_unique(&tree.0, "ipe-test", zeros, |p: &Path| {
+        let second = create_unique(&tree.0, "ipe-test", NameShape::Plain, zeros, |p: &Path| {
             attempts += 1;
             exclusive_mkdir(p)
         });
@@ -1312,23 +1540,202 @@ mod tests {
             buf.fill(0xab);
             Ok::<(), EntropyUnavailable>(())
         };
-        let hostile = format!("../../etc/x:y\\z{}", "a".repeat(500));
-        let name = scratch_name(&hostile, &mut fill)?;
+        let hostile = format!("../../etc/x:y\\z<>|?*\"{}", "a".repeat(500));
+        let leaf = scratch_name(&hostile, NameShape::Plain, &mut fill)?;
+        let name = leaf.as_str();
         assert!(
             name.chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
             "{name}"
         );
-        assert!(name.starts_with("______etc_x_y_z"), "{name}");
+        assert!(name.starts_with(".._.._etc_x_y_z______"), "{name}");
         assert!(name.ends_with(&"ab".repeat(ENTROPY_BYTES)), "{name}");
         assert!(name.len() <= MAX_LABEL_CHARS + 2 + 10 + 2 * ENTROPY_BYTES);
         assert_eq!(name.len(), scratch_name_len(&hostile));
-        for label in ["", "ipe-pg-relay", "a.b"] {
+        for label in ["", "ipe-pg-relay", "a.b", ".", ".."] {
+            let leaf = scratch_name(label, NameShape::Plain, &mut fill)?;
+            assert_eq!(leaf.as_str().len(), scratch_name_len(label));
+            assert_eq!(Path::new(leaf.as_str()).components().count(), 1);
+        }
+        assert!(
+            scratch_name("store.json", NameShape::Plain, &mut fill)?
+                .as_str()
+                .starts_with("store.json-"),
+            "a `.` in a label is kept"
+        );
+        Ok(())
+    }
+
+    /// A label whose first dot-segment is a device name is refused before any entry exists.
+    #[test]
+    fn device_stem_label_is_refused_and_creates_nothing() -> io::Result<()> {
+        let mut fill = |buf: &mut [u8]| {
+            buf.fill(0xab);
+            Ok::<(), EntropyUnavailable>(())
+        };
+        for label in ["nul.x", "CON.log", "com1.db", "conin$.x"] {
+            let refused = scratch_name(label, NameShape::Plain, &mut fill).err();
             assert_eq!(
-                scratch_name(label, &mut fill)?.len(),
-                scratch_name_len(label)
+                refused.as_ref().map(io::Error::kind),
+                Some(io::ErrorKind::InvalidInput),
+                "{label:?}"
             );
         }
+        let tree = Tree::new("devlabel")?;
+        let dir = ScratchDir::new_under(&tree.0, "nul.x").err();
+        let file = private_file_under(&tree.0, "nul.x").err();
+        for err in [dir, file] {
+            assert_eq!(
+                err.as_ref().map(io::Error::kind),
+                Some(io::ErrorKind::InvalidInput)
+            );
+        }
+        assert_eq!(
+            std::fs::read_dir(&tree.0)?.count(),
+            2,
+            "only the fixture tree"
+        );
+        Ok(())
+    }
+
+    /// A sibling name is hidden and carries the temp suffix, whatever the target is called.
+    #[test]
+    fn sibling_name_is_hidden_and_suffixed() -> io::Result<()> {
+        let mut fill = |buf: &mut [u8]| {
+            buf.fill(0xab);
+            Ok::<(), EntropyUnavailable>(())
+        };
+        for label in ["store.json", "con.txt", "", "a/b", "."] {
+            let leaf = scratch_name(label, NameShape::HiddenTemp, &mut fill)?;
+            let name = leaf.as_str();
+            assert!(name.starts_with('.'), "{name}");
+            assert!(name.ends_with(TEMP_SIBLING_SUFFIX), "{name}");
+        }
+        Ok(())
+    }
+
+    fn refuse_file(path: &Path, _: &File) -> io::Result<()> {
+        assert!(path.is_file(), "the refused file was created");
+        Err(refused(path, ScratchRefusal::NotPrivate))
+    }
+
+    fn assert_refused(err: Option<io::Error>) {
+        assert_eq!(
+            err.as_ref().map(io::Error::kind),
+            Some(io::ErrorKind::PermissionDenied)
+        );
+    }
+
+    /// A created file that fails verification is removed before the refusal returns.
+    #[test]
+    fn refused_private_file_is_removed() -> io::Result<()> {
+        let root = ScratchDir::new("ipe-scratch-refusefile")?;
+        let base = root.path();
+        assert_refused(private_file_under_with(base, "ipe-kernel", refuse_file).err());
+        assert_eq!(std::fs::read_dir(base)?.count(), 0);
+        Ok(())
+    }
+
+    /// A created directory that fails verification is removed before the refusal returns.
+    #[test]
+    fn refused_scratch_dir_is_removed() -> io::Result<()> {
+        let root = ScratchDir::new("ipe-scratch-refusedir")?;
+        let base = root.path();
+        let refuse = |p: &Path, (): &()| {
+            assert!(p.is_dir(), "the refused directory was created");
+            Err(refused(p, ScratchRefusal::NotPrivate))
+        };
+        assert_refused(ScratchDir::new_under_with(base, "ipe-dir", refuse).err());
+        assert_eq!(std::fs::read_dir(base)?.count(), 0);
+        Ok(())
+    }
+
+    /// A created sibling that fails verification is removed, and the target is untouched.
+    #[test]
+    fn refused_sibling_is_removed_and_target_untouched() -> io::Result<()> {
+        let tree = Tree::new("refusesib")?;
+        let base = tree.0.join("shared");
+        let target = base.join("store.db");
+        std::fs::write(&target, b"old")?;
+        assert_refused(AtomicSibling::create_with(&target, refuse_file).err());
+        assert_eq!(std::fs::read_dir(&base)?.count(), 1, "only the target");
+        assert_eq!(std::fs::read(&target)?, b"old");
+        Ok(())
+    }
+
+    #[test]
+    fn atomic_sibling_is_hidden_beside_the_target_until_commit() -> io::Result<()> {
+        let tree = Tree::new("sibling")?;
+        let base = tree.0.join("shared");
+        let target = base.join("store.db");
+        let a = AtomicSibling::create(&target)?;
+        let b = AtomicSibling::create(&target)?;
+        assert_ne!(a.tmp_path(), b.tmp_path());
+        let canonical = std::fs::canonicalize(&base)?;
+        for sib in [&a, &b] {
+            let parent = sib
+                .tmp_path()
+                .parent()
+                .map(std::fs::canonicalize)
+                .transpose()?;
+            assert_eq!(parent.as_deref(), Some(canonical.as_path()));
+            let name = sib.tmp_path().file_name().and_then(OsStr::to_str);
+            assert!(
+                name.is_some_and(|n| n.starts_with(".store.db-")),
+                "{name:?}"
+            );
+            assert!(
+                name.is_some_and(|n| n.ends_with(TEMP_SIBLING_SUFFIX)),
+                "{name:?}"
+            );
+        }
+        assert!(
+            !target.exists(),
+            "the target is never created before commit"
+        );
+        drop((a, b));
+        assert_eq!(std::fs::read_dir(&base)?.count(), 0, "drop removes both");
+        Ok(())
+    }
+
+    #[test]
+    fn committed_sibling_replaces_the_target_and_leaves_no_sibling() -> io::Result<()> {
+        let tree = Tree::new("commit")?;
+        let base = tree.0.join("shared");
+        let target = base.join("store.db");
+        std::fs::write(&target, b"old")?;
+        let mut sib = AtomicSibling::create(&target)?;
+        sib.write_all(b"new")?;
+        assert_eq!(std::fs::read(&target)?, b"old", "unchanged before commit");
+        sib.commit()?;
+        assert_eq!(std::fs::read(&target)?, b"new");
+        assert_eq!(std::fs::read_dir(&base)?.count(), 1, "only the target");
+        Ok(())
+    }
+
+    /// A rename that fails (the target is a non-empty directory) leaves no sibling behind.
+    #[test]
+    fn failed_commit_leaves_no_sibling() -> io::Result<()> {
+        let tree = Tree::new("failcommit")?;
+        let base = tree.0.join("shared");
+        let target = base.join("store.db");
+        std::fs::create_dir(&target)?;
+        std::fs::write(target.join("keep"), b"keep")?;
+        let mut sib = AtomicSibling::create(&target)?;
+        sib.write_all(b"new")?;
+        assert!(sib.commit().is_err());
+        assert_eq!(std::fs::read_dir(&base)?.count(), 1, "only the target dir");
+        assert_eq!(std::fs::read(target.join("keep"))?, b"keep");
+        Ok(())
+    }
+
+    /// A sibling whose parent directory is absent fails and creates nothing.
+    #[test]
+    fn sibling_of_a_missing_parent_fails_and_creates_nothing() -> io::Result<()> {
+        let tree = Tree::new("noparent")?;
+        let target = tree.0.join("absent").join("store.db");
+        assert!(AtomicSibling::create(&target).is_err());
+        assert!(!tree.0.join("absent").exists());
         Ok(())
     }
 
@@ -1417,7 +1824,7 @@ mod tests {
     #[test]
     fn hostile_leaf_names_are_refused() {
         let too_long = "a".repeat(MAX_LEAF_BYTES + 1);
-        let cases: [(&str, LeafNameRefusal); 15] = [
+        let cases: [(&str, LeafNameRefusal); 25] = [
             ("", LeafNameRefusal::Empty),
             (too_long.as_str(), LeafNameRefusal::TooLong),
             (".", LeafNameRefusal::DotName),
@@ -1433,6 +1840,16 @@ mod tests {
             ("name ", LeafNameRefusal::TrailingDotOrSpace),
             ("nul.txt", LeafNameRefusal::ReservedDevice),
             ("Com1", LeafNameRefusal::ReservedDevice),
+            ("COM\u{b9}", LeafNameRefusal::ReservedDevice),
+            ("lpt\u{b3}.txt", LeafNameRefusal::ReservedDevice),
+            ("CONIN$", LeafNameRefusal::ReservedDevice),
+            ("conout$.x", LeafNameRefusal::ReservedDevice),
+            ("a<b", LeafNameRefusal::ForbiddenChar('<')),
+            ("a>b", LeafNameRefusal::ForbiddenChar('>')),
+            ("a\"b", LeafNameRefusal::ForbiddenChar('"')),
+            ("a|b", LeafNameRefusal::ForbiddenChar('|')),
+            ("a?b", LeafNameRefusal::ForbiddenChar('?')),
+            ("a*b", LeafNameRefusal::ForbiddenChar('*')),
         ];
         for (name, refusal) in cases {
             assert_eq!(LeafName::new(name), Err(refusal), "{name:?}");
@@ -1450,18 +1867,6 @@ mod tests {
         for entry in [&a, &b] {
             assert_eq!(entry.parent(), Some(base.as_path()));
         }
-        Ok(())
-    }
-
-    #[test]
-    fn exclusive_sibling_lands_beside_the_target() -> io::Result<()> {
-        let tree = Tree::new("sibling")?;
-        let target = tree.0.join("store.db");
-        let (a, _) = exclusive_sibling(&target)?;
-        let (b, _) = exclusive_sibling(&target)?;
-        assert_ne!(a, b);
-        assert_eq!(a.parent(), Some(tree.0.as_path()));
-        assert!(!target.exists(), "the target itself is never created");
         Ok(())
     }
 
@@ -1646,23 +2051,24 @@ mod tests {
             Ok(())
         }
 
-        /// A sibling is never opened through a symlink planted at its name.
+        /// A sibling is 0600, and its commit replaces a symlinked target's link, never the link's target.
         #[test]
-        fn exclusive_sibling_is_0600_and_never_follows_a_link() -> io::Result<()> {
+        fn atomic_sibling_is_0600_and_never_writes_through_a_link() -> io::Result<()> {
             let root = ScratchDir::new("ipe-scratch-sib")?;
-            let (path, _) = exclusive_sibling(&root.child(&LeafName::new("store.db")?))?;
-            let meta = std::fs::symlink_metadata(&path)?;
-            assert!(meta.file_type().is_file());
-            assert_eq!(meta.mode() & 0o777, 0o600);
-
             let canary = root.child(&LeafName::new("canary")?);
             std::fs::write(&canary, b"canary")?;
-            let planted = root.child(&LeafName::new("planted")?);
-            std::os::unix::fs::symlink(&canary, &planted)?;
-            assert_eq!(
-                exclusive_open(&planted).map(drop).map_err(|e| e.kind()),
-                Err(io::ErrorKind::AlreadyExists)
-            );
+            let target = root.child(&LeafName::new("store.db")?);
+            std::os::unix::fs::symlink(&canary, &target)?;
+
+            let mut sib = AtomicSibling::create(&target)?;
+            let meta = std::fs::symlink_metadata(sib.tmp_path())?;
+            assert!(meta.file_type().is_file());
+            assert_eq!(meta.mode() & 0o777, 0o600);
+            sib.write_all(b"new")?;
+            sib.commit()?;
+
+            assert!(std::fs::symlink_metadata(&target)?.file_type().is_file());
+            assert_eq!(std::fs::read(&target)?, b"new");
             assert_eq!(std::fs::read(&canary)?, b"canary");
             Ok(())
         }

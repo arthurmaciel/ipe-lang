@@ -512,6 +512,9 @@ fn is_real_dir(path: &Path) -> bool {
 /// `examples/foo/tests/output.log`) must not self-trigger the watch loop by
 /// virtue of a path SEGMENT matching that word.
 fn is_watchable_leaf(tests_root: Option<&Path>, path: &Path) -> bool {
+    if is_temp_sibling(path) {
+        return false;
+    }
     if path.file_name().and_then(|n| n.to_str()) == Some("package.ipe") {
         return true;
     }
@@ -519,6 +522,21 @@ fn is_watchable_leaf(tests_root: Option<&Path>, path: &Path) -> bool {
         return true;
     }
     tests_root.is_some_and(|root| path.starts_with(root))
+}
+
+/// Suffix of the hidden sibling an atomic replace writes before its rename.
+///
+/// Shape: `.<target>-<pid>-<entropy>.ipe-tmp`. Mirrors
+/// `ipe_sandbox::scratch::TEMP_SIBLING_SUFFIX`; `ipe-cli` asserts the two are
+/// equal at build time.
+pub const TEMP_SIBLING_SUFFIX: &str = ".ipe-tmp";
+
+/// Whether `path` names an atomic-replace temp sibling: never a watch trigger,
+/// so a supervised app persisting under `tests/` cannot restart itself.
+fn is_temp_sibling(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with('.') && n.ends_with(TEMP_SIBLING_SUFFIX))
 }
 
 /// The project manifest filename. It shares the `.ipe` extension but is a
@@ -821,6 +839,43 @@ mod tests {
         assert!(
             scope.is_relevant(&fixture),
             "a non-.ipe file directly under the root-level tests/ must stay relevant"
+        );
+    }
+
+    /// An atomic-replace temp sibling under `tests/` (a supervised app
+    /// persisting its session store) is not a change the watch reacts to; the
+    /// file it commits to still is.
+    #[test]
+    fn is_relevant_ignores_temp_siblings_under_root_level_tests() {
+        let root = tmp_dir("scope_root_temp_sibling");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("Main.ipe"),
+            "module Main exposing (main)\nmain = 1\n",
+        )
+        .unwrap();
+        let tests_dir = root.join("tests");
+        fs::create_dir_all(&tests_dir).unwrap();
+        let sibling = tests_dir.join(format!(".store.json-42-00ff{TEMP_SIBLING_SUFFIX}"));
+        fs::write(&sibling, "{}").unwrap();
+        let committed = tests_dir.join("store.json");
+        fs::write(&committed, "{}").unwrap();
+        let visible = tests_dir.join(format!("store{TEMP_SIBLING_SUFFIX}"));
+        fs::write(&visible, "{}").unwrap();
+
+        let scope = WatchScope::build(&root, &src, &[]).unwrap();
+        assert!(
+            !scope.is_relevant(&sibling),
+            "a hidden temp sibling is ignored"
+        );
+        assert!(
+            scope.is_relevant(&committed),
+            "the committed target stays relevant"
+        );
+        assert!(
+            scope.is_relevant(&visible),
+            "only the hidden sibling shape is ignored"
         );
     }
 

@@ -364,7 +364,7 @@ pub fn file_is_dir<E: Send + 'static>(path: Path) -> IpeTask<E, bool> {
 #[must_use]
 pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
-        match run_blocking(move || temp_file_sync(&prefix)).await {
+        match run_blocking(move || temp_file_sync(&prefix).map_err(|e| e.to_string())).await {
             Ok(p) => ok_res(p),
             Err(e) => IpeResult::Err(str_err(&e)),
         }
@@ -382,7 +382,7 @@ pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTa
 #[must_use]
 pub fn file_temp_dir<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
-        match run_blocking(move || temp_dir_sync(&prefix)).await {
+        match run_blocking(move || temp_dir_sync(&prefix).map_err(|e| e.to_string())).await {
             Ok(p) => ok_res(p),
             Err(e) => IpeResult::Err(str_err(&e)),
         }
@@ -390,19 +390,17 @@ pub fn file_temp_dir<E: Send + From<String> + 'static>(prefix: String) -> IpeTas
 }
 
 /// A private temp file tagged with `prefix`, kept past this call.
-fn temp_file_sync(prefix: &str) -> Result<String, String> {
-    let root = super::scratch_core::temp_root().map_err(|e| e.to_string())?;
+fn temp_file_sync(prefix: &str) -> std::io::Result<String> {
+    let root = super::scratch_core::temp_root()?;
     super::scratch_core::private_file_under(&root, prefix)
         .map(|(path, _file)| path.to_string_lossy().into_owned())
-        .map_err(|e| e.to_string())
 }
 
 /// A private temp directory tagged with `prefix`, kept past this call.
-fn temp_dir_sync(prefix: &str) -> Result<String, String> {
-    let root = super::scratch_core::temp_root().map_err(|e| e.to_string())?;
+fn temp_dir_sync(prefix: &str) -> std::io::Result<String> {
+    let root = super::scratch_core::temp_root()?;
     super::scratch_core::ScratchDir::new_under(&root, prefix)
         .map(|dir| dir.into_path().to_string_lossy().into_owned())
-        .map_err(|e| e.to_string())
 }
 
 // ─── Copy / rename ─────────────────────────────────────────────────────────

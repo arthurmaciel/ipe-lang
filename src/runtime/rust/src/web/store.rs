@@ -299,6 +299,8 @@ pub struct FileStore<Model, Msg> {
     /// The live process's Model schema tag (H24) — a stored blob whose leading
     /// tag differs is rejected identically to "no row" (fresh `init`).
     schema_tag: [u8; 32],
+    /// Whether the last map write failed, so a failure streak is logged once.
+    persist_failing: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(feature = "web")]
@@ -324,6 +326,7 @@ impl<Model, Msg> FileStore<Model, Msg> {
             mem_cache: RwLock::new(HashMap::new()),
             ttl,
             schema_tag,
+            persist_failing: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -334,25 +337,39 @@ impl<Model, Msg> FileStore<Model, Msg> {
     /// crash mid-write never leaves a truncated map a later `new` would fail to
     /// parse (and thus silently drop every session).
     ///
-    /// The temp file comes from the shared scratch primitive: an unguessable
-    /// name, created exclusively, never through a symlink, and verified `0600`
-    /// (owner-only) BEFORE any bytes are written, so the checkpoint map — which
-    /// may hold Model secrets — is never world-readable, not even momentarily.
-    /// The rename carries the mode to the final path (rename preserves the
-    /// inode's permissions).
+    /// The temp file is an [`AtomicSibling`](crate::scratch_core::AtomicSibling):
+    /// an unguessable hidden name, created exclusively, never through a symlink,
+    /// and verified `0600` (owner-only) BEFORE any bytes are written, so the
+    /// checkpoint map — which may hold Model secrets — is never world-readable,
+    /// not even momentarily. The rename carries the mode to the final path, and
+    /// a refused or failed write removes the temp file.
+    ///
+    /// The first failure after a success is logged, naming its cause (a refused
+    /// temp file names the refusal); repeats stay silent until a write succeeds
+    /// again, so a persistently failing disk yields one line, not one per
+    /// mutation.
     fn persist(&self, disk: &HashMap<String, (String, i64)>) {
-        use std::io::Write as _;
-        let Ok(json) = serde_json::to_string(disk) else {
-            return;
-        };
-        let Ok((tmp, mut file)) = crate::scratch_core::exclusive_sibling(&self.path) else {
-            return;
-        };
-        let written = file.write_all(json.as_bytes()).is_ok() && file.flush().is_ok();
-        drop(file);
-        if !written || std::fs::rename(&tmp, &self.path).is_err() {
-            let _ = std::fs::remove_file(&tmp);
+        let failed = self.write_map(disk).err();
+        let was_failing = self
+            .persist_failing
+            .swap(failed.is_some(), std::sync::atomic::Ordering::Relaxed);
+        if let (Some(err), false) = (failed, was_failing) {
+            crate::system::emit_runtime_log(
+                "live",
+                &format!(
+                    "session store: file @ {} not written, sessions kept in memory: {err}",
+                    self.path.display()
+                ),
+            );
         }
+    }
+
+    /// Serialize `disk` and atomically replace the map file with it.
+    fn write_map(&self, disk: &HashMap<String, (String, i64)>) -> std::io::Result<()> {
+        let json = serde_json::to_string(disk)?;
+        let mut sibling = crate::scratch_core::AtomicSibling::create(&self.path)?;
+        sibling.write_all(json.as_bytes())?;
+        sibling.commit()
     }
 }
 
@@ -2159,6 +2176,60 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&victim).ok().as_deref(),
             Some("keep")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every write, successful or failed, leaves only the map itself in its directory.
+    #[cfg(feature = "web")]
+    #[tokio::test]
+    async fn file_store_leaves_no_temp_file_behind() {
+        let dir = std::env::temp_dir().join(format!("ipetest_file_notmp_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(std::fs::create_dir_all(&dir).is_ok(), "make scratch dir");
+        let entries = |d: &std::path::Path| {
+            std::fs::read_dir(d).map_or_else(
+                |_| Vec::new(),
+                |it| {
+                    it.filter_map(|e| e.ok().map(|e| e.file_name()))
+                        .collect::<Vec<_>>()
+                },
+            )
+        };
+        let map = dir.join("sessions.json");
+        let Some(p) = map.to_str() else {
+            assert!(map.to_str().is_some(), "utf-8 temp path");
+            return;
+        };
+        let s: FileStore<i32, ()> = FileStore::new(p, Duration::from_secs(60), TEST_TAG);
+        s.set("s1", handle_i32(7)).await;
+        s.delete("s1").await;
+        assert_eq!(
+            entries(&dir),
+            vec![std::ffi::OsString::from("sessions.json")]
+        );
+
+        // The map path is a non-empty directory: every rename fails.
+        let blocked = dir.join("blocked.json");
+        assert!(std::fs::create_dir_all(blocked.join("x")).is_ok(), "block");
+        let Some(bp) = blocked.to_str() else {
+            return;
+        };
+        let s: FileStore<i32, ()> = FileStore::new(bp, Duration::from_secs(60), TEST_TAG);
+        s.set("s1", handle_i32(7)).await;
+        s.set("s2", handle_i32(8)).await;
+        assert!(
+            s.persist_failing.load(std::sync::atomic::Ordering::Relaxed),
+            "the failure is recorded"
+        );
+        let mut left = entries(&dir);
+        left.sort();
+        assert_eq!(
+            left,
+            vec![
+                std::ffi::OsString::from("blocked.json"),
+                std::ffi::OsString::from("sessions.json")
+            ]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

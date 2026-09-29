@@ -43,6 +43,10 @@ const READY_TIMEOUT: Duration = Duration::from_secs(8);
 /// to avoid an orphan child process.
 static CHILD: Mutex<Option<Child>> = Mutex::new(None);
 
+/// The zero-config console store's private directory, held for the life of the
+/// process (the child writes into it) and removed by [`shutdown_console`].
+static CONSOLE_SCRATCH: Mutex<Option<crate::scratch_core::ScratchDir>> = Mutex::new(None);
+
 /// Resolve the pre-built console binary path: `IPE_CONSOLE_BIN`, else the
 /// version-keyed cache path the build step populates. `None` when neither
 /// exists (→ the caller falls back to the in-process console; first build
@@ -137,13 +141,17 @@ pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Opti
     }
 }
 
-/// Kill the tracked console child (parent shutdown). Idempotent; never panics.
+/// Kill the tracked console child (parent shutdown), then remove the
+/// zero-config store directory. Idempotent; never panics.
 pub fn shutdown_console() {
     if let Ok(mut g) = CHILD.lock() {
         if let Some(child) = g.as_mut() {
             let _ = child.start_kill();
         }
         *g = None;
+    }
+    if let Ok(mut dir) = CONSOLE_SCRATCH.lock() {
+        drop(dir.take());
     }
 }
 
@@ -356,12 +364,12 @@ fn console_store_path() -> Option<String> {
         Ok(p) if !p.is_empty() => Some(p),
         _ => {
             let leaf = crate::scratch_core::LeafName::new("console.db").ok()?;
-            // The child owns the store for the life of the process, so the
-            // directory is kept past this call.
-            let dir = crate::scratch_core::ScratchDir::new("ipe-console")
-                .ok()?
-                .into_path();
-            Some(dir.join(leaf).to_string_lossy().into_owned())
+            let mut slot = CONSOLE_SCRATCH.lock().ok()?;
+            if slot.is_none() {
+                *slot = Some(crate::scratch_core::ScratchDir::new("ipe-console").ok()?);
+            }
+            slot.as_ref()
+                .map(|dir| dir.child(&leaf).to_string_lossy().into_owned())
         }
     }
 }

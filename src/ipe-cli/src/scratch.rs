@@ -7,6 +7,26 @@
 
 pub use ipe_sandbox::scratch::{LeafName, ScratchDir, ScratchFile};
 
+/// The watcher mirrors the atomic-replace sibling suffix (it cannot depend on
+/// the sandbox crate); the build breaks the instant the two drift.
+const _: [(); 0] = [(); if bytes_eq(
+    ipe_watch::scope::TEMP_SIBLING_SUFFIX.as_bytes(),
+    ipe_sandbox::scratch::TEMP_SIBLING_SUFFIX.as_bytes(),
+) {
+    0
+} else {
+    1
+}];
+
+/// Byte equality usable in a `const` context.
+const fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    match (a, b) {
+        ([], []) => true,
+        ([x, a @ ..], [y, b @ ..]) => *x == *y && bytes_eq(a, b),
+        ([], [_, ..]) | ([_, ..], []) => false,
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -118,56 +138,93 @@ mod tests {
         let _ = std::fs::remove_file(&canary);
     }
 
-    /// No PRODUCTION code in the `ipe-cli`, `ipe-wrapper`, or runtime crates
-    /// (outside the sanctioned `scratch` modules) derives a temp path from
-    /// `temp_dir()` — all such paths must go through a `scratch` module's
-    /// exclusively-created constructors.
+    /// The sanctioned scratch modules, by path relative to their scanned root.
+    ///
+    /// The one place `temp_dir()` may be joined (behind exclusive-create +
+    /// entropy). Exact names only — `scratch_helpers.rs` or `x/scratch.rs` is
+    /// audited like any other file.
+    const SANCTIONED_SCRATCH_MODULES: [&str; 3] =
+        ["scratch.rs", "scratch_core.rs", "scratch_host.rs"];
+
+    /// Whether root-relative `rel` is one of [`SANCTIONED_SCRATCH_MODULES`].
+    fn is_sanctioned_scratch_module(rel: &std::path::Path) -> bool {
+        SANCTIONED_SCRATCH_MODULES
+            .iter()
+            .any(|m| rel == std::path::Path::new(m))
+    }
+
+    /// Production lines exempt from the literal-`/tmp` rule.
+    ///
+    /// The base is only ever handed to `ScratchDir::new_under` (verified base,
+    /// CSPRNG name, exclusive 0700 create). `(root-relative file, trimmed line)`;
+    /// every entry must still match, so a stale exemption fails the gate.
+    const TMP_LITERAL_EXEMPT: [(&str, &str); 1] = [(
+        "ssrf.rs",
+        ".chain(std::iter::once(PathBuf::from(\"/tmp\")))",
+    )];
+
+    /// No production code derives a temp path from `temp_dir()` or `/tmp`.
+    ///
+    /// Covers the `ipe-cli`, `ipe-wrapper`, runtime, and sandbox crates outside
+    /// [`SANCTIONED_SCRATCH_MODULES`]: all such paths must go through a
+    /// `scratch` module's exclusively-created constructors.
     ///
     /// Both the single-line form (`temp_dir().join(name)`) and the split form
     /// (`let base = temp_dir(); base.join(name)`) are caught: a bare
     /// `temp_dir()` binding in production is flagged the moment its value is
-    /// `.join`-ed to build a path.
+    /// `.join`-ed to build a path. A `"/tmp"` literal is flagged when it builds
+    /// a path (`Path::new`, `PathBuf::from`, `.join`, `format!`) or is bound and
+    /// later joined.
     ///
-    /// Test-only code (`#[cfg(test)]` / `mod tests` blocks) is exempt: test
+    /// Test-only code (`#[cfg(test)]` items / `mod tests` blocks) is exempt: test
     /// helpers that use predictable names in isolated temp dirs do not expose the
     /// verify/exec or verify/read identity gap that the production paths do.
     ///
-    /// This is the class gate: it keeps the `toctou-verify-one-exec-other-scratch`
-    /// class closed against future PRODUCTION regressions across all three crates.
+    /// The walk fails closed: every root must exist and yield `.rs` files, and
+    /// any unreadable directory or file fails the gate rather than shrinking it.
     #[test]
     fn no_predictable_temp_names_in_production_code() {
-        // ipe-cli src, the sibling ipe-wrapper src (jail scratch and
-        // embedded-app temp paths), and the runtime src (every temp path an
-        // emitted program builds).
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let cli_src = manifest.join("src");
-        let siblings = manifest.parent().into_iter().flat_map(|p| {
-            [
-                p.join("ipe-wrapper").join("src"),
-                p.join("runtime").join("rust").join("src"),
-            ]
-        });
+        let src = manifest.parent();
+        assert!(src.is_some(), "{} has no parent", manifest.display());
+        let Some(src) = src else { return };
+        let roots = [
+            manifest.join("src"),
+            src.join("ipe-wrapper").join("src"),
+            src.join("runtime").join("rust").join("src"),
+            src.join("compiler").join("sandbox").join("src"),
+        ];
+        let mut exempt_hits = [0_usize; TMP_LITERAL_EXEMPT.len()];
 
-        for src_root in std::iter::once(cli_src).chain(siblings) {
+        for src_root in &roots {
             let mut rs_files: Vec<std::path::PathBuf> = Vec::new();
-            collect_rs_files(&src_root, &mut rs_files);
+            let walked = collect_rs_files(src_root, &mut rs_files);
+            assert!(
+                walked.is_ok(),
+                "cannot walk {}: {walked:?} — an unwalked tree cannot be audited",
+                src_root.display()
+            );
+            assert!(
+                !rs_files.is_empty(),
+                "{} yields no .rs files — a vanished root is not a clean one",
+                src_root.display()
+            );
             for path in &rs_files {
-                // The sanctioned scratch modules are the one place `temp_dir()`
-                // may be joined (behind exclusive-create + entropy).
-                if path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("scratch"))
-                {
+                let rel = path.strip_prefix(src_root);
+                assert!(
+                    rel.is_ok(),
+                    "{} is outside {}",
+                    path.display(),
+                    src_root.display()
+                );
+                let Ok(rel) = rel else { return };
+                if is_sanctioned_scratch_module(rel) {
                     continue;
                 }
                 // An out-of-line test module carries no inline `#[cfg(test)]`
                 // marker for the region tracker, so a confirmed one is exempt
                 // whole; an unconfirmed one stays in scope.
-                let is_test_module = path
-                    .strip_prefix(&src_root)
-                    .is_ok_and(|rel| panic_scan::is_verified_test_path(&src_root, rel));
-                if is_test_module {
+                if panic_scan::is_verified_test_path(src_root, rel) {
                     continue;
                 }
                 // An unread file is unaudited, not clean.
@@ -178,42 +235,108 @@ mod tests {
                     path.display()
                 );
                 let Ok(source) = source else { return };
-                assert_predictable_temp_free(path, &source);
+                let exempt: Vec<(usize, &str)> = TMP_LITERAL_EXEMPT
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (file, _))| rel == std::path::Path::new(file))
+                    .map(|(i, (_, line))| (i, *line))
+                    .collect();
+                let lines: Vec<&str> = exempt.iter().map(|(_, l)| *l).collect();
+                for used in audit_predictable_temp(path, &source, &lines) {
+                    if let Some((i, _)) = exempt.iter().find(|(_, l)| *l == used)
+                        && let Some(hits) = exempt_hits.get_mut(*i)
+                    {
+                        *hits += 1;
+                    }
+                }
             }
+        }
+        for ((file, line), hits) in TMP_LITERAL_EXEMPT.iter().zip(exempt_hits) {
+            assert!(
+                hits > 0,
+                "stale /tmp exemption {file}: `{line}` matched no line — remove it"
+            );
         }
     }
 
-    /// Assert `source` derives no temp path from `temp_dir()` in production code.
-    ///
-    /// Tracks `#[cfg(test)]`/`mod tests` regions by brace depth to exempt test
-    /// helpers, and tracks production `let <ident> = ...temp_dir();` bindings so a
-    /// later `<ident>.join(` (the split form) is caught as well as the inline
-    /// `temp_dir().join(` form.  Also flags `temp_dir` passed as a bare function
-    /// reference (e.g. `map_or_else(std::env::temp_dir, ...)` or
-    /// `map_or_else(temp_dir, ...)`), which is semantically equivalent to the
-    /// split form and was the original source of this defect class.
+    /// Assert `source` derives no temp path from `temp_dir()` or a literal `/tmp`
+    /// in production code.
     fn assert_predictable_temp_free(path: &std::path::Path, source: &str) {
-        let lines: Vec<&str> = source.lines().collect();
-        let mut in_test_region = false;
-        let mut brace_depth_at_test_entry: Option<usize> = None;
+        let _ = audit_predictable_temp(path, source, &[]);
+    }
+
+    /// Whether `line` opens a test-only region: a `#[cfg(test)]` attribute or a
+    /// `mod tests` item. Comments never do, so prose naming `mod tests` cannot
+    /// exempt the production code after it.
+    fn opens_test_region(line: &str) -> bool {
+        let t = line.trim_start();
+        !t.starts_with("//")
+            && (t.starts_with("#[cfg(test)]")
+                || ["mod tests", "pub mod tests", "pub(crate) mod tests"]
+                    .iter()
+                    .any(|p| t.starts_with(p)))
+    }
+
+    /// Whether `line` builds a path from a literal `/tmp` base.
+    fn builds_tmp_literal_path(line: &str) -> bool {
+        line.contains("\"/tmp")
+            && ["Path::new(", "PathBuf::from(", ".join(", "format!("]
+                .iter()
+                .any(|c| line.contains(c))
+    }
+
+    /// Audit `source`, panicking on the first predictable temp path in
+    /// production code. `exempt_tmp` lists trimmed lines allowed to name the
+    /// literal `/tmp` base; returns the exempt lines that were hit.
+    ///
+    /// A test region opens at a line [`opens_test_region`] accepts and covers
+    /// the item it decorates: through its closing `}` when a `{` opens first,
+    /// or through its `;` when the item ends before any brace (`#[cfg(test)]
+    /// use x;`), so a braceless test item never exempts what follows. Braces are
+    /// counted textually: one inside a string or comment is miscounted (the
+    /// documented limit of this line-level tracker). Production
+    /// `let <ident> = ...temp_dir();` / `let <ident> = ..."/tmp"...` bindings are
+    /// tracked so a later `<ident>.join(` (the split form) is caught as well as
+    /// the inline forms. `temp_dir` passed as a bare function reference (e.g.
+    /// `map_or_else(std::env::temp_dir, ...)`) is caught as the split form's
+    /// equivalent.
+    fn audit_predictable_temp<'e>(
+        path: &std::path::Path,
+        source: &str,
+        exempt_tmp: &[&'e str],
+    ) -> Vec<&'e str> {
+        let mut used = Vec::new();
         let mut brace_depth: usize = 0;
-        // Production idents currently bound to a `temp_dir()` value.
+        // Depth at the marker, and whether the decorated item opened its brace.
+        let mut test_region: Option<(usize, bool)> = None;
+        // Production idents currently bound to a temp base.
         let mut temp_bindings: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        for (i, &line) in lines.iter().enumerate() {
-            if line.contains("#[cfg(test)]") || line.contains("mod tests") {
-                in_test_region = true;
-                brace_depth_at_test_entry = Some(brace_depth);
+        for (i, &line) in source.lines().enumerate() {
+            if test_region.is_none() && opens_test_region(line) {
+                test_region = Some((brace_depth, false));
             }
-            brace_depth += line.chars().filter(|&c| c == '{').count();
-            brace_depth = brace_depth.saturating_sub(line.chars().filter(|&c| c == '}').count());
-            if in_test_region
-                && let Some(entry_depth) = brace_depth_at_test_entry
-                && brace_depth < entry_depth
-            {
-                in_test_region = false;
-                brace_depth_at_test_entry = None;
-                temp_bindings.clear();
+            let in_test_region = test_region.is_some();
+            for c in line.chars() {
+                match (c, test_region) {
+                    ('{', Some((entry, false))) => {
+                        brace_depth += 1;
+                        test_region = Some((entry, true));
+                    }
+                    ('{', _) => brace_depth += 1,
+                    ('}', Some((entry, true))) => {
+                        brace_depth = brace_depth.saturating_sub(1);
+                        if brace_depth <= entry {
+                            test_region = None;
+                            temp_bindings.clear();
+                        }
+                    }
+                    ('}', _) => brace_depth = brace_depth.saturating_sub(1),
+                    (';', Some((entry, false))) if brace_depth == entry => {
+                        test_region = None;
+                    }
+                    _ => {}
+                }
             }
 
             if in_test_region {
@@ -229,6 +352,22 @@ mod tests {
                 i + 1,
                 line.trim()
             );
+
+            // Literal `/tmp` base building a path, unless exempt.
+            if builds_tmp_literal_path(line) {
+                let exempt = exempt_tmp.iter().find(|e| line.trim() == **e);
+                assert!(
+                    exempt.is_some(),
+                    "predictable literal /tmp path in production code at {}:{} — \
+                     use temp_root() + ScratchDir::new_under instead.\n  line: {}",
+                    path.display(),
+                    i + 1,
+                    line.trim()
+                );
+                if let Some(e) = exempt {
+                    used.push(*e);
+                }
+            }
 
             // Fn-reference form: `temp_dir` used as a bare callable (without `()`)
             // in a combinator such as `map_or_else(std::env::temp_dir, ...)` or
@@ -248,9 +387,9 @@ mod tests {
                 line.trim()
             );
 
-            // Split form, part 1: record a `let <ident> = ...temp_dir();` binding
-            // (that does not itself `.join`).
-            if line.contains("temp_dir()")
+            // Split form, part 1: record a `let <ident> = ...temp_dir();` or
+            // `let <ident> = ..."/tmp"...;` binding (that does not itself `.join`).
+            if (line.contains("temp_dir()") || line.contains("\"/tmp"))
                 && !line.contains(".join")
                 && let Some(ident) = binding_ident(line)
             {
@@ -262,7 +401,7 @@ mod tests {
                 let joined = format!("{ident}.join(");
                 assert!(
                     !line.contains(&joined),
-                    "predictable split-form temp path (`{ident} = temp_dir(); {ident}.join(...)`) \
+                    "predictable split-form temp path (`{ident} = <temp base>; {ident}.join(...)`) \
                      in production code at {}:{} — use ScratchDir or ScratchFile instead.\n  line: {}",
                     path.display(),
                     i + 1,
@@ -270,6 +409,7 @@ mod tests {
                 );
             }
         }
+        used
     }
 
     /// Extract the bound identifier from a `let <ident> = ...;` line, if any.
@@ -286,18 +426,23 @@ mod tests {
         Some(name.to_owned())
     }
 
-    fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
+    /// Collect every `.rs` file under `dir`, failing on any unreadable directory
+    /// or entry. Symlinks are not followed (no loop, no escape from the root).
+    fn collect_rs_files(
+        dir: &std::path::Path,
+        out: &mut Vec<std::path::PathBuf>,
+    ) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
             let path = entry.path();
-            if path.is_dir() {
-                collect_rs_files(&path, out);
-            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                collect_rs_files(&path, out)?;
+            } else if kind.is_file() && path.extension().and_then(|e| e.to_str()) == Some("rs") {
                 out.push(path);
             }
         }
+        Ok(())
     }
 
     /// The class gate flags the inline predictable-temp form in production code.
@@ -386,5 +531,86 @@ mod tests {
             ScratchDir::new_under(base, \"ipe-add\")\n}\n";
         // Must not panic.
         assert_predictable_temp_free(std::path::Path::new("clean.rs"), clean);
+    }
+
+    /// Whether auditing `source` panics (the gate refuses it).
+    fn gate_refuses(source: &str) -> bool {
+        std::panic::catch_unwind(|| {
+            assert_predictable_temp_free(std::path::Path::new("injected.rs"), source);
+        })
+        .is_err()
+    }
+
+    /// A literal `/tmp` base building a path is refused, inline and split.
+    #[test]
+    fn class_gate_flags_literal_tmp_paths() {
+        for injected in [
+            "fn make() -> PathBuf {\n    PathBuf::from(\"/tmp\").join(\"n\")\n}\n",
+            "fn make() -> &'static Path {\n    Path::new(\"/tmp/ipe-fixed\")\n}\n",
+            "fn make() -> String {\n    format!(\"/tmp/ipe-{}\", 1)\n}\n",
+            "fn make() {\n    let root = \"/tmp\";\n    root.join(\"n\");\n}\n",
+        ] {
+            assert!(gate_refuses(injected), "gate must flag: {injected}");
+        }
+    }
+
+    /// An exempt `/tmp` line passes and is reported as used; the same line not
+    /// listed is refused.
+    #[test]
+    fn class_gate_tmp_exemption_is_exact_and_reported() {
+        let line = ".chain(std::iter::once(PathBuf::from(\"/tmp\")))";
+        let source = format!("fn bases() -> Vec<PathBuf> {{\n    roots\n        {line}\n}}\n");
+        let used = audit_predictable_temp(std::path::Path::new("ssrf.rs"), &source, &[line]);
+        assert_eq!(used, vec![line]);
+        assert!(gate_refuses(&source), "an unlisted /tmp line is refused");
+    }
+
+    /// A braceless `#[cfg(test)]` item and prose naming `mod tests` exempt
+    /// nothing after them.
+    #[test]
+    fn class_gate_test_region_never_leaks_into_production() {
+        for injected in [
+            "#[cfg(test)]\nuse std::env::temp_dir;\nfn make() -> PathBuf {\n    \
+             std::env::temp_dir().join(\"n\")\n}\n",
+            "// helpers live in mod tests below\nfn make() -> PathBuf {\n    \
+             std::env::temp_dir().join(\"n\")\n}\n",
+            "#[cfg(test)]\nmod tests;\nfn make() -> PathBuf {\n    \
+             std::env::temp_dir().join(\"n\")\n}\n",
+            "#[cfg(test)]\nmod tests {\n    fn t() {}\n}\nfn make() -> PathBuf {\n    \
+             std::env::temp_dir().join(\"n\")\n}\n",
+        ] {
+            assert!(gate_refuses(injected), "gate must flag: {injected}");
+        }
+    }
+
+    /// Only the exact sanctioned module paths are exempt.
+    #[test]
+    fn class_gate_sanctions_exact_scratch_modules_only() {
+        for ok in SANCTIONED_SCRATCH_MODULES {
+            assert!(
+                is_sanctioned_scratch_module(std::path::Path::new(ok)),
+                "{ok}"
+            );
+        }
+        for audited in [
+            "scratch_helpers.rs",
+            "scratchy.rs",
+            "web/scratch.rs",
+            "scratch.rs.bak",
+        ] {
+            assert!(
+                !is_sanctioned_scratch_module(std::path::Path::new(audited)),
+                "{audited} must be audited"
+            );
+        }
+    }
+
+    /// A missing root fails the walk rather than yielding an empty, clean tree.
+    #[test]
+    fn class_gate_walk_fails_closed_on_a_missing_root() {
+        let root = ScratchDir::new("ipe-gate-walk").expect("scratch dir");
+        let mut files = Vec::new();
+        assert!(collect_rs_files(&root.path().join("absent"), &mut files).is_err());
+        assert!(files.is_empty());
     }
 }
