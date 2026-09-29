@@ -635,6 +635,10 @@ lint: findings remain at or above the gate severity (see above)
 
 {path}: permission denied — grant read access to the file (and read and search access to its directory) to compile it
 
+## cli-source-symlink
+
+{path}: reached through a symlink — ipe never follows a symlink while walking a loose file's imports; replace the link with the real file or directory
+
 ## cli-path-escape
 
 manifest path {raw} was rejected: {reason}
@@ -646,6 +650,10 @@ output directory refused: {refusal}
 ## cli-discovery-limit-reached
 
 module-discovery walk aborted: {detail}
+
+## cli-device-named-module
+
+{path}: module segment `{segment}` is a reserved Windows device name, so this file cannot be the same module on every platform — rename it
 
 ## cli-advisory-vulnerable
 
