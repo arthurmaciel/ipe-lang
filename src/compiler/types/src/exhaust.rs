@@ -41,6 +41,7 @@ use ipe_canon::ast as canon;
 use ipe_diagnostics::{DResult, Diagnostic, SortedNames, Span, TypeError};
 use ipe_intern::{Interner, Symbol};
 
+use crate::homed::{HomedDiagnostic, HomedWarning};
 use crate::ty::Ty;
 
 /// Solved scrutinee types, keyed the way [`crate::SolvedTypes::regions`] is:
@@ -574,33 +575,56 @@ fn check_param_irrefutable(pat: &canon::Pattern) -> DResult<()> {
 /// full constructor signature instead of being skipped as unknown.
 ///
 /// Redundant-branch findings ([`TypeError::RedundantCaseBranch`], IPE-T0011)
-/// are pushed onto `warnings` instead of being returned as errors — they are
-/// severity-Warning and must not abort compilation.
+/// are pushed onto `warnings`, each paired with its owning definition's home,
+/// instead of being returned as errors — they are severity-Warning and must not
+/// abort compilation. A finding [`HomedWarning::new`] refuses (any non-Warning
+/// severity) becomes the returned error instead.
+///
+/// Every returned error carries the `home` of the definition that owns it. In a
+/// linked program spans are byte offsets local to their own source file, so a
+/// span alone cannot name its file: two modules overlap freely, and a finding
+/// in one would otherwise be framed against whichever module's definition
+/// happens to enclose the same offsets.
 ///
 /// # Errors
 /// * [`TypeError::RefutablePatternParameter`] when a param / binder is refutable.
 /// * [`TypeError::NonExhaustiveCase`] when the arms miss a value.
-/// * [`Diagnostic::CompilerBug`] if a constructor symbol cannot be resolved.
+/// * [`TypeError::WildcardCoversKnownConstructors`] (the first one, in
+///   definition order) when a catch-all arm hides constructors of a closed union.
+/// * [`Diagnostic::CompilerBug`] if a constructor symbol cannot be resolved
+///   (homeless: it belongs to no single definition).
 pub fn check(
     module: &canon::Module,
     extra_unions: &[&canon::Union],
     regions: &Regions,
     interner: &mut Interner,
-    warnings: &mut Vec<Diagnostic>,
-) -> DResult<()> {
-    let sigs = Sigs::build(module, extra_unions, interner)?;
+    warnings: &mut Vec<HomedWarning>,
+) -> Result<(), HomedDiagnostic> {
+    let sigs = Sigs::build(module, extra_unions, interner).map_err(|d| (d, Vec::new()))?;
+    let mut first_error: Option<HomedDiagnostic> = None;
     for def in &module.defs {
+        let home = def.home();
         let (patterns, body) = match def {
             canon::Def::Untyped { patterns, body, .. }
             | canon::Def::Typed { patterns, body, .. } => (patterns, body),
         };
         // Every function-def head parameter is a binding position.
         for p in patterns {
-            check_param_irrefutable(p)?;
+            check_param_irrefutable(p).map_err(|d| (d, home.to_vec()))?;
         }
-        check_expr(body, def.home(), &sigs, regions, interner, warnings)?;
+        let mut findings: Vec<Diagnostic> = Vec::new();
+        check_expr(body, home, &sigs, regions, interner, &mut findings)
+            .map_err(|d| (d, home.to_vec()))?;
+        for finding in findings {
+            match HomedWarning::new(finding, home) {
+                Ok(warning) => warnings.push(warning),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
     }
-    Ok(())
+    first_error.map_or(Ok(()), Err)
 }
 
 /// The read-only context threaded through the recursive `case` walk: the
@@ -736,7 +760,8 @@ fn check_expr_ctx(e: &canon::Expr, ctx: &Ctx<'_>, warnings: &mut Vec<Diagnostic>
 ///
 /// Redundant-branch findings are pushed onto `warnings` (IPE-T0011 is a
 /// Warning-severity diagnostic that must not abort compilation).
-/// Wildcard-lint findings are also warnings (IPE-T0018).
+/// Wildcard-lint findings (IPE-T0018) share that sink; [`check`] promotes the
+/// first Error-severity one to its home-attributed `Err`.
 fn check_case(
     scrut: &canon::Expr,
     branches: &[canon::CaseBranch],
