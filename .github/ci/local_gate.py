@@ -40,7 +40,7 @@ import re
 import shlex
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import strict_yaml  # noqa: E402  # the shared strict loader
@@ -83,6 +83,7 @@ PLACEHOLDERS = {
 }
 PLACEHOLDER_RE = re.compile(r"\{[a-z_]+\}")
 EXPR_RE = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
+OBJECT_ID_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
 def canon_expr(text: str) -> str:
@@ -100,6 +101,15 @@ CI_ONLY_FLAGS = frozenset({"--offline"})
 # Target kinds whose crate carries doctests (`cargo test --doc -p` refuses a
 # package without one).
 DOCTEST_KINDS = frozenset({"lib", "rlib", "dylib", "proc-macro"})
+
+# Characters a shell gives meaning to outside quotes. The gate runs a command
+# as an argv with no shell, so any of these would run literally here while the
+# token-equal CI line means something else there (a `$FILTER` that expands in
+# CI is a filter matching nothing locally, and a test run matching nothing
+# exits 0).
+SHELL_OPERATORS = frozenset("|&;<>()")
+SHELL_GLOBS = frozenset("*?[")
+SHELL_WORD_START = frozenset("~#!")
 
 LOCAL_KEYS_RUN = frozenset({"tier", "run"})
 COMMAND_KEYS = frozenset({"cmd", "env", "cwd", "differs"})
@@ -141,6 +151,59 @@ class CiOnly:
 LocalDisposition = RunLocal | CoveredBy | CiOnly
 
 
+def shell_hazard(text: str) -> str | None:
+    """Why `text` would not mean the same to a shell as to `shlex.split`.
+
+    The quote-aware scan refuses what a shell would expand, glob, redirect,
+    chain or comment: `$` and backquote outside single quotes; operators,
+    globs, braces other than a whole placeholder, a backslash, a word-leading
+    `~`, `#` or `!` outside any quotes; a newline anywhere; and a leading
+    `NAME=value` assignment (declare it under `env:`). None when inert.
+    """
+    if "\n" in text or "\r" in text:
+        return "a newline separates shell commands"
+    quote: str | None = None
+    word_start = True
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote == "'":
+            if ch == "'":
+                quote = None
+        elif ch == "\\":
+            return "a backslash outside single quotes escapes differently in a shell"
+        elif quote == '"':
+            if ch == '"':
+                quote = None
+            elif ch in "$`":
+                return f"{ch!r} expands inside double quotes"
+        elif ch in "'\"":
+            quote = ch
+        elif ch in "$`":
+            return f"{ch!r} expands in a shell"
+        elif ch in SHELL_OPERATORS:
+            return f"{ch!r} is a shell operator"
+        elif ch in SHELL_GLOBS:
+            return f"{ch!r} is a shell glob"
+        elif ch == "{":
+            m = PLACEHOLDER_RE.match(text, i)
+            if m is None:
+                return "'{' outside a placeholder is a shell brace expansion"
+            i = m.end()
+            word_start = False
+            continue
+        elif ch == "}":
+            return "'}' outside a placeholder is a shell brace expansion"
+        elif word_start and ch in SHELL_WORD_START:
+            return f"a word-leading {ch!r} is shell syntax (home expansion, comment or negation)"
+        word_start = quote is None and ch in " \t"
+        i += 1
+    first = text.split(None, 1)[0] if text.split() else ""
+    if "=" in first and ENV_NAME_RE.match(first.split("=", 1)[0]):
+        return "a leading NAME=value is a shell assignment; declare it under `env:`"
+    return None
+
+
 def _parse_command(raw: object, loc: str, errors: list[str]) -> Command | None:
     """Parse one `run:` item, refusing every malformed shape."""
     if isinstance(raw, str):
@@ -160,6 +223,10 @@ def _parse_command(raw: object, loc: str, errors: list[str]) -> Command | None:
     if "${{" in text:
         errors.append(f"{loc}: {text!r} holds a workflow expression; use a placeholder")
         ok = False
+    hazard = shell_hazard(text)
+    if hazard is not None:
+        errors.append(f"{loc}: {text!r} is not inert without a shell: {hazard}")
+        return None
     try:
         argv = tuple(shlex.split(text))
     except ValueError as e:
@@ -221,7 +288,7 @@ def parse_local(ctx: str, raw: object, errors: list[str]) -> LocalDisposition | 
         return CoveredBy(target)
     if keys == {"ci-only"}:
         reason = raw["ci-only"]
-        if reason not in CI_ONLY_REASONS:
+        if not isinstance(reason, str) or reason not in CI_ONLY_REASONS:
             errors.append(f"{loc}: ci-only reason {reason!r} is not one of {sorted(CI_ONLY_REASONS)}")
             return None
         return CiOnly(reason)
@@ -248,7 +315,10 @@ def parse_local(ctx: str, raw: object, errors: list[str]) -> LocalDisposition | 
 def parse_manifest_locals(entries: list[dict], errors: list[str]) -> dict[str, LocalDisposition]:
     """Parse every entry's `local:`; a gate needs one, any other entry none."""
     parsed: dict[str, LocalDisposition] = {}
-    for e in entries:
+    for i, e in enumerate(entries):
+        if not isinstance(e, dict):
+            errors.append(f"checks[{i}]: an entry is a mapping, got {type(e).__name__}")
+            continue
         ctx = e.get("context")
         if not isinstance(ctx, str):
             continue
@@ -308,6 +378,18 @@ def _job_matches(job_id: str, job: dict, names: set[str]) -> bool:
     return job_id in names or name in names or any(name.startswith(n + " (") for n in names)
 
 
+def _default_working_directory(doc: dict) -> str | None:
+    """`defaults.run.working-directory` of a job or workflow, if declared.
+
+    GitHub resolves each `defaults.run` key on its own (job over workflow), so
+    a job's `defaults` without a working directory keeps the workflow's.
+    """
+    defaults = doc.get("defaults")
+    run = defaults.get("run") if isinstance(defaults, dict) else None
+    wd = run.get("working-directory") if isinstance(run, dict) else None
+    return str(wd) if wd is not None else None
+
+
 def ci_lines(workflow_doc: dict, ctx: str, aggregates: list[str]) -> list[CiLine]:
     """Every command line of the jobs producing `ctx` (and those it aggregates)."""
     names = {ctx, *aggregates}
@@ -317,8 +399,7 @@ def ci_lines(workflow_doc: dict, ctx: str, aggregates: list[str]) -> list[CiLine
         if not isinstance(job, dict) or not _job_matches(str(job_id), job, names):
             continue
         job_env = {**wf_env, **_mapping(job.get("env"))}
-        defaults = job.get("defaults") or workflow_doc.get("defaults") or {}
-        default_wd = (defaults.get("run") or {}).get("working-directory", ".") if isinstance(defaults, dict) else "."
+        default_wd = _default_working_directory(job) or _default_working_directory(workflow_doc) or "."
         for step in job.get("steps") or []:
             if not isinstance(step, dict) or not isinstance(step.get("run"), str):
                 continue
@@ -380,8 +461,11 @@ def load_workflow(producer: str, github_dir: str) -> dict | None:
     path = os.path.join(github_dir, "workflows", producer)
     if not os.path.isfile(path):
         return None
-    with open(path) as f:
-        doc = strict_yaml.safe_load(f)
+    try:
+        with open(path) as f:
+            doc = strict_yaml.safe_load(f)
+    except (OSError, strict_yaml.yaml.YAMLError):
+        return None
     return doc if isinstance(doc, dict) else None
 
 
@@ -390,7 +474,7 @@ def check_local_dispositions(
 ) -> dict[str, LocalDisposition]:
     """Parse every `local:` and refuse any that drifts from its CI producer."""
     parsed = parse_manifest_locals(entries, errors)
-    by_ctx = {e.get("context"): e for e in entries}
+    by_ctx = {e.get("context"): e for e in entries if isinstance(e, dict)}
     for ctx, disp in parsed.items():
         if not isinstance(disp, RunLocal):
             continue
@@ -398,16 +482,23 @@ def check_local_dispositions(
         producer = entry.get("producer")
         doc = load_workflow(str(producer), github_dir) if producer else None
         if doc is None:
-            errors.append(f"{ctx!r} local: producer workflow {producer!r} not found")
+            errors.append(f"{ctx!r} local: producer workflow {producer!r} not found or not a loadable mapping")
             continue
         check_drift(ctx, disp, ci_lines(doc, ctx, list(entry.get("aggregates") or [])), errors)
     return parsed
 
 
 def load_manifest_entries(path: str = MANIFEST) -> list[dict]:
-    with open(path) as f:
-        doc = strict_yaml.safe_load(f)
-    return list(doc["checks"])
+    """The manifest's `checks` list; ValueError when the document has none."""
+    try:
+        with open(path) as f:
+            doc = strict_yaml.safe_load(f)
+    except strict_yaml.yaml.YAMLError as e:
+        raise ValueError(f"{path}: {e}") from e
+    checks = doc.get("checks") if isinstance(doc, dict) else None
+    if not isinstance(checks, list):
+        raise ValueError(f"{path}: no top-level `checks:` list")
+    return checks
 
 
 # ---- planning: which commands a tier runs, over which packages -----------
@@ -422,6 +513,9 @@ class Workspace:
     member_dirs: dict[str, str]
     doctest: frozenset[str]
     path_deps: dict[str, frozenset[str]]
+    # owner -> members whose sources read a path inside it without a cargo
+    # edge (see `source_readers`). Empty until `with_source_readers`.
+    readers: dict[str, frozenset[str]] = field(default_factory=dict)
 
     @staticmethod
     def from_metadata(meta: dict) -> Workspace:
@@ -450,12 +544,23 @@ class Workspace:
                 best = (len(d), name)
         return best[1] if best else None
 
+    def owners_within(self, path: str) -> set[str]:
+        """Members owning `path` or any file under it (a directory path)."""
+        found = {n for n, d in self.member_dirs.items() if d and d.startswith(path + "/")}
+        owner = self.owner(path)
+        return found | {owner} if owner else found
+
+    def with_source_readers(self) -> Workspace:
+        return replace(self, readers=source_readers(self))
+
     def reverse_closure(self, seeds: set[str]) -> set[str]:
-        """`seeds` plus every member that depends on one, transitively."""
+        """`seeds` plus every member that depends on or reads one, transitively."""
         rdeps: dict[str, set[str]] = {n: set() for n in self.member_dirs}
         for n, ds in self.path_deps.items():
             for d in ds:
                 rdeps.setdefault(d, set()).add(n)
+        for owner, rs in self.readers.items():
+            rdeps.setdefault(owner, set()).update(rs)
         out = set(seeds)
         pending = list(seeds)
         while pending:
@@ -464,6 +569,76 @@ class Workspace:
                     out.add(r)
                     pending.append(r)
         return out
+
+
+# A Rust string literal's body (escapes kept; raw strings are read as plain).
+RUST_STR_RE = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
+SCAN_PRUNE = frozenset({"target", ".git", "node_modules"})
+
+
+def _path_literal(lit: str) -> str | None:
+    """A literal that names a relative path, leading `/` stripped (as after
+    `concat!(env!("CARGO_MANIFEST_DIR"), "/...")`).
+
+    None for a literal no file reference is spelled as, only path-traversal
+    test strings are: a bare `..` chain, or a `..` after a named component.
+    """
+    if "/" not in lit:
+        return None
+    parts = [p for p in lit.split("/") if p not in ("", ".")]
+    named = [p for p in parts if p != ".."]
+    if not named or parts.index(named[0]) < max((i for i, p in enumerate(parts) if p == ".."), default=-1):
+        return None
+    return lit.lstrip("/")
+
+
+def source_readers(ws: Workspace) -> dict[str, frozenset[str]]:
+    """owner -> the members whose Rust sources name an existing path inside it.
+
+    A crate that `include_str!`s, `include!`s or reads another crate's file
+    (a stdlib `.ipe`, a runtime source, a template directory) is affected by a
+    change there even with no cargo edge between them. Each `.rs` file of a
+    member is scanned for path literals, resolved against the file's
+    directory, the crate directory and the repository root; any that exists
+    inside a different member (or is a directory holding members) adds an edge.
+    An extra edge only widens `affected`.
+
+    LIMIT: a path assembled from single-component pieces at run time
+    (`dir.join("stdlib").join("Ipe")`) is invisible to a literal scan.
+    """
+    member_abs = {os.path.join(ws.root, d) for d in ws.member_dirs.values() if d}
+    edges: dict[str, set[str]] = {}
+    for name, rel_dir in ws.member_dirs.items():
+        if not rel_dir:
+            continue
+        crate = os.path.join(ws.root, rel_dir)
+        for dirpath, dirnames, filenames in os.walk(crate):
+            dirnames[:] = [
+                d for d in dirnames if d not in SCAN_PRUNE and os.path.join(dirpath, d) not in member_abs
+            ]
+            for fn in filenames:
+                if not fn.endswith(".rs"):
+                    continue
+                with open(os.path.join(dirpath, fn), encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+                for lit in RUST_STR_RE.findall(text):
+                    rel = _path_literal(lit)
+                    if rel is None:
+                        continue
+                    for base in (dirpath, crate, ws.root):
+                        target = os.path.normpath(os.path.join(base, rel))
+                        rel_target = os.path.relpath(target, ws.root)
+                        if rel_target == "." or rel_target.split(os.sep)[0] == ".." or not os.path.exists(target):
+                            continue
+                        for owner in ws.owners_within(rel_target):
+                            if owner != name:
+                                edges.setdefault(owner, set()).add(name)
+    return {o: frozenset(rs) for o, rs in edges.items()}
+
+
+def load_workspace(repo_root: str) -> Workspace:
+    """The workspace from `cargo metadata`, with its source-read edges."""
+    return Workspace.from_metadata(cargo_metadata(repo_root)).with_source_readers()
 
 
 @dataclass(frozen=True)
@@ -481,10 +656,12 @@ class Selection:
 
 
 def select_packages(tier: Tier, changed: list[str], ws: Workspace) -> Selection:
-    """Map changed files to the packages a tier covers, failing closed.
+    """Map changed files to the packages a tier covers.
 
     A file no member owns (workspace manifests, lockfile, config, shared
     fixtures) may affect every crate, so it selects the whole workspace.
+    `affected` widens the owners by cargo path edges and by the source-read
+    edges of `Workspace.readers`; see `source_readers` for the one LIMIT.
     """
     if tier is Tier.FULL:
         return Selection(None)
@@ -577,7 +754,12 @@ def changed_files(repo_root: str, base: str) -> list[str]:
     def git(*args: str) -> str:
         return subprocess.run(["git", *args], cwd=repo_root, check=True, capture_output=True, text=True).stdout
 
-    merge_base = git("merge-base", "HEAD", base).strip()
-    tracked = git("diff", "--name-only", merge_base).splitlines()
-    untracked = git("ls-files", "--others", "--exclude-standard").splitlines()
+    # `--end-of-options`: a `--base` spelled like an option stays a revision.
+    merge_base = git("merge-base", "--end-of-options", "HEAD", base).strip()
+    if not OBJECT_ID_RE.fullmatch(merge_base):
+        raise subprocess.CalledProcessError(1, ["git", "merge-base"], stderr=f"no merge-base with {base!r}")
+    # `--no-renames`: a moved file names its old path too, whose crate lost it.
+    # `-z`: paths arrive verbatim, never C-quoted.
+    tracked = git("diff", "--name-only", "--no-renames", "-z", merge_base, "--").split("\0")
+    untracked = git("ls-files", "-z", "--others", "--exclude-standard").split("\0")
     return sorted({p for p in tracked + untracked if p})

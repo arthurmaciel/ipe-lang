@@ -15,13 +15,15 @@ MARKER="# ipe-gate-pre-push-hook"
 hooks_dir="$(git rev-parse --git-path hooks)"
 hook="${hooks_dir}/pre-push"
 
+# A symlink is never ours: writing through one (even a dangling one, which
+# `-e` reports absent) would clobber whatever file it points at.
 ours() {
-  [[ -f "$hook" ]] && head -n 2 "$hook" | tail -n 1 | { read -r line; [[ "$line" == "$MARKER" ]]; }
+  [[ ! -L "$hook" && -f "$hook" ]] && head -n 2 "$hook" | tail -n 1 | { read -r line; [[ "$line" == "$MARKER" ]]; }
 }
 
 case "${1:-}" in
   "")
-    if [[ -e "$hook" ]] && ! ours; then
+    if { [[ -e "$hook" || -L "$hook" ]]; } && ! ours; then
       echo "install-pre-push-hook: $hook exists and was not written by this script; leaving it alone" >&2
       exit 1
     fi
@@ -38,7 +40,7 @@ EOF
     echo "install-pre-push-hook: installed $hook (runs tools/scripts/gate quick)"
     ;;
   --uninstall)
-    if [[ ! -e "$hook" ]]; then
+    if [[ ! -e "$hook" && ! -L "$hook" ]]; then
       echo "install-pre-push-hook: no pre-push hook installed"
       exit 0
     fi

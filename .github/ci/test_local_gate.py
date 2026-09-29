@@ -14,6 +14,7 @@ Pure stdlib `unittest`, no network, no cargo.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -118,6 +119,12 @@ class ShapeRefusals(Fixture):
     def test_bad_ci_only_reason(self) -> None:
         self.refuses("ci-only reason 'slow'", gate("fmt", {"ci-only": "slow"}))
 
+    def test_unhashable_ci_only_reason(self) -> None:
+        self.refuses("ci-only reason ['platform']", gate("fmt", {"ci-only": ["platform"]}))
+
+    def test_non_mapping_entry(self) -> None:
+        self.refuses("checks[0]: an entry is a mapping", "fmt")  # type: ignore[arg-type]
+
     def test_covered_by_self(self) -> None:
         self.refuses("covered-by 'fmt'", gate("fmt", {"covered-by": "fmt"}))
 
@@ -168,6 +175,56 @@ class CommandRefusals(Fixture):
 
     def test_empty_differs(self) -> None:
         self.refuses("must state why", gate("fmt", run({"cmd": "cargo fmt", "differs": ""})))
+
+
+class ShellHazardRefusals(Fixture):
+    """A command runs as an argv with no shell; shell syntax would run literally."""
+
+    def refused(self, text: str) -> None:
+        self.refuses("is not inert without a shell", gate("fmt", run(text)))
+
+    def test_variable(self) -> None:
+        self.refused("cargo nextest run $FILTER")
+
+    def test_braced_variable(self) -> None:
+        self.refused("cargo nextest run ${FILTER}")
+
+    def test_variable_in_double_quotes(self) -> None:
+        self.refused('cargo nextest run "$FILTER"')
+
+    def test_command_substitution(self) -> None:
+        self.refused("cargo nextest run `cat filter`")
+
+    def test_operators(self) -> None:
+        for text in ("cargo doc && cargo test", "cargo doc | tee log", "cargo doc; true", "cargo doc > log", "(cargo doc)"):
+            with self.subTest(text=text):
+                self.refused(text)
+
+    def test_glob(self) -> None:
+        for text in ("git diff --exit-code docs/*.md", "ls a?", "ls [ab]"):
+            with self.subTest(text=text):
+                self.refused(text)
+
+    def test_brace_expansion(self) -> None:
+        self.refused("git diff --exit-code docs/{a,b}.md")
+
+    def test_home_comment_negation(self) -> None:
+        for text in ("ls ~/x", "cargo doc # trailing", "! cargo test"):
+            with self.subTest(text=text):
+                self.refused(text)
+
+    def test_backslash(self) -> None:
+        self.refused("cargo test a\\ b")
+
+    def test_newline(self) -> None:
+        self.refused("cargo doc\ncargo test")
+
+    def test_assignment_prefix(self) -> None:
+        self.refused("IPE_E2E=1 cargo nextest run --workspace")
+
+    def test_inert_quoting_and_placeholders_accepted(self) -> None:
+        self.assertIsNone(lg.shell_hazard("cargo nextest run -E 'test(/a$b*/)' {packages} --root={repo_root}"))
+        self.assertIsNone(lg.shell_hazard('cargo run -- "a b" --flag=x'))
 
 
 class DriftRefusals(Fixture):
@@ -236,6 +293,20 @@ class DriftAccepts(Fixture):
 
     def test_differs_waives_only_tokens(self) -> None:
         self.accepts(gate("clippy", run({"cmd": "cargo clippy -p one", "differs": "local variant"})))
+
+    def test_workflow_working_directory_survives_job_defaults(self) -> None:
+        doc = {
+            "defaults": {"run": {"working-directory": "editors/grammar"}},
+            "jobs": {"g": {"defaults": {"run": {"shell": "bash"}}, "steps": [{"run": "tree-sitter test"}]}},
+        }
+        self.assertEqual([ln.cwd for ln in lg.ci_lines(doc, "g", [])], ["editors/grammar"])
+
+    def test_job_working_directory_wins(self) -> None:
+        doc = {
+            "defaults": {"run": {"working-directory": "a"}},
+            "jobs": {"g": {"defaults": {"run": {"working-directory": "b"}}, "steps": [{"run": "x"}]}},
+        }
+        self.assertEqual([ln.cwd for ln in lg.ci_lines(doc, "g", [])], ["b"])
 
     def test_covered_by_and_ci_only(self) -> None:
         self.accepts(
@@ -308,6 +379,95 @@ class Selection(unittest.TestCase):
         self.assertIsNone(lg.select_packages(lg.Tier.FULL, ["src/core/a.rs"], workspace()).packages)
 
 
+class SourceReaders(unittest.TestCase):
+    """A crate reading another crate's file with no cargo edge is affected by it."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        root = self.tmp.name
+        files = {
+            "src/core/src/lib.rs": "",
+            "src/core/data/table.txt": "",
+            "src/back/src/lib.rs": "",
+            "src/back/rust/src/lib.rs": "",
+            "src/back/rust/templates/main.rs": "",
+            # include_str! relative to the file, and a manifest-dir concat.
+            "src/cli/tests/ssot.rs": (
+                'const T: &str = include_str!("../../core/data/table.txt");\n'
+                'const U: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../back/rust/templates");\n'
+            ),
+            # Path-traversal strings and names of absent files add no edge.
+            "src/core/tests/paths.rs": '"a/../../.."; "../.."; "../back/gone.rs"; "../../cli/tests/ssot.rs";',
+        }
+        for rel, text in files.items():
+            path = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(text)
+        self.ws = lg.Workspace(
+            root=root,
+            target_dir=os.path.join(root, "target"),
+            member_dirs={"core": "src/core", "back": "src/back", "rust": "src/back/rust", "cli": "src/cli"},
+            doctest=frozenset(),
+            path_deps={"core": frozenset(), "back": frozenset(), "rust": frozenset(), "cli": frozenset()},
+        ).with_source_readers()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_edges(self) -> None:
+        self.assertEqual(
+            self.ws.readers,
+            {"core": frozenset({"cli"}), "rust": frozenset({"cli"}), "cli": frozenset({"core"})},
+        )
+
+    def test_affected_selects_the_reader(self) -> None:
+        sel = lg.select_packages(lg.Tier.AFFECTED, ["src/core/data/table.txt"], self.ws)
+        self.assertEqual(sel.packages, frozenset({"core", "cli"}))
+
+    def test_nested_member_files_are_not_the_parents(self) -> None:
+        sel = lg.select_packages(lg.Tier.AFFECTED, ["src/back/src/lib.rs"], self.ws)
+        self.assertEqual(sel.packages, frozenset({"back"}))
+
+
+class ChangedFiles(unittest.TestCase):
+    """`changed_files` against a real throwaway repository."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        self.git("init", "-q", "-b", "main")
+        os.makedirs(os.path.join(self.root, "src/a"))
+        with open(os.path.join(self.root, "src/a/moved.rs"), "w") as f:
+            f.write("fn moved() {}\n" * 20)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "base")
+        self.git("checkout", "-q", "-b", "topic")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def git(self, *args: str) -> None:
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        ident = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+        subprocess.run(["git", *ident, *args], cwd=self.root, check=True, capture_output=True, env=env)
+
+    def test_a_rename_reports_both_paths(self) -> None:
+        os.makedirs(os.path.join(self.root, "src/b"))
+        self.git("mv", "src/a/moved.rs", "src/b/moved.rs")
+        self.git("commit", "-q", "-m", "move")
+        self.assertEqual(lg.changed_files(self.root, "main"), ["src/a/moved.rs", "src/b/moved.rs"])
+
+    def test_untracked_and_unusual_names_are_verbatim(self) -> None:
+        with open(os.path.join(self.root, "src/a/sp ace\u00e9.rs"), "w") as f:
+            f.write("")
+        self.assertEqual(lg.changed_files(self.root, "main"), ["src/a/sp ace\u00e9.rs"])
+
+    def test_option_shaped_base_is_a_revision(self) -> None:
+        with self.assertRaises(subprocess.CalledProcessError):
+            lg.changed_files(self.root, "--output=/tmp/x")
+
+
 class Plan(unittest.TestCase):
     def test_quick_runs_quick_only(self) -> None:
         self.assertEqual(
@@ -349,6 +509,24 @@ class LiveManifest(unittest.TestCase):
         parsed = lg.check_local_dispositions(lg.load_manifest_entries(), errs)
         self.assertEqual(errs, [])
         self.assertTrue(any(isinstance(d, lg.RunLocal) and d.tier is lg.Tier.QUICK for d in parsed.values()))
+
+    def test_live_source_readers_include_known_cross_crate_reads(self) -> None:
+        # kernels' veneer SSOT tests read the stdlib `.ipe` sources; ffi reads
+        # the inspector's model; neither has a cargo edge in that direction.
+        ws = lg.Workspace(
+            root=lg.REPO_ROOT,
+            target_dir="",
+            member_dirs={
+                "ipe_kernels": "src/compiler/kernels",
+                "ipe_stdlib": "src/stdlib",
+                "ipe_ffi": "src/compiler/ffi",
+                "ipe-ffi-inspector": "tools/ipe-ffi-inspector",
+            },
+            doctest=frozenset(),
+            path_deps={},
+        ).with_source_readers()
+        self.assertIn("ipe_kernels", ws.readers.get("ipe_stdlib", frozenset()))
+        self.assertIn("ipe_ffi", ws.readers.get("ipe-ffi-inspector", frozenset()))
 
 
 if __name__ == "__main__":

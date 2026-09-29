@@ -10,8 +10,9 @@ first, and a manifest whose `local:` blocks drift from CI refuses to run.
 
   quick     fmt, clippy on the changed crates, workspace check, static guards,
             panic-scan and every generated-doc drift check.
-  affected  quick and tests, both over the changed crates and their reverse
-            dependencies, plus the example / admission / advisory gates.
+  affected  quick and tests, both over the changed crates plus every crate
+            that depends on one or names a path inside one in its sources,
+            plus the example / admission / advisory gates.
   full      the CI mirror: every locally reproducible gate over the whole
             workspace, `IPE_E2E=1` included.
 
@@ -44,8 +45,12 @@ def main() -> int:
     args = ap.parse_args()
     tier = local_gate.TIER_NAMES[args.tier]
 
-    entries = local_gate.load_manifest_entries()
     errors: list[str] = []
+    try:
+        entries = local_gate.load_manifest_entries()
+    except (OSError, ValueError) as e:
+        print(f"gate: cannot load check-manifest.yml; refusing to run: {e}", file=sys.stderr)
+        return 2
     parsed = local_gate.check_local_dispositions(entries, errors)
     if errors:
         print("gate: check-manifest.yml `local:` blocks are invalid; refusing to run:", file=sys.stderr)
@@ -54,7 +59,7 @@ def main() -> int:
         return 2
 
     try:
-        ws = local_gate.Workspace.from_metadata(local_gate.cargo_metadata(REPO_ROOT))
+        ws = local_gate.load_workspace(REPO_ROOT)
         changed = local_gate.changed_files(REPO_ROOT, args.base)
     except (subprocess.CalledProcessError, OSError) as e:
         detail = e.stderr.strip() if isinstance(e, subprocess.CalledProcessError) and e.stderr else str(e)
