@@ -158,6 +158,12 @@ const fn memo_entry_bytes(layout_len: usize) -> usize {
         .saturating_add(size_of::<u64>())
 }
 
+/// What one cut layout occupies: a memo entry whose key also carries its
+/// [`CutBound`].
+const fn cut_entry_bytes(layout_len: usize) -> usize {
+    memo_entry_bytes(layout_len.saturating_add(size_of::<CutBound>()))
+}
+
 /// A whole memoized layout, with the width its tail lines need.
 struct Layout {
     text: String,
@@ -219,8 +225,15 @@ struct Memo {
     /// The first line, through its newline, of each layout a first-line [`trial`]
     /// rendered and saw break; charged to `bytes` like `layouts`.
     first_lines: HashMap<MemoKey, String>,
-    /// Where the innermost first-line [`trial`] stops laying out.
+    /// Where the innermost bounded [`trial`] stops laying out.
     stop_mark: Option<StopMark>,
+    /// Whether the innermost width-bounded [`trial`] has cut its layout short
+    /// since the innermost open memoized render began.
+    cut: bool,
+    /// The layouts a width-bounded [`trial`] cut short, apart from `layouts`:
+    /// each is laid out only up to where the cut decided its trial, so it is
+    /// replayed only under the same cut; charged [`cut_entry_bytes`] to `bytes`.
+    cuts: HashMap<CutKey, String>,
     /// [`is_block_like`] per node, computed once.
     block_like: HashMap<usize, bool>,
     /// [`is_glue_shape`] per node, computed once.
@@ -239,7 +252,7 @@ struct Memo {
 }
 
 /// Everything a node's render reads besides the node itself.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct MemoKey {
     node: usize,
     cfg: RenderConfig,
@@ -250,7 +263,7 @@ struct MemoKey {
 }
 
 /// Which renderer laid a node out, with the inputs only that renderer reads.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Pass {
     /// [`render_at`], flat or letting the node's own groups decide.
     Layout { flat: bool },
@@ -261,7 +274,7 @@ enum Pass {
 /// What a render reads of the buffer it appends to: whether anything is written
 /// yet, the current line's length and whether it is all indentation, and the run
 /// of trailing spaces a break may trim before writing its newline.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Cursor {
     empty: bool,
     line_len: usize,
@@ -374,6 +387,8 @@ impl MemoScope {
             flat_measures: HashMap::new(),
             first_lines: HashMap::new(),
             stop_mark: None,
+            cut: false,
+            cuts: HashMap::new(),
             block_like: HashMap::new(),
             glue_shapes: HashMap::new(),
             delimited_exprs: HashMap::new(),
@@ -559,17 +574,23 @@ fn render_flat_shared(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, o
     }
     let start = out.len();
     let base = out.trim_end_matches(' ').len();
-    memoized(
-        doc,
-        cfg,
-        indent,
-        col,
-        Pass::Layout { flat: true },
-        out,
-        |out| {
-            render_node(doc, cfg, indent, col, true, out);
-        },
-    );
+    let cut = cut_during(out, |out| {
+        memoized(
+            doc,
+            cfg,
+            indent,
+            col,
+            Pass::Layout { flat: true },
+            out,
+            |out| {
+                render_node(doc, cfg, indent, col, true, out);
+            },
+        );
+    });
+    // A layout a width bound cut short is not the one every context appends.
+    if cut {
+        return;
+    }
     let appended = out
         .get(base..)
         .is_some_and(|written| !written.contains('\n'));
@@ -601,31 +622,222 @@ enum Reach {
     Done,
 }
 
-/// The buffer, and the offset in it, from which a first-line [`trial`] watches
-/// for its first newline.
+/// The buffer, and the offset in it, from which a [`trial`] watches for where
+/// it stops laying out.
 #[derive(Clone, Copy)]
 struct StopMark {
     addr: usize,
     from: usize,
+    bound: StopBound,
+}
+
+/// Where a [`trial`] stops laying out, with what it has already scanned.
+///
+/// A width-bounded trial decides a verdict that fails once one byte lands past
+/// its width that no later trim can remove, so it stops there: the rest of the
+/// layout could not change the verdict. Its scan state only skips bytes already
+/// scanned — nothing below a buffer's trailing-space run is rewritten except by
+/// a nested trial's roll back, which restores it.
+#[derive(Clone, Copy)]
+enum StopBound {
+    /// At the first newline.
+    FirstLine,
+    /// At the first newline, or at the first byte past `width` on the first line
+    /// that is not a space or an open delimiter; nothing below `clear` is one.
+    FirstLineWithin { width: usize, clear: usize },
+    /// Once a line after the first newline carries content wider than `width`;
+    /// every line before `tail` is scanned and fits.
+    WholeWithin { width: usize, tail: Option<usize> },
+}
+
+/// Whether a byte on a line leaves a width verdict open: a space may be trimmed,
+/// and an open delimiter ending a head is not counted in its width.
+const fn width_neutral(byte: u8) -> bool {
+    matches!(byte, b' ' | b'(' | b'{' | b'[')
+}
+
+/// The width a line's content takes: without its indentation, nor the trailing
+/// spaces a break trims.
+fn content_width(line: &str) -> usize {
+    line.trim_start().trim_end_matches(' ').len()
+}
+
+impl StopMark {
+    /// The [`Reach`] of a render into `out`, and whether the mark's width bound
+    /// has cut the trial short.
+    ///
+    /// A trial never writes below its `from` offset and a buffer only grows past
+    /// its last newline — a break trims trailing spaces, never a newline — so
+    /// once a newline sits at or past `from` the trial's first line is final, and
+    /// a byte past the width that no trim removes stays on its line.
+    fn observe(&mut self, out: &str) -> (Reach, bool) {
+        let from = self.from;
+        let last_newline = out.rfind('\n');
+        let past_first_line = last_newline.is_some_and(|nl| nl >= from);
+        match &mut self.bound {
+            StopBound::FirstLine | StopBound::FirstLineWithin { .. } if past_first_line => {
+                (Reach::Done, false)
+            }
+            StopBound::FirstLine => (Reach::FirstLine, false),
+            StopBound::FirstLineWithin { width, clear } => {
+                let line_start = last_newline.map_or(0, |nl| nl.saturating_add(1));
+                let scan = (*clear).max(from).max(line_start.saturating_add(*width));
+                let over = out.get(scan..).and_then(|rest| {
+                    rest.bytes()
+                        .position(|b| !width_neutral(b))
+                        .map(|at| scan.saturating_add(at))
+                });
+                let (scanned, observed) = over.map_or_else(
+                    || (out.trim_end_matches(' ').len(), (Reach::FirstLine, false)),
+                    |at| (at, (Reach::Done, true)),
+                );
+                *clear = scanned;
+                observed
+            }
+            StopBound::WholeWithin { width, tail } => observe_tail(out, from, *width, tail),
+        }
+    }
+
+    /// The [`CutBound`] a layout starting at `base` on `out` is cut under, or
+    /// `None` when this mark's trial is not width-bounded.
+    fn cut_bound(&self, out: &str, base: usize) -> Option<CutBound> {
+        match self.bound {
+            StopBound::FirstLine => None,
+            StopBound::FirstLineWithin { width, .. } => Some(CutBound::FirstLine { width }),
+            StopBound::WholeWithin { width, .. } => {
+                let prefix = out.get(..base).unwrap_or_default();
+                let newline = prefix.rfind('\n');
+                let line = newline
+                    .and_then(|nl| prefix.get(nl.saturating_add(1)..))
+                    .unwrap_or(prefix);
+                let content = line.trim_start();
+                let lead = line.len().saturating_sub(content.len());
+                Some(CutBound::Tail {
+                    width,
+                    lead: (!content.is_empty()).then_some(lead),
+                    counted: newline.is_some_and(|nl| nl >= self.from),
+                })
+            }
+        }
+    }
+}
+
+/// The [`Reach`] under a [`StopBound::WholeWithin`] mark watching `out` from
+/// `from`, and whether a line past its first newline is wider than `width`.
+fn observe_tail(out: &str, from: usize, width: usize, tail: &mut Option<usize>) -> (Reach, bool) {
+    let first_tail = || {
+        out.get(from..)
+            .and_then(|rest| rest.find('\n'))
+            .map(|nl| from.saturating_add(nl).saturating_add(1))
+    };
+    let Some(start) = tail.or_else(first_tail) else {
+        return (Reach::Whole, false);
+    };
+    let Some(rest) = out.get(start..) else {
+        return (Reach::Whole, false);
+    };
+    let mut line_start = start;
+    for line in rest.split('\n') {
+        if content_width(line) > width {
+            *tail = Some(line_start);
+            return (Reach::Done, true);
+        }
+        line_start = line_start.saturating_add(line.len()).saturating_add(1);
+    }
+    *tail = Some(
+        rest.rfind('\n')
+            .map_or(start, |nl| start.saturating_add(nl).saturating_add(1)),
+    );
+    (Reach::Whole, false)
+}
+
+/// A layout a width-bounded [`trial`] cut short: its node's [`MemoKey`] and the
+/// bound that cut it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct CutKey {
+    key: MemoKey,
+    bound: CutBound,
+}
+
+/// Everything a width cut reads of a layout's context beyond its [`MemoKey`].
+///
+/// A layout's bytes all land at or past its trial's `from`, at the columns its
+/// cursor fixes, and every byte before it was scanned when it began, so a
+/// first-line cut reads only the width. A tail cut also measures the layout's
+/// first line with the content before it: the indentation of that prefix
+/// (`None` when it is blank), and whether the line is past the trial's first
+/// newline and so scanned at all.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum CutBound {
+    FirstLine {
+        width: usize,
+    },
+    Tail {
+        width: usize,
+        lead: Option<usize>,
+        counted: bool,
+    },
 }
 
 /// The [`Reach`] of a render into `out`, the buffer at address `addr`.
 ///
-/// A trial never writes below its `from` offset and a buffer only grows past its
-/// last newline — a break trims trailing spaces, never a newline — so once a
-/// newline sits at or past `from` the trial's first line is final.
+/// A width cut is recorded for the memoized renders open on the buffer, so none
+/// of them keeps its cut-short layout as the whole one.
 fn reach(addr: usize, out: &str) -> Reach {
-    let mark = MEMO.with_borrow(|m| m.as_ref().and_then(|m| m.stop_mark));
-    match mark {
-        Some(mark) if mark.addr == addr => {
-            if out.rfind('\n').is_some_and(|nl| nl >= mark.from) {
-                Reach::Done
-            } else {
-                Reach::FirstLine
-            }
+    MEMO.with_borrow_mut(|m| {
+        let Some(m) = m.as_mut() else {
+            return Reach::Whole;
+        };
+        let observed = m
+            .stop_mark
+            .as_mut()
+            .filter(|mark| mark.addr == addr)
+            .map(|mark| mark.observe(out));
+        observed.map_or(Reach::Whole, |(reach, cut)| {
+            m.cut |= cut;
+            reach
+        })
+    })
+}
+
+/// The [`CutKey`] of a render of `key` starting at `base` on `out`, the buffer at
+/// address `addr`, when the innermost trial on `out` is width-bounded.
+fn cut_key(key: MemoKey, addr: usize, out: &str, base: usize) -> Option<CutKey> {
+    MEMO.with_borrow(|m| {
+        m.as_ref()?
+            .stop_mark
+            .filter(|mark| mark.addr == addr)?
+            .cut_bound(out, base)
+            .map(|bound| CutKey { key, bound })
+    })
+}
+
+/// Run `render` on `out` and return whether a width cut fell inside it, leaving
+/// the cut recorded for the enclosing memoized renders too.
+fn cut_during(out: &mut String, render: impl FnOnce(&mut String)) -> bool {
+    let outer = MEMO.with_borrow_mut(|m| m.as_mut().is_some_and(|m| std::mem::take(&mut m.cut)));
+    render(out);
+    MEMO.with_borrow_mut(|m| {
+        m.as_mut().is_some_and(|m| {
+            let inner = m.cut;
+            m.cut = outer || inner;
+            inner
+        })
+    })
+}
+
+/// Record a width cut for the memoized renders open on the buffer.
+fn mark_cut() {
+    MEMO.with_borrow_mut(|m| {
+        if let Some(m) = m.as_mut() {
+            m.cut = true;
         }
-        _ => Reach::Whole,
-    }
+    });
+}
+
+/// Whether a width cut fell inside the innermost open trial so far.
+fn cut_seen() -> bool {
+    MEMO.with_borrow(|m| m.as_ref().is_some_and(|m| m.cut))
 }
 
 /// `layout` up to and including its first newline, or all of it when it has none.
@@ -643,6 +855,24 @@ enum TrialReach {
     FirstLine,
     /// Every byte.
     Whole,
+    /// As [`TrialReach::FirstLine`], stopping early once a byte past `width` on
+    /// the first line fails a verdict that needs the first line to fit it.
+    FirstLineWithin { width: usize },
+    /// As [`TrialReach::Whole`], stopping early once a line after the first
+    /// newline fails a verdict that needs every such line to fit `width`.
+    WholeWithin { width: usize },
+}
+
+impl TrialReach {
+    /// The stop bound a trial of this reach sets, `None` when it lays out whole.
+    const fn bound(self) -> Option<StopBound> {
+        match self {
+            Self::FirstLine => Some(StopBound::FirstLine),
+            Self::Whole => None,
+            Self::FirstLineWithin { width } => Some(StopBound::FirstLineWithin { width, clear: 0 }),
+            Self::WholeWithin { width } => Some(StopBound::WholeWithin { width, tail: None }),
+        }
+    }
 }
 
 /// Where a [`trial`] began on its buffer.
@@ -706,26 +936,34 @@ impl Mark {
 /// A caller discards what `render` writes — a [`trial`] rolls it back, a fresh
 /// buffer is dropped — so the bytes charged for it leave the held total with it:
 /// an enclosing layout never counts a probe's bytes as its children's. Only an
-/// [`attempt`] that keeps its bytes keeps their charge.
+/// [`attempt`] that keeps its bytes keeps their charge. A width cut inside decides
+/// only what `render` reads, so it is not recorded past the trial.
 fn with_stop<T>(
     out: &mut String,
     reach: TrialReach,
     render: impl FnOnce(&mut String, Mark) -> T,
 ) -> T {
     let mark = Mark::at(out);
-    let stop = (reach == TrialReach::FirstLine).then_some(StopMark {
+    let stop = reach.bound().map(|bound| StopMark {
         addr: std::ptr::from_ref::<String>(out).addr(),
         from: mark.stable,
+        bound,
     });
     let outer = MEMO.with_borrow_mut(|m| {
-        m.as_mut()
-            .map(|m| (std::mem::replace(&mut m.stop_mark, stop), m.charged))
+        m.as_mut().map(|m| {
+            (
+                std::mem::replace(&mut m.stop_mark, stop),
+                m.charged,
+                std::mem::take(&mut m.cut),
+            )
+        })
     });
     let read = render(out, mark);
     MEMO.with_borrow_mut(|m| {
-        if let (Some(m), Some((stop_mark, charged))) = (m.as_mut(), outer) {
+        if let (Some(m), Some((stop_mark, charged, cut))) = (m.as_mut(), outer) {
             m.stop_mark = stop_mark;
             m.charged = charged;
+            m.cut = cut;
         }
     });
     read
@@ -762,16 +1000,23 @@ enum Attempt {
 /// Lay a whole layout out on `out` at its live cursor and keep it when `render`
 /// accepts it, so a probe that proves its layout is also its commit.
 ///
-/// A kept layout keeps its charge, as the render that would replay it holds.
-/// Inside an open first-line [`trial`] the commit writes only up to its first
-/// newline, so the whole layout is rolled back for the caller to commit.
-fn attempt(out: &mut String, render: impl FnOnce(&mut String) -> bool) -> Attempt {
+/// `render` accepts only a layout none of whose lines after the first newline is
+/// wider than `width`, so the layout stops at the first such line. A kept layout
+/// keeps its charge, as the render that would replay it holds. Inside an open
+/// first-line [`trial`] the commit writes only up to its first newline, so the
+/// whole layout is rolled back for the caller to commit; `render` is told whether
+/// its layout can be kept.
+fn attempt(
+    out: &mut String,
+    width: usize,
+    render: impl FnOnce(&mut String, bool) -> bool,
+) -> Attempt {
     let mark = Mark::at(out);
-    let whole = reach(std::ptr::from_ref::<String>(out).addr(), out) == Reach::Whole;
+    let keeps = reach(std::ptr::from_ref::<String>(out).addr(), out) == Reach::Whole;
     let mut held = None;
-    let fits = with_stop(out, TrialReach::Whole, |out, _| {
-        let fits = render(out);
-        held = (fits && whole).then(held_charged);
+    let fits = with_stop(out, TrialReach::WholeWithin { width }, |out, _| {
+        let fits = render(out, keeps);
+        held = (fits && keeps && !cut_seen()).then(held_charged);
         fits
     });
     if let Some(held) = held {
@@ -855,22 +1100,8 @@ fn memoized(
     // A break trims only the trailing spaces before it, so everything before that
     // run is untouched and the render's effect is exactly the bytes from `base` on.
     let base = out.len().saturating_sub(key.cursor.trailing_spaces);
-    let replayed = MEMO.with_borrow(|m| {
-        let m = m.as_ref()?;
-        let whole = m.layouts.get(&key).map(|l| l.text.as_str());
-        let found = if reach == Reach::FirstLine {
-            whole
-                .map(first_line)
-                .or_else(|| m.first_lines.get(&key).map(String::as_str))
-        } else {
-            whole
-        };
-        let layout = found?;
-        out.truncate(base);
-        out.push_str(layout);
-        Some(layout.len())
-    });
-    if let Some(replayed) = replayed {
+    let cut_key = cut_key(key, std::ptr::from_ref::<String>(out).addr(), out, base);
+    if let Some(replayed) = replay(&key, cut_key.as_ref(), reach, out, base) {
         if spend(replayed) {
             hold_charged(replayed);
         }
@@ -879,7 +1110,7 @@ fn memoized(
     #[cfg(test)]
     RENDERED.with(|n| n.set(n.get() + 1));
     let children = held_charged();
-    render(out);
+    let cut = cut_during(out, render);
     let Some(layout) = out.get(base..) else {
         return;
     };
@@ -894,7 +1125,69 @@ fn memoized(
         return;
     }
     hold_charged(own);
-    keep_layout(key, reach, layout);
+    if cut {
+        if let Some(cut_key) = cut_key {
+            keep_cut(cut_key, layout);
+        }
+    } else {
+        keep_layout(key, reach, layout);
+    }
+}
+
+/// Replay onto `out` from `base` the layout kept for `key` under `reach`, or
+/// failing that the cut-short one kept under `cut_key`, and return its length.
+///
+/// A cut-short layout is the same bytes as the render it replays, cut where that
+/// render's width bound stopped it, so replaying it records the cut again.
+fn replay(
+    key: &MemoKey,
+    cut_key: Option<&CutKey>,
+    reach: Reach,
+    out: &mut String,
+    base: usize,
+) -> Option<usize> {
+    let (len, cut) = MEMO.with_borrow(|m| {
+        let m = m.as_ref()?;
+        let whole = m.layouts.get(key).map(|l| l.text.as_str());
+        let found = if reach == Reach::FirstLine {
+            whole
+                .map(first_line)
+                .or_else(|| m.first_lines.get(key).map(String::as_str))
+        } else {
+            whole
+        };
+        let (layout, cut) = found.map(|l| (l, false)).or_else(|| {
+            cut_key
+                .and_then(|ck| m.cuts.get(ck))
+                .map(|l| (l.as_str(), true))
+        })?;
+        out.truncate(base);
+        out.push_str(layout);
+        Some((layout.len(), cut))
+    })?;
+    if cut {
+        mark_cut();
+    }
+    Some(len)
+}
+
+/// Keep a `layout` a width bound cut short for replay under `cut_key`: up to its
+/// first newline under a first-line bound, which reads nothing past it.
+fn keep_cut(cut_key: CutKey, layout: &str) {
+    let kept = match cut_key.bound {
+        CutBound::FirstLine { .. } => first_line(layout),
+        CutBound::Tail { .. } => layout,
+    };
+    MEMO.with_borrow_mut(|m| {
+        let entry = cut_entry_bytes(kept.len());
+        if let Some(m) = m.as_mut()
+            && let Some(bytes) = m.bytes.checked_add(entry)
+            && bytes <= m.byte_ceiling
+        {
+            m.bytes = bytes;
+            m.cuts.insert(cut_key, kept.to_owned());
+        }
+    });
 }
 
 /// The layout bytes charged for what the open buffers hold.
@@ -2409,7 +2702,12 @@ fn render_assign(
     //    exceeds `max_width` — an unbreakable run no indent can ever fit (the
     //    body `rustfmt` leaves as an over-wide raw snippet). Such a body makes
     //    the next-line form no better than the glued one, and the glued form wins.
-    let glue_head_core_w = trial(out, TrialReach::FirstLine, |out, mark| {
+    // Content past the width on the head line fails the glue whatever follows,
+    // so the probe stops there.
+    let glue_reach = TrialReach::FirstLineWithin {
+        width: cfg.max_width,
+    };
+    let glue_head_core_w = trial(out, glue_reach, |out, mark| {
         render_at(rhs, cfg, indent, glue_col, false, out);
         let head = mark.line(out);
         head.strip_suffix('\n')
@@ -2434,7 +2732,7 @@ fn render_assign(
         rhs_indent + head_w + head_trailer <= cfg.max_width
     };
     let rhs_break_fits = if glue_viable {
-        let tried = attempt(out, |out| {
+        let tried = attempt(out, cfg.max_width, |out, keeps| {
             open_rhs_break(rhs_indent, out);
             let key = MemoKey {
                 node: node_addr(rhs),
@@ -2444,6 +2742,9 @@ fn render_assign(
                 pass: Pass::Layout { flat: false },
                 cursor: Cursor::of(out),
             };
+            if !keeps && let Some(fits) = kept_rhs_break_fits(&key, cfg.max_width, &head_fits) {
+                return fits;
+            }
             let mark = Mark::at(out);
             render_at(rhs, cfg, rhs_indent, rhs_indent, false, out);
             let body = mark.written(out);
@@ -2456,7 +2757,10 @@ fn render_assign(
     } else {
         trial(out, TrialReach::Whole, |out, _| {
             open_rhs_break(rhs_indent, out);
-            with_stop(out, TrialReach::FirstLine, |out, mark| {
+            let reach = TrialReach::FirstLineWithin {
+                width: cfg.max_width,
+            };
+            with_stop(out, reach, |out, mark| {
                 render_at(rhs, cfg, rhs_indent, rhs_indent, false, out);
                 head_fits(mark.written(out))
             })
@@ -2472,6 +2776,38 @@ fn render_assign(
     // `rustfmt` keeps it glued to `= ` and breaks it into its own delimiters at
     // the block indent.
     render_at(rhs, cfg, indent, glue_col, false, out);
+}
+
+/// Whether the RHS-break layout kept under `key` fits, or `None` when no whole
+/// layout is kept.
+///
+/// It fits when `head_fits` its body and no tail line is wider than `width`. Only
+/// for an [`attempt`] that cannot keep its bytes, which reads the verdict alone:
+/// the replay it stands for would write the kept layout and measure it, so this
+/// measures the kept layout in place, charged for its first line.
+fn kept_rhs_break_fits(
+    key: &MemoKey,
+    width: usize,
+    head_fits: impl Fn(&str) -> bool,
+) -> Option<bool> {
+    let (fits, head_len) = MEMO.with_borrow(|m| {
+        let m = m.as_ref()?;
+        let layout = m.layouts.get(key)?;
+        let text = layout.text.as_str();
+        let indent = key.cursor.trailing_spaces;
+        let intact = text
+            .get(..indent)
+            .is_some_and(|run| run.bytes().all(|b| b == b' '));
+        let body = if intact {
+            text.get(indent..).unwrap_or_default()
+        } else {
+            text.trim_start_matches(' ')
+        };
+        let fits = head_fits(body) && layout.widest_tail <= width;
+        Some((fits, first_line(text).len()))
+    })?;
+    spend(head_len);
+    Some(fits)
 }
 
 /// Break an assignment after its `= `, onto a fresh line at `rhs_indent`.
@@ -4770,6 +5106,11 @@ mod p0_tests {
                     .map(|l| l.text.len())
                     .chain(m.flat_layouts.values().map(String::len))
                     .chain(m.first_lines.values().map(String::len))
+                    .chain(
+                        m.cuts
+                            .values()
+                            .map(|c| c.len().saturating_add(size_of::<CutBound>())),
+                    )
                     .map(memo_entry_bytes)
                     .sum();
                 assert_eq!(m.bytes, charged, "memo bytes must charge every entry");
@@ -4962,13 +5303,18 @@ mod p0_tests {
                     .map(|l| l.text.len())
                     .chain(m.flat_layouts.values().map(String::len))
                     .chain(m.first_lines.values().map(String::len))
+                    .chain(
+                        m.cuts
+                            .values()
+                            .map(|c| c.len().saturating_add(size_of::<CutBound>())),
+                    )
                     .map(memo_entry_bytes)
                     .sum();
                 assert_eq!(m.bytes, charged, "memo bytes must charge every entry");
                 assert!(m.bytes <= byte_ceiling, "memo past its ceiling");
                 (
                     fuel.saturating_sub(m.fuel),
-                    m.layouts.len() + m.flat_layouts.len() + m.first_lines.len(),
+                    m.layouts.len() + m.flat_layouts.len() + m.first_lines.len() + m.cuts.len(),
                     m.bytes,
                 )
             })
