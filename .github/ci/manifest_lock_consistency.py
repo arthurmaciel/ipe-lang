@@ -5,15 +5,22 @@ exactly those lock entries.
 
 Two agreements, both refused on drift:
 
-1. Lock: each member with `version.workspace = true` has one path entry in
-   Cargo.lock (no `source`), at the `# x-release-please-version` version of the
-   root manifest. A desynced lock fails `cargo build --locked` after a release.
+1. Lock: each member whose `package.version` is `{ workspace = true }` has one
+   path entry in Cargo.lock (no `source`), at the workspace version, which the
+   root manifest's `# x-release-please-version` line must mark. A desynced lock
+   fails `cargo build --locked` after a release.
 2. Release commit: `.config/release-please-config.json` carries one `toml`
    extra-file for Cargo.lock whose jsonpath names exactly those members. The
    release commit then moves Cargo.toml and Cargo.lock together, so no push of
-   the release branch ever carries one without the other.
+   the release branch ever carries one without the other. The jsonpath matches
+   by name alone, so no named member may also be a registry or git package in
+   Cargo.lock.
 
-Stdlib only and no toolchain, so it stays on the fast required PR path.
+Manifests are parsed as TOML, never pattern-matched: a member `package.version`
+is either `{ workspace = true }` or a literal string, and any other shape is
+refused, so no spelling of inheritance can read as a literal and drop the
+member from both agreements. Stdlib `tomllib` (`tomli` below Python 3.11) and
+no toolchain, so it stays on the fast required PR path.
 """
 
 from __future__ import annotations
@@ -23,18 +30,19 @@ import os
 import re
 import sys
 
+try:
+    import tomllib
+except ImportError:  # Python < 3.11 outside CI.
+    import tomli as tomllib  # type: ignore[no-redef]
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RELEASE_PLEASE_CONFIG = os.path.join(".config", "release-please-config.json")
 
 _MARKER = re.compile(r'^version = "([^"]+)" # x-release-please-version\b', re.MULTILINE)
-_MEMBERS = re.compile(r"^members = \[(.*?)^\]", re.MULTILINE | re.DOTALL)
-_QUOTED = re.compile(r'"([^"]*)"')
-_SECTION = re.compile(r"^\[")
-_NAME = re.compile(r'^name = "([^"]+)"$')
-_LOCK_VERSION = re.compile(r'^version = "([^"]+)"$')
-_INHERITS = re.compile(r"^version(?:\.workspace = true| = \{ workspace = true \})$")
+_HEADER = re.compile(r"^\[\s*([A-Za-z0-9_.-]+)\s*\]", re.MULTILINE)
 _JSONPATH = re.compile(r"\$\.package\[\?\((.+)\)\]\.version")
 _JSONPATH_NAME = re.compile(r"@\.name\.value==='([A-Za-z0-9_-]+)'")
+_INHERITED = {"workspace": True}
 
 
 class Refusal(Exception):
@@ -49,62 +57,90 @@ def _read(root: str, rel: str) -> str:
         raise Refusal(f"cannot read {rel}: {e.strerror}") from e
 
 
-def manifest_version(root_manifest: str) -> str:
-    """The single `# x-release-please-version` version of the root manifest."""
-    found = _MARKER.findall(root_manifest)
+def _toml(root: str, rel: str) -> tuple[str, dict]:
+    text = _read(root, rel)
+    try:
+        return text, tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        raise Refusal(f"{rel} is not TOML: {e}") from e
+
+
+def _table(doc: object, key: str) -> dict:
+    value = doc.get(key) if isinstance(doc, dict) else None
+    return value if isinstance(value, dict) else {}
+
+
+def manifest_version(root_text: str, root_doc: dict) -> str:
+    """The workspace version: `[workspace.package] version`, which the single
+    `# x-release-please-version` line must mark."""
+    found = list(_MARKER.finditer(root_text))
     if len(found) != 1:
         raise Refusal(
             f"Cargo.toml must carry exactly one `# x-release-please-version` line; found {len(found)}"
         )
-    return found[0]
+    headers = _HEADER.findall(root_text, 0, found[0].start())
+    if not headers or headers[-1] != "workspace.package":
+        raise Refusal(
+            "the `# x-release-please-version` line must sit in `[workspace.package]`; "
+            f"it sits in [{headers[-1] if headers else ''}]"
+        )
+    marked = found[0].group(1)
+    declared = _table(_table(root_doc, "workspace"), "package").get("version")
+    if declared != marked:
+        raise Refusal(
+            f"the `# x-release-please-version` line reads {marked!r} but "
+            f"`[workspace.package] version` is {declared!r}; mark the workspace version itself"
+        )
+    return marked
 
 
-def inheriting_members(root: str, root_manifest: str) -> set[str]:
-    """Package names of the workspace members whose `[package]` inherits the
-    workspace version."""
-    block = _MEMBERS.search(root_manifest)
-    if block is None:
-        raise Refusal("Cargo.toml has no `members = [ ... ]` list")
+def inheriting_members(root: str, root_doc: dict) -> set[str]:
+    """Package names of the workspace members whose `package.version` is
+    `{ workspace = true }`."""
+    members = _table(root_doc, "workspace").get("members")
+    if not isinstance(members, list) or not all(isinstance(m, str) for m in members):
+        raise Refusal("Cargo.toml has no `[workspace] members` list of paths")
     names: set[str] = set()
-    for member in _QUOTED.findall(block.group(1)):
+    for member in members:
         if any(c in member for c in "*?["):
             raise Refusal(f"workspace member {member!r} is a glob; list members explicitly")
         rel = os.path.join(member, "Cargo.toml")
-        in_package = False
-        name = None
-        inherits = False
-        for line in _read(root, rel).splitlines():
-            line = line.strip()
-            if _SECTION.match(line):
-                in_package = line == "[package]"
-            elif in_package:
-                if m := _NAME.match(line):
-                    name = m.group(1)
-                elif _INHERITS.match(line):
-                    inherits = True
-        if name is None:
+        package = _table(_toml(root, rel)[1], "package")
+        name = package.get("name")
+        if not isinstance(name, str):
             raise Refusal(f"{rel} has no `[package] name`")
-        if inherits:
+        version = package.get("version")
+        if version == _INHERITED:
             names.add(name)
+        elif not isinstance(version, str):
+            raise Refusal(
+                f"{rel} `package.version` is {version!r}; declare `version.workspace = true` "
+                "or a literal version string"
+            )
     if not names:
         raise Refusal("no workspace member inherits the workspace version")
     return names
 
 
-def path_lock_versions(lock: str) -> dict[str, list[str]]:
+def lock_entries(lock_doc: dict) -> tuple[dict[str, list[str]], set[str]]:
     """Name -> versions of every Cargo.lock entry with no `source` (a path
-    package, which is what a workspace member locks as)."""
-    out: dict[str, list[str]] = {}
-    for block in lock.split("[[package]]")[1:]:
-        fields = [line.strip() for line in block.strip().splitlines()]
-        if any(f.startswith("source = ") for f in fields):
-            continue
-        names = [m.group(1) for f in fields if (m := _NAME.match(f))]
-        versions = [m.group(1) for f in fields if (m := _LOCK_VERSION.match(f))]
-        if len(names) != 1 or len(versions) != 1:
-            raise Refusal("Cargo.lock has a path `[[package]]` without exactly one name and version")
-        out.setdefault(names[0], []).append(versions[0])
-    return out
+    package, which is what a workspace member locks as), and the names of the
+    entries that carry one (registry or git packages)."""
+    packages = lock_doc.get("package")
+    if not isinstance(packages, list):
+        raise Refusal("Cargo.lock has no `[[package]]` entries")
+    paths: dict[str, list[str]] = {}
+    sourced: set[str] = set()
+    for entry in packages:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        version = entry.get("version") if isinstance(entry, dict) else None
+        if not isinstance(name, str) or not isinstance(version, str):
+            raise Refusal("Cargo.lock has a `[[package]]` without a string name and version")
+        if "source" in entry:
+            sourced.add(name)
+        else:
+            paths.setdefault(name, []).append(version)
+    return paths, sourced
 
 
 def release_commit_names(config: str) -> set[str]:
@@ -113,11 +149,11 @@ def release_commit_names(config: str) -> set[str]:
         doc = json.loads(config)
     except json.JSONDecodeError as e:
         raise Refusal(f"{RELEASE_PLEASE_CONFIG} is not JSON: {e}") from e
-    packages = doc.get("packages") if isinstance(doc, dict) else None
-    root_pkg = packages.get(".") if isinstance(packages, dict) else None
-    extra = root_pkg.get("extra-files") if isinstance(root_pkg, dict) else None
+    extra = _table(_table(doc, "packages"), ".").get("extra-files")
     lock_files = [
-        e for e in extra or [] if isinstance(e, dict) and e.get("path") == "Cargo.lock"
+        e
+        for e in (extra if isinstance(extra, list) else [])
+        if isinstance(e, dict) and e.get("path") == "Cargo.lock"
     ]
     fix = (
         f'give {RELEASE_PLEASE_CONFIG} one extra-file {{"type": "toml", "path": "Cargo.lock", '
@@ -142,10 +178,10 @@ def release_commit_names(config: str) -> set[str]:
 def check(root: str = REPO_ROOT) -> list[str]:
     """Every refusal, as the gate prints it; empty when consistent."""
     try:
-        root_manifest = _read(root, "Cargo.toml")
-        version = manifest_version(root_manifest)
-        members = inheriting_members(root, root_manifest)
-        locked = path_lock_versions(_read(root, "Cargo.lock"))
+        root_text, root_doc = _toml(root, "Cargo.toml")
+        version = manifest_version(root_text, root_doc)
+        members = inheriting_members(root, root_doc)
+        locked, sourced = lock_entries(_toml(root, "Cargo.lock")[1])
         bumped = release_commit_names(_read(root, RELEASE_PLEASE_CONFIG))
     except Refusal as e:
         return [str(e)]
@@ -166,6 +202,11 @@ def check(root: str = REPO_ROOT) -> list[str]:
         errors.append(
             f"the release commit bumps {name!r} in Cargo.lock, which does not inherit the "
             f"workspace version; remove it from the Cargo.lock jsonpath in {RELEASE_PLEASE_CONFIG}"
+        )
+    for name in sorted(bumped.intersection(sourced)):
+        errors.append(
+            f"the Cargo.lock jsonpath matches {name!r}, which is also a registry or git package "
+            "in Cargo.lock that the release commit would bump with it; rename the member"
         )
     return errors
 

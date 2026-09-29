@@ -483,9 +483,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Fetch crates
-        run: cargo fetch
+        run: cargo fetch --locked
       - name: Check the workspace compiles
-        run: cargo check --offline --workspace
+        run: cargo check --locked --offline --workspace
 
   # Guards the ipe-runtime-rust feature graph against silent coupling. The
   # workspace jobs above build the runtime with its DEFAULT features (`[]`), so
@@ -663,7 +663,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       # Compile every test binary ONCE into a self-contained archive.
-      - run: cargo nextest archive --workspace --archive-file nextest.tar.zst
+      - run: cargo nextest archive --locked --workspace --archive-file nextest.tar.zst
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nextest-archive
@@ -671,7 +671,7 @@ jobs:
           retention-days: 1
       # Doctests can't be archived/partitioned by nextest, so they run here once
       # against the just-warmed target (rustdoc drives them separately).
-      - run: cargo test --doc --workspace
+      - run: cargo test --locked --doc --workspace
 
   test-run:
     runs-on: ubuntu-latest
@@ -767,7 +767,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ github.workspace }}/.cache/seal-shared-target
       - name: Build ipe
-        run: cargo build --release -p ipe
+        run: cargo build --locked --release -p ipe
       # Pre-warm the shared emitted-crate target with the runtime + a trivial
       # emitted crate BEFORE the per-example build below, so the cold runtime dep
       # build lands once (and in cache) rather than on the tested hot path. Does

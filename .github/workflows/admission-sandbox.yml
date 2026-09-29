@@ -68,7 +68,9 @@ jobs:
     outputs:
       # An unset output (classifier crash) reads as `true`: absent proof, run.
       code: ${{ steps.classify.outputs.code != 'false' }}
-      release_only: ${{ steps.release.outputs.release_only }}
+      # Normalised to `true`/`false`: an unset output (classifier crash) reads as
+      # `false`, so every proof runs.
+      release_only: ${{ steps.release.outputs.release_only == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

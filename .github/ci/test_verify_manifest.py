@@ -48,6 +48,7 @@ check_fast_gate_first = verify_manifest.check_fast_gate_first
 check_pull_request_target = verify_manifest.check_pull_request_target
 check_trust_roots = verify_manifest.check_trust_roots
 check_release_only_declarations = verify_manifest.check_release_only_declarations
+check_release_locked_build = verify_manifest.check_release_locked_build
 
 # A declaration key left out of a fixture entry.
 _MISSING = object()
@@ -3852,7 +3853,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.c.outputs.code }}
-      release_only: ${{ steps.c.outputs.release_only }}
+      release_only: ${{ steps.c.outputs.release_only == 'true' }}
     steps:
       - id: c
         run: echo classify
@@ -4067,7 +4068,7 @@ class TestReleaseOnlyDeclarations(unittest.TestCase):
                 "    if: needs.changes.outputs.code == 'true' && needs.other.outputs.release_only != 'true'\n",
             ),
             _RO13.replace(
-                "      code: ${{ steps.c.outputs.code }}\n      release_only: ${{ steps.c.outputs.release_only }}\n",
+                "      code: ${{ steps.c.outputs.code }}\n      release_only: ${{ steps.c.outputs.release_only == 'true' }}\n",
                 "      code: ${{ steps.c.outputs.code }}\n",
             ),
             _RO13.replace(
@@ -4076,6 +4077,7 @@ class TestReleaseOnlyDeclarations(unittest.TestCase):
             ),
         ):
             with self.subTest(bad=bad):
+                self.assertNotEqual(bad, _RO13)
                 errors = self.errors(bad)
                 self.assertTrue(any("(check 13)" in e for e in errors), errors)
 
@@ -4086,6 +4088,51 @@ class TestReleaseOnlyDeclarations(unittest.TestCase):
         )
         self.assertRefused("its steps may not name `release_only`", bad)
 
+    def test_raw_release_only_export_is_refused(self) -> None:
+        normalised = "      release_only: ${{ steps.c.outputs.release_only == 'true' }}\n"
+        for raw in (
+            "${{ steps.c.outputs.release_only }}",
+            "${{ steps.c.outputs.release_only != 'false' }}",
+            "${{ steps.c.outputs.Release_Only == 'true' || 'x' }}",
+        ):
+            with self.subTest(raw=raw):
+                self.assertRefused("exports the raw classifier value", _RO13.replace(normalised, f"      release_only: {raw}\n"))
+
+    def locked_errors(self, content: str, declared: object = None) -> list[str]:
+        self.fx.workflow("gate.yml", content)
+        entry = {"context": "plain", "producer": "gate.yml", "release-only": declared or {"run": "x"}}
+        errors: list[str] = []
+        check_release_locked_build([entry], {"plain"}, errors, root=self.fx.root)
+        return errors
+
+    def test_a_run_gate_with_an_unconditional_locked_cargo_step_proves_the_lock(self) -> None:
+        for step in ("cargo check --locked --workspace", "cargo fetch --locked", "|\n          echo a\n          cargo build --release --locked"):
+            with self.subTest(step=step):
+                ok = _RO13.replace("      - run: cargo test\n", f"      - run: {step}\n")
+                self.assertEqual(self.locked_errors(ok), [])
+
+    def test_no_locked_cargo_step_on_a_release_run_gate_is_refused(self) -> None:
+        needle = "never proves Cargo.lock matches"
+        locked = "      - run: cargo test --locked\n"
+        cases = {
+            "unlocked": _RO13,
+            "flag in a comment": _RO13.replace("      - run: cargo test\n", "      - run: cargo test # --locked later\n"),
+            "not cargo": _RO13.replace("      - run: cargo test\n", "      - run: echo cargo --locked\n"),
+            "conditional step": _RO13.replace("      - run: cargo test\n", "      - if: github.event_name == 'push'\n        run: cargo test --locked\n"),
+            "conditional job": _RO13.replace("    needs: [changes]\n    steps:\n      - run: cargo test\n", "    needs: [changes]\n    if: github.event_name == 'push'\n    steps:\n" + locked),
+        }
+        for name, content in cases.items():
+            with self.subTest(case=name):
+                self.assertTrue(any(needle in e for e in self.locked_errors(content)), name)
+        on_pass = _RO13.replace("      - run: cargo test\n", locked)
+        self.assertTrue(any(needle in e for e in self.locked_errors(on_pass, {"pass": "x"})))
+        self.fx.workflow("gate.yml", on_pass)
+        errors: list[str] = []
+        check_release_locked_build(
+            [{"context": "plain", "producer": "gate.yml", "release-only": {"run": "x"}}], set(), errors, root=self.fx.root
+        )
+        self.assertTrue(any(needle in e for e in errors), "a non-gate context proves nothing")
+
     def test_live_manifest_passes(self) -> None:
         with open(os.path.join(HERE, "check-manifest.yml")) as f:
             manifest = verify_manifest.strict_yaml.safe_load(f)
@@ -4093,6 +4140,7 @@ class TestReleaseOnlyDeclarations(unittest.TestCase):
         gates = {e["context"] for e in entries if e.get("disposition") == "gate"}
         errors: list[str] = []
         check_release_only_declarations(entries, gates, errors)
+        check_release_locked_build(entries, gates, errors)
         self.assertEqual(errors, [])
         self.assertTrue(all("release-only" in e for e in entries if e.get("context") in {"test", "quick-check", "manifest-lock-consistency"}))
         for ctx in ("test", "quick-check", "manifest-lock-consistency"):

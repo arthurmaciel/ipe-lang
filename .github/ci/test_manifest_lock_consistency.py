@@ -150,12 +150,38 @@ class TestManifestLockConsistency(unittest.TestCase):
     def test_malformed_inputs_are_refused(self) -> None:
         cases = (
             ("Cargo.toml", _ROOT.replace(" # x-release-please-version", ""), "exactly one `# x-release-please-version`"),
-            ("Cargo.toml", _ROOT + 'version = "1" # x-release-please-version\n', "found 2"),
+            ("Cargo.toml", _ROOT + '\n[x]\nversion = "1" # x-release-please-version\n', "found 2"),
+            (
+                "Cargo.toml",
+                _ROOT.replace('version = "1.2.3" # x-release-please-version', 'version = "1.2.3"')
+                + '\n[x]\nversion = "1.2.3" # x-release-please-version\n',
+                "must sit in `[workspace.package]`; it sits in [x]",
+            ),
+            (
+                "Cargo.toml",
+                _ROOT.replace(
+                    'version = "1.2.3" # x-release-please-version',
+                    'version = "1.2.3"\n\n[workspace.package.x]\nversion = "9.9.9" # x-release-please-version',
+                ),
+                "it sits in [workspace.package.x]",
+            ),
+            (
+                "Cargo.toml",
+                _ROOT.replace(
+                    'version = "1.2.3" # x-release-please-version',
+                    'version = "1.2.3"\n"version " = "9.9.9"\nversion = "9.9.9" # x-release-please-version',
+                ),
+                "Cargo.toml is not TOML",
+            ),
             ("Cargo.toml", _ROOT.replace("members = [", "members = [\n    \"crates/*\","), "is a glob"),
-            ("Cargo.toml", _ROOT.replace("members", "default-members"), "no `members = [ ... ]` list"),
+            ("Cargo.toml", _ROOT.replace("members", "default-members"), "no `[workspace] members` list"),
+            ("Cargo.toml", _ROOT.replace('    "lit",\n', "    7,\n"), "no `[workspace] members` list"),
+            ("Cargo.toml", _ROOT + "[", "Cargo.toml is not TOML"),
+            ("a/Cargo.toml", "[package\n", "a/Cargo.toml is not TOML"),
             ("a/Cargo.toml", "[package]\nversion.workspace = true\n", "has no `[package] name`"),
             (mlc.RELEASE_PLEASE_CONFIG, "{", "is not JSON"),
-            ("Cargo.lock", _LOCK + '\n[[package]]\nname = "x"\n', "without exactly one name and version"),
+            ("Cargo.lock", _LOCK + '\n[[package]]\nname = "x"\n', "without a string name and version"),
+            ("Cargo.lock", "version = 4\n", "no `[[package]]` entries"),
         )
         for rel, content, needle in cases:
             with self.subTest(rel=rel, needle=needle):
@@ -172,6 +198,43 @@ class TestManifestLockConsistency(unittest.TestCase):
         for member in ("a", "b"):
             self.put(os.path.join(member, "Cargo.toml"), f'[package]\nname = "{member}"\nversion = "1.0.0"\n')
         self.assertRefused("no workspace member inherits")
+
+    def test_every_spelling_of_inheritance_is_a_member(self) -> None:
+        for spelling in (
+            "version.workspace = true # inherited",
+            "version.workspace=true",
+            "version = {workspace=true}",
+            "version = { workspace = true } # c",
+            "\n[package.version]\nworkspace = true",
+        ):
+            with self.subTest(spelling=spelling):
+                self.put("a/Cargo.toml", f'[package]\nname = "crate-a"\n{spelling}\n')
+                self.assertEqual(mlc.check(self.root), [])
+                self.put(
+                    mlc.RELEASE_PLEASE_CONFIG,
+                    _config([{"type": "toml", "path": "Cargo.lock", "jsonpath": _jsonpath("crate_b")}]),
+                )
+                self.assertRefused("'crate-a' inherits the workspace version but the release commit leaves")
+                self.put(mlc.RELEASE_PLEASE_CONFIG, _config())
+
+    def test_a_version_shape_neither_inherited_nor_literal_is_refused(self) -> None:
+        for spelling in (
+            "version.workspace = false",
+            "version = { workspace = true, extra = 1 }",
+            "version = {}",
+            "version = 3",
+            "",
+        ):
+            with self.subTest(spelling=spelling):
+                self.put("a/Cargo.toml", f'[package]\nname = "crate-a"\n{spelling}\n')
+                self.assertRefused("a/Cargo.toml `package.version` is")
+
+    def test_jsonpath_name_shared_with_a_registry_package_is_refused(self) -> None:
+        self.put(
+            "Cargo.lock",
+            _LOCK + '\n[[package]]\nname = "crate_b"\nversion = "0.9.0"\nsource = "registry+x"\n',
+        )
+        self.assertRefused("matches 'crate_b', which is also a registry or git package")
 
     def test_live_repository_passes(self) -> None:
         self.assertEqual(mlc.check(), [])

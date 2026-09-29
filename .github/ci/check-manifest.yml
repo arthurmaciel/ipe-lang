@@ -103,11 +103,11 @@ checks:
     disposition: gate
     producer: ci.yml
     release-only:
-      run: compiles the workspace against the bumped Cargo.toml and Cargo.lock
+      run: compiles the workspace `--locked` against the bumped Cargo.toml and Cargo.lock
     local:
       tier: quick
       run:
-        - cargo check --workspace
+        - cargo check --locked --workspace
   - context: test
     disposition: gate
     producer: ci.yml
@@ -118,7 +118,7 @@ checks:
       run:
         - cmd: cargo nextest run {packages} --profile ci --no-tests=warn
           differs: CI runs the same suite from one archive split over shards; locally it runs over the selected crates directly
-        - cargo test --doc {lib_packages}
+        - cargo test --locked --doc {lib_packages}
     aggregates: [test-prep, test-run]
   - context: artifact-guard
     disposition: gate

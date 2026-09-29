@@ -201,7 +201,12 @@ Checks performed
       carrying that `!= 'true'` conjunct; `<job>` must be a job it `needs`
       whose `outputs` carry `release_only`.  At least one job must narrow,
       and a job needing a skipped job must run `always()`.  A declaration
-      the workflow contradicts, or none at all, is refused.
+      the workflow contradicts, or none at all, is refused.  Some `gate`
+      declared `run` must execute an unconditional `cargo ... --locked` step
+      in a job with no `if:`, so a release PR proves the bumped Cargo.lock
+      still matches Cargo.toml.
+      A job output read from a step's `release_only` must be exactly
+      `${{ steps.<id>.outputs.release_only == 'true' }}`.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
 `git ls-files` locally to list tracked paths.
@@ -1424,6 +1429,26 @@ def _declared_release_only(entry: dict, loc: str, errors: list[str]) -> str | No
     return None
 
 
+_RELEASE_ONLY_WRITER = re.compile(r"\bsteps\.[\w-]+\.outputs\.release_only\b", re.IGNORECASE)
+_RELEASE_ONLY_NORMALISED = re.compile(r"\$\{\{\s*steps\.[\w-]+\.outputs\.release_only\s*==\s*'true'\s*\}\}")
+
+
+def _check_release_only_exports(fname: str, doc: dict, errors: list[str]) -> None:
+    """A job output read from the classifier step's `release_only` must be
+    exactly `${{ steps.<id>.outputs.release_only == 'true' }}`: every consumer
+    then sees `true` or `false`, and an unset writer reads as `false`, so all
+    jobs run in full."""
+    jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
+    for jid, job in jobs.items():
+        outputs = job.get("outputs") if isinstance(job, dict) else None
+        for key, value in (outputs if isinstance(outputs, dict) else {}).items():
+            if _RELEASE_ONLY_WRITER.search(str(value)) and not _RELEASE_ONLY_NORMALISED.fullmatch(str(value)):
+                errors.append(
+                    f"{fname}: job {jid!r} output {key!r} exports the raw classifier value "
+                    f"{value!r}; write `${{{{ steps.<id>.outputs.release_only == 'true' }}}}` (check 13)"
+                )
+
+
 def check_release_only_declarations(
     entries: list[dict], gate_contexts: set[str], errors: list[str], root: str = REPO_ROOT
 ) -> None:
@@ -1431,6 +1456,7 @@ def check_release_only_declarations(
     check 6 and missing producers by check 2; here they are skipped only after
     that refusal is on record."""
     docs: dict[str, dict | None] = {}
+    normalised: set[str] = set()
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -1452,6 +1478,9 @@ def check_release_only_declarations(
         doc = docs[fname]
         if doc is None:
             continue
+        if fname not in normalised:
+            normalised.add(fname)
+            _check_release_only_exports(fname, doc, errors)
         triggers = _triggers(doc)
         if triggers is not None and not triggers & _RELEASE_ONLY_EVENTS:
             if "release-only" in entry:
@@ -1513,6 +1542,41 @@ def check_release_only_declarations(
                 f"{loc}: declared `pass` but no job narrows on `release_only`, so a "
                 "release-only diff runs it in full (check 13)"
             )
+
+
+_CARGO_LOCKED = re.compile(r"(?m)^\s*cargo\s[^\n]*\s--locked(\s|$)")
+
+
+def check_release_locked_build(
+    entries: list[dict], gate_contexts: set[str], errors: list[str], root: str = REPO_ROOT
+) -> None:
+    """Check 13, lock clause: a release PR bumps Cargo.toml and Cargo.lock, so
+    some gate declared `release-only: run` must execute an unconditional
+    `cargo ... --locked` step, which refuses a lock the bump left stale instead
+    of re-resolving it."""
+    for entry in entries:
+        if not isinstance(entry, dict) or str(entry.get("context")) not in gate_contexts:
+            continue
+        declared = entry.get("release-only")
+        if not (isinstance(declared, dict) and list(declared) == ["run"]):
+            continue
+        try:
+            with open(os.path.join(root, "workflows", str(entry.get("producer")))) as f:
+                doc = strict_yaml.safe_load(f)
+        except (OSError, yaml.YAMLError):
+            continue
+        jobs = doc.get("jobs") if isinstance(doc, dict) and isinstance(doc.get("jobs"), dict) else {}
+        aggregates = [str(a) for a in entry.get("aggregates") or []]
+        for _, job, _ in _entry_jobs(str(entry.get("context")), aggregates, jobs):
+            if "if" in job or not isinstance(job.get("steps"), list):
+                continue
+            for st in job["steps"]:
+                if isinstance(st, dict) and "if" not in st and _CARGO_LOCKED.search(str(st.get("run", ""))):
+                    return
+    errors.append(
+        "no gate declared `release-only: run` executes an unconditional `cargo ... --locked` "
+        "step, so a release PR never proves Cargo.lock matches the bumped Cargo.toml (check 13)"
+    )
 
 
 def _needs_list(job: dict) -> list[str] | None:
@@ -3932,6 +3996,11 @@ def main() -> int:
 
     # ---- 13. every PR-reachable context declares its release-only behaviour ----
     check_release_only_declarations(
+        entries,
+        {ctx for ctx, e in by_context.items() if e.get("disposition") == "gate"},
+        errors,
+    )
+    check_release_locked_build(
         entries,
         {ctx for ctx, e in by_context.items() if e.get("disposition") == "gate"},
         errors,
