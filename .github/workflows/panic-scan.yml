@@ -32,9 +32,9 @@ jobs:
     # panic-scan-relevant paths is already scanned. (A job-level author gate would
     # wrongly skip a trusted-author PR that changed runtime code.)
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         id: filter
         with:
           filters: |
