@@ -62,10 +62,12 @@ impl BlockEdit {
 ///
 /// The edit covers exactly the import block, located from the parser-recorded
 /// declaration spans. It is refused (`None`) when the module does not parse,
-/// when any declaration shares a line with other code or holds a comment,
-/// when anything but whitespace lies between declarations, when a name does
-/// not resolve, when the rewritten module fails to re-parse to the same
-/// declarations and the kept imports' bound names, or when a re-derivation
+/// when any declaration shares a line with other code, when a kept
+/// declaration holds a comment (its replacement is re-serialized from the
+/// AST, which cannot reproduce it), when anything but whitespace lies between
+/// declarations, when a name does not resolve, when the rewritten module
+/// fails to re-parse to the same declarations and the kept imports' bound
+/// names, or when a re-derivation
 /// on the output cannot prove that the drop removed only what the dropped
 /// imports bound and that none of it is still referenced. That proof is
 /// independent of the drop *decision* but reuses the `unused-imports` usage
@@ -120,6 +122,15 @@ fn organize_imports_dropping(
 
     let (dropped, kept): (Vec<&Import>, Vec<&Import>) =
         ast.imports.iter().partition(|imp| is_dropped(imp));
+
+    // A kept import is re-serialized from its AST (module path, alias,
+    // exposing list) by `render_import_block`, never copied from source, so a
+    // comment nested inside its declaration would be silently lost. A dropped
+    // import's declaration is never re-serialized (its whole span vanishes
+    // with the rest of the block), so a comment inside it is harmless here.
+    if kept.iter().any(|imp| declaration_has_comment(source, imp)) {
+        return None;
+    }
 
     let newline = if original.contains("\r\n") {
         "\r\n"
@@ -550,6 +561,19 @@ fn render_import_line(key: &ImportKey, exposing: &MergedExposing, newline: &str)
 
 /// Render surviving imports as sorted, merged source text: one line per
 /// distinct [`ImportKey`], in key order. `None` when a name does not resolve.
+/// Whether `import`'s declaration span holds a `--` or `{-` comment opener.
+///
+/// A kept import's rendered replacement comes only from its AST fields
+/// (`render_import_block` never copies source text), so any comment in its
+/// span cannot survive reorganization; this is what the caller refuses on.
+/// Fail-closed: an out-of-range or off-boundary span reads as holding one.
+fn declaration_has_comment(text: &str, import: &Import) -> bool {
+    let lo = import.span.lo as usize;
+    let hi = import.span.hi as usize;
+    text.get(lo..hi)
+        .is_none_or(|body| body.contains("--") || body.contains("{-"))
+}
+
 fn render_import_block(imports: &[&Import], interner: &Interner, newline: &str) -> Option<String> {
     let mut groups: BTreeMap<ImportKey, MergedExposing> = BTreeMap::new();
     for imp in imports {
@@ -852,7 +876,11 @@ mod tests {
 
     #[test]
     fn fix_all_applies_several_findings_in_one_file() {
-        let src = "module Main exposing (main)\n\nimport Unused\n\nmain =\n    List.map fmt (List.filter live records)\n";
+        // `prefer-pipeline` fires only once the rewrite removes at least two
+        // paren levels (`MIN_PAREN_LEVELS`); a one-level nest such as
+        // `List.map fmt (List.filter live records)` is left alone, so this
+        // fixture needs a third level (`String.concat (…)`) to qualify.
+        let src = "module Main exposing (main)\n\nimport Unused\n\nmain =\n    String.concat (List.map fmt (List.filter live records))\n";
         let out = fixed(src, FIX_ALL_MAX_ROUNDS);
         assert!(!out.contains("Unused"), "unused import fixed, got:\n{out}");
         assert!(
@@ -863,10 +891,19 @@ mod tests {
 
     #[test]
     fn fix_all_bounded_stops_at_the_round_bound() {
-        // Four `List.map` levels deep: round 1 flattens the outer pair into a
-        // `|>` chain, which leaves the inner pair nested as that chain's first
-        // operand — a second round is needed to flatten it too.
-        let src = "module Main exposing (main)\n\nmain =\n    List.map fmt (List.map g (List.map h (List.map i xs)))\n";
+        // `Chain::of` walks an entire run of nested calls threaded through
+        // trailing arguments in one pass, so a single finding already
+        // flattens an arbitrarily deep pure `List.map (List.map (…))` nest —
+        // that shape never needs a second round. A second round IS needed
+        // when two findings' fix spans overlap: `apply_module_fixes` applies
+        // the later (rightmost) one and skips the other for this round. Here
+        // the outer `max 0 (min a (…))` chain's fix span covers the whole
+        // expression, including the binop-operand chain nested inside it
+        // (`String.concat (List.map fmt (List.filter live records))`, itself
+        // qualifying at three levels); round 1 applies only the inner,
+        // non-overlapping rewrite and leaves the outer chain — still
+        // findable on the rewritten text — for round 2.
+        let src = "module Main exposing (main)\n\nmain =\n    max 0 (min a (n + String.concat (List.map fmt (List.filter live records))))\n";
 
         let partial = fixed(src, 1);
         let residual = run(&[module(&partial)], &LintConfig::default());

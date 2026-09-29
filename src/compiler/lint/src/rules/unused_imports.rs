@@ -17,10 +17,12 @@
 //! visible in the parse tree (a triple-quoted string that interpolates, whose
 //! `{{…}}` bodies the canonicaliser resolves from raw text).
 //!
-//! The fix deletes the declaration's whole lines only when that deletion is
-//! provably confined to the import: nothing but whitespace shares its first and
-//! last lines, and no comment lies inside its span. Otherwise the finding is
-//! reported without a fix.
+//! The fix deletes the declaration's whole lines: the parser-recorded
+//! [`Import::span`] already covers the keyword through the last clause's last
+//! token, comments and all, so nothing further needs re-deriving from the raw
+//! text. The fix exists only when that deletion is provably confined to the
+//! import — nothing but whitespace shares its first and last lines. Otherwise
+//! the finding is reported without a fix.
 
 use std::collections::HashSet;
 
@@ -205,29 +207,24 @@ pub fn import_qualifier_texts(interner: &Interner, import: &Import) -> Option<Ve
 /// The byte range whose deletion removes `import` and nothing else.
 ///
 /// The range is the declaration's full lines: from the start of the `import`
-/// keyword's line through the newline ending the line of its last token. It
-/// exists only when the parser-recorded span begins with the keyword, only
-/// whitespace shares those first and last lines, and the span holds no
-/// comment. `None` is the refusal.
+/// keyword's line through the newline ending the line of its last token. The
+/// endpoints come straight from the parser-recorded `import.span` — which
+/// already covers any comment nested inside the declaration (a `--` or
+/// `{- -}` between clauses parses as part of the same span, never as a false
+/// terminator) — so no further text re-scan is needed to trust them. The
+/// range exists only when that span begins with the keyword and only
+/// whitespace shares those first and last lines; `None` is the refusal.
 pub fn removal_range(text: &str, import: &Import) -> Option<(usize, usize)> {
     let lo = import.span.lo as usize;
     let hi = import.span.hi as usize;
     let body = text.get(lo..hi)?;
-    if !body.starts_with("import") || !body.chars().all(is_import_char) {
+    if !body.starts_with("import") {
         return None;
     }
     let start = line_start(text, lo);
     let end = line_end(text, hi);
     let blank = |s: Option<&str>| s.is_some_and(|s| s.chars().all(char::is_whitespace));
     (blank(text.get(start..lo)) && blank(text.get(hi..end))).then_some((start, end))
-}
-
-/// Whether `c` can occur in an import declaration outside a comment.
-///
-/// Identifiers, `.`, `(`, `)`, `,` and whitespace spell every import; any other
-/// character (a comment opener among them) leaves the span unproven.
-fn is_import_char(c: char) -> bool {
-    c.is_alphanumeric() || c.is_whitespace() || matches!(c, '_' | '.' | '(' | ')' | ',')
 }
 
 /// Every name a module body may reference.

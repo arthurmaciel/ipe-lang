@@ -1691,14 +1691,19 @@ mod tests {
         );
     }
 
-    /// A comment inside the declaration leaves the removal unproven: no fix.
+    /// A comment inside the declaration is deleted along with the whole line
+    /// it lives on, exactly like the rest of the import: a fix is still
+    /// offered, spanning that whole line.
     #[test]
-    fn comment_inside_import_refuses_the_fix() {
+    fn comment_inside_import_still_offers_the_fix() {
         let src =
             "module Main exposing (main)\n\nimport Unused {- note -} exposing (x)\n\nmain = 1\n";
         let found = unused_imports(src);
         assert!(
-            matches!(found.as_slice(), [f] if f.fix.is_none()),
+            matches!(found.as_slice(), [f] if f.fix.as_ref().is_some_and(|fix| {
+                src.get(fix.span.lo as usize..fix.span.hi as usize)
+                    == Some("import Unused {- note -} exposing (x)\n")
+            })),
             "{found:?}"
         );
     }
