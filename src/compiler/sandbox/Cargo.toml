@@ -20,7 +20,7 @@ getrandom = { version = "0.3", features = ["std"] }
 libc = "0.2"
 # The effective uid/gid the private-scratch and jail-dir ownership checks compare
 # against, obtained without `unsafe`.
-rustix = { version = "0.38", features = ["fs", "process"] }
+rustix = { version = "1.1", features = ["fs", "process"] }
 
 # The Windows run-jail arm builds its confinement primitives directly through the
 # Win32 kernel API (Job Object, AppContainer lowbox token, capability SIDs, ACLs,

@@ -83,7 +83,7 @@ notify = "8"
 # On-disk build cache (`src/cache.rs`) — content hashing of the whole-project
 # key + the compiler/toolchain version-epoch, and JSON (de)serialization of the
 # cached `EmittedProject`.
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 # `crate::watch::mint_hot_token` fills the hot-control token from the OS CSPRNG.
 # `getrandom` is a thin cross-platform wrapper over each target's real CSPRNG
@@ -95,8 +95,8 @@ getrandom = { version = "0.3", features = ["std"] }
 # exposure — and encodes it in the OpenSSH format. `ed25519-dalek` (already in the
 # vetted graph) derives the public key from the CSPRNG seed; `base64` armors the
 # key files; `zeroize` wipes the seed and the encoded private key from memory.
-ed25519-dalek = { version = "2", default-features = false, features = ["zeroize"] }
-base64 = "0.22"
+ed25519-dalek = { version = "3", default-features = false, features = ["zeroize"] }
+base64 = "0.23"
 zeroize = "1"
 serde_json = "1"
 # `[dependencies]` version requirements in `ipe.toml` are parsed into typed
@@ -114,13 +114,13 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 # table), and any missed dependency would admit an unconstrained capability.
 # Same `toml` version the runtime crate already pins, so this adds no new crate
 # to the vetted dependency graph.
-toml = "0.8"
+toml = "1.1"
 # `ipe health`'s config-edit fixes rewrite a user's `~/.cargo/config.toml` and
 # `<IPE_HOME>/config.toml`. A structural edit that dropped their comments and
 # formatting would be a hostile surprise on a file the user owns, so the edit
 # goes through the format-preserving `toml_edit` document model: only the exact
 # key it sets is touched, every comment and layout the user wrote is kept.
-toml_edit = "0.22"
+toml_edit = "0.25"
 # The runtime crate SOURCE (`../runtime/rust`: its `Cargo.toml` + `src/**`) is
 # compiled INTO this binary as a static directory tree, so a copied `ipe`
 # binary carries its own runtime source and never needs a separate download.
@@ -169,8 +169,8 @@ pki_types = { package = "rustls-pki-types", version = "1", optional = true }
 # JIT default backend is kept (the module is executed once per `ipe run`, not a
 # cold-start-sensitive path). Optional so the default build never links the
 # engine's graph.
-wasmtime = { version = "35", default-features = false, features = ["cranelift", "runtime", "std"], optional = true }
-wasmtime-wasi = { version = "35", default-features = false, features = ["preview1"], optional = true }
+wasmtime = { version = "49", default-features = false, features = ["cranelift", "runtime", "std"], optional = true }
+wasmtime-wasi = { version = "36", default-features = false, features = ["preview1"], optional = true }
 
 # `ipe health`'s free-disk check reads the filesystem's available blocks via
 # `statvfs(2)`. rustix exposes the syscall directly — no libc binding in our own
@@ -178,7 +178,7 @@ wasmtime-wasi = { version = "35", default-features = false, features = ["preview
 # check adds no new vetted crate. Unix-only: the query has no portable analogue
 # on the non-Unix targets this CLI builds for.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "0.38", features = ["fs", "process", "termios"] }
+rustix = { version = "1.1", features = ["fs", "process", "termios"] }
 
 # Held output-directory handles read a handle's volume serial number and file
 # index (`GetFileInformationByHandle`) through a safe wrapper, and open entries
@@ -186,7 +186,7 @@ rustix = { version = "0.38", features = ["fs", "process", "termios"] }
 # through cap-primitives, so the Windows side acts through handles with no
 # `unsafe` of our own. cap-primitives is already in the dependency graph.
 [target.'cfg(windows)'.dependencies]
-cap-primitives = "3.4.6"
+cap-primitives = "4.0.3"
 winapi-util = "0.1"
 
 [dev-dependencies]

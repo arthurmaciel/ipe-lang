@@ -13,7 +13,7 @@ ipe_intern = { path = "../../intern" }
 ipe_backend = { path = ".." }
 ipe_diagnostics = { path = "../../diagnostics" }
 # Model schema tag (H24) — same pin as ipe_watch/ipec/runtime.
-sha2 = "0.10"
+sha2 = "0.11"
 # The exact float-to-shortest-decimal formatter `serde_json` uses internally
 # (its `write_f64` calls `ryu::Buffer::format_finite`). Using it directly makes a
 # baked `Float` template default byte-identical to the runtime's

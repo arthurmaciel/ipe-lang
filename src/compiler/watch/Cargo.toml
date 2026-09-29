@@ -10,13 +10,13 @@ license.workspace = true
 notify = "8"
 # Task 23's `LastGoodBinary` content hash. Same pin as `ipec`'s own build
 # cache (`crates/ipec/Cargo.toml`) — one version across the workspace.
-sha2 = "0.10"
+sha2 = "0.11"
 
 # `signal` module: a safe SIGTERM listener. Its public API needs no caller
 # `unsafe`, so it composes with this crate's `#![forbid(unsafe_code)]` — the
 # `sigaction(2)` FFI lives inside signal-hook's own dependency crate.
 [target.'cfg(unix)'.dependencies]
-signal-hook = "0.3"
+signal-hook = "0.4"
 
 [lints]
 workspace = true

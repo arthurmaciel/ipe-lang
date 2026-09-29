@@ -20,7 +20,7 @@ license.workspace = true
 # census to keep in sync.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-strum = { version = "0.26", features = ["derive"] }
+strum = { version = "0.27", features = ["derive"] }
 
 # `ipe_parse` and `ipe_syntax` are used only in the SSOT test
 # (`tests/maybe_veneer_ssot.rs`) that parses `Maybe.ipe` and asserts the

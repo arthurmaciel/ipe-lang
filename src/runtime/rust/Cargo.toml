@@ -21,7 +21,7 @@ path = "src/mod.rs"
 # whose order is part of the contract; the `Map` must keep insertion order rather
 # than sort keys, so serialization emits keys in the order given.
 serde_json = { version = "1", features = ["preserve_order"], optional = true }
-jsonwebtoken = { version = "9", optional = true }
+jsonwebtoken = { version = "10", optional = true }
 # `crypto_core.rs` (the cryptographic floor: SHA-2 hash + HMAC family + typed
 # Key/Mac + entropy pair + constant-time compare) is behind the `crypto-core`
 # feature: a program that reaches no crypto-floor kernel — and no crypto / jwt /
@@ -30,18 +30,18 @@ jsonwebtoken = { version = "9", optional = true }
 # `digest` / `block-buffer` / `crypto-common` / `generic-array` / `typenum` /
 # `cpufeatures`). The heavy RSA arms inside `crypto_core.rs` stay behind the
 # `crypto` feature (which implies `crypto-core`).
-sha2 = { version = "0.10", optional = true }
+sha2 = { version = "0.11", optional = true }
 rsa = { version = "0.9", features = ["sha2"], optional = true }
-aes-gcm = { version = "0.10", optional = true }
-chacha20poly1305 = { version = "0.10", optional = true }
-pbkdf2 = { version = "0.12", optional = true }
+aes-gcm = { version = "0.11", optional = true }
+chacha20poly1305 = { version = "0.11", optional = true }
+pbkdf2 = { version = "0.13", optional = true }
 flate2 = { version = "1", optional = true }
-zstd = { version = "0.13", optional = true }
+zstd = { version = "0.14", optional = true }
 csv = { version = "1", optional = true }
-toml = { version = "0.8", optional = true }
+toml = { version = "1.1", optional = true }
 serde_yaml = { version = "0.9", optional = true }
-axum = { version = "0.7", features = ["ws"], optional = true }
-tower-http = { version = "0.5", features = ["fs", "catch-panic", "timeout"], optional = true }
+axum = { version = "0.8", features = ["ws"], optional = true }
+tower-http = { version = "0.6", features = ["fs", "catch-panic", "timeout"], optional = true }
 # `tower` (limit + util) backs the server front-door DoS ceilings:
 # `GlobalConcurrencyLimitLayer` (in-flight cap) needs `limit`; `ServiceExt`
 # (`util`) drives a `Router` through a single request in the server unit tests.
@@ -70,7 +70,7 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "h
 # connections use the same rustls backend as reqwest/sqlx/lettre — no native
 # TLS dependency added. The `native-tls` feature is deliberately NOT listed;
 # rustls-only TLS: no native-tls dependency added (deliberate divergence: §B-WS-TLS).
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"], optional = true }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"], optional = true }
 futures-util = { version = "0.3", optional = true }
 # The floor types (`IpeMaybe`/`IpeResult` in `core.rs`, the `IpeError` family in
 # `error.rs`, `IpeOrder` in `basics.rs`, `Decimal`, the `dom::diff::Patch` wire)
@@ -106,17 +106,17 @@ getrandom = { version = "0.2", optional = true }
 zeroize = { version = "1", optional = true }
 # HMAC family — the `crypto_core` floor's `hmacSha256`/`hmacSha512`. Optional,
 # behind `crypto-core`.
-hmac = { version = "0.12", optional = true }
+hmac = { version = "0.13", optional = true }
 # Legacy SHA-1 / MD5 checksums (`Crypto.sha1`/`md5`) live in `crypto.rs`, the
 # heavy surface — optional, behind the `crypto` feature.
-sha1 = { version = "0.10", optional = true }
-md-5 = { version = "0.10", optional = true }
+sha1 = { version = "0.11", optional = true }
+md-5 = { version = "0.11", optional = true }
 # The driver features (`sqlite`/`postgres`) are activated by the `db-sqlite` /
 # `db-postgres` selectors, not enabled here — a program pulls only the driver
 # it emits. `db-postgres` also activates `sqlite` (the Live session store keeps
 # a sqlite side table even under the postgres driver — see `db_cargo_toml`).
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls"], optional = true }
-redis = { version = "0.27", features = ["tokio-comp"], optional = true }
+redis = { version = "1.6", features = ["tokio-comp"], optional = true }
 # `Ipe.Regex` regex kernels + `String.isUrl`, behind the `regex` feature. A
 # program that reaches neither drops `regex` and its aho-corasick / regex-automata
 # / regex-syntax subtree.
@@ -133,7 +133,7 @@ unicode-general-category = { version = "1", optional = true }
 # buffer kernels, behind the `encoding` feature. Also used by the raw crates in
 # the crypto/db/server/email/jwt/web surfaces — those features each imply
 # `encoding`. A program that reaches none of these drops all three crates.
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.23", optional = true }
 # `Ipe.Uuid` v4/v7/parse, behind the `uuid` feature. The `server` / `web`
 # surfaces mint session/CSRF ids via `uuid::new_v4` (they imply `uuid`); a bare
 # Program that reaches none drops the crate.
@@ -173,19 +173,19 @@ rust_decimal = { version = "1", optional = true, default-features = false, featu
     "std",
     "maths",
 ] }
-bcrypt = { version = "0.17", optional = true }
+bcrypt = { version = "0.19", optional = true }
 # `icu_casemap`: locale-aware case mapping (`String.toUpperIn`/`toLowerIn`).
 # Feature-gated so programs that never use locale-aware case pay nothing.
 # Uses ICU4X compiled-data bundling — no separate data-provider call needed.
 icu_casemap = { version = "2.2", optional = true }
 icu_locale_core = { version = "2.2", optional = true }
 async-trait = { version = "0.1", optional = true }
-unicode-width = { version = "0.1", optional = true }
-crossterm = { version = "0.28", optional = true }
+unicode-width = { version = "0.2", optional = true }
+crossterm = { version = "0.29", optional = true }
 # Ipe.Webview native window. Modern wry/tao (objc2 + current windows-rs) build on
 # macOS-15/Xcode-16 + Windows-2025; on Linux they target webkit2gtk-4.1 + libsoup-3.0.
-wry = { version = "0.55", optional = true }
-tao = { version = "0.35", optional = true }
+wry = { version = "0.57", optional = true }
+tao = { version = "0.37", optional = true }
 
 # Unix-only: the Ipe.Web console reverse-proxy (live/console_proxy.rs) uses
 # libc::prctl(PR_SET_PDEATHSIG) on Linux so the spawned console child dies with
@@ -244,7 +244,7 @@ wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys = { version = "0.3", optional = true }
 # `Sub.every` / `Time.sleep` / `Time.every` browser substitute — `setInterval`
 # / `setTimeout` wrapped as futures/callbacks (M4 Cmd/Sub bridge).
-gloo-timers = { version = "0.3", features = ["futures"], optional = true }
+gloo-timers = { version = "0.4", features = ["futures"], optional = true }
 web-sys = { version = "0.3", optional = true, features = [
     "Window",
     "Document",
@@ -621,11 +621,11 @@ wasm-client = [
 [dev-dependencies]
 regex = "1"
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 # `tests/no_ungated_dial.rs` parses the dial-site sources into a syntax tree, so
 # `#[cfg(test)]`, comments, and strings are classified by the parser rather
 # than by a text scanner.
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }
 proc-macro2 = "1"
 
 # `wasm-bindgen-test` drives the headless-browser test harness (`tests/
@@ -660,11 +660,11 @@ proc-macro2 = "1"
 # to check every kernel's runtime function exists — a native-only source-walk test.
 ipe_kernels = { path = "../../compiler/kernels" }
 proptest = "1"
-jsonwebtoken = "9"
-bcrypt = "0.17"
-aes-gcm = "0.10"
-chacha20poly1305 = "0.10"
-pbkdf2 = "0.12"
+jsonwebtoken = "10"
+bcrypt = "0.19"
+aes-gcm = "0.11"
+chacha20poly1305 = "0.11"
+pbkdf2 = "0.13"
 # `tower` moved to an optional `[dependencies]` gated by the `server` feature
 # (it now backs the front-door concurrency-cap layer, not only the test-only
 # `ServiceExt::oneshot`). The `server` unit tests reach it through that feature.

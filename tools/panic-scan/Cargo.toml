@@ -14,7 +14,7 @@ publish = false
 proc-macro2 = { version = "1", features = ["span-locations"] }
 # The syntax tree decides test-only exemption per node, so an attribute can
 # never reach past the item, arm, field, or statement it decorates.
-syn = { version = "2", default-features = false, features = ["full", "visit", "parsing"] }
+syn = { version = "3", default-features = false, features = ["full", "visit", "parsing"] }
 
 [lib]
 path = "src/lib.rs"
