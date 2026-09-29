@@ -1297,6 +1297,8 @@ messages! {
     login_status_exposed(path) = "login-status-exposed";
     /// `ipe login --status`: the token's directory is a symbolic link.
     login_status_symlinked_dir(path) = "login-status-symlinked-dir";
+    /// `ipe login --status`: the token's directory, or an ancestor, is not private.
+    login_status_dir_untrusted(path) = "login-status-dir-untrusted";
     /// `ipe login --status`: no token is stored.
     login_status_not_logged_in = "login-status-not-logged-in";
     /// `ipe login` stored the token.

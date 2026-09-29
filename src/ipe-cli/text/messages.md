@@ -1504,6 +1504,10 @@ token file at {path} is not private to you — publish will not use it; treat th
 
 token directory {path} is a symbolic link — publish will not read a token through it; point `XDG_CONFIG_HOME` (or `HOME`) at the real directory, or replace the link with the directory it names
 
+## login-status-dir-untrusted
+
+token directory {path} is not private to you (another local user could write or replace it) — publish will not read a token under it; if a token is stored there, treat it as exposed: revoke it in GitHub settings, then make the directory owner-only (`chmod go-w`) and run `ipe login --logout` and `ipe login`
+
 ## login-status-not-logged-in
 
 not logged in — run `ipe login` to authorize
