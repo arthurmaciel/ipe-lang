@@ -188,6 +188,19 @@ struct Memo {
     flat_layouts: HashMap<FlatKey, String>,
     /// [`flat_measure`] per [`flat_fixed`] node, computed once.
     flat_measures: HashMap<FlatKey, FlatMeasure>,
+    /// The first line, through its newline, of each layout a [`first_line_probe`]
+    /// rendered and saw break; charged to `bytes` like `layouts`.
+    first_lines: HashMap<MemoKey, String>,
+    /// The address of the buffer the innermost [`first_line_probe`] fills.
+    stop_buffer: Option<usize>,
+    /// [`is_block_like`] per node, computed once.
+    block_like: HashMap<usize, bool>,
+    /// [`is_glue_shape`] per node, computed once.
+    glue_shapes: HashMap<usize, bool>,
+    /// [`is_delimited_expr`] per node, computed once.
+    delimited_exprs: HashMap<usize, bool>,
+    /// [`receiver_is_method_chain`] per node, computed once.
+    chain_receivers: HashMap<usize, bool>,
     /// [`LAYOUT_FUEL`] left to spend; once spent the render is abandoned.
     fuel: usize,
     exhausted: bool,
@@ -327,6 +340,12 @@ impl MemoScope {
             flat_fixed: HashMap::new(),
             flat_layouts: HashMap::new(),
             flat_measures: HashMap::new(),
+            first_lines: HashMap::new(),
+            stop_buffer: None,
+            block_like: HashMap::new(),
+            glue_shapes: HashMap::new(),
+            delimited_exprs: HashMap::new(),
+            chain_receivers: HashMap::new(),
             fuel,
             exhausted: false,
         };
@@ -476,6 +495,14 @@ fn is_keyed(doc: &Doc) -> bool {
 /// same bytes appended in every context. A multi-line one places its later lines
 /// at `indent`, so it stays with the per-context memo.
 fn render_flat_shared(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, out: &mut String) {
+    // A probe past its first line keeps nothing more, and its empty append must
+    // not stand in for the node's shared layout.
+    if reach(std::ptr::from_ref::<String>(out).addr(), out) == Reach::Done {
+        if !spend(1) {
+            abandon(out);
+        }
+        return;
+    }
     let key = FlatKey::of(doc, cfg);
     let shared = MEMO.with_borrow(|m| {
         let m = m.as_ref()?;
@@ -527,9 +554,69 @@ fn render_flat_shared(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, o
     });
 }
 
+/// How much more of its layout a render into a buffer must write.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// Every byte: the buffer is not a [`first_line_probe`].
+    Whole,
+    /// Up to and including the first newline, which the probe does not hold yet.
+    FirstLine,
+    /// Nothing: the probe's first line is complete.
+    Done,
+}
+
+/// The [`Reach`] of a render into `out`, the buffer at address `addr`.
+///
+/// A buffer only grows past its last newline — a break trims trailing spaces,
+/// never a newline — so once a probe holds a newline its first line is final.
+fn reach(addr: usize, out: &str) -> Reach {
+    let probe = MEMO.with_borrow(|m| m.as_ref().is_some_and(|m| m.stop_buffer == Some(addr)));
+    if probe {
+        if current_col(out) < out.len() {
+            Reach::Done
+        } else {
+            Reach::FirstLine
+        }
+    } else {
+        Reach::Whole
+    }
+}
+
+/// `layout` up to and including its first newline, or all of it when it has none.
+fn first_line(layout: &str) -> &str {
+    layout
+        .find('\n')
+        .and_then(|nl| layout.get(..=nl))
+        .unwrap_or(layout)
+}
+
+/// Run `render` into a fresh buffer that keeps only the first line it writes.
+///
+/// Every render into the buffer stops laying out once a newline is in it, so a
+/// probe that reads no further than the first line — its length, whether a
+/// newline ends it, its first character — costs that line, not the whole subtree.
+/// Before its first newline the buffer grows exactly as an ordinary one would, so
+/// the probe holds the bytes an ordinary render writes up to and including its
+/// first newline, and nothing after them.
+fn first_line_probe<T>(render: impl FnOnce(&mut String) -> T) -> (String, T) {
+    let mut probe = String::new();
+    let addr = std::ptr::from_ref(&probe).addr();
+    let outer = MEMO.with_borrow_mut(|m| m.as_mut().map(|m| m.stop_buffer.replace(addr)));
+    let read = render(&mut probe);
+    MEMO.with_borrow_mut(|m| {
+        if let (Some(m), Some(outer)) = (m.as_mut(), outer) {
+            m.stop_buffer = outer;
+        }
+    });
+    let end = first_line(&probe).len();
+    probe.truncate(end);
+    (probe, read)
+}
+
 /// Run `render` for `doc` into `out`, or replay the bytes it produced the last time
 /// it ran on the same node in the same context. A node outside the memoized
-/// document renders directly.
+/// document renders directly. Into a [`first_line_probe`] only the first line is
+/// laid out and replayed.
 fn memoized(
     doc: &Doc,
     cfg: RenderConfig,
@@ -548,11 +635,14 @@ fn memoized(
         abandon(out);
         return;
     };
+    let reach = reach(std::ptr::from_ref::<String>(out).addr(), out);
     if !keyed {
         // A leaf's caller measures the cursor line to place it, so it is charged
         // that line like a keyed node is.
         if spend(1_usize.saturating_add(current_col(out))) {
-            render(out);
+            if reach != Reach::Done {
+                render(out);
+            }
         } else {
             abandon(out);
         }
@@ -570,16 +660,26 @@ fn memoized(
         abandon(out);
         return;
     }
+    if reach == Reach::Done {
+        return;
+    }
     // A break trims only the trailing spaces before it, so everything before that
     // run is untouched and the render's effect is exactly the bytes from `base` on.
     let base = out.len().saturating_sub(key.cursor.trailing_spaces);
     let replayed = MEMO.with_borrow(|m| {
-        let layout = m.as_ref().and_then(|m| m.layouts.get(&key));
-        if let Some(layout) = layout {
-            out.truncate(base);
-            out.push_str(layout);
-        }
-        layout.map(String::len)
+        let m = m.as_ref()?;
+        let whole = m.layouts.get(&key).map(String::as_str);
+        let found = if reach == Reach::FirstLine {
+            whole
+                .map(first_line)
+                .or_else(|| m.first_lines.get(&key).map(String::as_str))
+        } else {
+            whole
+        };
+        let layout = found?;
+        out.truncate(base);
+        out.push_str(layout);
+        Some(layout.len())
     });
     if let Some(replayed) = replayed {
         spend(replayed);
@@ -595,14 +695,30 @@ fn memoized(
         abandon(out);
         return;
     }
+    keep_layout(key, reach, layout);
+}
+
+/// Keep a fresh `layout` for replay under `key`: whole, or apart as its first
+/// line when a [`first_line_probe`] rendered it and it broke.
+///
+/// A probe's layout without a newline was laid out in full, so it is the whole
+/// layout every other render of the key replays.
+fn keep_layout(key: MemoKey, reach: Reach, layout: &str) {
+    let partial = reach == Reach::FirstLine && layout.contains('\n');
+    let kept = if partial { first_line(layout) } else { layout };
     MEMO.with_borrow_mut(|m| {
-        let entry = memo_entry_bytes(layout.len());
+        let entry = memo_entry_bytes(kept.len());
         if let Some(m) = m.as_mut()
             && let Some(bytes) = m.bytes.checked_add(entry)
             && bytes <= m.byte_ceiling
         {
             m.bytes = bytes;
-            m.layouts.insert(key, layout.to_owned());
+            let table = if partial {
+                &mut m.first_lines
+            } else {
+                &mut m.layouts
+            };
+            table.insert(key, kept.to_owned());
         }
     });
 }
@@ -749,8 +865,9 @@ fn children_flat_fixed(doc: &Doc) -> bool {
 /// The [`FlatMeasure`] of `doc` laid out flat under `cfg`, or `None` when `doc` is
 /// not [`flat_fixed`], so its flat layout depends on where it lands.
 ///
-/// Measured on the real flat render (through [`render_at`], so a keyed node shares
-/// its layout) and kept per keyed node.
+/// Measured on the first line of the real flat render (through [`render_at`], so
+/// a keyed node shares its layout) and kept per keyed node. Every field reads no
+/// further than the first newline, so a [`first_line_probe`] measures it.
 fn flat_measure(doc: &Doc, cfg: RenderConfig) -> Option<FlatMeasure> {
     if !flat_fixed(doc) {
         return None;
@@ -760,9 +877,10 @@ fn flat_measure(doc: &Doc, cfg: RenderConfig) -> Option<FlatMeasure> {
     if cached.is_some() {
         return cached;
     }
-    let mut scratch = String::new();
-    render_at(doc, cfg.no_reserve(), 0, 0, true, &mut scratch);
-    let measure = FlatMeasure::of(&scratch);
+    let (first, ()) = first_line_probe(|probe| {
+        render_at(doc, cfg.no_reserve(), 0, 0, true, probe);
+    });
+    let measure = FlatMeasure::of(&first);
     MEMO.with_borrow_mut(|m| {
         if let Some(m) = m.as_mut()
             && !m.exhausted
@@ -1128,9 +1246,15 @@ fn render_method_chain(
 /// brace-block receiver's method attaches). A transparent `Nest`/`Concat` wrapper is
 /// looked through so a chain carried inside a positional wrapper still classifies.
 fn receiver_is_method_chain(receiver: &Doc) -> bool {
-    if !spend(1) {
-        return false;
-    }
+    node_fact(
+        receiver,
+        |m| &mut m.chain_receivers,
+        || (method_chain_uncached(receiver), 1),
+    )
+}
+
+/// [`receiver_is_method_chain`] for one node, its children read through the cache.
+fn method_chain_uncached(receiver: &Doc) -> bool {
     match receiver {
         Doc::MethodChain { .. } => true,
         Doc::Nest(_, inner) => receiver_is_method_chain(inner),
@@ -1189,16 +1313,10 @@ fn inner_renders_parenthesized(
     if let Some(measure) = flat_measure(inner, cfg) {
         return measure.starts_paren;
     }
-    let mut scratch = String::new();
-    render_at(
-        inner,
-        cfg.no_reserve(),
-        indent,
-        start_col,
-        true,
-        &mut scratch,
-    );
-    scratch.starts_with('(')
+    let (first, ()) = first_line_probe(|probe| {
+        render_at(inner, cfg.no_reserve(), indent, start_col, true, probe);
+    });
+    first.starts_with('(')
 }
 
 /// Render a [`Doc::TypeBound`] `Ptr<Head + T1 + …>` with `rustfmt`'s angle-bracket
@@ -1405,28 +1523,25 @@ fn struct_lit_flat_fits(
         ListWidths::Multiline => return false,
         ListWidths::Unmeasured => {}
     }
-    let mut scratch = String::new();
-    render_at(
-        open,
-        cfg.no_reserve(),
-        indent,
-        start_col,
-        true,
-        &mut scratch,
-    );
-    let open_end = current_col(&scratch);
-    scratch.push(' ');
-    render_flat_elems(fields, cfg, indent, &mut scratch);
-    let fields_end = current_col(&scratch);
-    scratch.push(' ');
-    render_at(
-        close,
-        cfg.no_reserve(),
-        indent,
-        fields_end + 1,
-        true,
-        &mut scratch,
-    );
+    // Every column read below is taken before the first newline or discarded by
+    // the single-line check, so the probe's first line decides the fit.
+    let (scratch, (open_end, fields_end)) = first_line_probe(|probe| {
+        render_at(open, cfg.no_reserve(), indent, start_col, true, probe);
+        let open_end = current_col(probe);
+        probe.push(' ');
+        render_flat_elems(fields, cfg, indent, probe);
+        let fields_end = current_col(probe);
+        probe.push(' ');
+        render_at(
+            close,
+            cfg.no_reserve(),
+            indent,
+            fields_end.saturating_add(1),
+            true,
+            probe,
+        );
+        (open_end, fields_end)
+    });
     if scratch.contains('\n') {
         return false;
     }
@@ -1965,9 +2080,10 @@ fn flat_width(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> 
     if let Some(measure) = flat_measure(doc, cfg) {
         return measure.first_len;
     }
-    let mut scratch = String::new();
-    render_at(doc, cfg, indent, start_col, true, &mut scratch);
-    scratch.split('\n').next().unwrap_or(&scratch).len()
+    let (first, ()) = first_line_probe(|probe| {
+        render_at(doc, cfg, indent, start_col, true, probe);
+    });
+    first.trim_end_matches('\n').len()
 }
 
 /// Whether `doc` rendered entirely flat from column `start_col` is genuinely
@@ -1981,9 +2097,10 @@ fn flat_is_single_line(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: u
     if let Some(measure) = flat_measure(doc, cfg) {
         return measure.single_line;
     }
-    let mut scratch = String::new();
-    render_at(doc, cfg, indent, start_col, true, &mut scratch);
-    !scratch.contains('\n')
+    let (first, ()) = first_line_probe(|probe| {
+        render_at(doc, cfg, indent, start_col, true, probe);
+    });
+    !first.contains('\n')
 }
 
 /// `doc` rendered from `start_col` at block indent `indent`, letting its own
@@ -2105,12 +2222,13 @@ fn fits_single_line(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usiz
             .width()
             .is_some_and(|w| start_col.saturating_add(w) <= cfg.margin());
     }
-    let mut scratch = String::new();
-    render_at(doc, cfg.no_reserve(), indent, start_col, true, &mut scratch);
-    if scratch.contains('\n') {
+    let (first, ()) = first_line_probe(|probe| {
+        render_at(doc, cfg.no_reserve(), indent, start_col, true, probe);
+    });
+    if first.contains('\n') {
         return false;
     }
-    start_col + scratch.len() <= cfg.margin()
+    start_col + first.len() <= cfg.margin()
 }
 
 /// Whether a chain's operands rendered flat from `start_col` are genuinely
@@ -2140,12 +2258,13 @@ fn chain_flat_fits_single_line(
         FlatRun::Multiline => return false,
         FlatRun::Unmeasured => {}
     }
-    let mut scratch = String::new();
-    render_chain_flat(operands, cfg.no_reserve(), indent, &mut scratch);
-    if scratch.contains('\n') {
+    let (first, ()) = first_line_probe(|probe| {
+        render_chain_flat(operands, cfg.no_reserve(), indent, probe);
+    });
+    if first.contains('\n') {
         return false;
     }
-    start_col + scratch.len() <= cfg.margin()
+    start_col + first.len() <= cfg.margin()
 }
 
 /// Render a binop chain with rustfmt's layout.
@@ -2351,17 +2470,11 @@ fn render_call_args_broken(
                 FlatRun::Width(w) => open_last.saturating_add(w) <= cfg.margin(),
                 FlatRun::Multiline => false,
                 FlatRun::Unmeasured => {
-                    let mut argscratch = String::new();
-                    render_flat_elems(elems, cfg, indent, &mut argscratch);
-                    render_at(
-                        close,
-                        cfg.no_reserve(),
-                        indent,
-                        open_last,
-                        true,
-                        &mut argscratch,
-                    );
-                    !argscratch.contains('\n') && open_last + argscratch.len() <= cfg.margin()
+                    let (first, ()) = first_line_probe(|probe| {
+                        render_flat_elems(elems, cfg, indent, probe);
+                        render_at(close, cfg.no_reserve(), indent, open_last, true, probe);
+                    });
+                    !first.contains('\n') && open_last + first.len() <= cfg.margin()
                 }
             };
             if args_fit {
@@ -2501,16 +2614,18 @@ fn call_args_flat_fits(
         ),
         ListWidths::Multiline => return false,
         ListWidths::Unmeasured => {
-            let mut scratch = String::new();
-            render_at(open, cfg, indent, start_col, true, &mut scratch);
-            let open_end = current_col(&scratch);
-            render_flat_elems(elems, cfg, indent, &mut scratch);
-            let elems_end = current_col(&scratch);
-            render_at(close, cfg, indent, elems_end, true, &mut scratch);
-            if scratch.contains('\n') {
+            let (first, (open_end, elems_end)) = first_line_probe(|probe| {
+                render_at(open, cfg, indent, start_col, true, probe);
+                let open_end = current_col(probe);
+                render_flat_elems(elems, cfg, indent, probe);
+                let elems_end = current_col(probe);
+                render_at(close, cfg, indent, elems_end, true, probe);
+                (open_end, elems_end)
+            });
+            if first.contains('\n') {
                 return false;
             }
-            (open_end, elems_end, scratch.len())
+            (open_end, elems_end, first.len())
         }
     };
     if start_col.saturating_add(line_len) > cfg.max_width {
@@ -2672,18 +2787,20 @@ fn last_arg_combines(
         (FlatRun::Width(o), FlatRun::Width(p)) => (o, p),
         (_, FlatRun::Multiline) => return None,
         _ => {
-            let mut scratch = String::new();
-            render_at(open, cfg, indent, start_col, true, &mut scratch);
-            let open_end = current_col(&scratch);
-            for e in prefix {
-                let c = current_col(&scratch);
-                render_at(e, cfg, indent, c, true, &mut scratch);
-                scratch.push_str(ELEM_SEP);
-            }
-            if scratch.contains('\n') {
+            let (first, open_end) = first_line_probe(|probe| {
+                render_at(open, cfg, indent, start_col, true, probe);
+                let open_end = current_col(probe);
+                for e in prefix {
+                    let c = current_col(probe);
+                    render_at(e, cfg, indent, c, true, probe);
+                    probe.push_str(ELEM_SEP);
+                }
+                open_end
+            });
+            if first.contains('\n') {
                 return None;
             }
-            (open_end, scratch.len())
+            (open_end, first.len())
         }
     };
     let last_col = start_col.saturating_add(prefix_len);
@@ -2708,9 +2825,10 @@ fn last_arg_combines(
     if single_arg && !has_hard_break(last) && !is_block_like(last) {
         let flat_w = flat_measure(last, cfg).map_or_else(
             || {
-                let mut flat = String::new();
-                render_at(last, cfg, indent, last_col, true, &mut flat);
-                (!flat.contains('\n')).then_some(flat.len())
+                let (first, ()) = first_line_probe(|probe| {
+                    render_at(last, cfg, indent, last_col, true, probe);
+                });
+                (!first.contains('\n')).then_some(first.len())
             },
             FlatMeasure::width,
         );
@@ -2738,17 +2856,18 @@ fn last_arg_combines(
     // Render the last element FORCED broken from that column; its first line is the
     // combined head's tail. `budget` (when threaded) is the recursive `Shape` width
     // for `last`; a probe without a threaded budget measures at the full `fn_call_width`.
-    let mut tail = String::new();
-    render_forced_break(
-        last,
-        base,
-        budget.unwrap_or(FN_CALL_WIDTH),
-        cfg,
-        indent,
-        last_col,
-        &mut tail,
-    );
-    let first = tail.split('\n').next().unwrap_or("");
+    let (tail, ()) = first_line_probe(|probe| {
+        render_forced_break(
+            last,
+            base,
+            budget.unwrap_or(FN_CALL_WIDTH),
+            cfg,
+            indent,
+            last_col,
+            probe,
+        );
+    });
+    let first = tail.trim_end_matches('\n');
     let first_line_end = last_col + first.len();
     if first_line_end > cfg.max_width {
         return None;
@@ -2981,9 +3100,11 @@ fn is_closure_head(head: &str) -> bool {
 /// also admits nested calls / macros / tuples that DO get their own line when they
 /// fit flat within the shared budget.
 fn is_block_like(doc: &Doc) -> bool {
-    if !spend(1) {
-        return false;
-    }
+    node_fact(doc, |m| &mut m.block_like, || (block_like_uncached(doc), 1))
+}
+
+/// [`is_block_like`] for one node, its children read through the cache.
+fn block_like_uncached(doc: &Doc) -> bool {
     match doc {
         Doc::BraceBody(_) => true,
         Doc::Group(inner) => is_block_like(inner),
@@ -3008,9 +3129,15 @@ fn is_block_like(doc: &Doc) -> bool {
 /// `Box::new(` / `Some(` text wrapper. A [`Doc::Chain`] and a parenthesized
 /// statement block (`({ … })`) are NOT glue-shaped.
 fn is_glue_shape(doc: &Doc) -> bool {
-    if !spend(1) {
-        return false;
-    }
+    node_fact(
+        doc,
+        |m| &mut m.glue_shapes,
+        || (glue_shape_uncached(doc), 1),
+    )
+}
+
+/// [`is_glue_shape`] for one node, its children read through the cache.
+fn glue_shape_uncached(doc: &Doc) -> bool {
     match doc {
         // A call/ctor/macro/tuple/list glues onto its own delimiters, and a struct
         // literal (`Name { … }`) is a brace-delimited construct `rustfmt` glues a
@@ -3044,9 +3171,15 @@ fn is_glue_shape(doc: &Doc) -> bool {
 /// whose last argument is a plain call breaks one argument per line rather than
 /// overflowing. A `Box::new(<delimited>)` wrapper counts (its inner is delimited).
 fn is_delimited_expr(doc: &Doc) -> bool {
-    if !spend(1) {
-        return false;
-    }
+    node_fact(
+        doc,
+        |m| &mut m.delimited_exprs,
+        || (delimited_expr_uncached(doc), 1),
+    )
+}
+
+/// [`is_delimited_expr`] for one node, its children read through the cache.
+fn delimited_expr_uncached(doc: &Doc) -> bool {
     match doc {
         Doc::CallArgs { open, elems, .. } => match open.as_ref() {
             // A tuple `(` or an array `vec![` / `[`.
@@ -3094,17 +3227,11 @@ fn glue_fits(
     if after_op > cfg.margin() {
         return (false, false);
     }
-    let mut scratch = String::new();
-    render_at(
-        operand,
-        cfg.no_reserve(),
-        indent,
-        after_op,
-        false,
-        &mut scratch,
-    );
-    let first_line = scratch.split('\n').next().unwrap_or("");
-    let single_line = !scratch.contains('\n');
+    let (first, ()) = first_line_probe(|probe| {
+        render_at(operand, cfg.no_reserve(), indent, after_op, false, probe);
+    });
+    let first_line = first.trim_end_matches('\n');
+    let single_line = !first.contains('\n');
     // The trailing-delimiter `reserve` bites only when the operand renders
     // single-line here — then this glued line IS the chain's last line and the
     // enclosing `,` sits at its end. A multiline operand ends on a later line, so
@@ -3121,9 +3248,10 @@ fn glue_fits(
 /// operator glues to a FOLLOWING operand only when the operand is single-line;
 /// `rustfmt` breaks the chain before an operand that would itself render multiline.
 fn renders_single_line(operand: &Doc, cfg: RenderConfig, col: usize, indent: usize) -> bool {
-    let mut scratch = String::new();
-    render_at(operand, cfg, indent, col, false, &mut scratch);
-    !scratch.contains('\n')
+    let (first, ()) = first_line_probe(|probe| {
+        render_at(operand, cfg, indent, col, false, probe);
+    });
+    !first.contains('\n')
 }
 
 /// The indentation (leading-space count) of the line currently being written in
@@ -4159,6 +4287,7 @@ mod p0_tests {
                     .layouts
                     .values()
                     .chain(m.flat_layouts.values())
+                    .chain(m.first_lines.values())
                     .map(|l| memo_entry_bytes(l.len()))
                     .sum();
                 assert_eq!(m.bytes, charged, "memo bytes must charge every entry");
@@ -4182,33 +4311,57 @@ mod p0_tests {
         }
     }
 
-    /// Flat fit probes answer from cached measures, so doubling a nest's depth at
-    /// most doubles its layout work: no probing construct re-renders its subtree
-    /// per enclosing level. The assign right-hand side is excluded — its non-flat
-    /// probe lands each level at a new column and indent.
+    /// Fit probes answer from cached measures or lay out only a first line, so
+    /// doubling a nest's depth at most doubles its layout work: no probing
+    /// construct re-renders its subtree per enclosing level.
+    ///
+    /// Two constructs are excluded because their probes are column-dependent:
+    /// the last-argument combine decides each level at the shared `fn_call_width`
+    /// budget from a column relative to the outermost call, and the assign
+    /// right-hand side probes its whole non-flat layout at a new column and indent
+    /// per level. Each probe is a distinct context, so their work grows with depth
+    /// times the width.
     #[test]
     fn nest_layout_work_grows_linearly() {
         on_main_thread_stack(|| {
-            for (name, step) in NESTS.into_iter().filter(|(name, _)| *name != "assign") {
-                for depth in [32, 64] {
-                    let (work, exhausted) = layout_work(&nest(step, depth));
-                    let (doubled, doubled_exhausted) = layout_work(&nest(step, depth * 2));
-                    assert!(
-                        !exhausted && !doubled_exhausted,
-                        "{name}: depth {depth} ran out of fuel"
-                    );
-                    assert!(
-                        doubled <= 2 * work + LINEAR_SLACK,
-                        "{name}: depth {} did {doubled} layouts, depth {depth} did {work}",
-                        depth * 2
-                    );
-                }
+            let linear = NESTS
+                .into_iter()
+                .filter(|(name, _)| !matches!(*name, "call" | "assign"));
+            for (name, step) in linear {
+                let (work, exhausted) = layout_work(&nest(step, 64));
+                let (doubled, doubled_exhausted) = layout_work(&nest(step, 128));
+                assert!(
+                    !exhausted && !doubled_exhausted,
+                    "{name}: depth 64 or 128 ran out of fuel"
+                );
+                assert!(
+                    doubled <= 2 * work + LINEAR_SLACK,
+                    "{name}: depth 128 did {doubled} layouts, depth 64 did {work}"
+                );
             }
         });
     }
 
     /// The constant layouts a nest may add per doubling beyond twice its work.
     const LINEAR_SLACK: usize = 64;
+
+    /// A deep call or mixed nest lays out within the fuel rather than falling
+    /// back to the plain layout.
+    #[test]
+    fn deep_call_nest_lays_out_within_fuel() {
+        on_main_thread_stack(|| {
+            for (name, step) in NESTS
+                .into_iter()
+                .filter(|(name, _)| matches!(*name, "call" | "mixed"))
+            {
+                let (work, exhausted) = layout_work(&nest(step, 128));
+                assert!(
+                    !exhausted,
+                    "{name}: depth 128 ran out of fuel after {work} layouts"
+                );
+            }
+        });
+    }
 
     /// A nest as deep as the parser admits finishes on the compiler's main-thread
     /// stack, deterministically: laid out within the fuel, or else plain.
@@ -4267,13 +4420,14 @@ mod p0_tests {
                     .layouts
                     .values()
                     .chain(m.flat_layouts.values())
+                    .chain(m.first_lines.values())
                     .map(|l| memo_entry_bytes(l.len()))
                     .sum();
                 assert_eq!(m.bytes, charged, "memo bytes must charge every entry");
                 assert!(m.bytes <= byte_ceiling, "memo past its ceiling");
                 (
                     fuel.saturating_sub(m.fuel),
-                    m.layouts.len() + m.flat_layouts.len(),
+                    m.layouts.len() + m.flat_layouts.len() + m.first_lines.len(),
                     m.bytes,
                 )
             })
