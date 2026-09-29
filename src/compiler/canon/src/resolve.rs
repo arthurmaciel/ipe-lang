@@ -4930,14 +4930,18 @@ fn inject_ctors_for_type(
 /// produces `ui::Attribute` — an exit-0-then-cargo-fail E0308. `["Html"]` is also
 /// the home the HM constrainer uses for the Html carrier, so the emitted type
 /// unifies with `Html.node`'s parameter rather than minting a nominally-distinct
-/// `Attribute`. A home-INsensitive builtin (`Path`, …) keeps the exporting
-/// module's own path.
+/// `Attribute`. A terminal engine (`Ipe.Ui.Tui`, `Ipe.Ui.Cells`, `Ipe.Ui.Cli`)
+/// re-exports its own `Attribute` under its own path, which canonicalises to
+/// that engine's builtin carrier. A home-INsensitive builtin (`Path`, …) keeps
+/// the exporting module's own path.
 fn reexported_builtin_type_home(
     resolved: &str,
     home: &[Symbol],
     interner: &Interner,
 ) -> Vec<Symbol> {
-    if !HOME_SENSITIVE_BUILTIN_TYPES.contains(&resolved) {
+    if !HOME_SENSITIVE_BUILTIN_TYPES.contains(&resolved)
+        || terminal_attribute_builtin(home, resolved, interner).is_some()
+    {
         return home.to_owned();
     }
     let module_is_html = home.iter().any(|s| interner.resolve(*s) == Some("Html"));
@@ -6978,6 +6982,37 @@ fn canonicalise_type(
                     qualifier_home
                 }
             };
+            // `Ipe.Ui.Tui.Attribute` / `Ipe.Ui.Cli.Attribute` — the terminal
+            // engines' attribute types, which their kernels mint as the reserved
+            // builtins `TuiAttr` / `CliAttr`. The public spelling a user writes
+            // (`Tui.Attribute msg`, or `Attribute msg` exposed from either module)
+            // canonicalises to that same builtin, so the documented type is
+            // nameable. The bare form arity-fills its message parameter exactly
+            // as the DOM `Attribute` does.
+            if let Some(builtin) = ctx
+                .interner
+                .resolve(name)
+                .and_then(|n| terminal_attribute_builtin(&home, n, ctx.interner))
+                && can_args.len() <= 1
+            {
+                let name = ctx
+                    .interner
+                    .lookup(builtin)
+                    .ok_or_else(|| Diagnostic::CompilerBug {
+                        where_: "ipe_canon::canonicalise_type::terminal_attribute",
+                        detail: "a terminal attribute builtin name is not interned".into(),
+                    })?;
+                let args = if can_args.is_empty() {
+                    vec![canon::Type::Var(ctx.ui_wildcard_msg)]
+                } else {
+                    can_args
+                };
+                return Ok(canon::Type::Con {
+                    home: Vec::new(),
+                    name,
+                    args,
+                });
+            }
             // A fixed-arity built-in that resolves to the empty-home sentinel
             // (a closed container, or `Ipe.Db`'s `Connection mode` handle and
             // its nullary `ReadOnly`/`ReadWrite` markers) has an exact-`args.len()`
@@ -7079,6 +7114,25 @@ fn canonicalise_type(
                 args: can_args,
             })
         }
+    }
+}
+
+/// The reserved builtin a terminal engine's `Attribute` resolves to:
+/// `Ipe.Ui.Tui.Attribute` (re-exposed by `Ipe.Ui.Cells`) is `TuiAttr`,
+/// `Ipe.Ui.Cli.Attribute` is `CliAttr`.
+fn terminal_attribute_builtin(
+    home: &[Symbol],
+    name: &str,
+    interner: &Interner,
+) -> Option<&'static str> {
+    if name != "Attribute" {
+        return None;
+    }
+    let segments: Vec<&str> = home.iter().filter_map(|s| interner.resolve(*s)).collect();
+    match segments.as_slice() {
+        ["Ipe", "Ui", "Tui" | "Cells"] => Some("TuiAttr"),
+        ["Ipe", "Ui", "Cli"] => Some("CliAttr"),
+        _ => None,
     }
 }
 
