@@ -4797,12 +4797,9 @@ mod p0_tests {
     /// doubling a nest's depth at most doubles its layout work: no probing
     /// construct re-renders its subtree per enclosing level.
     ///
-    /// Two constructs are excluded because their probes are column-dependent:
-    /// the last-argument combine decides each level at the shared `fn_call_width`
-    /// budget from a column relative to the outermost call, and the assign
-    /// right-hand side probes its whole non-flat layout at a new column and indent
-    /// per level. Each probe is a distinct context, so their work grows with depth
-    /// times the width.
+    /// The last-argument combine and the assign right-hand side lay each level out
+    /// at the absolute column its enclosing levels set, so their bound is the one
+    /// [`column_dependent_nest_work_stays_quadratic`] pins.
     #[test]
     fn nest_layout_work_grows_linearly() {
         on_main_thread_stack(|| {
@@ -4827,14 +4824,75 @@ mod p0_tests {
     /// The constant layouts a nest may add per doubling beyond twice its work.
     const LINEAR_SLACK: usize = 64;
 
-    /// A deep call or mixed nest lays out within the fuel rather than falling
-    /// back to the plain layout.
+    /// A nest laid out at the absolute columns its levels land on does work per
+    /// level bounded by the width, never by the subtree below it.
+    ///
+    /// The last-argument combine and the assign right-hand side probe each level
+    /// at a column its enclosing levels set, and a probe that proves a layout is
+    /// its commit, so no level re-renders or replays its subtree: doubling the
+    /// depth at most quadruples the layout work and the fuel, and the output —
+    /// whose indentation grows with the depth — stays within a quadratic cap.
+    #[test]
+    fn column_dependent_nest_work_stays_quadratic() {
+        on_main_thread_stack(|| {
+            for (name, step) in NESTS
+                .into_iter()
+                .filter(|(name, _)| matches!(*name, "call" | "assign"))
+            {
+                let runs = [32_usize, 64, 128].map(|depth| {
+                    let doc = nest(step, depth);
+                    RENDERED.with(|n| n.set(0));
+                    let stats = render_stats(&doc, LAYOUT_FUEL, MEMO_BYTE_CEILING);
+                    let work = RENDERED.with(std::cell::Cell::get);
+                    (depth, work, stats, doc.normalized_leaves().len())
+                });
+                let report = runs
+                    .iter()
+                    .map(|(depth, work, stats, _)| {
+                        format!(
+                            "depth {depth}: {work} layouts, {} fuel, {} bytes",
+                            stats.spent,
+                            stats.out.len()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                for (depth, _, stats, leaves) in &runs {
+                    assert!(!stats.exhausted, "{name}: ran out of fuel: {report}");
+                    assert!(
+                        stats.spent <= LAYOUT_FUEL >> 3,
+                        "{name}: depth {depth} spent past an eighth of the fuel: {report}"
+                    );
+                    assert!(
+                        stats.out.len() <= 8 * depth * depth + leaves,
+                        "{name}: depth {depth} wrote past its quadratic cap: {report}"
+                    );
+                }
+                for pair in runs.windows(2) {
+                    let [(_, work, small, _), (depth, doubled, big, _)] = pair else {
+                        continue;
+                    };
+                    assert!(
+                        *doubled <= 4 * work + LINEAR_SLACK,
+                        "{name}: depth {depth} more than quadrupled the layouts: {report}"
+                    );
+                    assert!(
+                        big.spent <= 4 * small.spent + LINEAR_SLACK,
+                        "{name}: depth {depth} more than quadrupled the fuel: {report}"
+                    );
+                }
+            }
+        });
+    }
+
+    /// A deep call, assign, or mixed nest lays out within the fuel rather than
+    /// falling back to the plain layout.
     #[test]
     fn deep_call_nest_lays_out_within_fuel() {
         on_main_thread_stack(|| {
             for (name, step) in NESTS
                 .into_iter()
-                .filter(|(name, _)| matches!(*name, "call" | "mixed"))
+                .filter(|(name, _)| matches!(*name, "call" | "assign" | "mixed"))
             {
                 let (work, exhausted) = layout_work(&nest(step, 128));
                 assert!(
