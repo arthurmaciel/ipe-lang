@@ -1,5 +1,4 @@
-//! Drift guard: the repository moved from `arthurmaciel/ipe-lang` to
-//! `ipe-lang/compiler`. Every in-binary URL derives from the one Rust SSOT
+//! Drift guard: the repository moved to `ipe-lang/compiler`. Every in-binary URL derives from the one Rust SSOT
 //! (`ipe_diagnostics::REPO_URL`, re-exported as `ipe::style::REPO_URL`), but a
 //! shell script, an editor manifest, a `.md` doc, or an example cannot import
 //! that constant — each hand-spells the URL instead. This test is the single
@@ -17,8 +16,8 @@ mod support;
 
 /// The retired slug: a redirect-only address today, and a stale link in any
 /// file that still spells it (help output, diagnostics footers, editor setup,
-/// the installer).
-const OLD_SLUG: &str = "arthurmaciel/ipe-lang";
+/// the installer). Spelled in two halves so this file never carries it whole.
+const OLD_SLUG: &str = concat!("arthurmaciel", "/ipe-lang");
 
 /// A file exempt from the drift check, relative to the repository root.
 fn is_exempt(rel_path: &str) -> bool {
@@ -69,7 +68,7 @@ fn tracked_files(repo_root: &Path) -> Vec<String> {
 }
 
 /// No tracked file — outside the narrow, documented exemptions — still spells
-/// the retired `arthurmaciel/ipe-lang` slug.
+/// the retired slug.
 #[test]
 fn no_tracked_file_carries_the_retired_repo_slug() {
     let repo_root = support::repo_root();
@@ -95,7 +94,7 @@ fn no_tracked_file_carries_the_retired_repo_slug() {
         offenders.is_empty(),
         "these tracked files still carry the retired `{OLD_SLUG}` slug \
          (repo moved to ipe-lang/compiler) — repoint them; regenerate goldens \
-         with `cargo run -p regen-goldens`:\n{}",
+         with `cargo run -p regen-cli-transcripts` and `UPDATE_GOLDENS=1`:\n{}",
         offenders.join("\n")
     );
 }
@@ -108,11 +107,12 @@ mod matcher_tests {
     /// slug, at the right line number — not a vacuously-passing scan.
     #[test]
     fn lines_containing_flags_a_line_with_the_old_slug() {
-        let fixture = "line one\nsee https://github.com/arthurmaciel/ipe-lang/issues\nline three";
-        let hits = lines_containing(fixture, OLD_SLUG);
+        let offending = format!("see https://github.com/{OLD_SLUG}/issues");
+        let fixture = format!("line one\n{offending}\nline three");
+        let hits = lines_containing(&fixture, OLD_SLUG);
         assert_eq!(
             hits,
-            vec![(2, "see https://github.com/arthurmaciel/ipe-lang/issues")],
+            vec![(2, offending.as_str())],
             "the matcher must flag exactly the offending line, by 1-based number"
         );
     }
