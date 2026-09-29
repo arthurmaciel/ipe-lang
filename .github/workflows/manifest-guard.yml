@@ -67,5 +67,8 @@ jobs:
       - name: Prove the nightly-green refusals (unit tests)
         run: python3 .github/ci/test_nightly_green.py -v
 
+      - name: Prove the local-gate refusals (unit tests)
+        run: python3 .github/ci/test_local_gate.py -v
+
       - name: The derived required-set is in sync with the manifest
         run: python3 .github/ci/check_required_set.py

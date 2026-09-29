@@ -9,7 +9,8 @@
 //! fixture is fast enough that racing a real file-save against it (as an
 //! end-to-end `ipe watch` test would have to) is unreliable. Instead this
 //! test registers an event callback on the WORKER's database that signals
-//! the very FIRST `WillExecute` — a two-module program (`A` imported by
+//! the very FIRST `WillExecute` and parks the worker there until the edit
+//! sets salsa's cancellation flag — a two-module program (`A` imported by
 //! `Main`) guarantees more tracked-query demands remain after that point
 //! (`resolve_imports`, canonicalize ×2, `module_interface`, `linked_program`,
 //! `typecheck`, `lower_program`, `emit_project`), so the cancelling edit is
@@ -26,7 +27,7 @@ use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -85,13 +86,27 @@ fn inject_stdlib_closure(
 #[test]
 fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
     let (first_exec_tx, first_exec_rx) = mpsc::channel::<()>();
+    let (flag_set_tx, flag_set_rx) = mpsc::channel::<()>();
+    let flag_set_rx = Mutex::new(flag_set_rx);
     let signalled = Arc::new(AtomicBool::new(false));
     let signalled_in_callback = Arc::clone(&signalled);
     let mut db = IpeDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
-        if matches!(event.kind, salsa::EventKind::WillExecute { .. })
-            && !signalled_in_callback.swap(true, Ordering::SeqCst)
-        {
-            let _ = first_exec_tx.send(());
+        match event.kind {
+            salsa::EventKind::WillExecute { .. }
+                if !signalled_in_callback.swap(true, Ordering::SeqCst) =>
+            {
+                let _ = first_exec_tx.send(());
+                // Park the worker until the edit raises the cancellation flag,
+                // so its next checkpoint observes the flag however fast the
+                // remaining queries run.
+                if let Ok(rx) = flag_set_rx.lock() {
+                    let _ = rx.recv_timeout(Duration::from_secs(10));
+                }
+            }
+            salsa::EventKind::DidSetCancellationFlag => {
+                let _ = flag_set_tx.send(());
+            }
+            _ => {}
         }
     }));
 
