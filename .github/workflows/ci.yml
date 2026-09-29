@@ -1921,3 +1921,27 @@ jobs:
           path: tools/scripts/browser-e2e/artifacts/
           if-no-files-found: warn
           retention-days: 7
+
+  # The live `main-protection` ruleset requires exactly the manifest's derived
+  # `{context, integration_id}` set (.github/ci/check_required_set.py). Not
+  # required on a PR, where it flags a required-set change the ruleset has not
+  # taken yet; a red on the nightly makes `nightly-green` hold every merge until
+  # the ruleset is reconciled (.github/ci/RECONCILIATION.md).
+  ruleset-drift:
+    name: ruleset-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install PyYAML
+        run: 'PIP_CONFIG_FILE=/dev/null python3 -m pip install --isolated --require-hashes --only-binary :all: -r "$GITHUB_WORKSPACE/.github/ci/requirements.txt"'
+      - name: The live ruleset requires exactly the derived set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: python3 .github/ci/check_required_set.py --fetch

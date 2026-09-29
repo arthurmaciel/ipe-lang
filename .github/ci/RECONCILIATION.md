@@ -1,129 +1,74 @@
 # CI required-set reconciliation
 
-The branch-protection required status checks are **derived from**
-`ci/check-manifest.yml` — every `gate` entry, and only those. `ci/required-set.json`
-is that derived list (regenerate with the snippet at the bottom). `manifest-guard`
-(`.github/workflows/manifest-guard.yml`) fails a PR whenever the manifest and the
-produced workflow contexts drift apart.
+The status checks `main` requires are **derived from** `ci/check-manifest.yml`:
+one `{context, integration_id}` pair per `gate` and `gate-external` entry,
+sorted by context. `ci/check_required_set.py` is the one derivation;
+`ci/required-set.json` is its committed output, in the exact shape of a
+ruleset's `required_status_checks` parameter.
 
-This file records the **intended** `main-protection` required set and the delta
-against the live ruleset. Applying the delta to the live ruleset is a manual,
-human step (a ruleset edit is a security-relevant change and is intentionally not
-automated by a workflow token).
+`integration_id` pins which GitHub App may satisfy a required check. A `gate`
+is posted by a workflow, so it carries the GitHub Actions app id
+(`GITHUB_ACTIONS_APP_ID` in `check_required_set.py`). A `gate-external` entry
+names the app that posts it in its own `integration_id`; no other entry may
+declare one. A required check with no integration is satisfied by a status
+any app — or any token holding `statuses: write` — posts under that name, so
+the pair, not the name, is what every comparison below checks.
 
-## Intended required set (= manifest `gate` + `gate-external` contexts)
+## Where the set is enforced
 
-See `ci/required-set.json`, 39 contexts:
+| Boundary | Compares | Runs |
+|----------|----------|------|
+| `verify-manifest.py` check 4 | manifest ⇄ `required-set.json` | `manifest-guard`, the local gate |
+| `check_required_set.py` | manifest ⇄ `required-set.json` | `manifest-guard` |
+| `check_required_set.py --fetch` | manifest ⇄ the live ruleset | `ruleset-drift` job in `ci.yml` |
 
-```
-admission-changes
-artifact-guard
-build-tools
-capabilities-docs-drift
-cargo-deny
-changes
-cli-docs-drift
-cli-transcripts-drift
-clippy
-diagnostic-tone
-doc-string example gate
-e2e-all
-editors-configure
-env-docs-drift
-explain-page example gate (ADR 0059)
-first-party check floor (ipe type-check only)
-first-party shapes (build gate)
-fmt
-grammar
-linux-arm64 (seccomp socket-deny + bubblewrap)
-linux-x64 (seccomp socket-deny + bubblewrap)
-macos-arm64 (sandbox-exec / Seatbelt)
-manifest-lock-consistency
-markdown-parity
-nightly-green
-panic-scan
-playground-changes
-playground-jail
-quick-check
-registry-admission
-requirements-docs-drift
-runtime-feature-combos
-runtime-full-features
-seal-slice
-seal-smoke
-stdlib-docs-drift
-test
-wasm-floor
-windows-check
-```
+The live ruleset is `main-protection` (`RULESET_ID` in
+`check_required_set.py`). `--fetch` refuses it unless it is an active branch
+ruleset on `~DEFAULT_BRANCH` with no exclusions, carrying exactly one
+`required_status_checks` rule whose pairs equal the derived set in both
+directions. `ruleset-drift` is a `nightly-gate`: a red nightly makes the
+required `nightly-green` context hold every merge until the ruleset is
+reconciled. On a pull request it is not required; there it flags a
+required-set change the ruleset has not taken yet.
 
-## Delta vs live `main-protection` ruleset (id 22326541)
+`strict_required_status_checks_policy` ("require branches to be up to date")
+is not part of the derived set and is not compared. It stays `false`: the
+merge queue already runs the required checks on the combined tree of each
+queued change, which is the property the strict policy would buy.
 
-Measured against the ruleset's current `required_status_checks`.
+## Changing the required set
 
-**Add to the required set** (`gate` in the manifest, absent from the ruleset):
+1. Change the entry's disposition in `ci/check-manifest.yml`.
+2. `python3 .github/ci/check_required_set.py --write` and commit the result
+   with the manifest change.
+3. The repository owner applies the set to the live ruleset. Editing a
+   ruleset is a security-relevant change, so no workflow token does it:
 
-- `build-tools` — compiles the doc/golden regenerator binaries the docs-drift
-  gates `need`; a failed or skipped build step would otherwise skip those gates
-  and pass them (fail open), the same property as the path classifiers.
-- `editors-configure` — every `editors/*/configure.sh` path, including the Zed
-  extension build for `wasm32-wasip2`.
-- `nightly-green` — red until the latest nightly on `main` is green (or the
-  change's own commit passed a dispatched full gate); the one required context
-  that carries the `nightly-gate` checks.
-- `requirements-docs-drift` — generated requirements-docs diff.
+   ```bash
+   repo=ipe-lang/compiler
+   id=$(python3 -c 'import sys; sys.path.insert(0, ".github/ci"); import check_required_set as c; print(c.RULESET_ID)')
+   gh api "repos/$repo/rulesets/$id" > /tmp/rs.json
+   jq --slurpfile want .github/ci/required-set.json \
+     '{name, target, enforcement, conditions, bypass_actors,
+       rules: [.rules[] | if .type == "required_status_checks"
+                          then .parameters.required_status_checks = $want[0] else . end]}' \
+     /tmp/rs.json > /tmp/rs-new.json
+   gh api -X PUT "repos/$repo/rulesets/$id" --input /tmp/rs-new.json
+   python3 .github/ci/check_required_set.py --live <(gh api "repos/$repo/rulesets/$id")
+   ```
 
-No removals: every live required context is a manifest `gate` and stays.
+   Review `/tmp/rs-new.json` before the `PUT`: it rewrites the whole ruleset.
 
-## Applying the delta (human step)
+## Contexts outside the required set
 
-Reconcile the live ruleset to `.github/ci/required-set.json`. Example (review before running):
-
-```bash
-# Fetch, edit required_status_checks to match ci/required-set.json, then PATCH.
-gh api repos/arthurmaciel/ipe-lang/rulesets/22326541 > /tmp/rs.json
-# ... edit /tmp/rs.json required_status_checks to the contexts in ci/required-set.json ...
-gh api -X PUT repos/arthurmaciel/ipe-lang/rulesets/22326541 --input /tmp/rs.json
-```
-
-`strict_required_status_checks_policy` should stay `false` (heavy `nightly-gate`
-contexts must not be forced onto every PR); nightly-gate reds are enforced by the
-required `nightly-green` context, which is red until the latest nightly on main is
-green (or the change's own commit passed a dispatched full gate).
-
-## Nightly-gate contexts (NOT branch-protection required)
-
-Heavy checks run nightly. A red does not block a PR and is
-surfaced by `ci-health`. See the `nightly-gate` entries in the manifest (the
-Linux jail proofs, sanitizers, seal-modset, browser-e2e).
-
-## Flagged: required-but-flaky and informational-but-noisy
-
-Reconciling the current checks against the disposition table surfaced these:
-
-- **`windows-static`, `freebsd-cross` — reported-green-when-red.** Both set
-  `continue-on-error: true`, so a red reports GREEN even to a human — worse than
-  advisory. Disposition `informational`; the fix is to DROP `continue-on-error`
-  so the `ci-health` surface can see a real red. (Not changed in this PR — it
-  touches `static.yml` job semantics; tracked here for the static.yml owner.)
-- **macOS / Windows / FreeBSD jail Tier-2 proofs — un-greenable on hosted
-  runners.** Not classified as CI contexts: they need real-OS substrate a
-  GitHub-hosted runner lacks. Their containment is verified out-of-band (release
-  checklist); `#2247`/`#2248`/`#2249` are the revival trigger for restoring them
-  when self-hosted / real-OS runners exist. `macos-arm64` (Seatbelt) and the
-  Linux Tier-2 jails remain the gating containment proofs.
-- **`asan`/`tsan`/`browser-e2e`/Linux jail-tier2 proofs — heavy, previously silent
-  advisory reds.** Now `nightly-gate` with a surface; no longer un-watched.
-- **`install-smoke ×4` — installer UX, network-dependent → intermittently noisy.**
-  `informational`, owner `release`; the dedup issue keeps one surface per red
-  instead of an email per run.
-
-No check is left unclassified or guarantee-but-un-gated after this change.
-
-## Regenerate `ci/required-set.json`
-
-```bash
-python3 -c "import sys,json; sys.path.insert(0,'.github/ci'); import strict_yaml; d=strict_yaml.safe_load(open('.github/ci/check-manifest.yml')); \
-print(json.dumps(sorted(e['context'] for e in d['checks'] if e['disposition'] in ('gate')), indent=2))" \
-  > .github/ci/required-set.json
-```
+- `nightly-gate` contexts run on the nightly full gate, not per change; a red
+  one blocks the next merge through `nightly-green`.
+- `informational` contexts never block; `ci-health` surfaces a red one.
+- `windows-static` and `freebsd-cross` (`static.yml`) set
+  `continue-on-error: true`, so a red reports green even to `ci-health`.
+  Dropping `continue-on-error` is the fix; it is the `release` owner's.
+- The macOS, Windows, and FreeBSD Tier-2 jail proofs are not CI contexts:
+  they need a real-OS substrate a GitHub-hosted runner lacks, so their
+  containment is verified by the release checklist until such runners exist
+  (`#2247`, `#2248`, `#2249`). `macos-arm64` (Seatbelt) and the Linux Tier-2
+  jails are the containment proofs CI produces.

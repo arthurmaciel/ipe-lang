@@ -1,41 +1,158 @@
 [
-  "admission-changes",
-  "artifact-guard",
-  "build-tools",
-  "capabilities-docs-drift",
-  "cargo-deny",
-  "changes",
-  "cli-docs-drift",
-  "cli-transcripts-drift",
-  "clippy",
-  "diagnostic-tone",
-  "doc-string example gate",
-  "e2e-all",
-  "editors-configure",
-  "env-docs-drift",
-  "explain-page example gate (ADR 0059)",
-  "first-party check floor (ipe type-check only)",
-  "first-party shapes (build gate)",
-  "fmt",
-  "grammar",
-  "linux-arm64 (seccomp socket-deny + bubblewrap)",
-  "linux-x64 (seccomp socket-deny + bubblewrap)",
-  "macos-arm64 (sandbox-exec / Seatbelt)",
-  "manifest-lock-consistency",
-  "markdown-parity",
-  "nightly-green",
-  "panic-scan",
-  "playground-changes",
-  "playground-jail",
-  "quick-check",
-  "registry-admission",
-  "requirements-docs-drift",
-  "runtime-feature-combos",
-  "runtime-full-features",
-  "seal-slice",
-  "seal-smoke",
-  "stdlib-docs-drift",
-  "test",
-  "wasm-floor",
-  "windows-check"
+  {
+    "context": "admission-changes",
+    "integration_id": 15368
+  },
+  {
+    "context": "artifact-guard",
+    "integration_id": 15368
+  },
+  {
+    "context": "build-tools",
+    "integration_id": 15368
+  },
+  {
+    "context": "capabilities-docs-drift",
+    "integration_id": 15368
+  },
+  {
+    "context": "cargo-deny",
+    "integration_id": 15368
+  },
+  {
+    "context": "changes",
+    "integration_id": 15368
+  },
+  {
+    "context": "cli-docs-drift",
+    "integration_id": 15368
+  },
+  {
+    "context": "cli-transcripts-drift",
+    "integration_id": 15368
+  },
+  {
+    "context": "clippy",
+    "integration_id": 15368
+  },
+  {
+    "context": "diagnostic-tone",
+    "integration_id": 15368
+  },
+  {
+    "context": "doc-string example gate",
+    "integration_id": 15368
+  },
+  {
+    "context": "e2e-all",
+    "integration_id": 15368
+  },
+  {
+    "context": "editors-configure",
+    "integration_id": 15368
+  },
+  {
+    "context": "env-docs-drift",
+    "integration_id": 15368
+  },
+  {
+    "context": "explain-page example gate (ADR 0059)",
+    "integration_id": 15368
+  },
+  {
+    "context": "first-party check floor (ipe type-check only)",
+    "integration_id": 15368
+  },
+  {
+    "context": "first-party shapes (build gate)",
+    "integration_id": 15368
+  },
+  {
+    "context": "fmt",
+    "integration_id": 15368
+  },
+  {
+    "context": "grammar",
+    "integration_id": 15368
+  },
+  {
+    "context": "linux-arm64 (seccomp socket-deny + bubblewrap)",
+    "integration_id": 15368
+  },
+  {
+    "context": "linux-x64 (seccomp socket-deny + bubblewrap)",
+    "integration_id": 15368
+  },
+  {
+    "context": "macos-arm64 (sandbox-exec / Seatbelt)",
+    "integration_id": 15368
+  },
+  {
+    "context": "manifest-lock-consistency",
+    "integration_id": 15368
+  },
+  {
+    "context": "markdown-parity",
+    "integration_id": 15368
+  },
+  {
+    "context": "nightly-green",
+    "integration_id": 15368
+  },
+  {
+    "context": "panic-scan",
+    "integration_id": 15368
+  },
+  {
+    "context": "playground-changes",
+    "integration_id": 15368
+  },
+  {
+    "context": "playground-jail",
+    "integration_id": 15368
+  },
+  {
+    "context": "quick-check",
+    "integration_id": 15368
+  },
+  {
+    "context": "registry-admission",
+    "integration_id": 15368
+  },
+  {
+    "context": "requirements-docs-drift",
+    "integration_id": 15368
+  },
+  {
+    "context": "runtime-feature-combos",
+    "integration_id": 15368
+  },
+  {
+    "context": "runtime-full-features",
+    "integration_id": 15368
+  },
+  {
+    "context": "seal-slice",
+    "integration_id": 15368
+  },
+  {
+    "context": "seal-smoke",
+    "integration_id": 15368
+  },
+  {
+    "context": "stdlib-docs-drift",
+    "integration_id": 15368
+  },
+  {
+    "context": "test",
+    "integration_id": 15368
+  },
+  {
+    "context": "wasm-floor",
+    "integration_id": 15368
+  },
+  {
+    "context": "windows-check",
+    "integration_id": 15368
+  }
 ]

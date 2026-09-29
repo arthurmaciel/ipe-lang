@@ -427,6 +427,15 @@ checks:
     producer: ci.yml
     guards: Security
 
+  # ── Required-set enforcement — nightly-gate ───────────────────────────────
+  - context: ruleset-drift
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: >-
+      Security — the live `main-protection` ruleset requires exactly the
+      derived `{context, integration_id}` set, so no gate is dropped from the
+      merge path and no required check is satisfiable by another app's status.
+
   # ── Cross-platform jail proofs — nightly-gate (Security §1) ───────────────
   # The Linux jail Tier-2 proofs — the containment gate CI produces on GitHub-
   # hosted runners. macOS/Windows/FreeBSD Tier-2 jails need real-OS substrate a

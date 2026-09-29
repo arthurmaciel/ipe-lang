@@ -22,11 +22,11 @@ Checks performed
      nightly-gate's ancestors must surface in a gate or nightly-gate.  A
      status context produced by two jobs is refused outright — a required
      context must resolve to exactly one producer.
-  4. Required-set reconciliation (best-effort, non-fatal by default): every
-     manifest `gate` context should be in the branch-protection required set and
-     vice-versa.  Run with `--ruleset FILE` (a JSON dump of the ruleset's
-     required contexts) to make mismatches fatal; without it the manifest is the
-     SSOT and the check is skipped with a note.
+  4. Required-set derivation: `check_required_set.derive` accepts the
+     manifest (a `gate-external` names its `integration_id`; no other entry
+     does) and `ci/required-set.json` is exactly the derived
+     `{context, integration_id}` set.  The live ruleset is compared by
+     `check_required_set.py --fetch` (see `ci/RECONCILIATION.md`).
   5. `ci/deterministic-checks.json` — the SSOT of (job, check step) pairs
      consumed by ci.yml's `cancel-on-cheap-red` watcher — is well-formed (exact keys, non-empty strings with
      no surrounding whitespace, no duplicate job), its job set equals the
@@ -4085,12 +4085,7 @@ def load_manifest() -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--ruleset",
-        help="JSON file: a list of required status-check context strings. "
-        "When given, gate<->required mismatches are fatal.",
-    )
-    args = ap.parse_args()
+    ap.parse_args()
 
     manifest = load_manifest()
     entries = manifest["checks"]
@@ -4275,26 +4270,22 @@ def main() -> int:
 
     local_gate.check_local_dispositions(entries, errors)
 
-    # ---- 4. required-set reconciliation ----
-    # gate-external contexts are required by the ruleset even though no CI
-    # workflow produces them; include them alongside plain gate entries.
-    gate_ctxs = {c for c, e in by_context.items() if e["disposition"] in ("gate", "gate-external")}
-    if args.ruleset:
-        required = set(json.load(open(args.ruleset)))
-        missing_from_ruleset = gate_ctxs - required
-        extra_in_ruleset = required - gate_ctxs
-        for c in sorted(missing_from_ruleset):
-            errors.append(f"gate {c!r} is NOT in the required set (add it to the ruleset)")
-        for c in sorted(extra_in_ruleset):
-            errors.append(
-                f"required context {c!r} is not a manifest `gate` "
-                "(remove from the ruleset or re-classify)"
-            )
+    # ---- 4. the committed required set is the manifest's derived set ----
+    import check_required_set  # noqa: PLC0415  # sibling module; SSOT of the derivation
+
+    try:
+        derived = check_required_set.derive(manifest)
+        with open(check_required_set.REQUIRED_SET, encoding="utf-8") as f:
+            on_disk = check_required_set.parse_pairs(json.load(f), "ci/required-set.json")
+    except (check_required_set.Refused, OSError, UnicodeDecodeError, ValueError) as e:
+        errors.append(f"check 4: {e}")
     else:
-        print(
-            "verify-manifest: no --ruleset given; skipping live required-set "
-            "reconciliation. The manifest is the SSOT; see ci/RECONCILIATION.md "
-            "for the intended required set."
+        errors.extend(
+            f"check 4: {line}"
+            for line in check_required_set.diff(
+                derived, on_disk, "ci/required-set.json",
+                "regenerate it: python3 .github/ci/check_required_set.py --write",
+            )
         )
 
     if errors:

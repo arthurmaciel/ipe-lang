@@ -2328,6 +2328,32 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
             )
 
 
+_PAIR_A = {"context": "a", "integration_id": 15368}
+_RS_A = json.dumps([_PAIR_A]).encode()
+
+
+def _ruleset(checks: list | None = None, **over: object) -> dict:
+    """A ruleset GET body requiring `checks` (default: context `a`)."""
+    rs = {
+        "id": 22326541,
+        "target": "branch",
+        "enforcement": "active",
+        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+        "rules": [
+            {"type": "deletion"},
+            {
+                "type": "required_status_checks",
+                "parameters": {
+                    "strict_required_status_checks_policy": False,
+                    "required_status_checks": [_PAIR_A] if checks is None else checks,
+                },
+            },
+        ],
+    }
+    rs.update(over)
+    return rs
+
+
 class TestSsotOutputTools(unittest.TestCase):
     """The SSOT-publishing tools fail closed on a malformed SSOT: exit 1 and
     write no output, so a consumer keeps its fail-safe default."""
@@ -2336,7 +2362,7 @@ class TestSsotOutputTools(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
         self.dir = self._tmpdir.name
-        for name in ("deterministic_checks_output.py", "check_required_set.py", "strict_yaml.py", "gha_expr.py"):
+        for name in ("deterministic_checks_output.py", "check_required_set.py", "strict_yaml.py", "gha_expr.py", "trust_roots.py"):
             with open(os.path.join(HERE, name), encoding="utf-8") as src:
                 _write(os.path.join(self.dir, name), src.read())
         self.output = os.path.join(self.dir, "github-output")
@@ -2350,18 +2376,19 @@ class TestSsotOutputTools(unittest.TestCase):
         with open(path, "wb") as f:
             f.write(content)
 
-    def run_tool(self, name: str) -> tuple[int, str, str]:
+    def run_tool(self, name: str, *args: str) -> tuple[int, str, str]:
         import subprocess
 
         open(self.output, "w").close()
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_OUTPUT": self.output}
         proc = subprocess.run(
-            [sys.executable, os.path.join(self.dir, name)], env=env, capture_output=True, text=True, check=False,
+            [sys.executable, os.path.join(self.dir, name), *args],
+            env=env, capture_output=True, text=True, check=False,
         )
         return proc.returncode, proc.stdout, proc.stderr
 
-    def assertFailsClosed(self, name: str) -> None:
-        rc, stdout, stderr = self.run_tool(name)
+    def assertFailsClosed(self, name: str, *args: str) -> None:
+        rc, stdout, stderr = self.run_tool(name, *args)
         self.assertEqual(rc, 1)
         self.assertEqual(stdout, "")
         # A refusal, not a crash that happens to exit 1.
@@ -2389,14 +2416,18 @@ class TestSsotOutputTools(unittest.TestCase):
 
     def test_check_required_set_passes_a_matching_pair(self) -> None:
         self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
-        self.put("required-set.json", b'["a"]')
+        self.put("required-set.json", _RS_A)
         self.assertEqual(self.run_tool("check_required_set.py")[0], 0)
 
     def test_check_required_set_refuses_a_malformed_manifest(self) -> None:
-        self.put("required-set.json", b'["a"]')
+        self.put("required-set.json", _RS_A)
         for content in (
             None, b"", b"\xff\xfe", b"[]", b"checks: 5\n", b"checks:\n- 5\n", b"checks:\n- context: a\n",
             b"checks:\n- context: 1\n  disposition: gate\n", b"checks: [\n", b"checks: []\nchecks: []\n",
+            b"checks:\n- context: a\n  disposition: gate\n  integration_id: 15368\n",
+            b"checks:\n- context: a\n  disposition: gate\n- context: x\n  disposition: gate-external\n",
+            b"checks:\n- context: a\n  disposition: gate\n- context: x\n  disposition: gate-external\n  integration_id: 0\n",
+            b"checks:\n- context: a\n  disposition: gate\n- context: a\n  disposition: gate-external\n  integration_id: 7\n",
         ):
             with self.subTest(content=content):
                 self.put("check-manifest.yml", content)
@@ -2404,10 +2435,95 @@ class TestSsotOutputTools(unittest.TestCase):
 
     def test_check_required_set_refuses_a_malformed_required_set(self) -> None:
         self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
-        for content in (None, b"", b"{", b"\xff\xfe", b"{}", b"[1]", b'"a"'):
+        for content in (
+            None, b"", b"{", b"\xff\xfe", b"{}", b"[1]", b'"a"', b'["a"]', b'[{"context": "a"}]',
+            b'[{"context": "a", "integration_id": "15368"}]', b'[{"context": "a", "integration_id": true}]',
+            b'[{"context": "a", "integration_id": 15368, "app": 1}]', b'[{"context": "a", "integration_id": 1}]',
+            b'[{"context": "a", "integration_id": 15368}, {"context": "a", "integration_id": 15368}]',
+            b'[{"context": "a", "integration_id": 15368}, {"context": "b", "integration_id": 15368}]', b"[]",
+        ):
             with self.subTest(content=content):
                 self.put("required-set.json", content)
                 self.assertFailsClosed("check_required_set.py")
+
+
+    def test_check_required_set_writes_the_derived_pairs(self) -> None:
+        self.put(
+            "check-manifest.yml",
+            b"checks:\n- context: b\n  disposition: gate\n- context: x\n  disposition: informational\n"
+            b"- context: a\n  disposition: gate-external\n  integration_id: 7\n",
+        )
+        self.put("required-set.json", None)
+        self.assertEqual(self.run_tool("check_required_set.py", "--write")[0], 0)
+        with open(os.path.join(self.dir, "required-set.json"), encoding="utf-8") as f:
+            self.assertEqual(
+                json.load(f), [{"context": "a", "integration_id": 7}, {"context": "b", "integration_id": 15368}]
+            )
+        self.assertEqual(self.run_tool("check_required_set.py")[0], 0)
+
+    def test_check_required_set_write_refuses_an_unnamed_external_app(self) -> None:
+        for app in (b"", b"  integration_id: 0\n", b"  integration_id: '7'\n", b"  integration_id: true\n"):
+            with self.subTest(app=app):
+                self.put("check-manifest.yml", b"checks:\n- context: x\n  disposition: gate-external\n" + app)
+                self.put("required-set.json", None)
+                self.assertFailsClosed("check_required_set.py", "--write")
+                self.assertFalse(os.path.exists(os.path.join(self.dir, "required-set.json")))
+
+    def test_check_required_set_matches_a_live_ruleset(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+        self.put("rs.json", json.dumps(_ruleset()).encode())
+        rc, stdout, _ = self.run_tool("check_required_set.py", "--live", os.path.join(self.dir, "rs.json"))
+        self.assertEqual(rc, 0)
+        self.assertIn("ruleset 22326541 match", stdout)
+
+    def test_check_required_set_refuses_a_drifted_live_ruleset(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+
+        def checks(*items: dict) -> dict:
+            return _ruleset(checks=list(items))
+
+        rsc = {"type": "required_status_checks", "parameters": {"required_status_checks": []}}
+        for label, rs in (
+            ("missing context", checks()),
+            ("extra context", checks(_PAIR_A, {"context": "b", "integration_id": 15368})),
+            ("no integration", checks({"context": "a"})),
+            ("other integration", checks({"context": "a", "integration_id": 1})),
+            ("null integration", checks({"context": "a", "integration_id": None})),
+            ("repeated context", checks(_PAIR_A, _PAIR_A)),
+            ("disabled", _ruleset(enforcement="disabled")),
+            ("evaluate", _ruleset(enforcement="evaluate")),
+            ("tag target", _ruleset(target="tag")),
+            ("other ruleset", _ruleset(id=1)),
+            ("not the default branch", _ruleset(conditions={"ref_name": {"include": ["refs/heads/x"], "exclude": []}})),
+            ("excludes a ref", _ruleset(conditions={"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": ["x"]}})),
+            ("no conditions", _ruleset(conditions=None)),
+            ("no status rule", _ruleset(rules=[{"type": "deletion"}])),
+            ("two status rules", _ruleset(rules=[_ruleset()["rules"][1], rsc])),
+            ("rules not a list", _ruleset(rules={})),
+            ("not an object", []),
+        ):
+            with self.subTest(label=label):
+                self.put("rs.json", json.dumps(rs).encode())
+                self.assertFailsClosed("check_required_set.py", "--live", os.path.join(self.dir, "rs.json"))
+        for content in (None, b"", b"{"):
+            with self.subTest(content=content):
+                self.put("rs.json", content)
+                self.assertFailsClosed("check_required_set.py", "--live", os.path.join(self.dir, "rs.json"))
+
+    def test_check_required_set_fetch_needs_its_environment(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+        self.assertFailsClosed("check_required_set.py", "--fetch")
+
+    def test_repo_required_set_is_the_derived_set(self) -> None:
+        import subprocess
+
+        proc = subprocess.run(
+            [sys.executable, os.path.join(HERE, "check_required_set.py")], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
 
 
 class TestGithubEnvHelper(unittest.TestCase):
