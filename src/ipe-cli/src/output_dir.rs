@@ -3948,8 +3948,8 @@ mod tests {
         let shared = base.join("shared");
         let out =
             OutputRoot::resolve(Some(&shared.join("a").to_string_lossy()), &proj).expect("resolve");
-        let (link, target) = (shared.clone(), victim.clone());
-        swap_when_held(base.clone(), move || plant_link(&target, &link));
+        let target = victim.clone();
+        swap_when_held(base.clone(), move || plant_link(&target, &shared));
         let claimed = out.claim();
         super::held::set_level_hook(None);
         assert!(
