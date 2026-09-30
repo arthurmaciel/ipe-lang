@@ -246,6 +246,11 @@ fn end_of(span: Span) -> LineColumn {
 mod tests {
     use super::test_only_item_lines;
 
+    /// The span set holding exactly `span`.
+    fn one_span(span: std::ops::RangeInclusive<usize>) -> Vec<std::ops::RangeInclusive<usize>> {
+        vec![span]
+    }
+
     /// Test-only items span attribute to close, and a brace in a string never moves the end.
     #[test]
     fn spans_run_from_the_attribute_to_the_item_end() {
@@ -272,7 +277,7 @@ mod tests {
     #[test]
     fn test_only_impl_items_are_spanned() {
         let src = "struct S;\nimpl S {\n    fn p() {}\n    #[cfg(test)]\n    fn t() {\n    }\n}\n";
-        assert_eq!(test_only_item_lines(src).ok(), Some(vec![4..=6]));
+        assert_eq!(test_only_item_lines(src).ok(), Some(one_span(4..=6)));
     }
 
     /// A test-only file is one span; an unparsable one is an error, never an empty span set.
@@ -280,7 +285,7 @@ mod tests {
     fn a_test_only_file_is_whole_and_garbage_is_refused() {
         assert_eq!(
             test_only_item_lines("#![cfg(test)]\nfn a() {}\nfn b() {}\n").ok(),
-            Some(vec![1..=3])
+            Some(one_span(1..=3))
         );
         assert!(test_only_item_lines("fn (").is_err());
     }
@@ -293,15 +298,15 @@ mod tests {
                     mod tests {\n\
                         fn t() {}\n\
                     }\n";
-        assert_eq!(test_only_item_lines(head).ok(), Some(vec![2..=4]));
+        assert_eq!(test_only_item_lines(head).ok(), Some(one_span(2..=4)));
         let tail = "#[cfg(test)]\n\
                     mod tests {\n\
                         fn t() {}\n\
                     } fn prod() {}\n";
-        assert_eq!(test_only_item_lines(tail).ok(), Some(vec![1..=3]));
+        assert_eq!(test_only_item_lines(tail).ok(), Some(one_span(1..=3)));
         let one_line = "#[cfg(test)] fn t() {} fn prod() {}\n";
         assert_eq!(test_only_item_lines(one_line).ok(), Some(vec![]));
         let alone = "  #[cfg(test)] fn t() {}  \n";
-        assert_eq!(test_only_item_lines(alone).ok(), Some(vec![1..=1]));
+        assert_eq!(test_only_item_lines(alone).ok(), Some(one_span(1..=1)));
     }
 }
