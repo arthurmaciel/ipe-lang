@@ -4,7 +4,7 @@
 use super::IpeResult;
 
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
 /// The set of bytes `urlEncode` percent-encodes, matching
 /// `url.QueryEscape` (`encodeQueryComponent`): every byte is escaped EXCEPT
@@ -302,48 +302,35 @@ pub fn url_encode(s: String) -> String {
         .replace("%20", "+")
 }
 
-/// True when every `%` in `s` is followed by exactly two hex digits — the only
-/// well-formed percent-escape shape (`%XX`, RFC 3986 §2.1). A stray `%`, a
-/// truncated `%A`, or a non-hex `%ZZ` is malformed. The `percent-encoding`
-/// decoder passes such input through as literal bytes and never errors, so
-/// `urlDecode` scans FIRST and rejects malformed input at this untrusted
-/// boundary (fail-closed) rather than silently returning the raw text.
-fn is_well_formed_percent(s: &str) -> bool {
-    let b = s.as_bytes();
-    let mut i = 0;
-    while let Some(&c) = b.get(i) {
-        if c == b'%' {
-            // Both trailing bytes must exist AND be ASCII hex digits.
-            match (b.get(i + 1), b.get(i + 2)) {
-                (Some(h1), Some(h2)) if h1.is_ascii_hexdigit() && h2.is_ascii_hexdigit() => {
-                    i += 3;
-                    continue;
-                }
-                _ => return false,
-            }
-        }
-        i += 1;
-    }
-    true
-}
-
-/// Ipê `urlDecode : String -> Result Error String` — `QueryUnescape`: `+` -> space,
-/// then percent-decode (so a literal `%2B` round-trips back to `+`). Fails closed
-/// with `Err` on a malformed percent-escape (a `%` not followed by two hex
-/// digits) and on a decode that is not valid UTF-8.
+/// Ipê `urlDecode : String -> Result Error String` — `QueryUnescape`.
+///
+/// Decodes under the form grammar (`+` -> space, then `%XX`, so a literal
+/// `%2B` round-trips back to `+`) through `decode_component`, so it fails
+/// closed with `Err` on a malformed percent-escape, on decoded bytes that are
+/// not valid UTF-8, and on an over-cap component.
 #[must_use]
 pub fn url_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
-    let spaced = s.replace('+', " ");
-    if !is_well_formed_percent(&spaced) {
-        return IpeResult::Err(
-            "urlDecode: malformed percent-escape (a '%' must be followed by two hex digits)"
-                .to_string()
-                .into(),
-        );
-    }
-    match percent_decode_str(&spaced).decode_utf8() {
-        Ok(cow) => IpeResult::Ok(cow.into_owned()),
-        Err(e) => IpeResult::Err(format!("urlDecode: {e}").into()),
+    decode_kernel("urlDecode", &s, UrlGrammar::Form)
+}
+
+/// Ipê `pathDecode : String -> Result Error String` — one RFC 3986 path segment.
+///
+/// Decodes `%XX` under the path grammar (`+` stays a literal `+`) through
+/// `decode_component`, refusing exactly what `url_decode` refuses.
+#[must_use]
+pub fn path_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
+    decode_kernel("pathDecode", &s, UrlGrammar::Path)
+}
+
+/// Run `decode_component` for the kernel `name`, rendering a refusal as its error.
+fn decode_kernel<E: From<String>>(
+    name: &str,
+    s: &str,
+    grammar: UrlGrammar,
+) -> IpeResult<E, String> {
+    match decode_component(s, grammar) {
+        Ok(text) => IpeResult::Ok(text),
+        Err(refusal) => IpeResult::Err(format!("{name}: {refusal}").into()),
     }
 }
 
@@ -376,7 +363,8 @@ pub fn encoding_hex_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
 
 // ── Concrete (non-generic) wrappers for generated Ipê code ─────────────
 //
-// The generic `base64_decode<E>`, `url_decode<E>`, `encoding_hex_decode<E>` above
+// The generic `base64_decode<E>`, `url_decode<E>`, `path_decode<E>`,
+// `encoding_hex_decode<E>` above
 // use a flexible `E: From<String>` bound so the error type can be inferred from
 // surrounding context. Generated Ipê code sets `IpeError = ipe_runtime::error::
 // IpeError`, but Rust's type inference cannot pin `E` when
@@ -395,6 +383,12 @@ pub fn ipe_base64_decode(s: String) -> IpeResult<crate::error::IpeError, String>
 #[must_use]
 pub fn ipe_url_decode(s: String) -> IpeResult<crate::error::IpeError, String> {
     url_decode(s)
+}
+
+/// Generated-code alias for `path_decode` with `E = IpeError`.
+#[must_use]
+pub fn ipe_path_decode(s: String) -> IpeResult<crate::error::IpeError, String> {
+    path_decode(s)
 }
 
 /// Generated-code alias for `encoding_hex_decode` with `E = IpeError`.
@@ -509,10 +503,8 @@ mod tests {
     }
 
     // A malformed percent-escape (a `%` not followed by two hex digits) is
-    // turned away at the boundary — the documented fail-closed contract. The
-    // stray/truncated/non-hex cases are the ones the raw `percent-encoding`
-    // decoder passes through as literal bytes, so they must be caught by the
-    // pre-scan, not the decoder.
+    // turned away at the boundary — the documented fail-closed contract — by
+    // both kernels, whatever their `+` grammar.
     #[test]
     fn test_url_decode_malformed_escape() {
         for bad in ["a%ZZb", "100%done", "trailing%", "%A", "%G0", "%2"] {
@@ -521,7 +513,21 @@ mod tests {
                 matches!(got, IpeResult::Err(_)),
                 "malformed percent-escape {bad:?} must be rejected"
             );
+            let got: IpeResult<String, String> = path_decode(bad.to_string());
+            assert!(
+                matches!(got, IpeResult::Err(_)),
+                "malformed percent-escape {bad:?} must be rejected by pathDecode"
+            );
         }
+    }
+
+    // `pathDecode` keeps `+` literal; `urlDecode` reads it as a space.
+    #[test]
+    fn test_path_decode_plus_is_literal() {
+        let path: IpeResult<String, String> = path_decode("a+b%20c".to_string());
+        assert!(matches!(path, IpeResult::Ok(ref s) if s == "a+b c"));
+        let form: IpeResult<String, String> = url_decode("a+b%20c".to_string());
+        assert!(matches!(form, IpeResult::Ok(ref s) if s == "a b c"));
     }
 
     // The non-UTF-8 decode path stays an `Err` (a well-formed `%C0` escape whose
