@@ -52,8 +52,14 @@ Acyclic chain of crates; most changes touch one stage.
 ```bash
 tools/scripts/gate quick      # fmt, clippy on changed crates, static guards, doc drift
 tools/scripts/gate affected   # + tests over changed crates and their reverse deps
-tools/scripts/gate full       # the local CI mirror (`IPE_E2E=1` included)
+tools/scripts/gate full       # the whole CI mirror (`IPE_E2E=1` included)
 ```
+- The pre-PR gate is `gate affected`. CI's PR run and its merge-queue re-run on
+  the combined tree are the full check, so `gate full` is not a pre-PR step.
+  A branch touching jail/sandbox, the browser runtime, or the registry also runs
+  the one full-tier job trusted-author PRs skip: `audit_native`
+  (`linux-x64-tier2`), `browser-e2e`, or `registry-admission`.
+- An infra-flake CI red is re-run with `gh run rerun <id> --failed`.
 - The commands are the `local:` blocks of `.github/ci/check-manifest.yml`, each
   verified against the CI step it mirrors; `--plan` prints them without running.
 - Opt-in pre-push hook: `tools/scripts/install-pre-push-hook.sh` (runs `gate quick`).
