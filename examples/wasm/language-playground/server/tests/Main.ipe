@@ -1,6 +1,7 @@
 module Main exposing (main)
 
 import Gate exposing (BindRefusal(..), Refusal(..), Token)
+import Ipe.Char as Char
 import Ipe.Error as Error exposing (Error)
 import Ipe.File as File
 import Ipe.List as List
@@ -12,6 +13,7 @@ import Ipe.System as System
 import Ipe.Task as Task exposing (Task)
 import Ipe.Test as Test exposing (Test, TestResult)
 import Layout exposing (Layout, LayoutRefusal(..))
+import Paths
 import Runner exposing (DeadlineRefusal(..))
 import Staging exposing (StagingError(..))
 
@@ -97,10 +99,39 @@ runnerPath =
 home : Test
 home =
     Test.suite "home"
-        [ Test.test "an absolute home is used as given" (\_ -> Test.equal (Ok "/home/pg") (Runner.absoluteHome "/home/pg"))
+        [ Test.test "an absolute home is used as given" (\_ -> Test.equal (Ok "/home/pg") (Result.map Path.toString (Runner.absoluteHome "/home/pg")))
         , Test.test "an unset home is refused" (\_ -> Test.err (Runner.absoluteHome ""))
         , Test.test "the working directory is refused" (\_ -> Test.err (Runner.absoluteHome "."))
         , Test.test "a relative home is refused" (\_ -> Test.err (Runner.absoluteHome "home/pg"))
+        ]
+
+
+-- Every path beneath a root the server holds is joined with `Path.under`: a
+-- staged name or run token that could land outside its root is refused.
+staged : String -> Result Error String
+staged name =
+    Path.fromString "/home/pg/.cache/ipe/playground-runs/t0"
+        |> Result.andThen (\runDir -> Runner.stagedTarget runDir { path = name, content = "" })
+        |> Result.map Path.toString
+
+
+joins : Test
+joins =
+    Test.suite "joins"
+        [ Test.test "a staged manifest lands in the run directory" (\_ -> Test.equal (Ok "/home/pg/.cache/ipe/playground-runs/t0/Cargo.toml") (staged "Cargo.toml"))
+        , Test.test "a nested source lands in the run directory" (\_ -> Test.equal (Ok "/home/pg/.cache/ipe/playground-runs/t0/src/ipe_mods/app.rs") (staged "src/ipe_mods/app.rs"))
+        , Test.test "a parent escape is refused" (\_ -> Test.err (staged "../x"))
+        , Test.test "an escape through a subdirectory is refused" (\_ -> Test.err (staged "a/../../b"))
+        , Test.test "an absolute name is refused" (\_ -> Test.err (staged "/abs"))
+        , Test.test "an absolute name into the run directory's parent is refused" (\_ -> Test.err (staged "/home/pg/.cache/ipe/playground-runs/t1/src/main.rs"))
+        , Test.test "an empty name is refused" (\_ -> Test.err (staged ""))
+        , Test.test "a dot name is refused" (\_ -> Test.err (staged "."))
+        , Test.test "a NUL-bearing name is refused" (\_ -> Test.err (staged ("src/main" ++ String.fromChar (Char.fromCode 0) ++ ".rs")))
+        , Test.test "the run directory is a token beneath HOME" (\_ -> Test.equal (Ok "/home/pg/.cache/ipe/playground-runs/0a1b") (Result.map Path.toString (Runner.absoluteHome "/home/pg" |> Result.andThen (\h -> Runner.runDirFor h "0a1b"))))
+        , Test.test "a traversing run token is refused" (\_ -> Test.err (Runner.absoluteHome "/home/pg" |> Result.andThen (\h -> Runner.runDirFor h "../../x")))
+        , Test.test "an empty run token is refused" (\_ -> Test.err (Runner.absoluteHome "/home/pg" |> Result.andThen (\h -> Runner.runDirFor h "")))
+        , Test.test "a layout file is joined beneath the root" (\_ -> Test.equal (Ok "/srv/playground/static/app.js") (Result.map Path.toString (Layout.rootOf "/srv/playground/server" |> Result.mapError (\_ -> ()) |> Result.andThen (\r -> Paths.below r "static/app.js" |> Result.mapError (\_ -> ())))))
+        , Test.test "a layout file outside the root is refused" (\_ -> Test.err (Layout.rootOf "/srv/playground/server" |> Result.mapError (\_ -> ()) |> Result.andThen (\r -> Paths.below r "../etc/passwd" |> Result.mapError (\_ -> ()))))
         ]
 
 
@@ -468,4 +499,4 @@ located probed =
 main =
     do
         probed <- probeLayouts
-        Test.runMain [ accepted, refused, runnerPath, home, wall, gateRun, gateHealth, healthBody, launch, tokenShape, pagePolicy, loopback, layout, located probed ]
+        Test.runMain [ accepted, refused, runnerPath, home, joins, wall, gateRun, gateHealth, healthBody, launch, tokenShape, pagePolicy, loopback, layout, located probed ]

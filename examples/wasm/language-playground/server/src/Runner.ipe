@@ -1,4 +1,4 @@
-module Runner exposing (DeadlineRefusal(..), JailWall, RunResult, absoluteHome, absoluteRunner, deadlineMessage, defaultDeadlineSecs, jailWallFor, maxJailWallSecs, minJailWallSecs, runPlan, wallSecs)
+module Runner exposing (DeadlineRefusal(..), JailWall, RunResult, absoluteHome, absoluteRunner, deadlineMessage, defaultDeadlineSecs, jailWallFor, maxJailWallSecs, minJailWallSecs, runDirFor, runPlan, stagedTarget, wallSecs)
 
 import Ipe.Crypto as Crypto
 import Ipe.Error as Error exposing (Error)
@@ -7,16 +7,20 @@ import Ipe.Json.Decode as Json
 import Ipe.Maybe as Maybe
 import Ipe.Path as Path exposing (Path)
 import Ipe.Process as Process
+import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
+import Paths
 import Staging exposing (StagedFile)
 
 
 -- Run one staging plan (a crate the allowlist accepted): write its files under a fresh
 -- `~/.cache/ipe/playground-runs/<token>` directory, and hand that directory to
 -- the jail runner by direct argv. The runner re-checks the layout, builds and
--- runs inside the jail, and removes the directory.
+-- runs inside the jail, and removes the directory. Every path beneath `HOME`
+-- or the run directory is a `Path` joined with `Paths.below`; a path becomes
+-- text only where it leaves as an argv element.
 type alias RunResult =
     { ok : Bool
     , unsandboxed : Bool
@@ -47,25 +51,33 @@ runPlan wall plan =
     do
         home <- System.getenvOr "HOME" "" |> absoluteHome |> Task.fromResult
         token <- Crypto.randomToken 8
-        runDir <- toPath (home ++ "/.cache/ipe/playground-runs/" ++ token)
+        runDir <- Task.fromResult (runDirFor home token)
         File.mkdirAll runDir
-        writeAll (Path.toString runDir) (Staging.files plan)
-        raw <- runJail wall home (Path.toString runDir)
+        writeAll runDir (Staging.files plan)
+        raw <- runJail wall home runDir
         Task.succeed (formatOutcome raw)
 
 
-runJail : JailWall -> String -> String -> Task Error RawOutcome
-runJail wall home runDir =
-    let
-        warmDir =
-            System.getenvOr "IPE_PLAYGROUND_WARM_DIR" (home ++ "/.cache/ipe/playground-warm")
+{-| The run directory for one run token: `.cache/ipe/playground-runs/<token>`
+beneath `home`. A token that is not one plain relative name is refused.
+-}
+runDirFor : Path -> String -> Result Error Path
+runDirFor home token =
+    Paths.below home ".cache/ipe/playground-runs" |> Result.andThen (\runs -> Paths.below runs token)
 
-        args =
-            [ "run", runDir, "--wall", String.fromInt (wallSecs wall), "--warm", warmDir ]
-    in
+
+runJail : JailWall -> Path -> Path -> Task Error RawOutcome
+runJail wall home runDir =
     do
+        warmDefault <- Task.fromResult (Paths.below home ".cache/ipe/playground-warm")
         runner <- home |> runnerPath |> Task.fromResult
-        done <- Process.runWith { command = runner, args = args, cwd = Nothing, env = [] }
+        done <-
+            Process.runWith
+                { command = runner
+                , args = [ "run", Path.toString runDir, "--wall", String.fromInt (wallSecs wall), "--warm", System.getenvOr "IPE_PLAYGROUND_WARM_DIR" (Path.toString warmDefault) ]
+                , cwd = Nothing
+                , env = []
+                }
         Task.fromResult (decodeOutcome done)
 
 
@@ -74,21 +86,32 @@ runJail wall home runDir =
 `IPE_PLAYGROUND_JAIL_RUNNER` names another. A relative name is refused rather
 than resolved through `PATH`.
 -}
-runnerPath : String -> Result Error String
+runnerPath : Path -> Result Error String
 runnerPath home =
-    home ++ "/.cache/ipe/playground/bin/jail-runner" |> System.getenvOr "IPE_PLAYGROUND_JAIL_RUNNER" |> absoluteRunner
+    Paths.below home ".cache/ipe/playground/bin/jail-runner"
+        |> Result.andThen (\installed -> installed |> Path.toString |> System.getenvOr "IPE_PLAYGROUND_JAIL_RUNNER" |> absoluteRunner)
 
 
 {-| The home directory runs are staged under: an absolute `HOME`, never a
 relative fallback that would stage into the server's working directory.
 -}
-absoluteHome : String -> Result Error String
+absoluteHome : String -> Result Error Path
 absoluteHome home =
-    if String.startsWith "/" home then
-        Ok home
+    case Path.fromString home of
+        Ok path ->
+            if Path.isAbsolute path then
+                Ok path
 
-    else
-        "HOME must be an absolute path, got: " ++ String.left 200 home |> Error.unexpected |> Err
+            else
+                homeRefused home
+
+        Err _ ->
+            homeRefused home
+
+
+homeRefused : String -> Result Error Path
+homeRefused home =
+    "HOME must be an absolute path, got: " ++ String.left 200 home |> Error.unexpected |> Err
 
 
 absoluteRunner : String -> Result Error String
@@ -219,24 +242,27 @@ decodeOutcome done =
                 |> Err
 
 
-writeAll : String -> List StagedFile -> Task Error ()
-writeAll baseDir files =
+writeAll : Path -> List StagedFile -> Task Error ()
+writeAll runDir files =
     case files of
         [] ->
             Task.succeed ()
 
         file :: rest ->
             do
-                target <- toPath (baseDir ++ "/" ++ file.path)
-                parent <- toPath (Path.dir target)
+                target <- Task.fromResult (stagedTarget runDir file)
+                parent <- Task.fromResult (Path.fromString (Path.dir target))
                 File.mkdirAll parent
                 File.writeFile target file.content
-                writeAll baseDir rest
+                writeAll runDir rest
 
 
-toPath : String -> Task Error Path
-toPath raw =
-    Task.fromResult (Path.fromString raw)
+{-| Where one staged file is written: its path beneath the run directory,
+refused when it could land anywhere else.
+-}
+stagedTarget : Path -> StagedFile -> Result Error Path
+stagedTarget runDir file =
+    Paths.below runDir file.path
 
 
 outcomeDecoder : Json.Decoder RawOutcome

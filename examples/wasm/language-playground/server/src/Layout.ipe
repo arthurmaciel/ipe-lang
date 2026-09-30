@@ -6,13 +6,14 @@ import Ipe.Path as Path exposing (Path)
 import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.Task as Task exposing (Task)
+import Paths
 
 
 -- Where the files the server serves live. The server starts from the
 -- playground's `server/` directory, so its parent is the playground root; every
 -- file the page needs is proven present there before the server listens, and
--- every served path is a `Path` parsed from that absolute root, never resolved
--- against the working directory again.
+-- every served path is a `Path` joined beneath that absolute root with
+-- `Paths.below`, never resolved against the working directory again.
 {-| The page, the static directory and the wasm bundle directory, under a root
 proven to hold every file in `requiredFiles`.
 -}
@@ -49,12 +50,6 @@ rootOf cwd =
             Err (RelativeCwd cwd)
 
 
--- `rel` under `root`, parsed as a `Path` in its own right.
-child : Path -> String -> Result Error Path
-child root rel =
-    Path.fromString (Path.toString root ++ "/" ++ rel)
-
-
 {-| The layout for the server's working directory, or the refusal naming the
 first required file it lacks.
 -}
@@ -72,7 +67,7 @@ probe cwd =
                         Task.succeed (Err (Missing (Path.toString root) file))
 
                     Nothing ->
-                        Task.map Ok (Task.fromResult (Result.map3 Layout (child root "index.html") (child root "static") (child root "pkg")))
+                        Task.map Ok (Task.fromResult (Result.map3 Layout (Paths.below root "index.html") (Paths.below root "static") (Paths.below root "pkg")))
 
 
 {-| Locate the playground from the server's working directory, or refuse. -}
@@ -91,7 +86,7 @@ firstMissing root files =
 
         file :: rest ->
             do
-                path <- Task.fromResult (child root file)
+                path <- Task.fromResult (Paths.below root file)
                 present <- File.exists path
                 if present then
                     firstMissing root rest

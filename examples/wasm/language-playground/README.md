@@ -147,7 +147,10 @@ Environment:
    missing `Cargo.toml` / `src/main.rs`, and the whole request is rejected
    before any file is written.
 3. `server/src/Runner.ipe` writes the plan under
-   `~/.cache/ipe/playground-runs/<random token>/`. It then runs
+   `~/.cache/ipe/playground-runs/<random token>/`. Each staged path is
+   joined beneath that directory with `Path.under` (`server/src/Paths.ipe`),
+   so a path the allowlist missed is still refused rather than written
+   elsewhere. It then runs
    `jail-runner run <dir> --wall <secs> --warm <warm>` as a direct argv
    vector, with no shell.
 4. `jail-runner` checks the layout again. It then builds the crate offline and
