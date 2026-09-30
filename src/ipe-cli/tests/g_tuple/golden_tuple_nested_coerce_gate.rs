@@ -19,12 +19,12 @@
 //!   column). So a `PList` / `PCons` column at any depth stays an honest
 //!   ipe-fail, never an exit-0-then-cargo-fail.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ipe::CliError;
 
 fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let joined = e2e_support::manifest_dir!().join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 

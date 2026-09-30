@@ -23,12 +23,12 @@
 //! required), so they run without `IPE_E2E=1`.  They return early if
 //! [`ipe::resolve_runtime`] cannot locate the embedded runtime.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ipe::CliError;
 
 fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let joined = e2e_support::manifest_dir!().join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 

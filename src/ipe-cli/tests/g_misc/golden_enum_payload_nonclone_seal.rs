@@ -63,8 +63,7 @@ fn assert_rejected(name: &str, entry: &Path, expected: ipe_diagnostics::Code) {
     // Unlike an accepted-build test, a refusal test proves nothing if it skips
     // silently here — a missing runtime would let the fail-closed assertion
     // pass vacuously without ever driving the pipeline.
-    let runtime =
-        e2e_support::require_runtime().into_path_buf();
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let out = out_dir(name);
     match ipe::build_loose_file(entry, &out, &runtime) {
         Err(CliError::Pipeline { diag, .. }) => assert_eq!(

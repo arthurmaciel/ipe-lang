@@ -20,12 +20,12 @@
 //! directly reproduces the fuzzer failure at the ipe level. The run check is
 //! `IPE_E2E`-gated (builds + runs the emitted binary).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 mod support;
 
 fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let joined = e2e_support::manifest_dir!().join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 

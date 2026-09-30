@@ -50,16 +50,10 @@ fn write_failing_cargo(dir: &Path) -> std::io::Result<std::path::PathBuf> {
 fn build_propagates_a_failed_emitted_cargo_build() {
     const SRC: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"hi\"\n";
 
-    // The runtime dir must resolve for the emit to reach the cargo step. When
-    // the repo tree is unavailable (a nextest archive shipped to another host),
-    // skip — the propagation primitive is also unit-covered in `toolchain.rs`
-    // and `lib.rs`; this end-to-end spawn only adds value where the tree exists.
+    // The runtime dir must resolve for the emit to reach the cargo step.
     let runtime_dir = e2e_support::require_runtime().into_path_buf();
 
-    let ipe_bin = env!("CARGO_BIN_EXE_ipe");
-    if !Path::new(ipe_bin).exists() {
-        return;
-    }
+    let ipe_bin = e2e_support::cargo_bin!("ipe");
 
     let dir =
         std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipe_build_cargo_fail_e2e");

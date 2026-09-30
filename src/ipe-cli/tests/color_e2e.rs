@@ -12,7 +12,7 @@
 //!     import, proving a colour value is one type everywhere, UI or not, and
 //!     that a bound a11y/parse kernel emits code that cargo-builds and runs.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 mod support;
 
@@ -22,7 +22,7 @@ fn runtime() -> PathBuf {
 }
 
 fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let joined = e2e_support::manifest_dir!().join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 

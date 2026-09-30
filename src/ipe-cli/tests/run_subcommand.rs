@@ -291,15 +291,7 @@ fn run_without_cargo_reports_the_missing_toolchain() {
     let created = fs::create_dir_all(&empty_home).and_then(|()| fs::write(&entry, SRC));
     assert!(created.is_ok(), "write source + empty home: {created:?}");
 
-    let ipe_bin = env!("CARGO_BIN_EXE_ipe");
-    // This path is baked at compile time; a nextest archive that ships the test
-    // to another host runs it where that path does not resolve. Skip there — the
-    // toolchain-resolution dispositions are covered by the unit tests in
-    // `toolchain.rs`; this end-to-end spawn only adds value where the binary is
-    // present.
-    if !std::path::Path::new(ipe_bin).exists() {
-        return;
-    }
+    let ipe_bin = e2e_support::cargo_bin!("ipe");
     // A minimal PATH with no cargo. `/nonexistent-ipe-cargo-probe` cannot hold
     // any executable, so cargo is unresolvable on the PATH.
     let cargoless_path = "/nonexistent-ipe-cargo-probe";

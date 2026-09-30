@@ -275,7 +275,7 @@ fn emitted_build_failure_reports_unattributed_as_compiler_bug() {
 
 /// The golden entry, located relative to this crate's manifest.
 fn golden_entry() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    e2e_support::manifest_dir!()
         .join("..")
         .join("..")
         .join("tests")
@@ -407,7 +407,7 @@ fn emit_ir_prints_a_tree_for_the_golden() {
 /// modules so the divergence cannot return.
 #[test]
 fn emit_ir_resolves_compiled_source_stdlib_with_own_types() {
-    let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let entry = e2e_support::manifest_dir!()
         .join("..")
         .join("..")
         .join("tests")
@@ -452,7 +452,7 @@ fn emit_ir_resolves_compiled_source_stdlib_with_own_types() {
 /// (which calls `String.*` internally), making it the ideal witness.
 #[test]
 fn compiled_source_stdlib_own_imports_resolve_no_n0034() {
-    let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let entry = e2e_support::manifest_dir!()
         .join("..")
         .join("..")
         .join("tests")

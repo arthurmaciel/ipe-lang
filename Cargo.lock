@@ -3306,6 +3306,7 @@ dependencies = [
 name = "ipe_kernels"
 version = "0.3.4"
 dependencies = [
+ "e2e-support",
  "ipe_intern",
  "ipe_parse",
  "ipe_syntax",
@@ -3342,6 +3343,7 @@ dependencies = [
 name = "ipe_lsp_features"
 version = "0.3.4"
 dependencies = [
+ "e2e-support",
  "ipe_annotate",
  "ipe_canon",
  "ipe_db",
@@ -4635,7 +4637,7 @@ dependencies = [
 name = "panic-scan"
 version = "0.0.0"
 dependencies = [
- "ipe_env",
+ "e2e-support",
  "proc-macro2",
  "syn 3.0.6",
 ]
@@ -4875,6 +4877,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 name = "playground-jail-runner"
 version = "0.3.4"
 dependencies = [
+ "e2e-support",
  "ipe_env",
  "ipe_sandbox",
  "serde",

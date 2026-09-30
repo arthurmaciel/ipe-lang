@@ -7,12 +7,12 @@
 //! (annotations `Task Error a` that now unify with the kernel's unary `Task a`)
 //! is exercised by `golden_m5a_task::task_signed_helper`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ipe::CliError;
 
 fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let joined = e2e_support::manifest_dir!().join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 

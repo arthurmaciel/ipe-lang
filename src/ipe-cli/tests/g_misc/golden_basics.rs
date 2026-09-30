@@ -2,11 +2,11 @@
 //! the compiler-reference golden, and (behind `IPE_E2E=1`) the emitted project must
 //! build and print `1`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The `ipe-lang` workspace root (two levels up from this crate's manifest).
 fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let joined = e2e_support::manifest_dir!().join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 

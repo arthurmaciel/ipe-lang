@@ -468,8 +468,7 @@ fn hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wasm() {
 
     // Emit the REAL wasm-hydration example (single source of truth) with the
     // hydrate mode its `package.ipe` declares.
-    let entry =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/wasm/hydration/src/Main.ipe");
+    let entry = e2e_support::manifest_dir!().join("../../examples/wasm/hydration/src/Main.ipe");
     let out = scratch_isolated("wasm_hydrate_seal").join("out");
     let options = BuildOptions {
         target: ipe_ir::Target::WasmClient,

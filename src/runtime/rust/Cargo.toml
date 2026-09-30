@@ -615,6 +615,8 @@ wasm-client = [
 ]
 
 [dev-dependencies]
+# Existence-proven test-artifact resolvers.
+e2e-support = { path = "../../../tools/e2e-support" }
 regex = "1"
 serde_json = "1"
 sha2 = "0.10"

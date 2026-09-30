@@ -50,8 +50,7 @@ static JAIL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn fixture_path() -> PathBuf {
     // `CARGO_MANIFEST_DIR` is `.../src/compiler/sandbox`; the fixture lives at
     // the repo root under `tests/fixtures/admission/`.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../tests/fixtures/admission/untrusted-build.sh")
+    e2e_support::manifest_dir!().join("../../../tests/fixtures/admission/untrusted-build.sh")
 }
 
 /// Skip unless `IPE_E2E=1`, the jail tools are present, AND a jail can actually

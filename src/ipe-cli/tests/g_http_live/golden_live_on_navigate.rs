@@ -17,10 +17,10 @@
 //! Pure ipe-pipeline check (parse → canon → types → lower → emit); no cargo
 //! build. Skips if the embedded runtime cannot be resolved.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let joined = e2e_support::manifest_dir!().join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 

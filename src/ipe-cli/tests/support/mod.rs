@@ -29,36 +29,24 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// This crate's manifest directory, resolved so it stays correct when a test
-/// binary runs from a `nextest archive` on a different machine than the one that
-/// compiled it.
+/// This crate's manifest directory, proven to exist; fails the test otherwise.
 ///
-/// `env!("CARGO_MANIFEST_DIR")` bakes the BUILD machine's absolute path at
-/// compile time; under `cargo nextest run --archive-file … --workspace-remap .`
-/// the run happens on a separate runner where that baked path does not exist.
-/// Nextest re-exports `CARGO_MANIFEST_DIR` in the runtime environment, re-rooted
-/// to the remapped checkout, so read it at runtime and fall back to the baked
-/// value for a plain (non-archive) `cargo test`/`nextest` run, which sets no such
-/// runtime variable.
+/// Archive-safe: the run-time `CARGO_MANIFEST_DIR` (re-rooted by
+/// `nextest --workspace-remap`) wins over the compile-time path.
 #[must_use]
-#[allow(dead_code)] // adopted file-by-file as tests migrate to the shared helper
+#[allow(dead_code)] // shared across test binaries; not every one calls it
 pub fn manifest_dir() -> PathBuf {
-    ipe_env::var_os("CARGO_MANIFEST_DIR")
-        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from)
+    e2e_support::manifest_dir!()
 }
 
-/// Absolute path to the built `ipe` binary, archive-safe for the same reason as
-/// [`manifest_dir`].
+/// The built `ipe` binary, proven to be a regular file; fails the test otherwise.
 ///
-/// `env!("CARGO_BIN_EXE_ipe")` points at the build machine's `target/`, which a
-/// separate `nextest archive` runner does not have. Nextest re-exports
-/// `CARGO_BIN_EXE_ipe` at runtime pointing at the extracted binary; read that,
-/// falling back to the baked path for a plain (non-archive) run.
+/// Archive-safe: the run-time `CARGO_BIN_EXE_ipe` (re-exported by nextest)
+/// wins over the compile-time path.
 #[must_use]
-#[allow(dead_code)] // adopted file-by-file as tests migrate to the shared helper
+#[allow(dead_code)] // shared across test binaries; not every one calls it
 pub fn ipe_bin() -> PathBuf {
-    ipe_env::var_os("CARGO_BIN_EXE_ipe")
-        .map_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_ipe")), PathBuf::from)
+    e2e_support::cargo_bin!("ipe").into_path_buf()
 }
 
 /// Per-binary scratch root for e2e output, isolated per `CARGO_TARGET_DIR` pool

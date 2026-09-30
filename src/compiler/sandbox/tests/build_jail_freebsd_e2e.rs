@@ -43,8 +43,7 @@ fn which(bin: &str) -> Option<PathBuf> {
 }
 
 fn fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../tests/fixtures/admission/untrusted-build.sh")
+    e2e_support::manifest_dir!().join("../../../tests/fixtures/admission/untrusted-build.sh")
 }
 
 /// A per-test scratch dir under the system temp root.

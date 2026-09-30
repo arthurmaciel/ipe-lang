@@ -304,7 +304,7 @@ fn inspect_marked_wrapper(
 ) -> Option<PkgInfo> {
     // The `ipe_bindgen` marker crate lives beside the ffi crate in the
     // workspace; the wrapper depends on it by an absolute `path`.
-    let define_crate = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    let define_crate = e2e_support::manifest_dir!()
         .join("../../ffi-bindgen-macro")
         .canonicalize()
         .expect("ipe_bindgen crate resolves");

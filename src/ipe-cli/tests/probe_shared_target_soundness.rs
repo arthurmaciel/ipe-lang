@@ -28,13 +28,9 @@ use std::process::Command;
 /// A minimal single-file Ipê program that emits, builds, and runs.
 const SRC: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"ok\"\n";
 
-/// The `ipe` binary under test. Under a nextest archive on another host the
-/// baked path may not resolve; callers skip when it is absent.
+/// The `ipe` binary under test, proven to exist; fails the test otherwise.
 fn ipe_bin() -> std::path::PathBuf {
-    ipe_env::var_os("CARGO_BIN_EXE_ipe").map_or_else(
-        || std::path::PathBuf::from(env!("CARGO_BIN_EXE_ipe")),
-        std::path::PathBuf::from,
-    )
+    e2e_support::cargo_bin!("ipe").into_path_buf()
 }
 
 /// Emit `SRC` at `dir/Main.ipe` into `dir/out` via a subprocess `ipe build`,
@@ -95,10 +91,7 @@ fn probe_shared_target_never_masks_a_broken_emit() {
         return;
     }
     let ipe = ipe_bin();
-    if !ipe.exists() {
-        return;
-    }
-    // `ipe build` resolves the runtime itself; skip only if this host cannot.
+    // `ipe build` resolves the runtime itself; prove this host has one.
     let _runtime = e2e_support::require_runtime();
 
     let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))

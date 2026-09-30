@@ -793,12 +793,9 @@ fn audit_entry_rejects_a_package_that_fails_the_tier1_audit() {
 
 // ── publish --dry-run (IPE_E2E-gated subprocess) ────────────────────────────
 
-/// The built `ipe` binary, archive-safe: nextest re-exports `CARGO_BIN_EXE_ipe`
-/// at runtime pointing at the extracted binary; fall back to the baked path for a
-/// plain (non-archive) run.
+/// The built `ipe` binary, proven to exist; fails the test otherwise.
 fn ipe_bin() -> PathBuf {
-    ipe_env::var_os("CARGO_BIN_EXE_ipe")
-        .map_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_ipe")), PathBuf::from)
+    e2e_support::cargo_bin!("ipe").into_path_buf()
 }
 
 #[test]

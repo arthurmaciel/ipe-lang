@@ -24,7 +24,7 @@ use ipe::CliError;
 
 /// The `ipe-lang` workspace root (two levels up from this crate's manifest).
 fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let joined = e2e_support::manifest_dir!().join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 

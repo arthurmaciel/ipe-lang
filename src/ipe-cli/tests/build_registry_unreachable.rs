@@ -51,10 +51,7 @@ fn build_registry_unreachable_renders_ipe_e0001_not_ice() {
 
     let runtime_dir = e2e_support::require_runtime().into_path_buf();
 
-    let ipe_bin = env!("CARGO_BIN_EXE_ipe");
-    if !Path::new(ipe_bin).exists() {
-        return;
-    }
+    let ipe_bin = e2e_support::cargo_bin!("ipe");
 
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("ipe_build_registry_unreachable_e2e");

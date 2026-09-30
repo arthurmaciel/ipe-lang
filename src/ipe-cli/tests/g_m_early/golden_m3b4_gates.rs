@@ -7,12 +7,12 @@
 //! floor). This locks the property that removing the IPE-L0116 gate did NOT
 //! remove the exhaustiveness guarantee: the Maranget check is the gate.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ipe::CliError;
 
 fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let joined = e2e_support::manifest_dir!().join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
