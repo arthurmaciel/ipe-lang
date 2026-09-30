@@ -20910,9 +20910,9 @@ impl<'a> Lowerer<'a> {
             }
             canon::Expr_::Float(f) => Ok(Expr::Float(*f)),
             canon::Expr_::Str(s) => Ok(Expr::Str(s.clone())),
-            // A compile-time-validated `path "…"` literal: the cleaned string
-            // was proven valid by the canonicaliser; lower directly to PathLit.
-            canon::Expr_::PathLit(cleaned) => Ok(Expr::PathLit(cleaned.clone())),
+            // A compile-time-sealed `path "…"` literal: the sealed forms carry
+            // straight through; lower directly to PathLit.
+            canon::Expr_::PathLit(lit) => Ok(Expr::PathLit(lit.clone())),
             // The reserved `CustomElement.fromFile "<js-path>"` constructor. The carried
             // path is the CLEANED, in-project, traversal-free relative path the
             // canon seal already proved (and the build-stage containment gate

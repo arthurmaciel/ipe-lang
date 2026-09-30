@@ -10,6 +10,9 @@
 //! (c) `path "safe\0bad"` (NUL byte) is a compile-time IPE-P0063 error.
 //! (d) `path` used as a plain identifier (not followed by a string literal)
 //!     compiles and runs normally — contextual keyword regression.
+//! (e) A literal only the Windows separator regime refuses (`..\x`, a
+//!     trailing-dot `..` disguise, a drive-relative `..`) is a compile-time
+//!     IPE-P0063 error on every compiling host — the all-targets gate.
 
 use std::path::{Path, PathBuf};
 
@@ -145,4 +148,46 @@ fn path_as_identifier_still_compiles() {
         "not a path literal",
         "`path` used as an identifier must print its value normally"
     );
+}
+
+// ── (e) Windows-only traversal is refused on every host ──────────────────────
+
+/// A literal the Unix seal accepts but the Windows seal refuses must still be
+/// a compile error: the compiler does not know the target's separator regime.
+#[test]
+fn windows_only_traversal_literals_are_rejected() {
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    for (i, literal) in [
+        "..\\\\secret",
+        "...",
+        ".. \\\\x",
+        "C:..\\\\x",
+        "a\\\\..\\\\..\\\\b",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("path_literal_win_{i}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let entry = dir.join("Main.ipe");
+        let source = format!(
+            "module Main exposing (main)\nimport Ipe.Io as Io\nimport Ipe.Path as Path\n\n\
+             evilPath : Path.Path\nevilPath =\n    path \"{literal}\"\n\n\
+             main =\n    Io.println (Path.toString evilPath)\n"
+        );
+        std::fs::write(&entry, source).unwrap();
+        let built = ipe::build(&entry, &dir.join("out"), &runtime);
+        let got = match &built {
+            Err(ipe::CliError::Pipeline { diag, .. }) => Some(diag.code()),
+            _ => None,
+        };
+        assert_eq!(
+            got,
+            Some(ipe_diagnostics::IPE_P0063),
+            "literal {literal:?}: expected IPE-P0063, got build result {built:?}"
+        );
+    }
 }

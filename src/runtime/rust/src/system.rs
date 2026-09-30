@@ -1,5 +1,6 @@
 // System helpers — some generic over E (when returning IpeTask).
-use super::{IpeMaybe, IpeResult, IpeTask, ok_res, str_err};
+use super::path::{OsOrigin, from_os};
+use super::{IpeError, IpeMaybe, IpeResult, IpeTask, ok_res, str_err};
 
 // `std::env::set_var`/`remove_var` are documented as NOT thread-safe: a mutator
 // reallocates the C `environ` block while another thread READS it — and the
@@ -1143,10 +1144,9 @@ pub fn system_exit(code: i64) -> ! {
 /// required for parity: `getenv` is Task-typed in the stdlib, so a bare `String`
 /// fails to type-check in any `Task.andThen`/`Task.run` position. Returning `Err`
 /// on unset (rather than `Ok("")`) fails the Task at the call site, so a
-/// chained `Task.andThen` short-circuits on a missing variable. The
-/// string-based error follows `system_cwd`'s convention — the generic `E` bound
-/// can only build `From<String>`, so the error kind is a plain string (shared
-/// limitation with `system_cwd`). NOTE: `getenvOr` stays a bare
+/// chained `Task.andThen` short-circuits on a missing variable. The error is
+/// string-based — the generic `E` bound can only build `From<String>`, so the
+/// error kind is a plain string. NOTE: `getenvOr` stays a bare
 /// `String` (the default plugs the missing case at the call site).
 #[must_use]
 pub fn system_getenv<E: Send + From<String> + 'static>(key: String) -> IpeTask<E, String> {
@@ -1247,12 +1247,18 @@ pub fn system_unsetenv<E: Send + 'static>(key: String) -> IpeTask<E, ()> {
 }
 
 /// `System.cwd : () -> Task Error String`.
+///
+/// The working directory passes the host seal; one that is not valid UTF-8
+/// is refused as invalid input, never rewritten lossily.
 #[must_use]
-pub fn system_cwd<E: Send + From<String> + 'static>(_: ()) -> IpeTask<E, String> {
+pub fn system_cwd<E: Send + From<IpeError> + 'static>(_: ()) -> IpeTask<E, String> {
     Box::pin(async move {
-        match std::env::current_dir() {
-            Ok(p) => ok_res(p.to_string_lossy().into_owned()),
-            Err(e) => IpeResult::Err(str_err(&format!("{e}"))),
+        let cwd = std::env::current_dir()
+            .map_err(|e| IpeError::from(format!("{e}")))
+            .and_then(|p| from_os(p.as_path(), OsOrigin::SystemCwd));
+        match cwd {
+            Ok(p) => ok_res(p.into_string()),
+            Err(e) => IpeResult::Err(e.into()),
         }
     })
 }
@@ -1260,7 +1266,7 @@ pub fn system_cwd<E: Send + From<String> + 'static>(_: ()) -> IpeTask<E, String>
 /// `System.getcwd : () -> Task Error String` — backward-compat alias for `cwd`.
 /// Wraps `System_cwd` with a unit arg.
 #[must_use]
-pub fn system_getcwd<E: Send + From<String> + 'static>(unit: ()) -> IpeTask<E, String> {
+pub fn system_getcwd<E: Send + From<IpeError> + 'static>(unit: ()) -> IpeTask<E, String> {
     system_cwd(unit)
 }
 

@@ -1392,16 +1392,24 @@ fn parse_label(msg: &ParseError) -> Option<String> {
         ParseError::MalformedCase(defect) => Some(case_defect_str(*defect).to_string()),
         ParseError::MalformedLet(defect) => Some(let_defect_str(*defect).to_string()),
         ParseError::MalformedIf(defect) => Some(if_defect_str(*defect).to_string()),
-        ParseError::InvalidPathLiteral { literal, reason } => {
-            use ipe_path_core::PathRejection;
-            let detail = match reason {
-                PathRejection::Nul => {
+        ParseError::InvalidPathLiteral { literal, refusal } => {
+            use ipe_path_core::{Regime, SealRefusal};
+            let detail = match (refusal.regime, &refusal.why) {
+                (_, SealRefusal::Nul) => {
                     "the path contains a NUL byte (a syscall-boundary truncation / traversal risk)"
                         .to_string()
                 }
-                PathRejection::Traversal => {
+                (_, SealRefusal::DisguisedParent) => format!(
+                    "an element of the path becomes `..` once Windows strips its trailing \
+                     dots / spaces (a traversal disguise): {literal:?}"
+                ),
+                (Regime::Unix, SealRefusal::Escape { .. }) => {
                     format!("the path escapes its root via `..` traversal: {literal:?}")
                 }
+                (Regime::Windows, SealRefusal::Escape { .. }) => format!(
+                    "the path escapes its root via `..` traversal on Windows, where `\\` \
+                     also separates elements: {literal:?}"
+                ),
             };
             Some(detail)
         }
@@ -3373,7 +3381,10 @@ mod tests {
             span: crate::span::Span::DUMMY,
             msg: ParseError::InvalidPathLiteral {
                 literal: "safe\0bad".into(),
-                reason: ipe_path_core::PathRejection::Nul,
+                refusal: ipe_path_core::LiteralRefusal {
+                    regime: ipe_path_core::Regime::Unix,
+                    why: ipe_path_core::SealRefusal::Nul,
+                },
             },
         };
         let out = plain_message(&diag, "");
@@ -3390,7 +3401,12 @@ mod tests {
             span: crate::span::Span::DUMMY,
             msg: ParseError::InvalidPathLiteral {
                 literal: "../secret".into(),
-                reason: ipe_path_core::PathRejection::Traversal,
+                refusal: ipe_path_core::LiteralRefusal {
+                    regime: ipe_path_core::Regime::Unix,
+                    why: ipe_path_core::SealRefusal::Escape {
+                        cleaned: "../secret".to_string(),
+                    },
+                },
             },
         };
         let out = plain_message(&diag, "");
@@ -3398,6 +3414,36 @@ mod tests {
             out.contains("traversal") || out.contains(".."),
             "Traversal rejection must mention traversal in plain_message output:\n{out}"
         );
+    }
+
+    /// A literal only the Windows regime refuses names Windows in its detail.
+    #[test]
+    fn path_rejection_windows_only_names_windows() {
+        for (literal, why) in [
+            (
+                "..\\secret",
+                ipe_path_core::SealRefusal::Escape {
+                    cleaned: "..\\secret".to_string(),
+                },
+            ),
+            ("...", ipe_path_core::SealRefusal::DisguisedParent),
+        ] {
+            let diag = Diagnostic::Parse {
+                span: crate::span::Span::DUMMY,
+                msg: ParseError::InvalidPathLiteral {
+                    literal: literal.into(),
+                    refusal: ipe_path_core::LiteralRefusal {
+                        regime: ipe_path_core::Regime::Windows,
+                        why,
+                    },
+                },
+            };
+            let out = plain_message(&diag, "");
+            assert!(
+                out.contains("Windows"),
+                "a Windows-only refusal must name Windows:\n{out}"
+            );
+        }
     }
 
     /// `an_article` wraps a bare type name in exactly one balanced backtick

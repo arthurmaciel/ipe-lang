@@ -266,10 +266,15 @@ mod load_from_file_tests {
         decode_field("name".to_string(), json_decode_string::<String>())
     }
 
-    fn make_path(s: &str) -> crate::path::Path {
-        // Tests use known-safe literal paths; `path_literal` bypasses the
-        // parse seal, which is the right choice for compiler-controlled sites.
-        crate::path::path_literal(s.to_string())
+    /// Seal a test fixture path through the runtime's one constructor.
+    pub fn make_path(s: &str) -> crate::path::Path {
+        let sealed: Result<_, crate::IpeError> = match crate::path::path_from_string(s.to_string())
+        {
+            IpeResult::Ok(p) => Ok(p),
+            IpeResult::Err(e) => Err(e),
+        };
+        #[allow(clippy::expect_used)] // fixture paths are absolute temp paths the seal accepts
+        sealed.expect("test fixture path passes the seal")
     }
 
     /// Functional correctness (independent of whether `run_blocking` takes
@@ -367,7 +372,7 @@ mod load_from_file_spawn_blocking_tests {
         // cap.
         let big = "x".repeat(12 * 1024 * 1024);
         std::fs::write(&p, format!(r#"{{"name": "{}"}}"#, big)).unwrap();
-        let path = crate::path::path_literal(p.to_string_lossy().into_owned());
+        let path = super::load_from_file_tests::make_path(&p.to_string_lossy());
 
         let ticks = rt.block_on(async move {
             let counter = Arc::new(AtomicU64::new(0));

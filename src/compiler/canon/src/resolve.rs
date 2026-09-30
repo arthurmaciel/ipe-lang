@@ -5682,15 +5682,16 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             desugar_multiline(raw, *anchor, span, env, interner)?
         }
         src::Expr_::Char(c) => canon::Expr_::Char(c.clone()),
-        // `path "…"` literal: validate at compile time, store the cleaned form.
-        src::Expr_::PathLit(raw) => match ipe_diagnostics::path_check::validate(raw) {
-            Ok(cleaned) => canon::Expr_::PathLit(cleaned),
-            Err(reason) => {
+        // `path "…"` literal: seal under every regime at compile time; the node
+        // carries each regime's sealed form.
+        src::Expr_::PathLit(raw) => match ipe_diagnostics::path_check::PathLitText::seal(raw) {
+            Ok(lit) => canon::Expr_::PathLit(lit),
+            Err(refusal) => {
                 return Err(Diagnostic::Parse {
                     span,
                     msg: ParseError::InvalidPathLiteral {
                         literal: raw.as_str().into(),
-                        reason,
+                        refusal,
                     },
                 });
             }
@@ -7455,7 +7456,7 @@ fn annotation_head_name<'a>(ann: &src::TypeAnnotation, interner: &'a Interner) -
 /// [`NameError::CustomElementCtorMalformed`] (IPE-N0044) on any malformed use.
 /// A path that fails the traversal seal surfaces as [`ParseError::InvalidPathLiteral`]
 /// (IPE-P0063) — the same code the `path "…"` literal uses, shared through
-/// `ipe_diagnostics::path_check::validate`.
+/// `ipe_diagnostics::path_check::PathLitText::seal`.
 fn detect_custom_element_constructor(
     val: &src::Value,
     env: &Env,
@@ -7587,17 +7588,22 @@ fn custom_element_widget_path(args: &[src::Expr], body_span: Span) -> DResult<St
         ));
     };
 
-    // Path seal: clean + all-targets traversal check, the SAME `ipe_path_core`
-    // source of truth the `path "…"` literal uses. A `..` escape is refused with
-    // IPE-P0063 (no arbitrary out-of-project file is read at build).
-    let cleaned = match ipe_diagnostics::path_check::validate(raw) {
-        Ok(cleaned) => cleaned,
-        Err(reason) => {
+    // Path seal: the all-regimes gate, the SAME `ipe_path_core` source of truth
+    // the `path "…"` literal uses. The build host that later joins this path may
+    // run either regime, so a literal any regime refuses (a `..` escape, a
+    // Windows `..\` or disguised `..`) is refused with IPE-P0063 — no arbitrary
+    // out-of-project file is read at build. The carried form is the Unix one:
+    // widget paths are `/`-separated project-relative text.
+    let cleaned = match ipe_diagnostics::path_check::PathLitText::seal(raw) {
+        Ok(lit) => lit
+            .sealed(ipe_diagnostics::path_check::Regime::Unix)
+            .to_owned(),
+        Err(refusal) => {
             return Err(Diagnostic::Parse {
                 span: arg.span,
                 msg: ParseError::InvalidPathLiteral {
                     literal: raw.as_str().into(),
-                    reason,
+                    refusal,
                 },
             });
         }

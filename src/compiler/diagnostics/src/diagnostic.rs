@@ -400,13 +400,12 @@ pub enum ParseError {
     MalformedIf(IfDefect),
     /// A `path "…"` literal whose string fails compile-time validation.
     ///
-    /// `reason` names which check failed: [`PathRejection::Nul`] (a NUL byte
-    /// in the string) or [`PathRejection::Traversal`] (the cleaned path
-    /// escapes its root via `..`). `literal` is the original unmodified source
-    /// string. [IPE-P0063]
+    /// `refusal` names the separator regime whose seal refused the literal and
+    /// why (a NUL byte, a Windows-disguised `..`, or a `..` escape). `literal`
+    /// is the original unmodified source string. [IPE-P0063]
     InvalidPathLiteral {
         literal: Box<str>,
-        reason: ipe_path_core::PathRejection,
+        refusal: ipe_path_core::LiteralRefusal,
     },
     /// A `do` block whose statements are all pure `=` bindings with no `<-`
     /// Task bind and no bare-run Task step — pure code masquerading as `do`.

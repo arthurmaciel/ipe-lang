@@ -1,139 +1,147 @@
-//! Compile-time validation for the `path "…"` literal gate (IPE-P0063).
+//! The compiler's entry onto the `path "…"` literal gate (IPE-P0063).
 //!
 //! The algorithm is NOT defined here — it lives once in the dependency-free
 //! `ipe_path_core` crate, which the runtime `Path.fromString` seal
-//! (`ipe_runtime::path`) also consumes. This module is the compiler's thin
-//! entry point onto that single source of truth, so the two sites can never
+//! (`ipe_runtime::path`) also consumes. This module re-exports that single
+//! source of truth, so the compile-time gate and the runtime seal can never
 //! drift.
 //!
-//! [`validate`] is the all-targets compile-time gate: because the compiler does
-//! not know the final target OS, it rejects any path that would traverse under
-//! EITHER the Unix (`/`) or the Windows (`\`/`/`) separator regime. That is
-//! stricter than the runtime's per-target seal by construction, so a literal the
-//! compiler accepts is accepted by the runtime on every target.
+//! [`PathLitText::seal`] is the all-targets compile-time gate: the compiler does
+//! not know the final target OS, so it seals a literal under EVERY separator
+//! regime and refuses it when any regime refuses. An accepted literal carries
+//! each regime's sealed form; the emitted program selects the host one, so the
+//! text a literal yields on a target IS that target's runtime seal.
 
-/// Compile-time validation for a `path "…"` literal — the all-targets gate.
-///
-/// Delegates to [`ipe_path_core::validate`]. Returns the cleaned path string on
-/// success, or a [`ipe_path_core::PathRejection`] that the canon stage renders
-/// into an `InvalidPathLiteral` diagnostic.
-///
-/// # Errors
-///
-/// Returns `Err(PathRejection::Nul)` for a NUL byte, or
-/// `Err(PathRejection::Traversal)` for any `..` escape (under either separator
-/// regime) or Windows trailing-dot/space `..` disguise.
-pub fn validate(s: &str) -> Result<String, ipe_path_core::PathRejection> {
-    ipe_path_core::validate(s)
-}
+pub use ipe_path_core::{LiteralRefusal, PathLitText, Regime, SealRefusal, seal};
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ── accepted paths ───────────────────────────────────────────────────────
-
-    #[test]
-    fn plain_relative_accepted() {
-        assert_eq!(validate("src/Main.ipe"), Ok("src/Main.ipe".to_string()));
+    fn refusal(raw: &str) -> Option<LiteralRefusal> {
+        PathLitText::seal(raw).err()
     }
 
+    fn escape(regime: Regime, cleaned: &str) -> Option<LiteralRefusal> {
+        Some(LiteralRefusal {
+            regime,
+            why: SealRefusal::Escape {
+                cleaned: cleaned.to_string(),
+            },
+        })
+    }
+
+    fn windows(why: SealRefusal) -> Option<LiteralRefusal> {
+        Some(LiteralRefusal {
+            regime: Regime::Windows,
+            why,
+        })
+    }
+
+    // ── accepted paths carry each regime's sealed form ───────────────────────
+
     #[test]
-    fn absolute_accepted() {
+    fn plain_relative_accepted_in_each_regime_form() {
+        let lit = PathLitText::seal("src/Main.ipe");
         assert_eq!(
-            validate("/usr/share/data"),
-            Ok("/usr/share/data".to_string())
+            lit.as_ref().map(|l| l.sealed(Regime::Unix)),
+            Ok("src/Main.ipe")
         );
+        assert_eq!(
+            lit.as_ref().map(|l| l.sealed(Regime::Windows)),
+            Ok("src\\Main.ipe")
+        );
+        assert_eq!(lit.as_ref().map(PathLitText::raw), Ok("src/Main.ipe"));
     }
 
     #[test]
     fn interior_dotdot_that_stays_in_bounds_accepted() {
-        assert_eq!(validate("a/b/../c"), Ok("a/c".to_string()));
+        let lit = PathLitText::seal("a/b/../c");
+        assert_eq!(lit.as_ref().map(|l| l.sealed(Regime::Unix)), Ok("a/c"));
+        assert_eq!(lit.as_ref().map(|l| l.sealed(Regime::Windows)), Ok("a\\c"));
     }
 
     #[test]
     fn rooted_dotdot_cannot_escape_accepted() {
-        assert_eq!(validate("/a/../../b"), Ok("/b".to_string()));
+        let lit = PathLitText::seal("/a/../../b");
+        assert_eq!(lit.as_ref().map(|l| l.sealed(Regime::Unix)), Ok("/b"));
     }
 
     #[test]
     fn empty_cleans_to_dot() {
-        assert_eq!(validate(""), Ok(".".to_string()));
+        let lit = PathLitText::seal("");
+        assert_eq!(lit.as_ref().map(|l| l.sealed(Regime::Unix)), Ok("."));
+        assert_eq!(lit.as_ref().map(|l| l.sealed(Regime::Windows)), Ok("."));
     }
 
-    // ── rejected under the Unix regime ───────────────────────────────────────
+    #[test]
+    fn each_form_is_that_regimes_seal() {
+        for raw in ["src/Main.ipe", "a//b/./c/", "/abs/x", "C:\\x\\y", "a\\b"] {
+            let lit = PathLitText::seal(raw);
+            assert!(lit.is_ok(), "{raw:?} must be accepted");
+            let Ok(lit) = lit else {
+                return;
+            };
+            for regime in [Regime::Unix, Regime::Windows] {
+                assert_eq!(seal(raw, regime).as_deref(), Ok(lit.sealed(regime)));
+            }
+        }
+    }
+
+    // ── refused under the Unix regime ────────────────────────────────────────
 
     #[test]
     fn nul_byte_rejected() {
         assert_eq!(
-            validate("safe\0bad"),
-            Err(ipe_path_core::PathRejection::Nul)
+            refusal("safe\0bad"),
+            Some(LiteralRefusal {
+                regime: Regime::Unix,
+                why: SealRefusal::Nul
+            })
         );
     }
 
     #[test]
     fn leading_dotdot_rejected() {
-        assert_eq!(
-            validate("../secret"),
-            Err(ipe_path_core::PathRejection::Traversal)
-        );
+        assert_eq!(refusal("../secret"), escape(Regime::Unix, "../secret"));
     }
 
     #[test]
     fn bare_dotdot_rejected() {
-        assert_eq!(validate(".."), Err(ipe_path_core::PathRejection::Traversal));
+        assert_eq!(refusal(".."), escape(Regime::Unix, ".."));
     }
 
     #[test]
     fn dotdot_that_resolves_to_escape_rejected() {
-        assert_eq!(
-            validate("a/../../etc"),
-            Err(ipe_path_core::PathRejection::Traversal)
-        );
+        assert_eq!(refusal("a/../../etc"), escape(Regime::Unix, "../etc"));
     }
 
-    // ── rejected under the Windows regime — the all-targets guarantee ─────────
-    //    Each of these is a Unix-clean no-op (`\` is a plain byte on Unix) yet a
-    //    traversal on Windows; the compile-time gate must reject them so no such
-    //    literal is ever emitted for a Windows build.
+    // ── refused only under the Windows regime — the all-targets guarantee ────
+    //    Each is a Unix-clean no-op (`\` is a plain byte on Unix) yet a
+    //    traversal on Windows; the gate refuses it and names the Windows regime.
 
     #[test]
     fn win_backslash_traversal_rejected() {
-        assert_eq!(
-            validate("..\\secret"),
-            Err(ipe_path_core::PathRejection::Traversal)
-        );
+        assert_eq!(refusal("..\\secret"), escape(Regime::Windows, "..\\secret"));
     }
 
     #[test]
     fn win_drive_relative_dotdot_rejected() {
-        assert_eq!(
-            validate("C:..\\x"),
-            Err(ipe_path_core::PathRejection::Traversal)
-        );
+        assert!(refusal("C:..\\x").is_some_and(|r| r.regime == Regime::Windows));
     }
 
     #[test]
     fn win_trailing_dot_space_disguise_rejected() {
-        assert_eq!(
-            validate(".. \\x"),
-            Err(ipe_path_core::PathRejection::Traversal)
-        );
+        assert_eq!(refusal(".. \\x"), windows(SealRefusal::DisguisedParent));
     }
 
     #[test]
     fn win_triple_dot_disguise_rejected() {
-        assert_eq!(
-            validate("..."),
-            Err(ipe_path_core::PathRejection::Traversal)
-        );
+        assert_eq!(refusal("..."), windows(SealRefusal::DisguisedParent));
     }
 
     #[test]
     fn win_mixed_separator_traversal_rejected() {
-        assert_eq!(
-            validate("a\\..\\..\\b"),
-            Err(ipe_path_core::PathRejection::Traversal)
-        );
+        assert!(refusal("a\\..\\..\\b").is_some_and(|r| r.regime == Regime::Windows));
     }
 }
