@@ -481,7 +481,7 @@ mod tests {
             ("/:9", 0),
             ("/:\u{e9}", 0),
             ("/:a-b", 1),
-            ("/:a_Z9-", 5),
+            ("/:a_Z9-", 4),
             ("/:a%41", 1),
         ] {
             let refused = RoutePattern::parse(bad);
