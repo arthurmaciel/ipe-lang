@@ -263,7 +263,7 @@ fn warm_root() -> PathBuf {
 }
 
 /// A legal phase wall of `secs` seconds.
-fn wall(secs: u64) -> WallSecs {
+const fn wall(secs: u64) -> WallSecs {
     WallSecs::new(secs).expect("a legal wall")
 }
 
