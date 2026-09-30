@@ -17,7 +17,7 @@ import Ipe.Io as Io
 --     `Nothing` (absent or evicted) is a case you handle, never an exception.
 --
 -- This cache stores string sessions; a value type of `Int` currently misses on
--- read (arthurmaciel/ipe-lang#1536), so an integer counter is not modelled here.
+-- read (ipe-lang/compiler#1536), so an integer counter is not modelled here.
 
 
 -- The cache is created once, then read and written through its handle. This one

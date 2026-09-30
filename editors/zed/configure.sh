@@ -2,7 +2,7 @@
 # editors/zed/configure.sh — prepares the Ipê extension for Zed.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/zed/configure.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ipe-lang/compiler/main/editors/zed/configure.sh | sh
 #   (or from a checkout: sh editors/zed/configure.sh)
 #
 # What it does:
@@ -32,7 +32,7 @@ if [ -n "$IPE_SRC_ROOT" ]; then
     . "$IPE_SRC_ROOT/editors/lib/ipe-editors.sh"
 else
     _lib="$(mktemp)" || exit 1
-    curl -fsSL "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/$IPE_EDITORS_REF/editors/lib/ipe-editors.sh" -o "$_lib" \
+    curl -fsSL "https://raw.githubusercontent.com/ipe-lang/compiler/$IPE_EDITORS_REF/editors/lib/ipe-editors.sh" -o "$_lib" \
         || { rm -f "$_lib"; printf 'error: cannot download editors/lib/ipe-editors.sh\n' >&2; exit 1; }
     # shellcheck source=/dev/null
     . "$_lib"
@@ -41,7 +41,7 @@ fi
 IPE_TAG="Zed"
 
 # --- preflight ---------------------------------------------------------------
-need ipe "install the Ipê toolchain first: https://github.com/arthurmaciel/ipe-lang"
+need ipe "install the Ipê toolchain first: https://github.com/ipe-lang/compiler"
 if ! ipe_have zed && ! ipe_have zeditor; then
     die "Zed not found ('zed' or 'zeditor' on PATH) — install Zed first: https://zed.dev"
 fi

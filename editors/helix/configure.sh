@@ -2,7 +2,7 @@
 # editors/helix/configure.sh — one-shot Ipê integration for Helix.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/helix/configure.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ipe-lang/compiler/main/editors/helix/configure.sh | sh
 #   (or from a checkout: sh editors/helix/configure.sh)
 #
 # What it does:
@@ -32,7 +32,7 @@ if [ -n "$IPE_SRC_ROOT" ]; then
     . "$IPE_SRC_ROOT/editors/lib/ipe-editors.sh"
 else
     _lib="$(mktemp)" || exit 1
-    curl -fsSL "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/$IPE_EDITORS_REF/editors/lib/ipe-editors.sh" -o "$_lib" \
+    curl -fsSL "https://raw.githubusercontent.com/ipe-lang/compiler/$IPE_EDITORS_REF/editors/lib/ipe-editors.sh" -o "$_lib" \
         || { rm -f "$_lib"; printf 'error: cannot download editors/lib/ipe-editors.sh\n' >&2; exit 1; }
     # shellcheck source=/dev/null
     . "$_lib"
@@ -41,7 +41,7 @@ fi
 IPE_TAG="Helix"
 
 # --- preflight ---------------------------------------------------------------
-need ipe "install the Ipê toolchain first: https://github.com/arthurmaciel/ipe-lang"
+need ipe "install the Ipê toolchain first: https://github.com/ipe-lang/compiler"
 need hx "install Helix first: https://helix-editor.com"
 
 HX_VERSION="$(hx --version 2>/dev/null | awk '{print $2}')"

@@ -2,12 +2,12 @@
 # Ipê installer — detects your platform, downloads the matching release binary,
 # and installs `ipe` (+ `ipe-ffi-inspector`) to a bin dir on your PATH.
 #
-#   curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ipe-lang/compiler/main/install.sh | sh
 #
 # Overrides:  IPE_VERSION=v0.1.0  IPE_INSTALL_DIR=$HOME/.local/bin  sh install.sh
 set -eu
 
-REPO="arthurmaciel/ipe-lang"
+REPO="ipe-lang/compiler"
 INSTALL_DIR="${IPE_INSTALL_DIR:-$HOME/.local/bin}"
 # Set only by `ipe upgrade`'s own wrapper — see die_no_prebuilt below.
 WRAPPED="${IPE_UPGRADE_WRAPPED:-0}"

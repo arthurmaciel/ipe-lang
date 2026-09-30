@@ -67,7 +67,7 @@ increment current =
 -- and the label reads `sku` from the tuple's own field. That keeps each read of
 -- `sku` in a single position and sidesteps a codegen move-after-use bug when one
 -- binding is reused after a kernel call — see
--- github.com/arthurmaciel/ipe-lang/issues/1526.
+-- github.com/ipe-lang/compiler/issues/1526.
 lineItem : ( String, Int ) -> String
 lineItem pair =
     let
