@@ -35,11 +35,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 CI_WORKFLOW = os.path.join(REPO, ".github", "workflows", "ci.yml")
+NEXTEST_TOML = os.path.join(REPO, ".config", "nextest.toml")
 WEIGHTS_FILE = os.path.join(HERE, "e2e_shard_weights.json")
 E2E_JOB = "e2e"
 CHANGES_JOB = "changes"
@@ -64,6 +66,11 @@ HEAVY_BINARIES = (
     "webview_e2e", "test_command", "verify", "stdlib_coverage_dynamic",
 )
 HEAVY = " | ".join(f"binary({b})" for b in HEAVY_BINARIES)
+# The nextest test-group `.config/nextest.toml` uses to serialize HEAVY_BINARIES
+# (see that file's `heavy-server-e2e` comment). `--lint` proves its `ci` and
+# `default` profile overrides select exactly this SSOT's binaries, so the two
+# copies of the heavy set cannot drift apart unnoticed.
+HEAVY_TEST_GROUP = "heavy-server-e2e"
 HEAVY_SHARDS = 5
 LIGHT_SHARDS = 9
 SHARDS = HEAVY_SHARDS + LIGHT_SHARDS
@@ -268,10 +275,57 @@ def wiring_errors(workflow: dict) -> list[str]:
     return errors
 
 
-def lint(path: str = CI_WORKFLOW) -> int:
-    """Fail unless ci.yml wires the plan, the shards and the cover exactly."""
+def _heavy_group_binaries(overrides: object, what: str) -> frozenset[str]:
+    """Return the binary set of the one `HEAVY_TEST_GROUP` override in `overrides`, or raise."""
+    if not isinstance(overrides, list):
+        raise ShardError(f"{what}: `overrides` must be a list")
+    matches = [o for o in overrides if isinstance(o, dict) and o.get("test-group") == HEAVY_TEST_GROUP]
+    if len(matches) != 1:
+        raise ShardError(f"{what}: exactly one override must set test-group = {HEAVY_TEST_GROUP!r}, found {len(matches)}")
+    filt = matches[0].get("filter")
+    if not isinstance(filt, str) or not filt:
+        raise ShardError(f"{what}: the {HEAVY_TEST_GROUP!r} override must set a non-empty string filter")
+    terms = filt.split(" | ")
+    names: list[str] = []
+    for term in terms:
+        m = re.fullmatch(r"binary\((\w+)\)", term)
+        if m is None:
+            raise ShardError(f"{what}: filter must be `binary(NAME)` terms joined by ` | `, got {term!r}")
+        names.append(m[1])
+    if len(names) != len(set(names)):
+        raise ShardError(f"{what}: filter names a binary more than once: {filt!r}")
+    return frozenset(names)
+
+
+def nextest_lint_errors(doc: object) -> list[str]:
+    """Return why nextest.toml's `HEAVY_TEST_GROUP` overrides disagree with `HEAVY_BINARIES`, or []."""
+    expected = frozenset(HEAVY_BINARIES)
+    errors: list[str] = []
+    for prof in ("ci", "default"):
+        what = f"nextest.toml profile.{prof}.overrides"
+        try:
+            profiles = doc.get("profile") if isinstance(doc, dict) else None
+            overrides = profiles.get(prof, {}).get("overrides") if isinstance(profiles, dict) else None
+            found = _heavy_group_binaries(overrides, what)
+        except ShardError as exc:
+            errors.append(str(exc))
+            continue
+        if found != expected:
+            missing = sorted(expected - found)
+            extra = sorted(found - expected)
+            errors.append(f"{what}: {HEAVY_TEST_GROUP!r} filter disagrees with HEAVY_BINARIES (missing {missing}, extra {extra})")
+    return errors
+
+
+def lint(path: str = CI_WORKFLOW, nextest_path: str = NEXTEST_TOML) -> int:
+    """Fail unless ci.yml wires the plan, the shards and the cover exactly, and nextest.toml agrees with HEAVY_BINARIES."""
     sys.path.insert(0, HERE)
     import strict_yaml  # noqa: PLC0415  # PyYAML-backed; only `--lint` needs it
+
+    try:
+        import tomllib  # noqa: PLC0415  # Python 3.11+; only `--lint` needs it
+    except ImportError:  # pragma: no cover - CI runs 3.11+
+        import tomli as tomllib  # type: ignore[no-redef]  # noqa: PLC0415
 
     try:
         with open(path, encoding="utf-8") as fh:
@@ -284,6 +338,13 @@ def lint(path: str = CI_WORKFLOW) -> int:
         plan()
     except ShardError as exc:
         errors.append(str(exc))
+    try:
+        with open(nextest_path, "rb") as fh:
+            nextest_doc = tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        errors.append(f"nextest.toml is unreadable: {exc}")
+    else:
+        errors += nextest_lint_errors(nextest_doc)
     for err in errors:
         print(f"e2e shard lint: {err}", file=sys.stderr)
     if errors:

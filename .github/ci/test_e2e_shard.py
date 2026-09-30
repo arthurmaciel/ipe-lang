@@ -539,5 +539,75 @@ class WiringTest(unittest.TestCase):
         self.assertTrue(_refused(lambda j: j["seal-slice"].update(needs=["e2e"]), "must need `changes`"))
 
 
+def _heavy_override(binaries: tuple[str, ...] = es.HEAVY_BINARIES) -> dict:
+    return {"test-group": es.HEAVY_TEST_GROUP, "filter": " | ".join(f"binary({b})" for b in binaries)}
+
+
+NEXTEST_DOC = {
+    "profile": {
+        "ci": {"overrides": [_heavy_override()]},
+        "default": {"overrides": [_heavy_override()]},
+    }
+}
+
+
+class NextestLintTest(unittest.TestCase):
+    """`nextest.toml`'s `heavy-server-e2e` overrides must be exactly `HEAVY_BINARIES` — the class that
+    let `.config/nextest.toml` drift a second, unchecked copy of the SSOT and silently drop a binary."""
+
+    def test_ssot_agreeing_doc_passes(self) -> None:
+        self.assertEqual(es.nextest_lint_errors(NEXTEST_DOC), [])
+
+    def test_repo_nextest_toml_agrees_with_the_ssot(self) -> None:
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(es.lint(), 0)
+
+    def test_missing_binary_refused(self) -> None:
+        doc = copy.deepcopy(NEXTEST_DOC)
+        doc["profile"]["ci"]["overrides"] = [_heavy_override(es.HEAVY_BINARIES[:-1])]
+        errors = es.nextest_lint_errors(doc)
+        self.assertTrue(any(f"missing ['{es.HEAVY_BINARIES[-1]}']" in e for e in errors))
+
+    def test_extra_binary_refused(self) -> None:
+        doc = copy.deepcopy(NEXTEST_DOC)
+        doc["profile"]["default"]["overrides"] = [_heavy_override((*es.HEAVY_BINARIES, "bogus_binary"))]
+        errors = es.nextest_lint_errors(doc)
+        self.assertTrue(any("extra ['bogus_binary']" in e for e in errors))
+
+    def test_missing_override_refused(self) -> None:
+        for prof in ("ci", "default"):
+            with self.subTest(prof):
+                doc = copy.deepcopy(NEXTEST_DOC)
+                doc["profile"][prof]["overrides"] = []
+                errors = es.nextest_lint_errors(doc)
+                self.assertTrue(any(f"profile.{prof}.overrides" in e and "found 0" in e for e in errors))
+
+    def test_duplicate_override_refused(self) -> None:
+        doc = copy.deepcopy(NEXTEST_DOC)
+        doc["profile"]["ci"]["overrides"].append(_heavy_override())
+        self.assertTrue(any("found 2" in e for e in es.nextest_lint_errors(doc)))
+
+    def test_malformed_filter_term_refused(self) -> None:
+        doc = copy.deepcopy(NEXTEST_DOC)
+        doc["profile"]["ci"]["overrides"] = [{"test-group": es.HEAVY_TEST_GROUP, "filter": "test(foo) | binary(bar)"}]
+        self.assertTrue(any("binary(NAME)" in e for e in es.nextest_lint_errors(doc)))
+
+    def test_duplicate_binary_in_filter_refused(self) -> None:
+        doc = copy.deepcopy(NEXTEST_DOC)
+        doc["profile"]["ci"]["overrides"] = [{"test-group": es.HEAVY_TEST_GROUP, "filter": "binary(a) | binary(a)"}]
+        self.assertTrue(any("more than once" in e for e in es.nextest_lint_errors(doc)))
+
+    def test_missing_profile_table_refused(self) -> None:
+        doc = copy.deepcopy(NEXTEST_DOC)
+        del doc["profile"]["default"]
+        self.assertTrue(any("profile.default.overrides" in e for e in es.nextest_lint_errors(doc)))
+
+    def test_nextest_toml_unreadable_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = os.path.join(tmp, "nope.toml")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(es.lint(nextest_path=missing), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
