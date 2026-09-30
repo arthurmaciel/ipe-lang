@@ -56,20 +56,19 @@ fn cache_int_get_builds_and_runs() {
         "cache_int_get: must be accepted, got: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
-    }
-    let outcome = crate::support::build_and_run_emitted("cache_int_get", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "cache_int_get: emitted crate must build and exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(
-        outcome.stdout.trim(),
-        "int=42",
-        "cache_int_get: pre-fix prints `FAIL: Int miss` (Box<i32>/i64 downcast \
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("cache_int_get", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "cache_int_get: emitted crate must build and exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(
+            outcome.stdout.trim(),
+            "int=42",
+            "cache_int_get: pre-fix prints `FAIL: Int miss` (Box<i32>/i64 downcast \
          mismatch); post-fix must print `int=42`"
-    );
+        );
+    }
 }

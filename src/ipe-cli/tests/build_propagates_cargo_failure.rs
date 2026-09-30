@@ -16,13 +16,6 @@
 use std::fs;
 use std::path::Path;
 
-/// `assert!(false_marker())` fails a test without tripping
-/// `clippy::assertions_on_constants` (a plain `assert!(false)` would).
-#[allow(clippy::missing_const_for_fn)]
-fn false_marker() -> bool {
-    std::hint::black_box(false)
-}
-
 /// Write an executable fake `cargo` at `dir/cargo` that prints an `E0609`-shaped
 /// error to stderr and exits 1 for a `build` invocation, and prints a minimal
 /// valid `cargo metadata` JSON for a `metadata` invocation (so any metadata

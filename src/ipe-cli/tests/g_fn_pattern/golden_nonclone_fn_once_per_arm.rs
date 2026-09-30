@@ -56,10 +56,9 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
          skips the promotion and re-opens the per-arm double-move E0382)"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("nonclone_fn_once_per_arm", &out);
+        assert_eq!(outcome.exit_code, Some(0), "exit 0");
+        assert_eq!(outcome.stdout.trim(), "43", "applyEither True (+1) = 43");
     }
-    let outcome = crate::support::build_and_run_emitted("nonclone_fn_once_per_arm", &out);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0");
-    assert_eq!(outcome.stdout.trim(), "43", "applyEither True (+1) = 43");
 }

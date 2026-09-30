@@ -60,37 +60,35 @@ fn assert_ipec_ok(fixture: &str, out_suffix: &str) {
 fn a1_noncl_var_task_and_then_compiles() {
     assert_ipec_ok("noncl_var_hof", "i149_noncl_var_hof_emit");
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let root = repo_root();
+        let entry = root
+            .join("tests")
+            .join("golden")
+            .join("noncl_var_hof")
+            .join("Main.ipe");
+        let out = crate::support::scratch_root().join("ipec_i149_noncl_var_hof_e2e");
+        let _ = std::fs::remove_dir_all(&out);
+
+        let runtime = e2e_support::require_runtime().into_path_buf();
+
+        let built = ipe::build(&entry, &out, &runtime);
+        assert!(
+            built.is_ok(),
+            "ipe build must succeed for noncl_var_hof: {:?}",
+            built.err()
+        );
+
+        let outcome = crate::support::build_and_run_emitted("noncl_var_hof", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "A1: must exit 0 (was IPE-L0126 before #149)"
+        );
+        assert!(
+            outcome.stdout.contains("hello!"),
+            "A1: NonClone Var forwarded to Task.andThen must produce 'hello!'; got:\n{}",
+            outcome.stdout
+        );
     }
-
-    let root = repo_root();
-    let entry = root
-        .join("tests")
-        .join("golden")
-        .join("noncl_var_hof")
-        .join("Main.ipe");
-    let out = crate::support::scratch_root().join("ipec_i149_noncl_var_hof_e2e");
-    let _ = std::fs::remove_dir_all(&out);
-
-    let runtime = e2e_support::require_runtime().into_path_buf();
-
-    let built = ipe::build(&entry, &out, &runtime);
-    assert!(
-        built.is_ok(),
-        "ipe build must succeed for noncl_var_hof: {:?}",
-        built.err()
-    );
-
-    let outcome = crate::support::build_and_run_emitted("noncl_var_hof", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "A1: must exit 0 (was IPE-L0126 before #149)"
-    );
-    assert!(
-        outcome.stdout.contains("hello!"),
-        "A1: NonClone Var forwarded to Task.andThen must produce 'hello!'; got:\n{}",
-        outcome.stdout
-    );
 }

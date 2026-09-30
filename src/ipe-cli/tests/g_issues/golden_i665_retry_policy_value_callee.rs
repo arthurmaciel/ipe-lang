@@ -78,23 +78,22 @@ fn retry_policy_value_callee_builds_and_runs() {
         "retry_policy_value_callee: must be accepted, got: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
-    }
-    let outcome = crate::support::build_and_run_emitted("retry_policy_value_callee", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "retry_policy_value_callee: emitted crate must build and exit 0 (the \
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("retry_policy_value_callee", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "retry_policy_value_callee: emitted crate must build and exit 0 (the \
          `RetryPolicy` `shouldRetry` fn field emits as an `Arc<dyn Fn>` on a \
          kernel-managed struct); stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(
-        outcome.stdout.trim(),
-        "x",
-        "wrong runtime output — the succeeding Task carries the value `x`"
-    );
+            outcome.stdout
+        );
+        assert_eq!(
+            outcome.stdout.trim(),
+            "x",
+            "wrong runtime output — the succeeding Task carries the value `x`"
+        );
+    }
 }
 
 /// SEAL negative: the `RetryPolicy` exemption must be scoped to the FULL closed

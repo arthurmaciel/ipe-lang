@@ -82,39 +82,37 @@ fn m3a_gate_partial_now_compiles() {
 fn a1_ctor_map_bare() {
     assert_ipec_ok("ctor_map_bare", "i147_ctor_map_bare_emit");
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let root = repo_root();
+        let entry = root
+            .join("tests")
+            .join("golden")
+            .join("ctor_map_bare")
+            .join("Main.ipe");
+        let out = crate::support::scratch_root().join("ipec_i147_ctor_map_bare_e2e");
+        let _ = std::fs::remove_dir_all(&out);
+
+        let runtime = e2e_support::require_runtime().into_path_buf();
+
+        let built = ipe::build(&entry, &out, &runtime);
+        assert!(
+            built.is_ok(),
+            "ipe build must succeed for ctor_map_bare: {:?}",
+            built.err()
+        );
+
+        let outcome = crate::support::build_and_run_emitted("ctor_map_bare", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "A1: must exit 0 (was IPE-L0113 before #147)"
+        );
+        assert!(
+            outcome.stdout.contains("1, 2, 3"),
+            "A1: List.map with bare ctor must produce '1, 2, 3'; got:\n{}",
+            outcome.stdout
+        );
     }
-
-    let root = repo_root();
-    let entry = root
-        .join("tests")
-        .join("golden")
-        .join("ctor_map_bare")
-        .join("Main.ipe");
-    let out = crate::support::scratch_root().join("ipec_i147_ctor_map_bare_e2e");
-    let _ = std::fs::remove_dir_all(&out);
-
-    let runtime = e2e_support::require_runtime().into_path_buf();
-
-    let built = ipe::build(&entry, &out, &runtime);
-    assert!(
-        built.is_ok(),
-        "ipe build must succeed for ctor_map_bare: {:?}",
-        built.err()
-    );
-
-    let outcome = crate::support::build_and_run_emitted("ctor_map_bare", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "A1: must exit 0 (was IPE-L0113 before #147)"
-    );
-    assert!(
-        outcome.stdout.contains("1, 2, 3"),
-        "A1: List.map with bare ctor must produce '1, 2, 3'; got:\n{}",
-        outcome.stdout
-    );
 }
 
 // ── A2 — partial multi-arg ctor + T4 String capture ──────────────────────────
@@ -127,39 +125,37 @@ fn a1_ctor_map_bare() {
 fn a2_ctor_partial_multiarg_with_clone() {
     assert_ipec_ok("ctor_partial", "i147_ctor_partial_emit");
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let root = repo_root();
+        let entry = root
+            .join("tests")
+            .join("golden")
+            .join("ctor_partial")
+            .join("Main.ipe");
+        let out = crate::support::scratch_root().join("ipec_i147_ctor_partial_e2e");
+        let _ = std::fs::remove_dir_all(&out);
+
+        let runtime = e2e_support::require_runtime().into_path_buf();
+
+        let built = ipe::build(&entry, &out, &runtime);
+        assert!(
+            built.is_ok(),
+            "ipe build must succeed for ctor_partial: {:?}",
+            built.err()
+        );
+
+        let outcome = crate::support::build_and_run_emitted("ctor_partial", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "A2: must exit 0 (was IPE-L0113 before #147)"
+        );
+        assert!(
+            outcome.stdout.contains("item:10, item:20, item:30"),
+            "A2: partial ctor with captured String must produce 'item:10, item:20, item:30'; got:\n{}",
+            outcome.stdout
+        );
     }
-
-    let root = repo_root();
-    let entry = root
-        .join("tests")
-        .join("golden")
-        .join("ctor_partial")
-        .join("Main.ipe");
-    let out = crate::support::scratch_root().join("ipec_i147_ctor_partial_e2e");
-    let _ = std::fs::remove_dir_all(&out);
-
-    let runtime = e2e_support::require_runtime().into_path_buf();
-
-    let built = ipe::build(&entry, &out, &runtime);
-    assert!(
-        built.is_ok(),
-        "ipe build must succeed for ctor_partial: {:?}",
-        built.err()
-    );
-
-    let outcome = crate::support::build_and_run_emitted("ctor_partial", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "A2: must exit 0 (was IPE-L0113 before #147)"
-    );
-    assert!(
-        outcome.stdout.contains("item:10, item:20, item:30"),
-        "A2: partial ctor with captured String must produce 'item:10, item:20, item:30'; got:\n{}",
-        outcome.stdout
-    );
 }
 
 // ── A3 — ctor stored in record field then applied ─────────────────────────────
@@ -172,37 +168,35 @@ fn a2_ctor_partial_multiarg_with_clone() {
 fn a3_ctor_stored_in_record_field() {
     assert_ipec_ok("ctor_field", "i147_ctor_field_emit");
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let root = repo_root();
+        let entry = root
+            .join("tests")
+            .join("golden")
+            .join("ctor_field")
+            .join("Main.ipe");
+        let out = crate::support::scratch_root().join("ipec_i147_ctor_field_e2e");
+        let _ = std::fs::remove_dir_all(&out);
+
+        let runtime = e2e_support::require_runtime().into_path_buf();
+
+        let built = ipe::build(&entry, &out, &runtime);
+        assert!(
+            built.is_ok(),
+            "ipe build must succeed for ctor_field: {:?}",
+            built.err()
+        );
+
+        let outcome = crate::support::build_and_run_emitted("ctor_field", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "A3: must exit 0 (was IPE-L0113 before #147)"
+        );
+        assert!(
+            outcome.stdout.contains("hello"),
+            "A3: ctor in record field then applied must produce 'hello'; got:\n{}",
+            outcome.stdout
+        );
     }
-
-    let root = repo_root();
-    let entry = root
-        .join("tests")
-        .join("golden")
-        .join("ctor_field")
-        .join("Main.ipe");
-    let out = crate::support::scratch_root().join("ipec_i147_ctor_field_e2e");
-    let _ = std::fs::remove_dir_all(&out);
-
-    let runtime = e2e_support::require_runtime().into_path_buf();
-
-    let built = ipe::build(&entry, &out, &runtime);
-    assert!(
-        built.is_ok(),
-        "ipe build must succeed for ctor_field: {:?}",
-        built.err()
-    );
-
-    let outcome = crate::support::build_and_run_emitted("ctor_field", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "A3: must exit 0 (was IPE-L0113 before #147)"
-    );
-    assert!(
-        outcome.stdout.contains("hello"),
-        "A3: ctor in record field then applied must produce 'hello'; got:\n{}",
-        outcome.stdout
-    );
 }

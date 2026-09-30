@@ -59,31 +59,29 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
             "a function value reaching a constructor payload through a type \
              variable must surface IPE-L0114, got: {diag:?}"
         );
-        return;
-    }
+    } else {
+        // The only other acceptable outcome is full acceptance — never another
+        // driver error, and never a silent accept that later cargo-fails.
+        assert!(
+            built.is_ok(),
+            "must reject cleanly (IPE-L0114) or accept fully — never another error: {:?}",
+            built.err()
+        );
 
-    // The only other acceptable outcome is full acceptance — never another
-    // driver error, and never a silent accept that later cargo-fails.
-    assert!(
-        built.is_ok(),
-        "must reject cleanly (IPE-L0114) or accept fully — never another error: {:?}",
-        built.err()
-    );
-
-    // With proper support (an eager `Box<dyn Fn>` coercion), the emitted crate
-    // MUST build and run with the semantically-correct output. Gated on IPE_E2E
-    // so default runs stay fast.
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+        // With proper support (an eager `Box<dyn Fn>` coercion), the emitted crate
+        // MUST build and run with the semantically-correct output. Gated on IPE_E2E
+        // so default runs stay fast.
+        if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+            let outcome = crate::support::build_and_run_emitted("function_payload_gate", &out);
+            crate::support::assert_go_parity(
+                "function_payload_gate",
+                &repo_root()
+                    .join("tests")
+                    .join("golden")
+                    .join("function_payload_gate"),
+                &outcome.stdout,
+            );
+            assert_eq!(outcome.exit_code, Some(0), "exit 0");
+        }
     }
-    let outcome = crate::support::build_and_run_emitted("function_payload_gate", &out);
-    crate::support::assert_go_parity(
-        "function_payload_gate",
-        &repo_root()
-            .join("tests")
-            .join("golden")
-            .join("function_payload_gate"),
-        &outcome.stdout,
-    );
-    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

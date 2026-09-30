@@ -83,20 +83,16 @@ fn assert_rejected(name: &str, entry: &Path, expected: ipe_diagnostics::Code) {
     }
 }
 
-/// Build `entry`; `None` when the runtime is unavailable or `ipe` refused it
-/// (the refusal is reported as a test failure).
+/// Build `entry` and return its out dir; an `ipe` refusal fails the test.
 #[track_caller]
-fn accepted_out(name: &str, entry: &Path) -> Option<PathBuf> {
+#[allow(clippy::panic)] // a refused well-formed program is the test failure
+fn accepted_out(name: &str, entry: &Path) -> PathBuf {
     let runtime = e2e_support::require_runtime().into_path_buf();
     let out = out_dir(name);
     match ipe::build_loose_file(entry, &out, &runtime) {
-        Ok(()) => Some(out),
+        Ok(()) => out,
         Err(err) => {
-            assert!(
-                false_marker(),
-                "{name}: ipe REJECTED a well-formed program — a false rejection: {err}"
-            );
-            None
+            panic!("{name}: ipe REJECTED a well-formed program — a false rejection: {err}")
         }
     }
 }
@@ -279,9 +275,7 @@ fn task_payload_enum_reuse_fails_closed() {
 fn task_payload_enum_linear_builds() {
     let name = "task_payload_enum_linear";
     let entry = write_single(name, TASK_PAYLOAD_ENUM_LINEAR);
-    let Some(out) = accepted_out(name, &entry) else {
-        return;
-    };
+    let out = accepted_out(name, &entry);
     assert_runs(name, &out, "ran");
 }
 
@@ -289,9 +283,7 @@ fn task_payload_enum_linear_builds() {
 fn clone_payload_enum_reuse_builds() {
     let name = "clone_payload_enum_reuse";
     let entry = write_single(name, CLONE_PAYLOAD_ENUM_REUSE);
-    let Some(out) = accepted_out(name, &entry) else {
-        return;
-    };
+    let out = accepted_out(name, &entry);
     assert_runs(name, &out, "8");
 }
 
@@ -316,9 +308,7 @@ fn ffi_handle_enum_linear_builds() {
         "must write the fixture project + FFI cache to a temp dir"
     );
     let entry = project.join("src").join("Main.ipe");
-    let Some(out) = accepted_out(name, &entry) else {
-        return;
-    };
+    let out = accepted_out(name, &entry);
 
     let emitted = emitted_app_rs(&out);
     // The backend module-prefixes every user type name (`naming::enum_name`,

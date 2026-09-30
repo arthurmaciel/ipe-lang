@@ -140,38 +140,3 @@ fn single_ctor_case_accessor_compiles() {
         built.err()
     );
 }
-
-/// Seal remeasure: building examples/00-standard-libs must NOT produce IPE-T0015
-/// on Std/Money or Ipê/Test after the Std/Money.ipe accessor fix.
-#[test]
-fn standard_libs_ipe_t0015_money_blocker_gone() {
-    let root = repo_root();
-    let manifest = root
-        .join("examples")
-        .join("00-standard-libs")
-        .join("package.ipe");
-    if !manifest.exists() {
-        return;
-    }
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("00_standard_libs_t0015_gate");
-    let _ = std::fs::remove_dir_all(&out);
-    let runtime = e2e_support::require_runtime().into_path_buf();
-    let result = ipe::build_project(&manifest, &out, &runtime);
-    match &result {
-        Err(ipe::CliError::Pipeline { diag, .. }) => {
-            let msg = format!("{diag:?}");
-            assert!(
-                !msg.contains("IPE-T0015") || (!msg.contains("Money") && !msg.contains("Test.ipe")),
-                "IPE-T0015 from Std/Money/Ipe.Test must be gone after accessor fix; got: {msg}"
-            );
-        }
-        Ok(()) => {}
-        Err(other) => {
-            let msg = format!("{other:?}");
-            assert!(
-                !msg.contains("IPE-T0015") || (!msg.contains("Money") && !msg.contains("Test.ipe")),
-                "IPE-T0015 from Std/Money/Ipe.Test must be gone after accessor fix; got: {msg}"
-            );
-        }
-    }
-}

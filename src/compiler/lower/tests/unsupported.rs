@@ -2424,9 +2424,3 @@ fn list_map2_two_argument_callback_passes_backstop() -> DResult<()> {
     );
     Ok(())
 }
-
-/// A runtime `false` the optimiser cannot fold, so `assert!(false_marker())`
-/// fails the test without tripping `clippy::assertions_on_constants`.
-const fn false_marker() -> bool {
-    std::hint::black_box(false)
-}

@@ -97,21 +97,19 @@ fn retry_policy_field_access_ice_builds_and_runs() {
         "RetryPolicy field access fixture must be accepted; got: {result:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("retry_policy_field_access_ice", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "emitted crate must build and run successfully; stdout:\n{}",
+            outcome.stdout
+        );
+        // The fixture prints "withRetryOn ok" then "ok" (two successful Task chains).
+        let stdout = outcome.stdout.trim();
+        assert!(
+            stdout.contains("ok"),
+            "emitted program must print 'ok' from the retryWith chain"
+        );
     }
-
-    let outcome = crate::support::build_and_run_emitted("retry_policy_field_access_ice", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "emitted crate must build and run successfully; stdout:\n{}",
-        outcome.stdout
-    );
-    // The fixture prints "withRetryOn ok" then "ok" (two successful Task chains).
-    let stdout = outcome.stdout.trim();
-    assert!(
-        stdout.contains("ok"),
-        "emitted program must print 'ok' from the retryWith chain"
-    );
 }

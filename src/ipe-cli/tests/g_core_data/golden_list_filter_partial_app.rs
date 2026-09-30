@@ -58,38 +58,36 @@ fn list_filter_partial_app_compiles() {
         built.err()
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
-    }
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        // Re-emit into a stable temp dir for the cargo build/run leg (the
+        // CARGO_TARGET_TMPDIR copy above is fine for the compile-only check but
+        // `crate::support::build_and_run_emitted` wants a dedicated directory it can
+        // freely rewrite the manifest of).
+        let e2e_out = crate::support::scratch_root().join("ipec_i161_list_filter_partial_app_e2e");
+        let _ = std::fs::remove_dir_all(&e2e_out);
 
-    // Re-emit into a stable temp dir for the cargo build/run leg (the
-    // CARGO_TARGET_TMPDIR copy above is fine for the compile-only check but
-    // `crate::support::build_and_run_emitted` wants a dedicated directory it can
-    // freely rewrite the manifest of).
-    let e2e_out = crate::support::scratch_root().join("ipec_i161_list_filter_partial_app_e2e");
-    let _ = std::fs::remove_dir_all(&e2e_out);
+        let runtime = e2e_support::require_runtime().into_path_buf();
 
-    let runtime = e2e_support::require_runtime().into_path_buf();
+        let built = ipe::build(&entry, &e2e_out, &runtime);
+        assert!(
+            built.is_ok(),
+            "ipe build must succeed for list_filter_partial_app (E2E leg): {:?}",
+            built.err()
+        );
 
-    let built = ipe::build(&entry, &e2e_out, &runtime);
-    assert!(
-        built.is_ok(),
-        "ipe build must succeed for list_filter_partial_app (E2E leg): {:?}",
-        built.err()
-    );
-
-    let outcome = crate::support::build_and_run_emitted("list_filter_partial_app", &e2e_out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "#161: emitted crate must build with cargo and exit 0 (was E0277 \
+        let outcome = crate::support::build_and_run_emitted("list_filter_partial_app", &e2e_out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "#161: emitted crate must build with cargo and exit 0 (was E0277 \
          `Box<dyn Fn> is not Clone` before the fix)"
-    );
-    assert!(
-        outcome.stdout.contains("3TF"),
-        "#161: List.filter (isAbove 3) [1..6] must keep [4,5,6] (len 3), \
+        );
+        assert!(
+            outcome.stdout.contains("3TF"),
+            "#161: List.filter (isAbove 3) [1..6] must keep [4,5,6] (len 3), \
          List.any (isAbove 5) must be true, List.any (isAbove 10) must be \
          false — expected \"3TF\" in stdout; got:\n{}",
-        outcome.stdout
-    );
+            outcome.stdout
+        );
+    }
 }

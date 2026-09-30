@@ -78,21 +78,20 @@ fn record_fn_literal_builds_and_runs() {
         "fcf_record_fn must be accepted, got: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
-    }
-    let outcome = crate::support::build_and_run_emitted("fcf_record_fn", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "emitted crate must build and exit 0 — a bare-fn record literal via a \
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("fcf_record_fn", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "emitted crate must build and exit 0 — a bare-fn record literal via a \
          non-literal fn value must not be `ipe`-accept-then-`cargo`-fail; \
          stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(
-        outcome.stdout.trim(),
-        "7,14",
-        "wrong runtime output — the two normalized fn fields compute 7 and 14"
-    );
+            outcome.stdout
+        );
+        assert_eq!(
+            outcome.stdout.trim(),
+            "7,14",
+            "wrong runtime output — the two normalized fn fields compute 7 and 14"
+        );
+    }
 }

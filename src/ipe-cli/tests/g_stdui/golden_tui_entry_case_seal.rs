@@ -40,10 +40,8 @@ fn fixture_entry(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// Build the fixture and return the emitted `src/main.rs` text. `None` when
-/// the runtime resolver is unavailable in this environment (mirrors the
-/// resolve-skip convention every other golden test in this suite uses) or
-/// when the build itself fails (the caller's `assert!` reports the diag).
+/// Build the fixture and return the emitted `src/main.rs` text. `None` when the
+/// build fails (the caller's `assert!` reports the diag).
 fn built_main_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<String>) {
     let entry = fixture_entry(root);
     let _ = std::fs::remove_dir_all(out);
@@ -71,9 +69,7 @@ fn nested_str_literal_ctor_payload_does_not_emit_bare_str_pattern() {
         built.is_ok(),
         "tui_entry_case_taskrun: must be accepted, got: {built:?}"
     );
-    let Some(main_rs) = main_rs else {
-        return; // resolver unavailable — skip, matches the other goldens
-    };
+    let main_rs = main_rs.expect("an accepted build yields the emitted source");
 
     assert!(
         !main_rs.contains("IpeMaybe::Just(\"live\") =>"),
@@ -113,9 +109,7 @@ fn case_branched_entry_point_elides_task_run_to_ipetask() {
         built.is_ok(),
         "tui_entry_case_taskrun: must be accepted, got: {built:?}"
     );
-    let Some(main_rs) = main_rs else {
-        return;
-    };
+    let main_rs = main_rs.expect("an accepted build yields the emitted source");
 
     assert!(
         main_rs.contains("fn ipe_main() -> IpeTask<"),
@@ -158,15 +152,14 @@ fn tui_entry_case_taskrun_builds_and_runs() {
         "tui_entry_case_taskrun: must be accepted, got: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("tui_entry_case_taskrun", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "tui_entry_case_taskrun: emitted crate must build and exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(outcome.stdout.trim(), "live mode", "wrong runtime output");
     }
-    let outcome = crate::support::build_and_run_emitted("tui_entry_case_taskrun", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "tui_entry_case_taskrun: emitted crate must build and exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(outcome.stdout.trim(), "live mode", "wrong runtime output");
 }

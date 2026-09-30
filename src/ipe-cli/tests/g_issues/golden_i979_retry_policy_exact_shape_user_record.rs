@@ -60,22 +60,20 @@ fn retry_policy_exact_shape_user_record_builds_and_runs() {
         "retry_policy_exact_shape_user_record: must be accepted; got: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
-    }
-
-    let outcome =
-        crate::support::build_and_run_emitted("retry_policy_exact_shape_user_record", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "emitted crate must build and exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(
-        outcome.stdout.trim(),
-        "retry,done,3",
-        "wrong runtime output — `applyPolicy p 1` = retry, `applyPolicy p 5` = done, \
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome =
+            crate::support::build_and_run_emitted("retry_policy_exact_shape_user_record", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "emitted crate must build and exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(
+            outcome.stdout.trim(),
+            "retry,done,3",
+            "wrong runtime output — `applyPolicy p 1` = retry, `applyPolicy p 5` = done, \
          `p.maxAttempts` = 3"
-    );
+        );
+    }
 }

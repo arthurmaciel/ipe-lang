@@ -74,20 +74,19 @@ fn cache_handle_seal_builds_and_runs() {
         "cache_handle_seal: must be accepted, got: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
-    }
-    let outcome = crate::support::build_and_run_emitted("cache_handle_seal", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "cache_handle_seal: emitted crate must build and exit 0 (the opaque \
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("cache_handle_seal", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "cache_handle_seal: emitted crate must build and exit 0 (the opaque \
          `IpeCacheHandle` must resolve through the gated `cache` module); stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(
-        outcome.stdout.trim(),
-        "7",
-        "wrong runtime output — `unwrap (Cache 7)` is 7"
-    );
+            outcome.stdout
+        );
+        assert_eq!(
+            outcome.stdout.trim(),
+            "7",
+            "wrong runtime output — `unwrap (Cache 7)` is 7"
+        );
+    }
 }

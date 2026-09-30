@@ -96,36 +96,35 @@ fn poly_task_on_error_nested_green() {
          shape); got:\n{main_rs}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
-    }
-    let outcome = crate::support::build_and_run_emitted("poly_task_on_error_nested", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "must exit 0; got:\n{}",
-        outcome.stdout
-    );
-    // The success path passes "hello" through untouched; the failure path
-    // replaces the original "boom" error with the "<opName> failed (ref
-    // <4-char token>)" wrapper — proving Task.onError's fallback actually
-    // fires with the right (generic, not JsonVal-erased) error type at
-    // runtime. `Error.toString` on an `Error.unexpected` payload prefixes
-    // "Unexpected: " (see `ipe_runtime::error::IpeError::to_ipe_string`) —
-    // that prefix is genuine runtime behaviour, not part of this fixture's
-    // own message text.
-    assert!(
-        outcome
-            .stdout
-            .contains("hello | Unexpected: op.fail failed (ref "),
-        "expected the ok path to print 'hello' and the fail path to print \
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("poly_task_on_error_nested", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "must exit 0; got:\n{}",
+            outcome.stdout
+        );
+        // The success path passes "hello" through untouched; the failure path
+        // replaces the original "boom" error with the "<opName> failed (ref
+        // <4-char token>)" wrapper — proving Task.onError's fallback actually
+        // fires with the right (generic, not JsonVal-erased) error type at
+        // runtime. `Error.toString` on an `Error.unexpected` payload prefixes
+        // "Unexpected: " (see `ipe_runtime::error::IpeError::to_ipe_string`) —
+        // that prefix is genuine runtime behaviour, not part of this fixture's
+        // own message text.
+        assert!(
+            outcome
+                .stdout
+                .contains("hello | Unexpected: op.fail failed (ref "),
+            "expected the ok path to print 'hello' and the fail path to print \
          the wrapped 'Unexpected: op.fail failed (ref ...)' message; got:\n{}",
-        outcome.stdout
-    );
-    assert!(
-        !outcome.stdout.contains("boom"),
-        "the original error message must be replaced by withErrorReporting's \
+            outcome.stdout
+        );
+        assert!(
+            !outcome.stdout.contains("boom"),
+            "the original error message must be replaced by withErrorReporting's \
          wrapper, not leak through verbatim; got:\n{}",
-        outcome.stdout
-    );
+            outcome.stdout
+        );
+    }
 }

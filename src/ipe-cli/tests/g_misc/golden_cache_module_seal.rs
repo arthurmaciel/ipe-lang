@@ -72,20 +72,19 @@ fn cache_module_seal_builds_and_runs() {
         "cache_module_seal: must be accepted, got: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
-    }
-    let outcome = crate::support::build_and_run_emitted("cache_module_seal", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "cache_module_seal: emitted crate must build and exit 0 (pre-fix: \
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("cache_module_seal", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "cache_module_seal: emitted crate must build and exit 0 (pre-fix: \
          undeclared `IpeCacheHandle` / `cache_new_raw` / `CacheCfg`); stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(
-        outcome.stdout.trim(),
-        "0",
-        "wrong runtime output — a fresh cache has size 0"
-    );
+            outcome.stdout
+        );
+        assert_eq!(
+            outcome.stdout.trim(),
+            "0",
+            "wrong runtime output — a fresh cache has size 0"
+        );
+    }
 }

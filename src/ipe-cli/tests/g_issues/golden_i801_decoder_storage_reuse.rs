@@ -82,18 +82,17 @@ fn decoder_storage_reuse_builds_and_runs() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "{GOLDEN} must be accepted, got: {built:?}");
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
-    }
-    let outcome = crate::support::build_and_run_emitted(GOLDEN, &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "emitted crate must build and exit 0 — a generic combinator storing a bare \
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted(GOLDEN, &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "emitted crate must build and exit 0 — a generic combinator storing a bare \
          `Decoder` and reusing it must not be `ipe`-accept-then-`cargo`-fail; \
          stdout:\n{}",
-        outcome.stdout
-    );
-    let dir = root.join("tests").join("golden").join(GOLDEN);
-    crate::support::assert_go_parity(GOLDEN, &dir, &outcome.stdout);
+            outcome.stdout
+        );
+        let dir = root.join("tests").join("golden").join(GOLDEN);
+        crate::support::assert_go_parity(GOLDEN, &dir, &outcome.stdout);
+    }
 }

@@ -54,20 +54,18 @@ fn backoff_strategy_adt_builds_and_runs() {
         "backoff_strategy_adt: must be accepted; got: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("backoff_strategy_adt", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "emitted crate must build and exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(
+            outcome.stdout.trim(),
+            "5\nok",
+            "wrong runtime output — expected maxAttempts=5 from withMaxAttempts then 'ok'"
+        );
     }
-
-    let outcome = crate::support::build_and_run_emitted("backoff_strategy_adt", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "emitted crate must build and exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(
-        outcome.stdout.trim(),
-        "5\nok",
-        "wrong runtime output — expected maxAttempts=5 from withMaxAttempts then 'ok'"
-    );
 }

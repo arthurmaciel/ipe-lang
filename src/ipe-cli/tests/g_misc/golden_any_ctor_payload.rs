@@ -79,21 +79,20 @@ fn any_ctor_payload_ipec_and_cargo_zero() {
 
     // Cargo build seal: the emitted Rust must compile.
     // Gated on IPE_E2E so the default test run stays fast.
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("any_ctor_payload", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "binary must exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert!(
+            outcome.stdout.contains("ignored"),
+            "handleMsg Ignored must print 'ignored'; got:\n{}",
+            outcome.stdout
+        );
     }
-    let outcome = crate::support::build_and_run_emitted("any_ctor_payload", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "binary must exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert!(
-        outcome.stdout.contains("ignored"),
-        "handleMsg Ignored must print 'ignored'; got:\n{}",
-        outcome.stdout
-    );
 }
 
 /// Fail-closed guard: using the `any`-ctor payload as a String must produce
@@ -138,15 +137,14 @@ fn ctor_span_attr_dep_module() {
         result.err()
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("ctor_span_attr", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "binary must exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(outcome.stdout.trim(), "22");
     }
-    let outcome = crate::support::build_and_run_emitted("ctor_span_attr", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "binary must exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(outcome.stdout.trim(), "22");
 }

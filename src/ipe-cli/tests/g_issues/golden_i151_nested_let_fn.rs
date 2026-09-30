@@ -68,21 +68,20 @@ fn c01_nested_let_fn_callee_green() {
         built.err()
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("nested_let_fn_callee", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "must exit 0; got:\n{}",
+            outcome.stdout
+        );
+        assert!(
+            outcome.stdout.contains("11, 12, 13"),
+            "applyInner 10 over [1,2,3] must print '11, 12, 13'; got:\n{}",
+            outcome.stdout
+        );
     }
-    let outcome = crate::support::build_and_run_emitted("nested_let_fn_callee", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "must exit 0; got:\n{}",
-        outcome.stdout
-    );
-    assert!(
-        outcome.stdout.contains("11, 12, 13"),
-        "applyInner 10 over [1,2,3] must print '11, 12, 13'; got:\n{}",
-        outcome.stdout
-    );
 }
 
 // ── c02 — let-fn forwarded to Task.onError inside a polymorphic function ─────

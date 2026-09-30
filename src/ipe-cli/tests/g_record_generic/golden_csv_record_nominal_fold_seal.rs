@@ -60,9 +60,7 @@ fn concat_emitted_rs(dir: &Path, out: &mut String) {
 }
 
 /// Build the fixture and return the concatenated emitted Rust source. `None`
-/// when the runtime resolver is unavailable in this environment (mirrors the
-/// resolve-skip convention every other golden test in this suite uses) or when
-/// the build itself fails (the caller's `assert!` reports the diag).
+/// when the build fails (the caller's `assert!` reports the diag).
 fn built_main_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<String>) {
     let entry = fixture_entry(root);
     let _ = std::fs::remove_dir_all(out);
@@ -95,9 +93,7 @@ fn csv_record_literal_emits_runtime_csv_doc_struct() {
         built.is_ok(),
         "csv_record_nominal_fold_seal: must be accepted, got: {built:?}"
     );
-    let Some(main_rs) = main_rs else {
-        return; // resolver unavailable — skip, matches the other goldens
-    };
+    let main_rs = main_rs.expect("an accepted build yields the emitted source");
 
     assert!(
         main_rs.contains("CsvDoc {"),
@@ -131,16 +127,15 @@ fn csv_record_nominal_fold_seal_builds_and_runs() {
         "csv_record_nominal_fold_seal: must be accepted, got: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
-    }
-    let outcome = crate::support::build_and_run_emitted("csv_record_nominal_fold_seal", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "csv_record_nominal_fold_seal: emitted crate must build and exit 0 \
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("csv_record_nominal_fold_seal", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "csv_record_nominal_fold_seal: emitted crate must build and exit 0 \
          (pre-fix: E0308, `expected CsvDoc, found RecHeaderRows`); stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(outcome.stdout.trim(), "2", "wrong runtime output");
+            outcome.stdout
+        );
+        assert_eq!(outcome.stdout.trim(), "2", "wrong runtime output");
+    }
 }

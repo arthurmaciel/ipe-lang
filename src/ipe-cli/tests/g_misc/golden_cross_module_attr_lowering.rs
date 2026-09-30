@@ -59,10 +59,7 @@ fn try_build(name: &str) -> Result<(), String> {
 /// never the byte-colliding `Main.ipe`.
 #[test]
 fn l0126_lower_error_attributes_to_owning_module() {
-    // Runtime unavailable → try_build returns Ok as a skip. Nothing to assert.
-    let Err(err) = try_build("cross_module_attr_lowering") else {
-        return;
-    };
+    let err = try_build("cross_module_attr_lowering").expect_err("the fixture must be refused");
     assert!(err.contains("IPE-L0126"), "expected IPE-L0126, got:\n{err}");
     assert!(
         err.contains("Dep.ipe"),

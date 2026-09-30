@@ -11,13 +11,6 @@
 use std::fs;
 use std::path::Path;
 
-/// `assert!(false_marker())` fails a test without tripping
-/// `clippy::assertions_on_constants`.
-#[allow(clippy::missing_const_for_fn)]
-fn false_marker() -> bool {
-    std::hint::black_box(false)
-}
-
 /// Write an executable fake `cargo` at `dir/cargo` that exits non-zero with
 /// the DNS/registry-error patterns cargo emits when offline or when the
 /// registry is unreachable.

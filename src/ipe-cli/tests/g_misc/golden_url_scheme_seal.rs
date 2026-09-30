@@ -61,17 +61,15 @@ fn url_scheme_seal_builds_and_runs() {
         "url_scheme_seal: must be accepted, got: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
-    }
-    let outcome = crate::support::build_and_run_emitted("url_scheme_seal", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "url_scheme_seal: emitted crate must build and exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    let expected = "href_https=OK\n\
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("url_scheme_seal", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "url_scheme_seal: emitted crate must build and exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        let expected = "href_https=OK\n\
                     href_http=OK\n\
                     href_mailto=OK\n\
                     href_tel=OK\n\
@@ -104,9 +102,10 @@ fn url_scheme_seal_builds_and_runs() {
                     rel_scheme=ERR\n\
                     rel_empty=ERR\n\
                     rel_control=ERR";
-    assert_eq!(
-        outcome.stdout.trim(),
-        expected,
-        "url_scheme_seal: the refusal matrix produced wrong output"
-    );
+        assert_eq!(
+            outcome.stdout.trim(),
+            expected,
+            "url_scheme_seal: the refusal matrix produced wrong output"
+        );
+    }
 }

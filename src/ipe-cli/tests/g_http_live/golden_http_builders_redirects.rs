@@ -64,24 +64,22 @@ fn redirect_builders_compile_and_run() {
          API-layer scheme narrowing).\n--- src/main.rs ---\n{emitted}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        // cargo-0 + run-0 with the exact expected chain result.
+        let outcome = crate::support::build_and_run_emitted("http_builders_redirects", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "binary must exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(
+            outcome.stdout.trim(),
+            // `withUrl` carries the typed `Url`'s canonical serialization; the two
+            // blocks exercise both `RedirectPolicy` variants (NoRedirects and
+            // FollowRedirects Int).
+            "http://example.org/\nnoredirect\nhttp://example.org/\nfollow 3",
+            "builder chain must override url and both redirect-policy variants"
+        );
     }
-
-    // cargo-0 + run-0 with the exact expected chain result.
-    let outcome = crate::support::build_and_run_emitted("http_builders_redirects", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "binary must exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(
-        outcome.stdout.trim(),
-        // `withUrl` carries the typed `Url`'s canonical serialization; the two
-        // blocks exercise both `RedirectPolicy` variants (NoRedirects and
-        // FollowRedirects Int).
-        "http://example.org/\nnoredirect\nhttp://example.org/\nfollow 3",
-        "builder chain must override url and both redirect-policy variants"
-    );
 }

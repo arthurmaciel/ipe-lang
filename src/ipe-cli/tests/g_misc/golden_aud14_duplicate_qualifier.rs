@@ -12,13 +12,6 @@
 use std::fs;
 use std::path::PathBuf;
 
-/// A runtime `false` the optimiser cannot fold, so `assert!(false_marker())`
-/// reads as a deliberate unconditional failure, not a suspicious constant
-/// condition — mirrors `crates/ipe/src/lib.rs`'s own test helper.
-const fn false_marker() -> bool {
-    std::hint::black_box(false)
-}
-
 fn write_project(dir: &std::path::Path, files: &[(&str, &str)]) -> bool {
     let src = dir.join("src");
     let _ = fs::remove_dir_all(dir);

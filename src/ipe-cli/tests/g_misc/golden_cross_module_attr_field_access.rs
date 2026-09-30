@@ -56,10 +56,7 @@ fn try_build(name: &str) -> Result<(), String> {
 /// byte-colliding `Main.ipe`.
 #[test]
 fn t0012_field_error_attributes_to_owning_module() {
-    // Runtime unavailable → try_build returns Ok as a skip. Nothing to assert.
-    let Err(err) = try_build("cross_module_attr_field_access") else {
-        return;
-    };
+    let err = try_build("cross_module_attr_field_access").expect_err("the fixture must be refused");
     assert!(err.contains("IPE-T0012"), "expected IPE-T0012, got:\n{err}");
     assert!(
         err.contains("Dep.ipe:14"),

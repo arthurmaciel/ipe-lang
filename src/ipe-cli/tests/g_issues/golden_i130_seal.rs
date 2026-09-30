@@ -235,12 +235,11 @@ fn c14_nested_lambda_noncopy_promoted_accepts() {
         built.err()
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("nested_lambda_noncopy", &out);
+        assert_eq!(outcome.exit_code, Some(0), "exit 0");
+        assert_eq!(outcome.stdout.trim(), "6", "composed (*2) 3 = 6");
     }
-    let outcome = crate::support::build_and_run_emitted("nested_lambda_noncopy", &out);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0");
-    assert_eq!(outcome.stdout.trim(), "6", "composed (*2) 3 = 6");
 }
 
 // ── c05 — StreamWriter capture-forward (clone_class opaque audit) ────────────
@@ -316,15 +315,14 @@ fn c06_stream_string_capture_seal() {
         built.err()
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        // Build-only: the fixture is a listening server, so it cannot run-to-exit.
+        // A successful cargo build is the seal (ipe-0 ⇒ cargo builds).
+        let built_bin = e2e_support::build_rust_binary("stream_string_capture", &out);
+        assert!(
+            built_bin.is_ok(),
+            "emitted crate must cargo-build (was 2x E0507 on the stream handler): {}",
+            built_bin.as_ref().err().map_or("", String::as_str)
+        );
     }
-    // Build-only: the fixture is a listening server, so it cannot run-to-exit.
-    // A successful cargo build is the seal (ipe-0 ⇒ cargo builds).
-    let built_bin = e2e_support::build_rust_binary("stream_string_capture", &out);
-    assert!(
-        built_bin.is_ok(),
-        "emitted crate must cargo-build (was 2x E0507 on the stream handler): {}",
-        built_bin.as_ref().err().map_or("", String::as_str)
-    );
 }

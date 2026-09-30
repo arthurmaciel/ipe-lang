@@ -129,17 +129,16 @@ fn result_and_map_fn_payload_accepted() {
         "Ok f |> Result.andMap must be accepted: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("result_and_map_fn_payload", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(outcome.stdout.trim(), "3");
     }
-    let outcome = crate::support::build_and_run_emitted("result_and_map_fn_payload", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(outcome.stdout.trim(), "3");
 }
 
 /// `Just f` holding a function must not trip IPE-L0114 unconditionally, which
@@ -153,17 +152,16 @@ fn maybe_and_map_fn_payload_accepted() {
         "Just f |> Maybe.andMap must be accepted: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("maybe_and_map_fn_payload", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(outcome.stdout.trim(), "42");
     }
-    let outcome = crate::support::build_and_run_emitted("maybe_and_map_fn_payload", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(outcome.stdout.trim(), "42");
 }
 
 /// Stage-1 RESIDUAL seal hole: a LET-BOUND constructor-wrapped closure
@@ -190,17 +188,16 @@ fn let_bound_fn_payload_accepted() {
         "let f = Ok (\\x -> …) crossing a fn boundary must be accepted: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("let_bound_fn_payload", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(outcome.stdout.trim(), "42");
     }
-    let outcome = crate::support::build_and_run_emitted("let_bound_fn_payload", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(outcome.stdout.trim(), "42");
 }
 
 /// Let-bound seal hole — Maybe variant, exercising the same lambda
@@ -215,17 +212,16 @@ fn let_bound_maybe_fn_payload_accepted() {
         "let f = Just (\\x -> …) crossing a fn boundary must be accepted: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("let_bound_maybe_fn_payload", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(outcome.stdout.trim(), "42");
     }
-    let outcome = crate::support::build_and_run_emitted("let_bound_maybe_fn_payload", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(outcome.stdout.trim(), "42");
 }
 
 /// A DECLARED function-typed constructor payload (`RetryWhen (e -> Bool)`)
@@ -240,17 +236,16 @@ fn ctor_decl_fn_payload_accepted() {
         "declared fn-typed ctor payload must be accepted: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("ctor_decl_fn_payload", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(outcome.stdout.trim(), "retry");
     }
-    let outcome = crate::support::build_and_run_emitted("ctor_decl_fn_payload", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(outcome.stdout.trim(), "retry");
 }
 
 /// T4 sound companion: calling an extracted function value MORE THAN ONCE
@@ -265,17 +260,16 @@ fn fn_extracted_called_twice_accepted() {
         "calling an extracted fn twice must be accepted: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("fn_extracted_called_twice", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(outcome.stdout.trim(), "5");
     }
-    let outcome = crate::support::build_and_run_emitted("fn_extracted_called_twice", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(outcome.stdout.trim(), "5");
 }
 
 // ── T3: the andMap curried-payload gate — every aliasing shape ─────────────
@@ -465,17 +459,17 @@ fn lambda_param_call_twice_accepted() {
         "calling a lambda param twice must be accepted: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome =
+            crate::support::build_and_run_emitted("lambda_param_call_twice_accepted", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(outcome.stdout.trim(), "5");
     }
-    let outcome = crate::support::build_and_run_emitted("lambda_param_call_twice_accepted", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(outcome.stdout.trim(), "5");
 }
 
 /// A fn-carrying, non-Clone `let`-binding used in two consuming (argument)

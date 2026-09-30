@@ -54,8 +54,8 @@ fn concat_emitted_rs(dir: &Path, out: &mut String) {
 /// Build the fixture and return the concatenated emitted APP Rust source
 /// (`src/main.rs` + `src/ipe_mods/`), scanning past the vendored
 /// `src/ipe_runtime/` so the runtime's own struct definitions do not mask what
-/// the app-side codegen chose. `None` when the resolver is unavailable or the
-/// build failed (the caller's `assert!` reports the diag).
+/// the app-side codegen chose. `None` when the build failed (the caller's
+/// `assert!` reports the diag).
 fn built_app_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<String>) {
     let entry = fixture_entry(root);
     let _ = std::fs::remove_dir_all(out);
@@ -83,9 +83,7 @@ fn runtime_shape_literals_emit_nominal_structs() {
         built.is_ok(),
         "runtime_shape_fold_seal: must be accepted, got: {built:?}"
     );
-    let Some(app_rs) = app_rs else {
-        return; // resolver unavailable — skip, matches the other goldens
-    };
+    let app_rs = app_rs.expect("an accepted build yields the emitted source");
 
     assert!(
         app_rs.contains("CacheCfg {"),
@@ -123,15 +121,14 @@ fn runtime_shape_fold_seal_builds_and_runs() {
         "runtime_shape_fold_seal: must be accepted, got: {built:?}"
     );
 
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
+    if e2e_support::e2e_tier() == e2e_support::Tier::E2e {
+        let outcome = crate::support::build_and_run_emitted("runtime_shape_fold_seal", &out);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "runtime_shape_fold_seal: emitted crate must build and exit 0; stdout:\n{}",
+            outcome.stdout
+        );
+        assert_eq!(outcome.stdout.trim(), "200", "wrong runtime output");
     }
-    let outcome = crate::support::build_and_run_emitted("runtime_shape_fold_seal", &out);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "runtime_shape_fold_seal: emitted crate must build and exit 0; stdout:\n{}",
-        outcome.stdout
-    );
-    assert_eq!(outcome.stdout.trim(), "200", "wrong runtime output");
 }

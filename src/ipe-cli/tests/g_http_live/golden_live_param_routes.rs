@@ -58,16 +58,17 @@ fn compile_solo_into(out: &Path) -> Result<(), CliError> {
 }
 
 /// Compile an inline source through the ipe pipeline (no cargo).
-fn compile_src(test_name: &str, source: &str) -> Option<Result<(), CliError>> {
+#[allow(clippy::expect_used)] // an unwritable scratch dir is the test failure
+fn compile_src(test_name: &str, source: &str) -> Result<(), CliError> {
     let ipe_dir = crate::support::scratch_root().join(format!("param_routes_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
-    std::fs::create_dir_all(&ipe_dir).ok()?;
+    std::fs::create_dir_all(&ipe_dir).expect("the fixture scratch dir must be writable");
     let entry = ipe_dir.join("Main.ipe");
-    std::fs::write(&entry, source).ok()?;
+    std::fs::write(&entry, source).expect("the fixture scratch dir must be writable");
     let out = crate::support::scratch_root().join(format!("param_routes_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out);
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, &out, &runtime))
+    ipe::build(&entry, &out, &runtime)
 }
 
 /// MIXED: one nullary route + one `:param` route in the SAME routes list.
@@ -160,9 +161,7 @@ fn param_route_solo_compiles_and_emits_param_conversion() {
 /// MIXED nullary + param routes in one list → ipe-0.
 #[test]
 fn param_route_mixed_with_nullary_compiles() {
-    let Some(result) = compile_src("mixed", MIXED_NULLARY_AND_PARAM) else {
-        return;
-    };
+    let result = compile_src("mixed", MIXED_NULLARY_AND_PARAM);
     assert!(
         result.is_ok(),
         "#108 hole 3: nullary + `:param` routes must type-check into ONE \
@@ -174,9 +173,7 @@ fn param_route_mixed_with_nullary_compiles() {
 /// WRONG-ADT param ctor → IPE-T0001 (the witness still rejects).
 #[test]
 fn param_route_wrong_adt_ctor_is_ipe_t0001() {
-    let Some(result) = compile_src("wrong_adt", WRONG_ADT_PARAM_CTOR) else {
-        return;
-    };
+    let result = compile_src("wrong_adt", WRONG_ADT_PARAM_CTOR);
     let got = match &result {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,

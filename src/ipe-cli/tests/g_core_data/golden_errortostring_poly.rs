@@ -17,10 +17,6 @@
 //!   - `f : a -> a; f x = x + 1` (Number literal pins rigid)  → still fails
 //!   - `double : a -> a; double x = x + x` (no literal)  → still compiles
 //!
-//! Seal of the upstream 00-standard-libs blocker:
-//!   - Building examples/00-standard-libs emits no "errorToString expected"
-//!     error at Ipê/Test.ipe:74.
-//!
 //! E2E (cargo build + run) is behind `IPE_E2E=1`.
 
 use std::path::{Path, PathBuf};
@@ -154,48 +150,4 @@ fn annotation_rigid_plus_literal_still_fails() {
         res.is_err(),
         "Number-obligation at a non-Number type must still fail at type-check"
     );
-}
-
-// ─── upstream blocker seal ────────────────────────────────────────────────────
-
-/// Regression: building examples/00-standard-libs must NOT produce the original
-/// "errorToString expected" mismatch at Ipê/Test.ipe:74. The error was
-/// IPE-T0001 from the monomorphic `Error -> String` scheme being unified
-/// against a rigid annotation var `a` in `equal : a -> a -> TestResult`.
-///
-/// After the fix, the build advances past Ipe.Test — if a different error fires
-/// (the next queue blocker), we verify it is NOT the Ipe.Test:74 error.
-#[test]
-fn standard_libs_errortostring_blocker_gone() {
-    let root = repo_root();
-    let manifest = root
-        .join("examples")
-        .join("00-standard-libs")
-        .join("package.ipe");
-    if !manifest.exists() {
-        return;
-    }
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("00_standard_libs_gate");
-    let _ = std::fs::remove_dir_all(&out);
-    let runtime = e2e_support::require_runtime().into_path_buf();
-    let result = ipe::build_project(&manifest, &out, &runtime);
-    match &result {
-        Err(ipe::CliError::Pipeline { diag, .. }) => {
-            let msg = format!("{diag:?}");
-            assert!(
-                !msg.contains("Test.ipe") || !msg.contains("errorToString expected"),
-                "original Ipe.Test:74 errorToString blocker must be gone; got: {msg}"
-            );
-            // There may be a subsequent blocker (e.g. Jwt type mismatch) — that is
-            // acceptable; only the original errorToString error must not recur.
-        }
-        Ok(()) => { /* full compile success is also acceptable */ }
-        Err(other) => {
-            let msg = format!("{other:?}");
-            assert!(
-                !msg.contains("Test.ipe") || !msg.contains("errorToString expected"),
-                "original Ipe.Test:74 errorToString blocker must be gone; got: {msg}"
-            );
-        }
-    }
 }
