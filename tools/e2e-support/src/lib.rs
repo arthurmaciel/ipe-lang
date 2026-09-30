@@ -677,10 +677,10 @@ pub enum RerunError {
     DidNotRun { stdout: String },
 }
 
-/// Re-exec the current test binary running only `test` (its full path under
-/// the crate root, e.g. `tests::name`), with `configure` adding the spawn-time
-/// environment and any extra harness flags, and require that the child ran
-/// and passed exactly that one test.
+/// Re-exec the current test binary and require it ran and passed only `test`.
+///
+/// `test` is the full path under the crate root (e.g. `tests::name`);
+/// `configure` adds the spawn-time environment and any extra harness flags.
 ///
 /// The one shared re-exec for tests whose body needs a process environment
 /// fixed at spawn: a success exit alone is vacuous, since a `test` name that
