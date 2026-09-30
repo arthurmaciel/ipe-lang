@@ -1,0 +1,194 @@
+module Staging exposing (StagedFile, maxFiles, maxSegments, plan)
+
+import Ipe.List as List
+import Ipe.Result as Result
+import Ipe.Set as Set
+import Ipe.String as String
+
+
+-- The staging plan for one Run request: the page's emitted Rust, rendered as
+-- `// ==== path ====` banners, parsed into the files to write under a
+-- token-scoped run directory. A path is accepted only as exactly `Cargo.toml`
+-- or `src/<segment>/…/<name>.rs` with every segment non-empty ASCII
+-- `[A-Za-z0-9_]`, so no staged path can name `..`, an absolute root, a hidden
+-- file, or anything outside the run directory. Any refusal rejects the whole
+-- request before a single file is written.
+type alias StagedFile =
+    { path : String
+    , content : String
+    }
+
+
+type alias SplitState =
+    { current : Maybe String
+    , preamble : Bool
+    , files : List StagedFile
+    , content : List String
+    }
+
+
+{-| The most files one staged crate may hold. -}
+maxFiles : Int
+maxFiles =
+    64
+
+
+{-| The most path segments under `src/` one staged file may have. -}
+maxSegments : Int
+maxSegments =
+    8
+
+
+manifestPath : String
+manifestPath =
+    "Cargo.toml"
+
+
+entryPath : String
+entryPath =
+    "src/main.rs"
+
+
+segmentChars : String
+segmentChars =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+
+
+{-| Parse the emitted Rust into the files to stage, or the reason it is refused. -}
+plan : String -> Result String (List StagedFile)
+plan emittedRust =
+    let
+        split =
+            splitBanners emittedRust
+    in
+    if split.preamble then
+        Err "refused: text before the first file banner"
+
+    else
+        checkFiles split.files
+
+
+checkFiles : List StagedFile -> Result String (List StagedFile)
+checkFiles files =
+    if List.length files > maxFiles then
+        Err ("refused: more than " ++ String.fromInt maxFiles ++ " staged files")
+
+    else
+        files
+            |> Result.traverse checkFile
+            |> Result.andThen checkUnique
+            |> Result.andThen (requirePath manifestPath)
+            |> Result.andThen (requirePath entryPath)
+
+
+checkFile : StagedFile -> Result String StagedFile
+checkFile file =
+    if file.path == manifestPath then
+        Ok file
+
+    else
+        case String.split "/" file.path of
+            root :: rest ->
+                if root == "src" && validSource rest then
+                    Ok file
+
+                else
+                    Err (refusedPath file.path)
+
+            [] ->
+                Err (refusedPath file.path)
+
+
+validSource : List String -> Bool
+validSource segments =
+    case List.reverse segments of
+        [] ->
+            False
+
+        last :: dirs ->
+            List.length segments
+                <= maxSegments
+                && String.endsWith ".rs" last
+                && validSegment (String.dropRight 3 last)
+                && List.all validSegment dirs
+
+
+validSegment : String -> Bool
+validSegment segment =
+    not (String.isEmpty segment)
+        && String.all (\c -> String.contains (String.fromChar c) segmentChars) segment
+
+
+checkUnique : List StagedFile -> Result String (List StagedFile)
+checkUnique files =
+    let
+        paths =
+            List.map (\ipe_accessor_arg -> ipe_accessor_arg.path) files
+    in
+    if Set.size (Set.fromList paths) == List.length paths then
+        Ok files
+
+    else
+        Err "refused: a staged path appears twice"
+
+
+requirePath : String -> List StagedFile -> Result String (List StagedFile)
+requirePath path files =
+    if List.any (\file -> file.path == path) files then
+        Ok files
+
+    else
+        Err ("refused: missing " ++ path)
+
+
+refusedPath : String -> String
+refusedPath path =
+    "refused staged path: " ++ String.left 80 path
+
+
+splitBanners : String -> SplitState
+splitBanners emittedRust =
+    let
+        final =
+            List.foldl splitLine { current = Nothing, preamble = False, files = [], content = [] } (String.lines emittedRust)
+    in
+    { final | current = Nothing, files = List.reverse (finish final), content = [] }
+
+
+finish : SplitState -> List StagedFile
+finish state =
+    case state.current of
+        Just path ->
+            { path = path, content = String.join "\n" (List.reverse state.content) ++ "\n" } :: state.files
+
+        Nothing ->
+            state.files
+
+
+splitLine : String -> SplitState -> SplitState
+splitLine line state =
+    case bannerPath line of
+        Just path ->
+            { state | current = Just path, files = finish state, content = [] }
+
+        Nothing ->
+            case state.current of
+                Just _ ->
+                    { state | content = line :: state.content }
+
+                Nothing ->
+                    { state | preamble = state.preamble || isText line }
+
+
+isText : String -> Bool
+isText line =
+    line |> String.trim |> String.isEmpty |> not
+
+
+bannerPath : String -> Maybe String
+bannerPath line =
+    if String.startsWith "// ==== " line && String.endsWith " ====" line && String.length line > 13 then
+        Just (String.slice 8 (String.length line - 5) line)
+
+    else
+        Nothing

@@ -1,49 +1,70 @@
 module Main exposing (main)
 
-import Ipe.Error as Error
-import Ipe.Http.Server as Server
-import Ipe.Http.Server exposing (Handler)
+import Ipe.Error as Error exposing (Error)
 import Ipe.Json.Decode as Json
 import Ipe.Json.Encode as Encode
+import Ipe.Server.Http as Server
 import Ipe.String as String
-import Ipe.Task as Task
+import Ipe.Task as Task exposing (Task)
 import Runner
 
 
--- Serves the playground as an Ipê-native server (start from this directory:
--- `cd server && ipe run`). The static roots are relative to the process cwd:
--- ".." is the playground root (index.html) and "../pkg" the wasm bundle.
--- POST /run accepts the EMITTED RUST (not Ipê source); the client-side WASM
--- compiler produced it. The server stages it into a fresh project dir under
--- ~/.cache/ipe/playground-runs and hands it to the sandboxed jail-runner
--- binary (see examples/wasm/language-playground/jail-runner).
+-- The playground's run server, started from this directory (`ipe run`). The
+-- static roots resolve against the process cwd: ".." is the playground root
+-- (index.html) and "../pkg" the wasm bundle. GET /health tells the page a run
+-- server is present. POST /run takes `{"rust": <emitted crate>}` — the page's
+-- own ipe-wasm emit, never Ipê source — and answers with the jailed transcript.
+main : Task Error ()
 main =
     Server.listen 8000
-        [ Server.static "/" ".."
-        , Server.static "/pkg" "../pkg"
+        [ Server.get "/health" health
         , Server.post "/run" handleRun
+        , Server.static "/pkg" "../pkg"
+        , Server.static "/" ".."
         ]
 
 
-handleRun : Handler
+{-| The largest request body `/run` decodes, in code points: the emitted crate
+of one playground program, without the runtime, is tens of KiB.
+-}
+maxRequestChars : Int
+maxRequestChars =
+    1048576
+
+
+health : Server.Request -> Task Error Server.Response
+health _ =
+    Task.succeed (Server.json "{\"ok\":true}")
+
+
+handleRun : Server.Request -> Task Error Server.Response
 handleRun req =
-    case Json.decodeString (Json.field "rust" Json.string) (Server.body req) of
-        Err _ ->
-            "Malformed request: expected {\"rust\": String}." |> runResponse False False |> Server.json |> Task.succeed
+    let
+        raw =
+            Server.body req
+    in
+    if String.length raw > maxRequestChars then
+        refuse 413 "Program too large (over 1 MiB of emitted Rust)."
 
-        Ok rust ->
-            if String.length rust > 16777216 then
-                "Program too large (over 16 MiB)." |> runResponse False False |> Server.json |> Task.succeed
+    else
+        case Json.decodeString (Json.field "rust" Json.string) raw of
+            Err _ ->
+                refuse 400 "Malformed request: expected {\"rust\": String}."
 
-            else
+            Ok rust ->
                 Runner.runEmittedRust rust
                     |> Task.map (\r -> Server.json (runResponse r.ok r.unsandboxed r.output))
-                    |> Task.onError (\e -> "Server error: " ++ Error.message e |> runResponse False False |> Server.json |> Task.succeed)
+                    |> Task.onError (\e -> refuse 500 ("Server error: " ++ Error.message e))
 
 
--- The wire carries the EMITTED Rust, which includes the whole
--- stdlib closure (src/ipe_runtime/*): a typical program ships
--- ~2.6 MiB. 16 MiB matches the runtime's output ceiling.
+refuse : Int -> String -> Task Error Server.Response
+refuse status message =
+    runResponse False False message
+        |> Server.json
+        |> Server.withStatus status
+        |> Task.succeed
+
+
 runResponse : Bool -> Bool -> String -> String
 runResponse ok unsandboxed output =
     Encode.encode 0

@@ -1,0 +1,76 @@
+module Main exposing (main)
+
+import Ipe.List as List
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Test as Test exposing (Test)
+import Staging
+
+
+-- The staging allowlist: the page's own emit is accepted, every path that
+-- could land outside the token-scoped run directory is refused.
+banner : String -> String -> String
+banner path body =
+    "// ==== " ++ path ++ " ====\n" ++ body ++ "\n"
+
+
+crate : List String -> String
+crate extra =
+    String.concat (List.map (\name -> banner name "fn f() {}") extra)
+        ++ banner "src/main.rs" "fn main() {}"
+        ++ banner "Cargo.toml" "[package]"
+
+
+stagedPaths : String -> Result String (List String)
+stagedPaths emitted =
+    Result.map (List.map (\ipe_accessor_arg -> ipe_accessor_arg.path)) (Staging.plan emitted)
+
+
+refuses : String -> String -> Test
+refuses name emitted =
+    Test.test name (\_ -> Test.err (Staging.plan emitted))
+
+
+accepted : Test
+accepted =
+    Test.suite "accepted"
+        [ Test.test
+            "the emitted crate stages as written"
+            (\_ -> Test.equal (Ok [ "src/main.rs", "Cargo.toml" ]) (stagedPaths (crate [])))
+        , Test.test
+            "a nested module file is allowed"
+            (\_ -> Test.ok (Staging.plan (crate [ "src/ipe_mods/app_2.rs" ])))
+        , Test.test
+            "file bodies survive the split"
+            (\_ -> Test.equal (Ok [ "fn main() {}\n", "[package]\n" ]) (Result.map (List.map (\ipe_accessor_arg -> ipe_accessor_arg.content)) (Staging.plan (crate []))))
+        ]
+
+
+refused : Test
+refused =
+    Test.suite "refused"
+        [ refuses "a parent traversal" (crate [ "src/../../../../etc/cron.d/x.rs" ])
+        , refuses "a traversal that cleans back inside" (crate [ "src/a/../main2.rs" ])
+        , refuses "an absolute path" (crate [ "/tmp/x.rs" ])
+        , refuses "a path outside src" (crate [ "build.rs" ])
+        , refuses "a harness entry" (crate [ "Cargo.lock" ])
+        , refuses "a non-Rust source" (crate [ "src/data.json" ])
+        , refuses "an empty segment" (crate [ "src//x.rs" ])
+        , refuses "a hidden file" (crate [ "src/.x.rs" ])
+        , refuses "a bare extension" (crate [ "src/.rs" ])
+        , refuses "a non-ASCII segment" (crate [ "src/é.rs" ])
+        , refuses "a backslash segment" (crate [ "src/a\\b.rs" ])
+        , refuses "a duplicate path" (crate [ "src/main.rs" ])
+        , refuses "nesting past the ceiling" (crate [ "src/a/b/c/d/e/f/g/h/i.rs" ])
+        , refuses "text before the first banner" ("fn evil() {}\n" ++ crate [])
+        , refuses "a missing manifest" (banner "src/main.rs" "fn main() {}")
+        , refuses "a missing entry point" (banner "Cargo.toml" "[package]")
+        , refuses "no files at all" ""
+        , refuses
+            "too many files"
+            (crate (List.map (\n -> "src/m" ++ String.fromInt n ++ ".rs") (List.range 1 Staging.maxFiles)))
+        ]
+
+
+main =
+    Test.runMain [ accepted, refused ]
