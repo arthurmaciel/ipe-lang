@@ -403,11 +403,10 @@ fn claim_owned(path: ProvenOutPath) -> Result<OwnedDir, CliError> {
 
 /// Claim `path` without a disjointness proof, returning the claimed directory's handle.
 ///
-/// Each directory ipe creates or adopts is opened relative to its held parent
-/// without following a link, and is marked or adopted through that handle. An
-/// existing ancestor is left as it is. The path carries no `..` or `.`, so each
-/// parent opened is the lexical one on every platform. The recursion is bounded
-/// by the path's component count.
+/// Only `path` itself is adopted; each missing ancestor is entered as
+/// [`enter_in`] enters it. Each level is opened relative to its held parent
+/// without following a link. The path carries no `..` or `.`, so each parent
+/// opened is the lexical one on every platform.
 #[cfg(test)]
 fn claim_held(path: &ProvenOutPath) -> Result<held::HeldDir, CliError> {
     if let Some(dir) = held::HeldDir::open(path.as_path())? {
@@ -417,11 +416,59 @@ fn claim_held(path: &ProvenOutPath) -> Result<held::HeldDir, CliError> {
     let (Some(name), Some(parent_path)) = (path.as_path().file_name(), path.parent()) else {
         return Err(OutputRefusal::ParentTraversal(path.as_path().to_path_buf()).into());
     };
-    let parent = match held::HeldDir::open_following(parent_path.as_path())? {
-        Some(parent) => parent,
-        None => claim_held(&parent_path)?,
+    claim_in(&hold_level(&parent_path)?, name)
+}
+
+/// Hold the ancestor `path` of a claim, creating and marking each missing level.
+///
+/// An existing level is held as it is, never inspected for ownership. The
+/// recursion is bounded by the path's component count.
+#[cfg(test)]
+fn hold_level(path: &ProvenOutPath) -> Result<held::HeldDir, CliError> {
+    if let Some(dir) = held::HeldDir::open_following(path.as_path())? {
+        return Ok(dir);
+    }
+    let (Some(name), Some(parent_path)) = (path.as_path().file_name(), path.parent()) else {
+        return Err(OutputRefusal::ParentTraversal(path.as_path().to_path_buf()).into());
     };
-    claim_in(&parent, name)
+    enter_in(&hold_level(&parent_path)?, name)
+}
+
+/// Claim `names` below the held `anchor`: every level but the last is entered, the last claimed.
+///
+/// With no names the anchor itself is the leaf and is adopted. An intermediate
+/// level is traversed like the anchor, so a sibling claim creating or filling
+/// a shared ancestor at the same moment never makes it look like user
+/// territory; only the leaf is ever adopted.
+fn claim_leaf_below(
+    anchor: held::HeldDir,
+    names: &[&std::ffi::OsStr],
+) -> Result<held::HeldDir, CliError> {
+    held::level_held(anchor.path());
+    let Some((leaf, above)) = names.split_last() else {
+        anchor.adopt()?;
+        return Ok(anchor);
+    };
+    let mut dir = anchor;
+    for name in above {
+        dir = enter_in(&dir, name)?;
+        held::level_held(dir.path());
+    }
+    let dir = claim_in(&dir, leaf)?;
+    held::level_held(dir.path());
+    Ok(dir)
+}
+
+/// Enter the intermediate level `name` of the held `parent`: created and marked when absent.
+///
+/// An existing directory is traversed without an ownership check, as the
+/// anchor is; a link or a non-directory is refused.
+fn enter_in(parent: &held::HeldDir, name: &std::ffi::OsStr) -> Result<held::HeldDir, CliError> {
+    let (dir, created) = parent.create_child(name)?;
+    if created {
+        dir.write_marker()?;
+    }
+    Ok(dir)
 }
 
 /// Claim the entry `name` of the held `parent`: created and marked when absent, else adopted.
@@ -675,6 +722,24 @@ pub fn contained_in(root: &Path, path: &Path) -> Result<PathBuf, CliError> {
 /// [`CliError::OutputRefused`] for a symlink, a non-directory, or a non-empty
 /// unmarked directory; [`CliError::Io`] on a filesystem failure.
 fn check_claimable(path: &Path) -> Result<bool, CliError> {
+    if !check_traversable(path)? {
+        Ok(false)
+    } else if has_marker(path)? || is_empty_dir(path)? {
+        Ok(true)
+    } else {
+        Err(OutputRefusal::NotIpeOwned(path.to_path_buf()).into())
+    }
+}
+
+/// Decide, without writing, whether a claim may pass through `path` on the way to its leaf.
+///
+/// `Ok(false)` when absent, `Ok(true)` when it is a directory; its ownership
+/// is never inspected.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] for a symlink or a non-directory;
+/// [`CliError::Io`] on a filesystem failure.
+fn check_traversable(path: &Path) -> Result<bool, CliError> {
     match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(io_err(path, e)),
@@ -682,13 +747,7 @@ fn check_claimable(path: &Path) -> Result<bool, CliError> {
             Err(OutputRefusal::Symlink(path.to_path_buf()).into())
         }
         Ok(meta) if !meta.is_dir() => Err(OutputRefusal::NotADirectory(path.to_path_buf()).into()),
-        Ok(_) => {
-            if has_marker(path)? || is_empty_dir(path)? {
-                Ok(true)
-            } else {
-                Err(OutputRefusal::NotIpeOwned(path.to_path_buf()).into())
-            }
-        }
+        Ok(_) => Ok(true),
     }
 }
 
@@ -945,16 +1004,22 @@ impl OutputRoot {
 
     /// The path of a (possibly nested) product area, e.g. `release/rust`.
     ///
-    /// Every level that already exists is checked claimable — a symlink or user
-    /// directory planted at any level is refused — but nothing is created: the
-    /// writer claims the area when it writes.
+    /// Every level that already exists is checked — a symlink or non-directory
+    /// planted at any level is refused, and so is a user directory at the area
+    /// itself — but nothing is created: the writer claims the area when it
+    /// writes. A level above the area is only passed through, never checked
+    /// for ownership.
     ///
     /// # Errors
     /// [`CliError::OutputRefused`] for an unclaimable existing level.
     pub fn area_path(&self, areas: &[OutputArea]) -> Result<PathBuf, CliError> {
         let mut path = self.path.as_path().to_path_buf();
-        for area in areas {
-            path.push(area.dir_name());
+        if let Some((leaf, above)) = areas.split_last() {
+            for area in above {
+                path.push(area.dir_name());
+                check_traversable(&path)?;
+            }
+            path.push(leaf.dir_name());
             check_claimable(&path)?;
         }
         Ok(path)
@@ -962,42 +1027,44 @@ impl OutputRoot {
 
     /// Claim a (possibly nested) product area for writing now.
     ///
+    /// The disjointness proof is taken again on the held handle of the
+    /// deepest existing level, and every missing level is created and marked
+    /// through the handle above it — a level swapped after the proof cannot
+    /// redirect the claim into the project. Only the area itself (the root,
+    /// for no areas) is adopted; every level above it is passed through.
+    ///
     /// # Errors
-    /// As [`OutputRoot::area_path`] and [`OutputRoot::claim`].
+    /// As [`OutputRoot::area_path`] and [`OutputRoot::resolve`];
+    /// [`CliError::Io`] on a filesystem failure.
     pub fn claim_area(&self, areas: &[OutputArea]) -> Result<OwnedDir, CliError> {
         self.area_path(areas)?;
-        let mut dir = self.claim()?;
-        for area in areas {
-            dir = dir.child(area.dir_name())?;
-        }
-        Ok(dir)
+        let checked = check_disjoint(self.path.as_path(), &self.project)?;
+        let names: Vec<&std::ffi::OsStr> = checked
+            .anchor
+            .tail
+            .iter()
+            .map(std::ffi::OsString::as_os_str)
+            .chain(
+                areas
+                    .iter()
+                    .map(|area| std::ffi::OsStr::new(area.dir_name())),
+            )
+            .collect();
+        let dir = claim_leaf_below(checked.anchor.dir, &names)?;
+        let mut path = checked.absolute.into_path_buf();
+        path.extend(areas.iter().map(|area| area.dir_name()));
+        Ok(OwnedDir {
+            path,
+            id: dir.id()?,
+        })
     }
 
     /// Claim the root itself for writing now.
     ///
-    /// The disjointness proof is taken again on the held handle of the
-    /// deepest existing level, and every missing level is created and marked
-    /// through the handle above it — a level swapped after the proof cannot
-    /// redirect the claim into the project.
-    ///
     /// # Errors
-    /// As [`OutputRoot::resolve`]; [`CliError::Io`] on a filesystem failure.
+    /// As [`OutputRoot::claim_area`].
     pub fn claim(&self) -> Result<OwnedDir, CliError> {
-        let checked = check_disjoint(self.path.as_path(), &self.project)?;
-        let anchor = checked.anchor;
-        held::level_held(anchor.dir.path());
-        if anchor.tail.is_empty() {
-            anchor.dir.adopt()?;
-        }
-        let mut dir = anchor.dir;
-        for name in &anchor.tail {
-            dir = claim_in(&dir, name)?;
-            held::level_held(dir.path());
-        }
-        Ok(OwnedDir {
-            path: checked.absolute.into_path_buf(),
-            id: dir.id()?,
-        })
+        self.claim_area(&[])
     }
 
     /// A product area to claim later, when its product is written.
@@ -3762,6 +3829,181 @@ mod tests {
             "a vanished claim must fail verification, got {missing:?}"
         );
         assert!(user_files_survive(&proj.root));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Sibling claims racing to create one missing shared parent all succeed, round after round.
+    #[test]
+    fn concurrent_sibling_claims_under_a_missing_shared_parent_all_succeed() {
+        const SIBLINGS: usize = 4;
+        let base = scratch("siblings");
+        let proj = project(&base);
+        for round in 0..200 {
+            let shared = base.join(format!("r{round}")).join("p");
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(SIBLINGS));
+            let claims: Vec<_> = (0..SIBLINGS)
+                .map(|n| {
+                    let leaf = shared.join(format!("s{n}"));
+                    let (proj, barrier) = (proj.clone(), std::sync::Arc::clone(&barrier));
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        OutputRoot::resolve(Some(&leaf.to_string_lossy()), &proj)
+                            .and_then(|root| root.claim())
+                            .map(|_| ())
+                            .map_err(|e| format!("{e:?}"))
+                    })
+                })
+                .collect();
+            for (n, claim) in claims.into_iter().enumerate() {
+                let result = claim.join().expect("claim thread");
+                assert!(
+                    result.is_ok(),
+                    "round {round}: sibling {n} was refused: {result:?}"
+                );
+                assert!(
+                    has_marker(&shared.join(format!("s{n}"))).expect("leaf marker"),
+                    "round {round}: sibling {n}'s leaf is marked"
+                );
+            }
+            assert!(
+                has_marker(&shared).expect("shared marker"),
+                "round {round}: the shared parent one claim created is marked"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A shared parent a sibling claim fills mid-claim is passed through, never adopted.
+    #[test]
+    fn a_shared_parent_filled_mid_claim_is_passed_through() {
+        let base = scratch("shared_mid");
+        let proj = project(&base);
+        let shared = base.join("shared");
+        let out =
+            OutputRoot::resolve(Some(&shared.join("a").to_string_lossy()), &proj).expect("resolve");
+        let sibling = shared.join("b");
+        let planted = sibling.clone();
+        swap_when_held(base.clone(), move || {
+            std::fs::create_dir_all(&planted).expect("sibling level");
+            std::fs::write(planted.join("f.txt"), "theirs").expect("sibling file");
+        });
+        let claimed = out.claim();
+        super::held::set_level_hook(None);
+        assert!(claimed.is_ok(), "the leaf is claimable, got {claimed:?}");
+        assert!(has_marker(&shared.join("a")).expect("leaf marker"));
+        assert!(
+            !shared.join(OWNERSHIP_MARKER).exists(),
+            "a level this claim did not create is left unmarked"
+        );
+        assert_eq!(
+            std::fs::read_to_string(sibling.join("f.txt"))
+                .ok()
+                .as_deref(),
+            Some("theirs")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A non-empty unmarked leaf is refused even when it appears mid-claim below a created level.
+    #[test]
+    fn a_user_leaf_planted_mid_claim_is_refused() {
+        let base = scratch("leaf_mid");
+        let proj = project(&base);
+        let leaf = base.join("shared").join("a");
+        let out = OutputRoot::resolve(Some(&leaf.to_string_lossy()), &proj).expect("resolve");
+        let planted = leaf.clone();
+        swap_when_held(base.clone(), move || {
+            std::fs::create_dir_all(&planted).expect("user leaf");
+            std::fs::write(planted.join("notes.txt"), "mine").expect("user file");
+        });
+        let claimed = out.claim();
+        super::held::set_level_hook(None);
+        assert!(
+            matches!(
+                claimed,
+                Err(CliError::OutputRefused(OutputRefusal::NotIpeOwned(_)))
+            ),
+            "a user leaf must be refused, got {claimed:?}"
+        );
+        assert!(
+            !leaf.join(OWNERSHIP_MARKER).exists(),
+            "the user leaf is not marked"
+        );
+        assert_eq!(
+            std::fs::read_to_string(leaf.join("notes.txt"))
+                .ok()
+                .as_deref(),
+            Some("mine")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A link planted at an intermediate level mid-claim is refused and never followed.
+    #[test]
+    fn a_link_planted_at_an_intermediate_level_mid_claim_is_refused() {
+        let base = scratch("link_mid");
+        let proj = project(&base);
+        let victim = base.join("victim");
+        std::fs::create_dir_all(&victim).expect("make victim");
+        let shared = base.join("shared");
+        let out =
+            OutputRoot::resolve(Some(&shared.join("a").to_string_lossy()), &proj).expect("resolve");
+        let (link, target) = (shared.clone(), victim.clone());
+        swap_when_held(base.clone(), move || plant_link(&target, &link));
+        let claimed = out.claim();
+        super::held::set_level_hook(None);
+        assert!(
+            matches!(
+                claimed,
+                Err(CliError::OutputRefused(OutputRefusal::Symlink(_)))
+            ),
+            "a linked intermediate level must be refused, got {claimed:?}"
+        );
+        assert_eq!(
+            std::fs::read_dir(&victim).expect("read victim").count(),
+            0,
+            "nothing reaches the link target"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Only the nested area itself is checked for ownership; the area above it is passed through.
+    #[test]
+    fn a_nested_area_adopts_only_its_leaf() {
+        let base = scratch("nested_area");
+        let proj = project(&base);
+        let out = OutputRoot::resolve(None, &proj).expect("default out");
+        out.claim().expect("claim root");
+        let release = out.path().join(OutputArea::Release.dir_name());
+        std::fs::create_dir_all(release.join("other")).expect("sibling area");
+        let bundle = out.claim_area(&[OutputArea::Release, OutputArea::Bundle]);
+        assert!(
+            bundle.is_ok(),
+            "the nested area is claimable, got {bundle:?}"
+        );
+        assert!(has_marker(&release.join(OutputArea::Bundle.dir_name())).expect("leaf marker"));
+        assert!(
+            !release.join(OWNERSHIP_MARKER).exists(),
+            "the level above is not adopted"
+        );
+
+        let rust = out.path().join(OutputArea::Rust.dir_name());
+        std::fs::create_dir_all(&rust).expect("user area");
+        std::fs::write(rust.join("notes.txt"), "mine").expect("user file");
+        let checked = out.area_path(&[OutputArea::Rust]);
+        assert!(
+            matches!(refused(&checked), Some(OutputRefusal::NotIpeOwned(_))),
+            "a user area must be refused by the area check, got {checked:?}"
+        );
+        let claimed = out.claim_area(&[OutputArea::Rust]);
+        assert!(
+            matches!(refused(&claimed), Some(OutputRefusal::NotIpeOwned(_))),
+            "a user area must be refused by the claim, got {claimed:?}"
+        );
+        assert!(
+            !rust.join(OWNERSHIP_MARKER).exists(),
+            "the user area is not marked"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }
