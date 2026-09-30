@@ -735,7 +735,9 @@ jobs:
   # a compiler change that makes a shipped example stop type-checking or emit a
   # crate that no longer compiles — the two ways a user first feels a regression.
   # Interactive RUN coverage (browser round-trips, pty-driven tui) is outside
-  # this build gate.
+  # this build gate. Every first-party example project that ships a
+  # tests/Main.ipe (examples/wasm/** and nested sub-projects included) runs its
+  # `ipe test` suite here, the one first-party job with cargo.
   shapes-examples:
     name: first-party shapes (build gate)
     runs-on: ubuntu-latest
@@ -803,11 +805,20 @@ jobs:
             exit 1
           fi
           echo "all first-party shape examples check + build + emit cleanly."
+      # Every first-party example project with a tests/Main.ipe — nested
+      # sub-projects of a multi-project example included — runs its own suite
+      # (tools/scripts/first-party-test-floor.sh, set from first_party_check_set).
+      - name: Run every first-party example's test suite
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/shapes-shared-target
+          IPE_BIN: ${{ runner.temp }}/ipe-release/ipe
+        run: bash tools/scripts/first-party-test-floor.sh
 
   # `ipe type-check`-only FLOOR over the WHOLE first-party example set — the cheap,
   # gating compile floor (scripts/first-party-check-floor.sh, set derived in
   # scripts/lib/examples.sh `first_party_check_set`). It type-checks every shipped
-  # examples/shapes/** and examples/wasm/** entry (FFI-gated examples excluded)
+  # examples/shapes/** and examples/wasm/** project at any depth (FFI-gated
+  # examples excluded)
   # and fails loud, naming each that does not `ipe type-check` clean.
   #
   # Complementary, not redundant, to `shapes-examples` above: that job BUILDS +

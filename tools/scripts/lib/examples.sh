@@ -273,14 +273,18 @@ build_set() {
 run_set()  { build_set; }
 perf_set() { build_set; }
 
-# ── first_party_check_set: the `ipe type-check`-only FLOOR over shipped examples ─
-# The first-party examples the project SHIPS and expects to type-check: every
-# flat `examples/shapes/*/*` and `examples/wasm/*` dir with a `src/Main.ipe`
-# entry. Emitted one per line.
+# ── first_party_check_set: the first-party FLOOR over shipped example projects ─
+# Every example PROJECT the project ships under examples/shapes/ and
+# examples/wasm/, at any depth: a directory holding a `package.ipe` or a
+# `src/Main.ipe` is a project, whether it sits flat (examples/wasm/counter) or
+# inside a multi-project example (examples/wasm/language-playground/server).
+# Emitted one per line, sorted by the glob order.
 #
 # SCOPE — this is a floor, not the parity sweep:
-#   • INCLUDE examples/shapes/** and examples/wasm/** — authored, expected to
-#     `ipe type-check` clean; a non-compiling one is a shipped regression.
+#   • INCLUDE every project under examples/shapes/** and examples/wasm/** —
+#     authored, expected to `ipe type-check` clean and pass its own `ipe test`;
+#     a failing one is a shipped regression. A `package.ipe` without a
+#     `src/Main.ipe` is still emitted, so the floor names it instead of skipping.
 #   • EXCLUDE an FFI-gated example — one that declares Rust FFI crates
 #     with no generated bindings cache (needs_ffi_install). Its `import Rust.<Crate>`
 #     modules are absent until `ipe install --allow-build-scripts` runs its
@@ -288,22 +292,38 @@ perf_set() { build_set; }
 #     (build-scripts / network / RCE-sandbox — the Rust-FFI subsystem). That is
 #     an install prerequisite, not a shipped-broken example.
 #
-# A dir without a flat `src/Main.ipe` (a nested multi-project like
-# examples/wasm/language-playground, whose sub-projects each carry their own
-# manifest) has no single check entry and is not part of this flat floor.
-first_party_check_set() {
-  local d globs=(examples/shapes/*/*/ examples/wasm/*/)
-  for d in "${globs[@]}"; do
-    d="${d%/}"
-    [ -f "$d/src/Main.ipe" ] || continue
-    needs_ffi_install "$d" && continue
-    printf '%s\n' "$d"
+# A project is a leaf: the walk does not descend into it. Build output and
+# vendored trees (out/, pkg/, target/, node_modules/, dot-directories) are never
+# walked. The walk is bounded: a tree nested deeper than
+# _FIRST_PARTY_MAX_DEPTH below its root is refused with exit 2, never truncated.
+_FIRST_PARTY_MAX_DEPTH=6
+_first_party_walk() { # $1=dir $2=depth below the scan root
+  local d="$1" depth="$2" c name
+  if [ -f "$d/package.ipe" ] || [ -f "$d/src/Main.ipe" ]; then
+    needs_ffi_install "$d" || printf '%s\n' "$d"
+    return 0
+  fi
+  for c in "$d"/*/; do
+    [ -d "$c" ] || continue
+    c="${c%/}"; name="${c##*/}"
+    case "$name" in out|pkg|target|node_modules|.*) continue ;; esac
+    if [ "$depth" -ge "$_FIRST_PARTY_MAX_DEPTH" ]; then
+      echo "first_party_check_set: $c is nested deeper than $_FIRST_PARTY_MAX_DEPTH levels without a project — refusing to enumerate a partial set" >&2
+      return 2
+    fi
+    _first_party_walk "$c" $((depth + 1)) || return 2
   done
-  # Explicit: without this, the function's exit status is whatever the LAST
-  # loop iteration's last command happened to return (e.g. a false `[ -f … ]`
-  # on the final glob entry) — an accident of enumeration order, not a signal
-  # of success/failure. A caller that checks this function's `$?` to detect a
-  # real producer failure needs 0 to mean "enumeration completed" reliably,
-  # even when it enumerated zero entries.
+  return 0
+}
+first_party_check_set() {
+  local root
+  for root in examples/shapes examples/wasm; do
+    if [ ! -d "$root" ]; then
+      continue
+    fi
+    _first_party_walk "$root" 0 || return 2
+  done
+  # Explicit: 0 means "enumeration completed", even over zero entries; a
+  # refused walk returned 2 above.
   return 0
 }

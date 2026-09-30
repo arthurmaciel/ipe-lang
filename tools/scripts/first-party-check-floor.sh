@@ -2,8 +2,9 @@
 # Ipê FIRST-PARTY `ipe type-check` FLOOR — the cheap, gating compile floor.
 #
 # Runs `ipe type-check` (type-check ONLY — no `ipe build`, no cargo) over every
-# shipped first-party example (first_party_check_set in tools/scripts/lib/examples.sh:
-# examples/shapes/** + examples/wasm/**, minus the FFI-gated ones). A shipped
+# shipped first-party example project (first_party_check_set in
+# tools/scripts/lib/examples.sh: every project under examples/shapes/** and
+# examples/wasm/**, nested sub-projects included, minus the FFI-gated ones). A shipped
 # example that fails to type-check FAILS this floor LOUD, naming each broken
 # entry — so a compiler change that reddens a canonical example breaks the gate
 # instead of rotting silently in the tree.
@@ -13,6 +14,8 @@
 #     cargo over the shape examples. This floor is check-only but WIDER: it also
 #     covers examples/wasm/**, which otherwise only reaches `ipe type-check` in the
 #     non-gating nightly E2E suite.
+#   • first-party-test-floor.sh — `ipe test` over the same set's projects that
+#     carry a tests/Main.ipe (needs cargo, so it runs in the build gate).
 #
 # Exit: 0 = every first-party example type-checks · 1 = one or more failed ·
 #       2 = setup (no repo / no ipe binary).

@@ -653,7 +653,11 @@ floor_repo="$fixture_dir/floor-repo"
 mkdir -p "$floor_repo/tools/scripts"
 : > "$floor_repo/tools/scripts/first-party-check-floor.sh"
 run_floor() { # $1 = HOME for the run (its .cargo/bin leads env.sh's PATH)
-    IPE_REPO="$floor_repo" IPE_BIN="$(type -P true)" HOME="$1" \
+    run_floor_script "$floor" "$1" true
+}
+run_floor_script() { # $1 = floor script  $2 = HOME  $3 = command standing in for ipe
+    local floor="$1"
+    IPE_REPO="$floor_repo" IPE_BIN="$(type -P "$3")" HOME="$2" \
         CARGO_TARGET_DIR="$fixture_dir/floor-target" IPE_NO_SCCACHE=1 \
         bash "$floor" 2>&1
 }
@@ -671,6 +675,47 @@ out="$(run_floor "$rg_stub_home")"; rc=$?
 check "first-party floor: the set producer failing (rg exit 2) exits 2" "$rc" 2
 check "first-party floor: the producer failure is the reported cause" \
     "$(cause_of "$out" "failed to enumerate")" named
+
+# ── first-party test floor: no suite exits 2; a failing suite exits 1, named ─
+tfloor="$repo_root/tools/scripts/first-party-test-floor.sh"
+: > "$floor_repo/tools/scripts/first-party-test-floor.sh"
+out="$(run_floor_script "$tfloor" "$fixture_dir/plain-home" true)"; rc=$?
+check "first-party test floor: a set without any tests/Main.ipe exits 2" "$rc" 2
+check "first-party test floor: the missing suites are the reported cause" \
+    "$(cause_of "$out" "no first-party example carries a tests/Main.ipe")" named
+mkdir -p "$floor_repo/examples/shapes/cli/demo/tests"
+printf 'module Main exposing (main)\n' > "$floor_repo/examples/shapes/cli/demo/tests/Main.ipe"
+out="$(run_floor_script "$tfloor" "$fixture_dir/plain-home" false)"; rc=$?
+check "first-party test floor: a failing suite exits 1" "$rc" 1
+check "first-party test floor: the failing suite is named" \
+    "$(cause_of "$out" "BROKEN: examples/shapes/cli/demo")" named
+out="$(run_floor_script "$tfloor" "$fixture_dir/plain-home" true)"; rc=$?
+check "first-party test floor: a passing suite exits 0" "$rc" 0
+
+# ── first-party set: nested projects are members; an over-deep walk refuses ─
+fp_repo="$fixture_dir/fp-repo"
+mkdir -p "$fp_repo/examples/wasm/multi/server/src" "$fp_repo/examples/wasm/multi/server/out/x" \
+    "$fp_repo/examples/wasm/multi/static" "$fp_repo/examples/wasm/multi/pkg/y" \
+    "$fp_repo/examples/wasm/flat/src" "$fp_repo/examples/wasm/manifest-only" \
+    "$fp_repo/examples/shapes/cli/demo/src"
+printf 'module Main exposing (main)\n' > "$fp_repo/examples/wasm/multi/server/src/Main.ipe"
+printf 'Package.name "server"\n' > "$fp_repo/examples/wasm/multi/server/package.ipe"
+printf 'Package.name "inside-a-project"\n' > "$fp_repo/examples/wasm/multi/server/out/x/package.ipe"
+printf 'Package.name "build-output"\n' > "$fp_repo/examples/wasm/multi/pkg/y/package.ipe"
+printf 'module Main exposing (main)\n' > "$fp_repo/examples/wasm/flat/src/Main.ipe"
+printf 'Package.name "manifest-only"\n' > "$fp_repo/examples/wasm/manifest-only/package.ipe"
+printf 'module Main exposing (main)\n' > "$fp_repo/examples/shapes/cli/demo/src/Main.ipe"
+rc=0
+got="$(cd "$fp_repo" && bash -c "source '$ex_lib'; first_party_check_set" 2>&1)" || rc=$?
+check "first_party_check_set: a walk over nested projects exits 0" "$rc" 0
+check "first_party_check_set: every project at any depth, nothing inside one or under pkg/" "$got" \
+    "$(printf '%s\n' examples/shapes/cli/demo examples/wasm/flat examples/wasm/manifest-only examples/wasm/multi/server)"
+mkdir -p "$fp_repo/examples/wasm/a/b/c/d/e/f/g"
+rc=0
+out="$(cd "$fp_repo" && bash -c "source '$ex_lib'; first_party_check_set" 2>&1)" || rc=$?
+check "first_party_check_set: a tree deeper than the walk bound exits 2" "$rc" 2
+check "first_party_check_set: the over-deep directory is the reported cause" \
+    "$(cause_of "$out" "nested deeper than")" named
 
 # ── tree-sitter parity: a missing or empty scan root exits 2 before any parse ─
 parity="$repo_root/editors/tree-sitter-ipe/scripts/parity-check.sh"
