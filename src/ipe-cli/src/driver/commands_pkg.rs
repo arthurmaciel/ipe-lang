@@ -5,7 +5,7 @@ use super::{
     classify_entry_shape, create_source_root, default_entry, discover_manifest, emit_machine_error,
     emitted_bin_filename, force_cargo_terminal_ui, home_to_source_map, program_constructs_a_widget,
     resolve_runtime, resolve_vendored_runtime_dir, run_build, runtime_context_for_message,
-    typecheck_entry_via_graph,
+    source_graph_for_target, typecheck_target,
 };
 use crate::output_dir::{EmitTarget, OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::publisher::{AttestedActor, BlessedPublisher};
@@ -1094,6 +1094,100 @@ pub fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<PathBuf, Cl
     Ok(main)
 }
 
+/// The analysis an `ipe type-check`-family `<path>` argument resolved to.
+///
+/// A FILE argument is always analysed as itself — [`Self::File`], or
+/// [`Self::TestFile`] when it lies under a governing manifest's `tests/`
+/// directory (module search widens to `tests ∪ src`, `ipe verify`'s own
+/// convention). Only a DIRECTORY argument (or none) resolves to the project's
+/// own entry, [`Self::Project`] — never a file argument, however a manifest
+/// governs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnalysisTarget {
+    /// A directory (or omitted) argument: the project's own entry file, from
+    /// [`analysis_root_of`].
+    Project(PathBuf),
+    /// A file argument outside any governing manifest's `tests/` tree:
+    /// analysed as itself, never substituted.
+    File(PathBuf),
+    /// A file argument under a governing manifest's `tests/` tree: analysed as
+    /// itself, over the `tests ∪ src` module set `collect_test_sources` builds.
+    TestFile {
+        /// The named test file.
+        file: PathBuf,
+        /// The governing manifest's `src/` root, unioned in alongside `file`'s
+        /// own `tests/` tree.
+        src_root: PathBuf,
+    },
+}
+
+impl AnalysisTarget {
+    /// The file this target analyses — the one a diagnostic blames.
+    pub fn entry_file(&self) -> &Path {
+        match self {
+            Self::Project(p) | Self::File(p) | Self::TestFile { file: p, .. } => p,
+        }
+    }
+}
+
+/// Strip `.` components and resolve `..` by popping the output path — pure
+/// lexical rewriting, no filesystem access, so it works for a file argument
+/// that may not exist yet.
+///
+/// A found manifest keeps the spelling the caller used (`find_manifest_for_ipe_file`),
+/// so a manifest-relative root (e.g. `.`/`tests`) and a user-given relative
+/// argument (e.g. `tests/Main.ipe`) can carry the same directory under
+/// different spellings; [`Path::starts_with`] is component-wise and a stray
+/// leading `CurDir` breaks an otherwise-identical prefix, so both sides are
+/// normalised through this before the comparison.
+fn lexically_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push(component);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Resolve a `check`/analysis `<path>` argument to the [`AnalysisTarget`] it
+/// names — the class-closing replacement for [`resolve_analysis_entry`]'s
+/// blanket manifest substitution.
+///
+/// A directory (or no) argument still resolves to the project's own entry,
+/// unchanged. A FILE argument is never substituted: it resolves to
+/// [`AnalysisTarget::TestFile`] when it lies under a governing manifest's
+/// `tests/` directory, else to [`AnalysisTarget::File`] — itself, whether or
+/// not a manifest governs it.
+///
+/// # Errors
+/// Same as [`resolve_analysis_entry`] for a directory argument; a manifest's
+/// own parse errors for a file argument under a governing manifest.
+pub fn resolve_analysis_target(path: &Path) -> Result<AnalysisTarget, CliError> {
+    if path.is_dir() {
+        return Ok(AnalysisTarget::Project(resolve_analysis_entry(path)?));
+    }
+    let Some(manifest_path) = discover_manifest(path)? else {
+        return Ok(AnalysisTarget::File(path.to_path_buf()));
+    };
+    let parsed = project::parse_manifest(&manifest_path)?;
+    let project_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let tests_root = lexically_normalize(&project_root.join("tests"));
+    if lexically_normalize(path).starts_with(&tests_root) {
+        return Ok(AnalysisTarget::TestFile {
+            file: path.to_path_buf(),
+            src_root: parsed.src_root,
+        });
+    }
+    Ok(AnalysisTarget::File(path.to_path_buf()))
+}
+
 /// `ipe type-check [<path>]` — type-check a program and stop. Runs the same
 /// injection-aware source graph `ipe build` uses, but demands only the
 /// `typecheck` query: no IR lowering, no Rust emission, nothing written. Exits
@@ -1125,10 +1219,10 @@ pub fn run_type_check_body(rest: &[String]) -> Result<(), CliError> {
         Some(e) => PathBuf::from(e),
         None => PathBuf::from(default_entry()?),
     };
-    let entry = resolve_analysis_entry(&arg)?;
+    let target = resolve_analysis_target(&arg)?;
     // Propagate any diagnostic raw; `run_type_check` routes it through the
     // resolved output format (the single machine-error boundary).
-    typecheck_entry_via_graph(&entry)?;
+    typecheck_target(&target)?;
     match args.format {
         cli_args::OutputFormat::Json => {
             // The shared machine envelope; a clean type-check carries an empty
@@ -1612,8 +1706,8 @@ pub fn verify_check_quiet(path: Option<&str>) -> Result<(), CliError> {
         Some(e) => PathBuf::from(e),
         None => PathBuf::from(default_entry()?),
     };
-    let entry = resolve_analysis_entry(&arg)?;
-    typecheck_entry_via_graph(&entry)
+    let target = resolve_analysis_target(&arg)?;
+    typecheck_target(&target)
 }
 
 /// The test stage in machine-quiet form: the shared runner with the test
@@ -1631,9 +1725,10 @@ pub fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
     // Route a directory / project-root `.` to its entry `.ipe` file, the same
     // argument convention `ipe type-check` uses. Without this a bare
     // `ipe capabilities` in a project dir passes `.` straight to the reader and
-    // fails with a raw "Is a directory" io error.
-    let entry = resolve_analysis_entry(&arg)?;
-    let graph = build_source_graph(&entry)?;
+    // fails with a raw "Is a directory" io error. A file argument is never
+    // substituted — only widened to `tests ∪ src` when it names a test file.
+    let target = resolve_analysis_target(&arg)?;
+    let (graph, entry) = source_graph_for_target(&target)?;
     let program = graph.run_attributed(&entry, |db, root, file| {
         ipe_db::lower_program(db, root, file).clone()
     })?;

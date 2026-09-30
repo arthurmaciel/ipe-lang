@@ -2561,6 +2561,128 @@ fn analysis_root_rejects_a_program_entry_that_escapes_the_source_root() {
     let _ = fs::remove_dir_all(&proj);
 }
 
+/// #3213 core repro, closed: `resolve_analysis_entry`/`analysis_root_of` used
+/// to substitute a FILE argument with the project's default entry whenever a
+/// governing manifest existed, so `ipe type-check tests/Main.ipe` silently
+/// type-checked `src/Main.ipe` instead — a fail-open pass on a file the user
+/// never asked about. A planted type error in `tests/Main.ipe`, with a clean
+/// `src/Main.ipe`, must now fail: [`resolve_analysis_target`] never
+/// substitutes a file argument, only widens its module search to `tests ∪
+/// src` when the file lies under the manifest's `tests/` tree.
+#[test]
+fn type_check_of_a_tests_file_is_analysed_as_itself_not_the_default_entry() {
+    let tmp = std::env::temp_dir().join("ipe_type_check_tests_file_not_substituted");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    let tests_dir = tmp.join("tests");
+    fs::create_dir_all(&src).expect("create src/");
+    fs::create_dir_all(&tests_dir).expect("create tests/");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"app\" }\n",
+    )
+    .expect("pkg");
+    // The default entry type-checks cleanly.
+    fs::write(
+        src.join("Main.ipe"),
+        "module Main exposing (main)\n\n\nmain : Int\nmain =\n    1\n",
+    )
+    .expect("src/Main.ipe");
+    // The test entry shares the `Main` module path but has a planted type
+    // error: `main` is annotated `Int` and returns a `String`.
+    let tests_main = tests_dir.join("Main.ipe");
+    fs::write(
+        &tests_main,
+        "module Main exposing (main)\n\n\nmain : Int\nmain =\n    \"not an int\"\n",
+    )
+    .expect("tests/Main.ipe");
+
+    let result = run_type_check_body(&[tests_main.to_string_lossy().into_owned()]);
+    assert!(
+        matches!(&result, Err(CliError::Pipeline { file, .. }) if file == &tests_main),
+        "a type error in the NAMED test file must fail, blamed on that file, \
+         not silently pass by analysing src/Main.ipe instead: {result:?}"
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// A plain `src/`-rooted file argument that is NOT the manifest's default
+/// entry is analysed as itself, never substituted for `src/Main.ipe` —
+/// the same class-closing property as the `tests/` case above, proven over a
+/// `src/` file instead.
+#[test]
+fn type_check_of_a_non_default_src_file_is_analysed_as_itself() {
+    let tmp = std::env::temp_dir().join("ipe_type_check_non_default_src_file_not_substituted");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    fs::create_dir_all(&src).expect("create src/");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"app\" }\n",
+    )
+    .expect("pkg");
+    // The default entry type-checks cleanly.
+    fs::write(
+        src.join("Main.ipe"),
+        "module Main exposing (main)\n\n\nmain : Int\nmain =\n    1\n",
+    )
+    .expect("src/Main.ipe");
+    // A second, non-default module with a planted type error.
+    let other = src.join("Other.ipe");
+    fs::write(
+        &other,
+        "module Other exposing (x)\n\n\nx : Int\nx =\n    \"not an int\"\n",
+    )
+    .expect("src/Other.ipe");
+
+    let result = run_type_check_body(&[other.to_string_lossy().into_owned()]);
+    assert!(
+        matches!(&result, Err(CliError::Pipeline { file, .. }) if file == &other),
+        "a type error in the NAMED src file must fail, blamed on that file, \
+         not silently pass by analysing the default src/Main.ipe instead: {result:?}"
+    );
+
+    assert_eq!(
+        resolve_analysis_target(&other).expect("resolves"),
+        AnalysisTarget::File(other.clone()),
+        "a src-rooted file argument resolves to itself, never Project"
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// Unchanged behaviour: a DIRECTORY argument (or none) still resolves to the
+/// project's own entry — only a FILE argument gets the corrected, never-
+/// substitute rule above.
+#[test]
+fn type_check_of_a_directory_still_resolves_the_project_entry() {
+    let tmp = std::env::temp_dir().join("ipe_type_check_directory_resolves_project_entry");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    fs::create_dir_all(&src).expect("create src/");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"app\" }\n",
+    )
+    .expect("pkg");
+    fs::write(
+        src.join("Main.ipe"),
+        "module Main exposing (main)\n\n\nmain : Int\nmain =\n    1\n",
+    )
+    .expect("src/Main.ipe");
+
+    assert_eq!(
+        resolve_analysis_target(&tmp).expect("resolves"),
+        AnalysisTarget::Project(src.join("Main.ipe")),
+        "a directory argument still resolves to the project's entry"
+    );
+    let result = run_type_check_body(&[tmp.to_string_lossy().into_owned()]);
+    assert!(
+        result.is_ok(),
+        "the clean default entry must still type-check via a directory argument: {result:?}"
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn build_refuses_a_pure_library_with_a_clean_message() {
     let tmp = ipe_test_temp::temp_root().join("ipe_build_refuse_library");
