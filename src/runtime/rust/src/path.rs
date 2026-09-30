@@ -69,8 +69,7 @@ use super::{IpeResult, IpeTask, ok_res, str_err};
 // module (not an extern crate) so it resolves both in the workspace AND when the
 // runtime is vendored as `mod ipe_runtime` into an emitted app.
 use super::path_core::{
-    ElementClass, Volume, clean_with, escapes_root, has_disguised_dotdot, has_nul, is_dos_device,
-    is_sep, volume_name_len,
+    ElementClass, Volume, clean_with, escapes_root, has_nul, is_dos_device, is_sep, volume_name_len,
 };
 use std::path::PathBuf;
 
@@ -133,7 +132,7 @@ fn seal_with(s: &str, windows: bool) -> Result<String, PathRefusal> {
     if has_nul(s) {
         return Err(PathRefusal::Nul);
     }
-    if windows && has_disguised_dotdot(s) {
+    if windows && ElementClass::windows_elements(s).any(|c| c == ElementClass::DisguisedParent) {
         // Windows strips trailing dots and spaces from every path element at the
         // syscall, so `".. "` and `"..."` name the parent directory even though
         // the lexical scan sees a literal filename. Reject before `clean` so the
@@ -165,10 +164,18 @@ enum PathRefusal {
     DisguisedParent { path: String },
     /// The seal's cleaned form climbs above its root.
     Escape { path: String, cleaned: String },
-    /// `under` refused the child itself.
-    Child { child: String, why: ChildRefusal },
-    /// `under`'s cleaned join does not lie strictly beneath the root.
-    NotBeneath { child: String, root: String },
+    /// The join behind `op` refused the child itself.
+    Child {
+        op: JoinOp,
+        child: String,
+        why: ChildRefusal,
+    },
+    /// The cleaned join behind `op` does not lie strictly beneath the root.
+    NotBeneath {
+        op: JoinOp,
+        child: String,
+        root: String,
+    },
     /// `absolute` met a working directory that is not valid UTF-8.
     CwdNotUtf8,
     /// `absolute` met a working directory with no complete volume to anchor a
@@ -191,12 +198,13 @@ impl std::fmt::Display for PathRefusal {
                 f,
                 "Ipe.Path: path escapes its root via `..` traversal: {path:?} (cleaned: {cleaned:?})"
             ),
-            Self::Child { child, why } => {
-                write!(f, "Ipe.Path.under: child path {child:?} {}", why.reason())
+            Self::Child { op, child, why } => {
+                write!(f, "{}: child path {child:?} {}", op.name(), why.reason())
             }
-            Self::NotBeneath { child, root } => write!(
+            Self::NotBeneath { op, child, root } => write!(
                 f,
-                "Ipe.Path.under: {child:?} does not resolve beneath the root {root:?}"
+                "{}: {child:?} does not resolve beneath the root {root:?}",
+                op.name()
             ),
             Self::CwdNotUtf8 => {
                 f.write_str("Ipe.Path.absolute: the working directory is not valid UTF-8")
@@ -206,6 +214,25 @@ impl std::fmt::Display for PathRefusal {
                 "Ipe.Path.absolute: the working directory {cwd:?} names no complete volume to \
                  anchor {path:?}"
             ),
+        }
+    }
+}
+
+/// The `Ipe.Path` operation whose child join refused, named in the refusal.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum JoinOp {
+    /// `Ipe.Path.under` joining its child beneath its root.
+    Under,
+    /// `Ipe.Path.absolute` joining a relative path beneath the working directory.
+    Absolute,
+}
+
+impl JoinOp {
+    /// The Ipê-facing operation name that prefixes the refusal.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Under => "Ipe.Path.under",
+            Self::Absolute => "Ipe.Path.absolute",
         }
     }
 }
@@ -409,7 +436,10 @@ fn is_within(root: &str, candidate: &str, windows: bool) -> bool {
 fn strictly_beneath(root: &str, joined: &str, windows: bool) -> bool {
     joined != root
         && is_within(root, joined, windows)
-        && !(windows && (has_stripped_element(root, joined) || has_device_element(root, joined)))
+        && !(windows
+            && (has_stripped_element(root, joined)
+                || has_device_element(root, joined)
+                || has_colon_element(root, joined)))
 }
 
 /// The part of `joined` below `root` (all of it for the root `.`).
@@ -438,13 +468,19 @@ fn first_element_has_colon(p: &str) -> bool {
 ///
 /// Windows strips trailing dots and spaces from every element, so such an
 /// element names `.` or `..` rather than a child of its own — a join ending in
-/// `\ ` resolves to the root itself. A raw byte scan, independent of the
-/// child-element parser that runs before the join.
+/// `\ ` resolves to the root itself: every non-empty [`ElementClass`] made
+/// only of dots and spaces (`.`, `..` and both disguises). Re-classifies the
+/// joined result itself, independent of the child parse run before the join.
 fn has_stripped_element(root: &str, joined: &str) -> bool {
-    below_root(root, joined)
-        .as_bytes()
-        .split(|&b| is_sep(b, true))
-        .any(|e| !e.is_empty() && e.iter().all(|&c| c == b'.' || c == b' '))
+    ElementClass::windows_elements(below_root(root, joined)).any(|c| {
+        matches!(
+            c,
+            ElementClass::Current
+                | ElementClass::Parent
+                | ElementClass::DisguisedCurrent
+                | ElementClass::DisguisedParent
+        )
+    })
 }
 
 /// Does the part of the Windows `joined` below `root` hold a reserved DOS
@@ -457,6 +493,15 @@ fn has_device_element(root: &str, joined: &str) -> bool {
         .as_bytes()
         .split(|&b| is_sep(b, true))
         .any(is_dos_device)
+}
+
+/// Does the part of the Windows `joined` below `root` hold a `:`?
+///
+/// A `:` below the root names an alternate data stream (`a:b`) or a drive
+/// designator, never a plain child. A raw byte scan of the joined result,
+/// independent of the child-element parser.
+fn has_colon_element(root: &str, joined: &str) -> bool {
+    below_root(root, joined).as_bytes().contains(&b':')
 }
 
 /// Why a Windows child element can never be joined beneath a root.
@@ -558,15 +603,23 @@ fn clean_child_refusal(c: &str, windows: bool) -> Option<ChildRefusal> {
     }
 }
 
-/// Join `child` beneath `root` under a separator regime.
+/// Join `child` beneath `root` under a separator regime, as `Ipe.Path.under`.
 ///
 /// Split from [`path_under`] so the Windows refusals are proven on any host.
+fn under_with(r: &str, c: &str, windows: bool) -> Result<String, PathRefusal> {
+    join_beneath(JoinOp::Under, r, c, windows)
+}
+
+/// Join `child` beneath `root` under a separator regime on behalf of `op`.
+///
 /// Neither input is trusted to be clean: the raw child is scanned first, then
 /// both are cleaned under the regime (a raw root `""` becomes `.`), and the
-/// join is always cleaned. `Err` carries the reason the join was refused.
-fn under_with(r: &str, c: &str, windows: bool) -> Result<String, PathRefusal> {
+/// join is always cleaned. `Err` carries the reason the join was refused,
+/// naming `op`.
+fn join_beneath(op: JoinOp, r: &str, c: &str, windows: bool) -> Result<String, PathRefusal> {
     let refused = |why: ChildRefusal| {
         Err(PathRefusal::Child {
+            op,
             child: c.to_string(),
             why,
         })
@@ -598,6 +651,7 @@ fn under_with(r: &str, c: &str, windows: bool) -> Result<String, PathRefusal> {
     };
     if !strictly_beneath(&rr, &joined, windows) {
         return Err(PathRefusal::NotBeneath {
+            op,
             child: c.to_string(),
             root: rr,
         });
@@ -641,7 +695,8 @@ fn is_self_anchored(p: &str, windows: bool) -> bool {
 /// drive-relative `p`) and the Windows root-relative anchoring are proven on
 /// any host. A self-anchored path is returned sealed; a Windows root-relative
 /// `\x` is anchored on the working directory's volume; a relative path is
-/// joined beneath `cwd` through [`under_with`], inheriting every refusal.
+/// joined beneath `cwd` through [`join_beneath`], inheriting every refusal
+/// under its own operation name.
 fn absolute_from(cwd: PathBuf, p: &str, windows: bool) -> Result<String, PathRefusal> {
     if is_self_anchored(p, windows) {
         return seal_with(p, windows);
@@ -667,7 +722,7 @@ fn absolute_from(cwd: PathBuf, p: &str, windows: bool) -> Result<String, PathRef
     if clean_with(p, windows) == "." {
         return Ok(cwd);
     }
-    under_with(&cwd, p, windows)
+    join_beneath(JoinOp::Absolute, &cwd, p, windows)
 }
 
 /// `Ipe.Path.absolute : Path -> Task Error Path` — resolve a path against the working directory.
@@ -832,7 +887,7 @@ mod tests {
         if s.as_bytes().contains(&0) {
             return false;
         }
-        if has_disguised_dotdot(s) {
+        if ElementClass::windows_elements(s).any(|c| c == ElementClass::DisguisedParent) {
             return false;
         }
         !escapes_root(&clean_with(s, true), true)
@@ -962,8 +1017,10 @@ mod tests {
     fn win_trailing_dot_space_disguised_dotdot_is_rejected() {
         // Vector: `.. ` / `...` — Windows strips trailing dots/spaces, turning a
         // literal element back into the `..` parent token the scan would miss.
-        assert!(has_disguised_dotdot("a\\.. \\b"), "`.. ` disguise");
-        assert!(has_disguised_dotdot("a\\...\\b"), "`...` disguise");
+        let disguised =
+            |s: &str| ElementClass::windows_elements(s).any(|c| c == ElementClass::DisguisedParent);
+        assert!(disguised("a\\.. \\b"), "`.. ` disguise");
+        assert!(disguised("a\\...\\b"), "`...` disguise");
         assert!(!win_seal_accepts("a\\.. \\secret"));
         assert!(!win_seal_accepts("foo/.../bar"));
     }
@@ -972,7 +1029,9 @@ mod tests {
     fn win_plain_dotdot_element_is_not_treated_as_a_disguise() {
         // The exact `..` token is handled by the normal scan, not the disguise
         // guard — so an in-bounds `a\..\b` still resolves rather than false-firing.
-        assert!(!has_disguised_dotdot("a\\..\\b"));
+        assert!(
+            !ElementClass::windows_elements("a\\..\\b").any(|c| c == ElementClass::DisguisedParent)
+        );
         assert_eq!(clean_with("a\\..\\b", true), "b");
         assert!(win_seal_accepts("a\\..\\b"));
     }
@@ -1023,7 +1082,8 @@ mod tests {
         if has_nul(s) {
             return false;
         }
-        if windows && has_disguised_dotdot(s) {
+        if windows && ElementClass::windows_elements(s).any(|c| c == ElementClass::DisguisedParent)
+        {
             return false;
         }
         !escapes_root(&clean_with(s, windows), windows)
@@ -1405,6 +1465,13 @@ mod tests {
         // A trailing dot/space-only element names the root, never beneath it.
         assert!(!strictly_beneath("C:\\repo", "C:\\repo\\ ", true));
         assert!(!strictly_beneath(".", ". ", true));
+        // A `:` below a non-`.` root (a stream or a drive) is refused on its own.
+        assert!(!strictly_beneath("C:\\repo", "C:\\repo\\a:b", true));
+        assert!(!strictly_beneath("C:\\repo", "C:\\repo\\x\\f.txt:s", true));
+        assert!(!strictly_beneath(".", "x\\a:b", true));
+        assert!(strictly_beneath("C:\\repo", "C:\\repo\\a", true));
+        // The Unix regime has no streams: a `:` is a plain name byte.
+        assert!(strictly_beneath("/repo", "/repo/a:b", false));
         // A lone non-ASCII drive is drive-relative, never a rooted root.
         assert!(!is_rooted("é:", true));
     }
@@ -1420,6 +1487,14 @@ mod tests {
             "CONOUT$",
             "aux.tar.gz",
             "a\\CON",
+            "CON.",
+            "CON .txt",
+            "LPT0",
+            "CONIN$",
+            "lpt\u{b9}",
+            "CON\u{131}N$",
+            "con\u{131}n$",
+            "CON\u{131}N$.txt",
         ] {
             assert_eq!(win_raw(".", child), None, "root `.` joined {child:?}");
             assert_eq!(
@@ -1492,6 +1567,24 @@ mod tests {
                 .map(|e| e.to_string())
                 .as_deref(),
             Some("Ipe.Path.under: child path \"../x\" contains a `..` element")
+        );
+        // A relative path joined by `absolute` names `absolute`, not `under`.
+        assert_eq!(
+            absolute_from(PathBuf::from("/work"), "../x", false)
+                .err()
+                .map(|e| e.to_string())
+                .as_deref(),
+            Some("Ipe.Path.absolute: child path \"../x\" contains a `..` element")
+        );
+        assert_eq!(
+            absolute_from(PathBuf::from("C:\\work"), "CON", true)
+                .err()
+                .map(|e| e.to_string())
+                .as_deref(),
+            Some(
+                "Ipe.Path.absolute: child path \"CON\" contains a reserved Windows device name \
+                 (`CON`, `NUL`, `COM1`, ...) that opens a device"
+            )
         );
         assert_eq!(
             seal_with("../x", false)

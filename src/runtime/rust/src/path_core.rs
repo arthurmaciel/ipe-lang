@@ -22,13 +22,14 @@
 //   the runtime's target-specific check: a compile-time reject can only ever be
 //   a superset of what the runtime rejects, so nothing the runtime would refuse
 //   is ever emitted as a validated literal.
-// * `clean_with` / `escapes_root` / `has_disguised_dotdot` / `has_nul`
+// * `clean_with` / `escapes_root` / `has_nul`
 //   — the target-specific primitives the runtime seal drives with its own
 //   host separator regime (`clean_with(s, cfg!(windows))`), keeping the runtime
 //   behaviour byte-identical per platform.
 // * `ElementClass` — the one per-element classifier under Windows filename
 //   canonicalisation, read by the seal, the compile-time gate and the runtime
-//   child-join parse alike.
+//   child-join parse alike (`ElementClass::of` per element,
+//   `ElementClass::windows_elements` over a whole path).
 
 /// Why a `path "…"` literal was rejected by [`validate`].
 ///
@@ -87,7 +88,7 @@ pub fn validate(s: &str) -> Result<String, PathRejection> {
     if has_nul(s) {
         return Err(PathRejection::Nul);
     }
-    if has_disguised_dotdot(s) {
+    if ElementClass::windows_elements(s).any(|c| c == ElementClass::DisguisedParent) {
         return Err(PathRejection::Traversal);
     }
     // Reject if the path escapes under EITHER separator regime: a Windows target
@@ -326,6 +327,17 @@ impl ElementClass {
             _ => Self::Name,
         }
     }
+
+    /// Classify every raw element of `path` split over the Windows separators.
+    ///
+    /// Windows honours both `\` and `/` at a syscall, so a scan that split on
+    /// only one would let the other hide a disguised element. The exact `..`
+    /// token classifies as [`Self::Parent`], never [`Self::DisguisedParent`]: a
+    /// consumer refusing the disguise leaves an in-bounds `a\..\b` to the
+    /// lexical `..` scan and [`escapes_root`].
+    pub fn windows_elements(path: &str) -> impl Iterator<Item = Self> + '_ {
+        path.as_bytes().split(|&c| is_sep(c, true)).map(Self::of)
+    }
 }
 
 /// Does the raw element `e` name a reserved Win32 DOS device?
@@ -335,7 +347,8 @@ impl ElementClass {
 /// `CONIN$` / `CONOUT$`, matched case-insensitively on the element's stem: the
 /// text before its first `.` or `:`, with trailing spaces dropped. An extension
 /// does not escape the device (`nul.txt`, `aux.tar.gz`) on older Windows
-/// versions, so the check fails closed on every version.
+/// versions, so the check fails closed on every version. The case fold is the
+/// NT one (see `device_fold`), not ASCII alone.
 #[must_use]
 pub fn is_dos_device(e: &[u8]) -> bool {
     let stem_end = e
@@ -348,7 +361,8 @@ pub fn is_dos_device(e: &[u8]) -> bool {
     }
     let named = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
         .iter()
-        .any(|n| stem.eq_ignore_ascii_case(n.as_bytes()));
+        .any(|n| device_fold(stem).eq(n.bytes()));
+    // `COM` / `LPT` hold no `I`, so the one non-ASCII fold never reaches them.
     let numbered = stem.split_at_checked(3).is_some_and(|(head, digit)| {
         (head.eq_ignore_ascii_case(b"COM") || head.eq_ignore_ascii_case(b"LPT"))
             // An ASCII digit, or the UTF-8 encoding of `¹` / `²` / `³`.
@@ -357,22 +371,25 @@ pub fn is_dos_device(e: &[u8]) -> bool {
     named || numbered
 }
 
-/// Could a path element alias to the `..` parent token once Windows applies its
-/// filename canonicalisation?
+/// Upcase a device-name stem the way NT compares device names.
 ///
-/// True when any element, split over the Windows separator set (`\` and `/`),
-/// is an [`ElementClass::DisguisedParent`] (`.. `, `...`, `. .`): the lexical
-/// `..` scan matches only the exact `..` token and would miss the climb. None
-/// is a legitimate filename.
-///
-/// The exact `..` token is deliberately EXCLUDED here — the lexical scan already
-/// counts it and [`escapes_root`] rejects any that climb out — so an in-bounds
-/// `a\..\b` still resolves instead of being false-rejected.
-#[must_use]
-pub fn has_disguised_dotdot(path: &str) -> bool {
-    path.as_bytes()
-        .split(|&c| is_sep(c, true))
-        .any(|e| ElementClass::of(e) == ElementClass::DisguisedParent)
+/// NT matches a device name through its Unicode upcase table, not ASCII alone.
+/// The only non-ASCII characters that upcase to an ASCII letter are `ı`
+/// (U+0131, UTF-8 `C4 B1`) to `I` and `ſ` (U+017F) to `S`; no device name holds
+/// an `S`, so `ı` is the one fold beyond ASCII. Every other byte is
+/// ASCII-upcased (a no-op on a non-ASCII byte), so `İ` (U+0130), which upcases
+/// to itself, never matches `I`.
+fn device_fold(stem: &[u8]) -> impl Iterator<Item = u8> + '_ {
+    let mut rest = stem;
+    std::iter::from_fn(move || {
+        let (unit, tail) = match rest {
+            [0xC4, 0xB1, tail @ ..] => (b'I', tail),
+            [c, tail @ ..] => (c.to_ascii_uppercase(), tail),
+            [] => return None,
+        };
+        rest = tail;
+        Some(unit)
+    })
 }
 
 /// Does a CLEANED path climb above its root?
@@ -396,8 +413,8 @@ pub fn has_disguised_dotdot(path: &str) -> bool {
 ///
 /// This over-rejects a legitimate top-level filename made solely of dots
 /// (e.g. `...` as a real filename). That is ACCEPTABLE — it fails closed, and
-/// matches the Windows `has_disguised_dotdot` behaviour, which already rejects
-/// the same all-dots family (Windows canonicalisation would alias it to `..`).
+/// matches the Windows [`ElementClass::DisguisedParent`] refusal, which already
+/// rejects the same all-dots family (Windows canonicalisation would alias it to `..`).
 #[must_use]
 pub fn escapes_root(cleaned: &str, windows: bool) -> bool {
     let vol = volume_name_len(cleaned, windows);
@@ -710,6 +727,14 @@ mod tests {
             "aux.tar.gz",
             "PRN:",
             "AUX :x",
+            "CON.",
+            "CON .txt",
+            "LPT0",
+            "CONIN$",
+            "lpt\u{b9}",
+            "CON\u{131}N$",
+            "con\u{131}n$",
+            "CON\u{131}N$.txt",
         ] {
             assert!(is_dos_device(e.as_bytes()), "{e:?} is a device");
         }
@@ -724,6 +749,8 @@ mod tests {
             "CO",
             "",
             "COMa",
+            "CON\u{131}N",
+            "\u{131}CON",
         ] {
             assert!(!is_dos_device(e.as_bytes()), "{e:?} is a plain name");
         }
@@ -741,7 +768,9 @@ mod tests {
         for e in [
             "", ".", "..", "...", ".. ", " ", ". ", " .. ", "a", "a.", ". . .",
         ] {
-            assert_eq!(has_disguised_dotdot(e), rule(e.as_bytes()), "{e:?}");
+            let disguised =
+                ElementClass::windows_elements(e).any(|c| c == ElementClass::DisguisedParent);
+            assert_eq!(disguised, rule(e.as_bytes()), "{e:?}");
         }
     }
 
