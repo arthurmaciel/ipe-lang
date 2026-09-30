@@ -157,8 +157,6 @@ fn run_jailed_inner(
     payload: &[OsString],
     capture_stderr: bool,
 ) -> Outcome {
-    use std::os::fd::{AsFd as _, AsRawFd as _};
-
     // Hold the global lock across the whole spawn — the memfd + cloexec-clear is
     // a process-wide fd-table mutation.
     let _guard = JAIL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -169,8 +167,7 @@ fn run_jailed_inner(
 
     // memfd for the seccomp program, through the launcher's own safe writer.
     let seccomp = ipe_sandbox::run_jail::write_seccomp_memfd(&bytes).expect("seccomp memfd");
-    ipe_sandbox::run_jail::clear_cloexec(seccomp.as_fd()).expect("seccomp fd inheritable");
-    let fd = seccomp.as_raw_fd();
+    let fd = seccomp.make_inheritable().expect("seccomp fd inheritable");
 
     let scoped = std::env::temp_dir().join(format!("ipe-e2e-{}", std::process::id()));
     std::fs::create_dir_all(&scoped).expect("scoped tmp");

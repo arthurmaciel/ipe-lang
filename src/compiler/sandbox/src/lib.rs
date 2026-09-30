@@ -461,8 +461,6 @@ pub fn run_in_bwrap_jail_deny_subprocess(
     spec: &JailSpec,
     payload: &[OsString],
 ) -> Result<JailedOutput, SandboxDefect> {
-    use std::os::fd::{AsFd as _, AsRawFd as _};
-
     // `allow_subprocess = false` ⇒ the fork/process-clone family is denied.
     let Some(program) = seccomp::subprocess_deny_program(false) else {
         // No filter can be compiled here — refuse rather than run unfiltered.
@@ -478,15 +476,15 @@ pub fn run_in_bwrap_jail_deny_subprocess(
         program: "seccomp".to_owned(),
         detail: d.to_string(),
     })?;
-    // The seccomp fd MUST be inheritable so bwrap reads the filter from it across
-    // the spawn. Clearing close-on-exec here, in the parent, refuses the run
-    // (fail-closed) when the flag cannot be cleared, rather than run the payload
-    // without its filter.
-    run_jail::clear_cloexec(owned.as_fd()).map_err(|e| SandboxDefect::Spawn {
+    // The sealed seccomp fd MUST be inheritable so bwrap reads the filter from it
+    // across the spawn. Clearing close-on-exec here, in the parent, refuses the
+    // run (fail-closed) when the flag cannot be cleared, rather than run the
+    // payload without its filter.
+    let seccomp_fd = owned.make_inheritable().map_err(|e| SandboxDefect::Spawn {
         program: "seccomp".to_owned(),
         detail: format!("clearing close-on-exec on the seccomp memfd failed: {e}"),
     })?;
-    let out = run_bwrap(caps, spec, payload, Some(owned.as_raw_fd()));
+    let out = run_bwrap(caps, spec, payload, Some(seccomp_fd));
     drop(owned);
     out
 }
@@ -494,13 +492,13 @@ pub fn run_in_bwrap_jail_deny_subprocess(
 /// The shared spawn+drain core for both the plain and the subprocess-denied jail.
 ///
 /// When `seccomp_fd` is `Some`, `--seccomp <fd>` is inserted into the bwrap argv;
-/// the caller owns that fd and has already made it inheritable, so bwrap reads the
-/// filter from it across the exec.
+/// the caller owns that sealed fd and has already made it inheritable, so bwrap
+/// reads the filter from it across the exec.
 fn run_bwrap(
     caps: &Capabilities,
     spec: &JailSpec,
     payload: &[OsString],
-    seccomp_fd: Option<i32>,
+    seccomp_fd: Option<run_jail::SealedFdNumber>,
 ) -> Result<JailedOutput, SandboxDefect> {
     let Some(bwrap) = &caps.bwrap else {
         return Err(SandboxDefect::NoIsolationMechanism);
@@ -649,7 +647,7 @@ fn bwrap_argv_with_seccomp(
     timeout: &Path,
     spec: &JailSpec,
     payload: &[OsString],
-    seccomp_fd: Option<i32>,
+    seccomp_fd: Option<run_jail::SealedFdNumber>,
 ) -> Result<Vec<OsString>, SandboxDefect> {
     let mut argv = bwrap_argv(bwrap, prlimit, timeout, spec, payload);
     let Some(fd) = seccomp_fd else {
@@ -1120,7 +1118,7 @@ mod tests {
             Path::new("/usr/bin/timeout"),
             &spec(),
             &[OsString::from("ipe-ffi-inspector")],
-            Some(7),
+            Some(run_jail::SealedFdNumber::for_test(7)),
         )
         .expect("bwrap token present, so the seccomp flag attaches");
         let rendered: Vec<String> = argv
@@ -1151,7 +1149,7 @@ mod tests {
             Path::new("/usr/bin/timeout"),
             &spec(),
             &[OsString::from("ipe-ffi-inspector")],
-            Some(7),
+            Some(run_jail::SealedFdNumber::for_test(7)),
         )
         .expect("a requested seccomp filter must attach, never drop");
         let rendered: Vec<String> = argv

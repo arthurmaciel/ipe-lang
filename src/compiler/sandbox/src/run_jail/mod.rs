@@ -107,6 +107,30 @@ pub use windows::*;
 // every target, so it is re-exported unconditionally, not only on Windows.
 pub use windows::windows_scrubbed_env;
 
+/// The number of a sealed, inheritable descriptor `bwrap` reads from: the
+/// `--seccomp <fd>` filter and the `--file <fd> <dest>` app delivery.
+///
+/// Only a sealed memfd owner mints one (`SealedSeccompFd::make_inheritable`,
+/// `SealedApp::make_inheritable`), and only after sealing and clearing
+/// close-on-exec, so a jail argv can never name a writable, unsealed, or
+/// non-inherited descriptor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SealedFdNumber(i32);
+
+impl std::fmt::Display for SealedFdNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl SealedFdNumber {
+    /// A stand-in descriptor number for pure argv-rendering tests.
+    #[cfg(test)]
+    pub(crate) const fn for_test(raw: i32) -> Self {
+        Self(raw)
+    }
+}
+
 // ── the Linux jail argv builder ─────────────────────────────────────────────
 
 /// The paths of the host tools the run jail needs. `bwrap` and `prlimit` are
@@ -139,8 +163,8 @@ pub struct RunJailTools {
 /// visible, and none of them exposes the cargo home. Every path is canonical,
 /// so the `--chdir` and `TMPDIR` the payload receives are exactly the paths
 /// bound.
-/// `seccomp_fd` is the file-descriptor number the caller has arranged to carry
-/// the compiled seccomp program (passed to `bwrap --seccomp <fd>`); `None` means
+/// `seccomp_fd` is the sealed, inheritable descriptor carrying the compiled
+/// seccomp program (passed to `bwrap --seccomp <fd>`); `None` means
 /// no filter is attached (the caller must have refused already if a filter was
 /// required).
 ///
@@ -152,7 +176,7 @@ pub fn run_jail_argv(
     tools: &RunJailTools,
     profile: &SandboxProfile,
     mounts: &JailMounts,
-    seccomp_fd: Option<i32>,
+    seccomp_fd: Option<SealedFdNumber>,
     host_env: &dyn Fn(&str) -> Option<OsString>,
     payload: &[OsString],
 ) -> Vec<OsString> {
@@ -174,8 +198,8 @@ pub fn run_jail_argv_with_delivery(
     tools: &RunJailTools,
     profile: &SandboxProfile,
     mounts: &JailMounts,
-    seccomp_fd: Option<i32>,
-    app_delivery: Option<(i32, &Path)>,
+    seccomp_fd: Option<SealedFdNumber>,
+    app_delivery: Option<(SealedFdNumber, &Path)>,
     host_env: &dyn Fn(&str) -> Option<OsString>,
     payload: &[OsString],
 ) -> Vec<OsString> {
@@ -1012,7 +1036,7 @@ mod tests {
         )
     }
 
-    fn rendered(profile: &SandboxProfile, seccomp_fd: Option<i32>) -> Vec<String> {
+    fn rendered(profile: &SandboxProfile, seccomp_fd: Option<SealedFdNumber>) -> Vec<String> {
         let no_env = |_: &str| None;
         run_jail_argv(
             &tools(),
@@ -1140,7 +1164,10 @@ mod tests {
 
     #[test]
     fn maximally_isolated_argv_denies_net_masks_proc_and_scrubs_env() {
-        let argv = rendered(&SandboxProfile::maximally_isolated(), Some(10));
+        let argv = rendered(
+            &SandboxProfile::maximally_isolated(),
+            Some(SealedFdNumber::for_test(10)),
+        );
         let joined = argv.join(" ");
         // No wall clock (default RunResourceLimits has wall_secs = None), so
         // bwrap is the first program.
@@ -1181,8 +1208,8 @@ mod tests {
             &tools(),
             &SandboxProfile::maximally_isolated(),
             &work_mounts(),
-            Some(10),
-            Some((7, dest)),
+            Some(SealedFdNumber::for_test(10)),
+            Some((SealedFdNumber::for_test(7), dest)),
             &no_env,
             &[OsString::from("/work/tmp-1/ipe-app")],
         )
@@ -1221,7 +1248,11 @@ mod tests {
     #[test]
     fn no_delivery_emits_no_file_op() {
         // The default `run_jail_argv` (no delivery) must not emit `--file`.
-        let joined = rendered(&SandboxProfile::maximally_isolated(), Some(10)).join(" ");
+        let joined = rendered(
+            &SandboxProfile::maximally_isolated(),
+            Some(SealedFdNumber::for_test(10)),
+        )
+        .join(" ");
         assert!(!joined.contains("--file"), "unexpected --file: {joined}");
         assert!(!joined.contains("--perms"), "unexpected --perms: {joined}");
     }

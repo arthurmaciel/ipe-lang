@@ -12,7 +12,8 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
 use super::{
-    RunJailDefect, RunJailTools, SandboxProfile, run_jail_argv, run_jail_argv_with_delivery,
+    RunJailDefect, RunJailTools, SandboxProfile, SealedFdNumber, run_jail_argv,
+    run_jail_argv_with_delivery,
 };
 use crate::seccomp;
 use crate::{CanonicalPath, JailMounts};
@@ -103,9 +104,9 @@ fn app_ro_binds(app: &CanonicalPath) -> Vec<CanonicalPath> {
 /// replacing the current process on success (Unix `exec`).
 ///
 /// This compiles the seccomp program for the profile's subprocess axis, places
-/// it on an inheritable file descriptor, builds the `bwrap` argv referencing
-/// that fd, and `exec`s it. The seccomp fd is deliberately left WITHOUT the
-/// close-on-exec flag so `bwrap` inherits it; every other fd stays cloexec.
+/// it on a sealed memfd, makes that fd inheritable, builds the `bwrap` argv
+/// referencing it, and `exec`s it. Only the sealed seccomp fd loses its
+/// close-on-exec flag, so `bwrap` inherits it; every other fd stays cloexec.
 ///
 /// On a non-Linux target this is a compile-time refusal shape — the whole body
 /// is `cfg(target_os = "linux")`; other targets return
@@ -142,7 +143,16 @@ pub fn exec_in_run_jail(
         });
     };
     let bytes = seccomp::program_bytes(&program);
-    let seccomp_fd = write_seccomp_memfd(&bytes)?;
+    let seccomp = write_seccomp_memfd(&bytes)?;
+    // The seccomp fd MUST survive exec so bwrap can read the program from it.
+    // `exec` replaces THIS process (no fork), so clearing close-on-exec here is
+    // the same fd-table state a pre-exec hook would see. A failure refuses
+    // rather than run the app without the filter.
+    let seccomp_fd = seccomp
+        .make_inheritable()
+        .map_err(|e| RunJailDefect::Spawn {
+            detail: format!("clearing close-on-exec on the seccomp memfd failed: {e}"),
+        })?;
 
     let mut payload: Vec<OsString> = Vec::with_capacity(app_args.len() + 1);
     payload.push(app.as_path().as_os_str().to_owned());
@@ -153,7 +163,7 @@ pub fn exec_in_run_jail(
         tools,
         profile,
         &mounts,
-        Some(seccomp_fd.as_raw_fd()),
+        Some(seccomp_fd),
         &host_env,
         &payload,
     );
@@ -163,13 +173,6 @@ pub fn exec_in_run_jail(
     })?;
     let mut cmd = std::process::Command::new(program_path);
     cmd.args(rest);
-    // The seccomp fd MUST survive exec so bwrap can read the program from it.
-    // `exec` replaces THIS process (no fork), so clearing close-on-exec here is
-    // the same fd-table state a pre-exec hook would see. A failure refuses
-    // rather than run the app without the filter.
-    clear_cloexec(seccomp_fd.as_fd()).map_err(|e| RunJailDefect::Spawn {
-        detail: format!("clearing close-on-exec on the seccomp memfd failed: {e}"),
-    })?;
     let err = cmd.exec();
     Err(RunJailDefect::Spawn {
         detail: err.to_string(),
@@ -183,9 +186,9 @@ pub fn exec_in_run_jail(
 ///
 /// The wrapper writes the embedded bytes to a sealed memfd
 /// ([`write_sealed_app_memfd`]), verifies the capability floor by reading the
-/// SEALED fd, then calls this. bwrap inherits the (non-cloexec, sealed) fd
-/// across the process replacement and materialises the app inside the jail via
-/// `--file` at a fixed sandbox path — so the bytes executed are provably the
+/// SEALED fd, then calls this, which makes the sealed fd inheritable. bwrap
+/// inherits it across the process replacement and materialises the app inside
+/// the jail via `--file` at a fixed sandbox path — so the bytes executed are provably the
 /// sealed bytes that were verified; a same-uid attacker has no host path to
 /// pre-seed or swap.
 ///
@@ -216,8 +219,21 @@ pub fn exec_embedded_in_run_jail(
         });
     };
     let bytes = seccomp::program_bytes(&program);
-    let seccomp_fd = write_seccomp_memfd(&bytes)?;
-    let app_fd = app.as_raw_fd();
+    let seccomp = write_seccomp_memfd(&bytes)?;
+    // Both the seccomp filter fd and the sealed app fd MUST survive the exec so
+    // bwrap can read them. `exec` replaces THIS process (no fork), so clearing
+    // close-on-exec here is the same fd-table state a pre-exec hook would see. A
+    // failure refuses rather than run the app without its filter or without a
+    // delivered binary.
+    let cloexec_err = |what: &str, e: std::io::Error| RunJailDefect::Spawn {
+        detail: format!("clearing close-on-exec on the {what} failed: {e}"),
+    };
+    let seccomp_fd = seccomp
+        .make_inheritable()
+        .map_err(|e| cloexec_err("seccomp memfd", e))?;
+    let app_fd = app
+        .make_inheritable()
+        .map_err(|e| cloexec_err("sealed app memfd", e))?;
 
     // The in-jail path the app is materialised at. It sits under `scoped_tmp`,
     // the one always-writable bind, so bwrap can create it after the mounts.
@@ -232,7 +248,7 @@ pub fn exec_embedded_in_run_jail(
         tools,
         profile,
         &mounts,
-        Some(seccomp_fd.as_raw_fd()),
+        Some(seccomp_fd),
         Some((app_fd, &dest)),
         &host_env,
         &payload,
@@ -243,32 +259,21 @@ pub fn exec_embedded_in_run_jail(
     })?;
     let mut cmd = std::process::Command::new(program_path);
     cmd.args(rest);
-    // Both the seccomp filter fd and the sealed app fd MUST survive the exec so
-    // bwrap can read them. `exec` replaces THIS process (no fork), so clearing
-    // close-on-exec here is the same fd-table state a pre-exec hook would see. A
-    // failure refuses rather than run the app without its filter or without a
-    // delivered binary.
-    let cloexec_err = |what: &str, e: std::io::Error| RunJailDefect::Spawn {
-        detail: format!("clearing close-on-exec on the {what} failed: {e}"),
-    };
-    clear_cloexec(seccomp_fd.as_fd()).map_err(|e| cloexec_err("seccomp memfd", e))?;
-    clear_cloexec(app.as_fd()).map_err(|e| cloexec_err("sealed app memfd", e))?;
     let err = cmd.exec();
     Err(RunJailDefect::Spawn {
         detail: err.to_string(),
     })
 }
 
-/// Clear the close-on-exec flag on `fd` so an inherited fd (the seccomp memfd)
-/// survives an exec.
+/// Clear the close-on-exec flag on `fd` so a sealed memfd survives an exec.
 ///
-/// Shared by the run jail's own launcher and the captured-child build jail's
-/// subprocess-denied variant, so the fd-inheritance handling is defined once.
+/// Reached only through the sealed owners' `make_inheritable`, so no unsealed
+/// descriptor is ever made inheritable.
 ///
 /// # Errors
 ///
 /// [`std::io::Error`] when either `fcntl` fails.
-pub fn clear_cloexec(fd: BorrowedFd<'_>) -> std::io::Result<()> {
+fn clear_cloexec(fd: BorrowedFd<'_>) -> std::io::Result<()> {
     let flags = rustix::io::fcntl_getfd(fd)?;
     rustix::io::fcntl_setfd(fd, flags.difference(rustix::io::FdFlags::CLOEXEC))?;
     Ok(())
@@ -296,36 +301,91 @@ fn rewind_fd(fd: BorrowedFd<'_>) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Write the compiled seccomp program to an anonymous in-memory file and return
-/// its owned descriptor, rewound to offset 0, ready for `bwrap --seccomp <fd>`.
+/// The four seals that freeze a memfd's bytes and size for the fd's lifetime:
+/// no write, no shrink, no grow, and no seal change.
+fn freezing_seals() -> rustix::fs::SealFlags {
+    use rustix::fs::SealFlags;
+    SealFlags::WRITE | SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL
+}
+
+/// Create a sealing-capable, close-on-exec memfd named `name`, write all of
+/// `bytes`, freeze it with [`freezing_seals`], and rewind it to offset 0.
 ///
-/// A `memfd` is used rather than a temp file so the program bytes never touch
-/// the filesystem (nothing to race or tamper on disk) and the fd is
-/// self-cleaning when closed. It is created WITHOUT `MFD_CLOEXEC`, so it is
-/// inheritable from birth: a spawned `bwrap` receives it with no child-side hook.
-///
-/// # Errors
-///
-/// [`RunJailDefect::Spawn`] on any `memfd_create`, write, or seek failure — a
-/// truncated or unwritten filter would be a malformed seccomp program, so the
-/// jail refuses rather than run unfiltered.
-pub fn write_seccomp_memfd(bytes: &[u8]) -> Result<OwnedFd, RunJailDefect> {
+/// `what` names the payload in the refusal detail.
+fn write_frozen_memfd(
+    name: &std::ffi::CStr,
+    what: &str,
+    bytes: &[u8],
+) -> Result<OwnedFd, RunJailDefect> {
+    use rustix::fs::MemfdFlags;
     let spawn = |detail: String| RunJailDefect::Spawn { detail };
-    let fd =
-        rustix::fs::memfd_create(c"ipe-seccomp", rustix::fs::MemfdFlags::empty()).map_err(|e| {
+    // Close-on-exec from birth: no concurrent spawn inherits the fd while it is
+    // being written. The owner clears the flag only once sealed, right before
+    // the hand-off to bwrap.
+    let fd = rustix::fs::memfd_create(name, MemfdFlags::ALLOW_SEALING | MemfdFlags::CLOEXEC)
+        .map_err(|e| {
             spawn(format!(
-                "memfd_create for the seccomp program failed: {}",
+                "memfd_create for the {what} failed: {}",
                 std::io::Error::from(e)
             ))
         })?;
-    write_all_fd(fd.as_fd(), bytes).map_err(|e| {
+    write_all_fd(fd.as_fd(), bytes)
+        .map_err(|e| spawn(format!("writing the {what} to the memfd failed: {e}")))?;
+    rustix::fs::fcntl_add_seals(fd.as_fd(), freezing_seals()).map_err(|e| {
         spawn(format!(
-            "writing the seccomp program to the memfd failed: {e}"
+            "sealing the {what} memfd failed: {}",
+            std::io::Error::from(e)
         ))
     })?;
-    // Rewind so bwrap reads the program from the start.
-    rewind_fd(fd.as_fd()).map_err(|e| spawn(format!("rewinding the seccomp memfd failed: {e}")))?;
+    rewind_fd(fd.as_fd()).map_err(|e| spawn(format!("rewinding the {what} memfd failed: {e}")))?;
     Ok(fd)
+}
+
+/// A sealed anonymous file holding a compiled seccomp program, owning its
+/// descriptor (closed on drop).
+///
+/// Built only by [`write_seccomp_memfd`], which seals the fd after the write,
+/// so the filter bwrap loads is exactly the program compiled here: no process
+/// holding the fd, the jailed payload included, can rewrite or resize it.
+pub struct SealedSeccompFd {
+    fd: OwnedFd,
+}
+
+impl AsFd for SealedSeccompFd {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.fd.as_fd()
+    }
+}
+
+impl SealedSeccompFd {
+    /// Clear close-on-exec so the next exec (bwrap) inherits the sealed fd, and
+    /// return the number the `--seccomp <fd>` argument names.
+    ///
+    /// # Errors
+    ///
+    /// [`std::io::Error`] when either `fcntl` fails.
+    pub fn make_inheritable(&self) -> std::io::Result<SealedFdNumber> {
+        clear_cloexec(self.fd.as_fd())?;
+        Ok(SealedFdNumber(self.fd.as_raw_fd()))
+    }
+}
+
+/// Write the compiled seccomp program to a sealed anonymous in-memory file,
+/// rewound to offset 0, ready for `bwrap --seccomp <fd>`.
+///
+/// A `memfd` is used rather than a temp file so the program bytes never touch
+/// the filesystem (nothing to race or tamper on disk) and the fd is
+/// self-cleaning when closed. It is born close-on-exec and becomes inheritable
+/// only through [`SealedSeccompFd::make_inheritable`].
+///
+/// # Errors
+///
+/// [`RunJailDefect::Spawn`] on any `memfd_create`, write, seal, or seek failure
+/// — a truncated, unwritten, or unsealed filter would let the payload run
+/// under a program other than the one compiled, so the jail refuses.
+pub fn write_seccomp_memfd(bytes: &[u8]) -> Result<SealedSeccompFd, RunJailDefect> {
+    let fd = write_frozen_memfd(c"ipe-seccomp", "seccomp program", bytes)?;
+    Ok(SealedSeccompFd { fd })
 }
 
 /// A sealed anonymous file holding the embedded app binary, owning its
@@ -346,10 +406,15 @@ impl AsFd for SealedApp {
 }
 
 impl SealedApp {
-    /// The raw descriptor number of the sealed anonymous file.
-    #[must_use]
-    pub fn as_raw_fd(&self) -> i32 {
-        self.fd.as_raw_fd()
+    /// Clear close-on-exec so the next exec (bwrap) inherits the sealed fd, and
+    /// return the number the `--file <fd> <dest>` delivery names.
+    ///
+    /// # Errors
+    ///
+    /// [`std::io::Error`] when either `fcntl` fails.
+    pub fn make_inheritable(&self) -> std::io::Result<SealedFdNumber> {
+        clear_cloexec(self.fd.as_fd())?;
+        Ok(SealedFdNumber(self.fd.as_raw_fd()))
     }
 
     /// Read the full sealed contents by reading through the fd.
@@ -397,48 +462,74 @@ impl SealedApp {
 /// Write `bytes` to an anonymous, sealing-capable in-memory file, seal it
 /// against any further write/resize, and return the owned [`SealedApp`].
 ///
-/// The returned fd is NON-close-on-exec so it is inherited across the
-/// wrapper→bwrap process replacement, letting bwrap materialise the app inside
-/// the jail from the same sealed inode via `--file`.  Sealing (`F_SEAL_WRITE |
-/// F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL`) makes the verified-then-executed
-/// bytes provably identical: no path lookup, no writable re-open.
+/// The fd is born close-on-exec and becomes inheritable only through
+/// [`SealedApp::make_inheritable`], right before the wrapper→bwrap process
+/// replacement that lets bwrap materialise the app inside the jail from the
+/// same sealed inode via `--file`. Sealing (`F_SEAL_WRITE | F_SEAL_SHRINK |
+/// F_SEAL_GROW | F_SEAL_SEAL`) makes the verified-then-executed bytes provably
+/// identical: no path lookup, no writable re-open.
 ///
 /// # Errors
 ///
 /// [`RunJailDefect::Spawn`] on any syscall failure.
 pub fn write_sealed_app_memfd(bytes: &[u8]) -> Result<SealedApp, RunJailDefect> {
-    use rustix::fs::SealFlags;
-    let spawn = |detail: String| RunJailDefect::Spawn { detail };
-    // `MFD_CLOEXEC` is deliberately NOT set: the fd must survive the exec into
-    // bwrap so bwrap can read the app from it.
-    let fd = rustix::fs::memfd_create(c"ipe-embedded-app", rustix::fs::MemfdFlags::ALLOW_SEALING)
-        .map_err(|e| {
-        spawn(format!(
-            "memfd_create for the embedded app failed: {}",
-            std::io::Error::from(e)
-        ))
-    })?;
-    write_all_fd(fd.as_fd(), bytes)
-        .map_err(|e| spawn(format!("writing the embedded app to the memfd failed: {e}")))?;
-    // Seal against write, shrink, grow, and further sealing. After this the
-    // byte content and size are frozen for the lifetime of the fd.
-    let seals = SealFlags::WRITE | SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL;
-    rustix::fs::fcntl_add_seals(fd.as_fd(), seals).map_err(|e| {
-        spawn(format!(
-            "sealing the embedded app memfd failed: {}",
-            std::io::Error::from(e)
-        ))
-    })?;
-    // Rewind so the first reader (verification scan) starts at the beginning.
-    rewind_fd(fd.as_fd())
-        .map_err(|e| spawn(format!("rewinding the embedded app memfd failed: {e}")))?;
+    let fd = write_frozen_memfd(c"ipe-embedded-app", "embedded app", bytes)?;
     Ok(SealedApp { fd })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::app_ro_binds;
+    use super::{app_ro_binds, write_sealed_app_memfd, write_seccomp_memfd};
     use crate::CanonicalPath;
+    use std::os::fd::AsFd as _;
+
+    /// Whether `fd` carries close-on-exec.
+    fn is_cloexec(fd: std::os::fd::BorrowedFd<'_>) -> bool {
+        rustix::io::fcntl_getfd(fd).is_ok_and(|flags| flags.contains(rustix::io::FdFlags::CLOEXEC))
+    }
+
+    #[test]
+    fn a_write_to_the_sealed_seccomp_fd_is_refused() {
+        let sealed = write_seccomp_memfd(b"filter").expect("sealed seccomp memfd");
+        let refused = rustix::io::write(sealed.as_fd(), b"x");
+        assert_eq!(refused, Err(rustix::io::Errno::PERM));
+        assert_eq!(
+            rustix::fs::fcntl_get_seals(sealed.as_fd()),
+            Ok(super::freezing_seals())
+        );
+    }
+
+    #[test]
+    fn a_resize_of_the_sealed_seccomp_fd_is_refused() {
+        let sealed = write_seccomp_memfd(b"filter").expect("sealed seccomp memfd");
+        assert_eq!(
+            rustix::fs::ftruncate(sealed.as_fd(), 0),
+            Err(rustix::io::Errno::PERM)
+        );
+        assert_eq!(
+            rustix::fs::ftruncate(sealed.as_fd(), 4096),
+            Err(rustix::io::Errno::PERM)
+        );
+    }
+
+    #[test]
+    fn the_seccomp_fd_is_close_on_exec_until_made_inheritable() {
+        let sealed = write_seccomp_memfd(b"filter").expect("sealed seccomp memfd");
+        assert!(is_cloexec(sealed.as_fd()), "born inheritable");
+        sealed.make_inheritable().expect("clear close-on-exec");
+        assert!(!is_cloexec(sealed.as_fd()), "still close-on-exec");
+    }
+
+    #[test]
+    fn a_write_to_the_sealed_app_fd_is_refused() {
+        let sealed = write_sealed_app_memfd(b"app").expect("sealed app memfd");
+        assert!(is_cloexec(sealed.as_fd()), "born inheritable");
+        assert_eq!(
+            rustix::io::write(sealed.as_fd(), b"x"),
+            Err(rustix::io::Errno::PERM)
+        );
+        assert_eq!(sealed.read_sealed_bytes().expect("read"), b"app".to_vec());
+    }
 
     #[test]
     fn app_ro_bind_is_the_file_not_its_parent() {

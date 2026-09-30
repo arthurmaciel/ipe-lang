@@ -28,11 +28,6 @@
 //! exit, signal, or ambiguous state decodes to a non-`Clean` outcome.
 
 use std::ffi::OsString;
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "x86_64", target_arch = "aarch64")
-))]
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use crate::JailMounts;
@@ -359,22 +354,26 @@ pub fn build_in_jail(
     // closing it after the child is waited on is safe. Unlike the run jail
     // (which `exec`s and never returns), this build jail RETURNS and is called
     // once per axis in the audit tightening loop; a raw fd would leak one memfd
-    // per call in the long-lived audit/CI process. It is born without
-    // close-on-exec, so the spawned bwrap inherits it.
+    // per call in the long-lived audit/CI process. It is sealed and born
+    // close-on-exec; clearing the flag only now, right before the spawn, lets
+    // bwrap inherit it. A failure refuses rather than run the build unfiltered.
     let seccomp_owned = match crate::run_jail::write_seccomp_memfd(&bytes) {
         Ok(fd) => fd,
         Err(defect) => return JailOutcome::Unavailable { defect },
     };
+    let seccomp_fd = match seccomp_owned.make_inheritable() {
+        Ok(fd) => fd,
+        Err(e) => {
+            return JailOutcome::Unavailable {
+                defect: RunJailDefect::Spawn {
+                    detail: format!("clearing close-on-exec on the seccomp memfd failed: {e}"),
+                },
+            };
+        }
+    };
 
     let host_env = crate::host_env::granted;
-    let argv = run_jail_argv(
-        tools,
-        profile,
-        mounts,
-        Some(seccomp_owned.as_raw_fd()),
-        &host_env,
-        payload,
-    );
+    let argv = run_jail_argv(tools, profile, mounts, Some(seccomp_fd), &host_env, payload);
 
     // The Linux jail's env is scrubbed inside the bwrap argv (`--clearenv` +
     // allowlisted re-export), so no launcher-side env override is needed here.
