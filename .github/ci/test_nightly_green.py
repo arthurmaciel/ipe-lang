@@ -383,7 +383,28 @@ class AdminReadTest(unittest.TestCase):
                 self.assertTrue(_verdict(api, **env))
 
 
-ADMIN_WORKFLOW = {"on": {"schedule": [{"cron": "30 4 * * *"}]}, "jobs": {}}
+ADMIN_STEP = {
+    "name": "admin read",
+    "env": {"GH_TOKEN": "${{ secrets.RULESET_READ_TOKEN }}", "REPO": "${{ github.repository }}"},
+    "run": "python3 .github/ci/check_required_set.py --fetch-admin",
+}
+ADMIN_WORKFLOW = {
+    "on": {"schedule": [{"cron": "30 4 * * *"}]},
+    "jobs": {
+        "ruleset-admin-read": {
+            "name": "ruleset-admin-read",
+            "runs-on": "ubuntu-latest",
+            "environment": "ruleset-admin-read",
+            "steps": [{"uses": "actions/checkout@v7"}, ADMIN_STEP],
+        }
+    },
+}
+
+
+def _admin_job(wf: dict) -> dict:
+    return wf["jobs"]["ruleset-admin-read"]
+
+
 ADMIN_MANIFEST = {
     "checks": [{"context": "ruleset-admin-read", "disposition": "nightly-gate", "producer": "ruleset-admin-read.yml"}]
 }
@@ -392,7 +413,7 @@ ADMIN_MANIFEST = {
 class AdminReadWiringTest(unittest.TestCase):
     def test_schedule_only_nightly_gate_passes(self) -> None:
         self.assertEqual(ng.admin_read_wiring_errors(ADMIN_WORKFLOW, ADMIN_MANIFEST), [])
-        self.assertEqual(ng.admin_read_wiring_errors({True: ADMIN_WORKFLOW["on"]}, ADMIN_MANIFEST), [])
+        self.assertEqual(ng.admin_read_wiring_errors({True: ADMIN_WORKFLOW["on"], "jobs": ADMIN_WORKFLOW["jobs"]}, ADMIN_MANIFEST), [])
 
     def test_extra_or_other_trigger_refused(self) -> None:
         for on in (
@@ -404,7 +425,57 @@ class AdminReadWiringTest(unittest.TestCase):
             None,
         ):
             with self.subTest(on):
-                self.assertTrue(ng.admin_read_wiring_errors({"on": on}, ADMIN_MANIFEST))
+                self.assertTrue(ng.admin_read_wiring_errors(dict(ADMIN_WORKFLOW, on=on), ADMIN_MANIFEST))
+
+    def assertAdminRefused(self, mutate, needle: str) -> None:
+        wf = copy.deepcopy(ADMIN_WORKFLOW)
+        mutate(wf)
+        errors = ng.admin_read_wiring_errors(wf, ADMIN_MANIFEST)
+        self.assertTrue(any(needle in e for e in errors), errors)
+
+    def test_workflow_token_read_refused(self) -> None:
+        def swapped(wf: dict) -> None:
+            step = _admin_job(wf)["steps"][-1]
+            step["run"] = "python3 .github/ci/check_required_set.py --fetch"
+            step["env"]["GH_TOKEN"] = "${{ github.token }}"
+
+        self.assertAdminRefused(swapped, "must run only")
+        self.assertAdminRefused(swapped, "env must be exactly")
+        for run in ("python3 .github/ci/check_required_set.py --fetch",
+                    "python3 .github/ci/check_required_set.py --fetch-admin || true",
+                    "python3 .github/ci/check_required_set.py"):
+            with self.subTest(run=run):
+                self.assertAdminRefused(lambda wf, r=run: _admin_job(wf)["steps"][-1].update(run=r), "must run only")
+        for env in ({"GH_TOKEN": "${{ github.token }}", "REPO": "${{ github.repository }}"},
+                    {"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}", "REPO": "${{ github.repository }}"},
+                    {"GH_TOKEN": "${{ secrets.RULESET_READ_TOKEN }}"},
+                    {"GH_TOKEN": "${{ secrets.RULESET_READ_TOKEN }}", "REPO": "o/r"},
+                    {**ADMIN_STEP["env"], "GITHUB_API_URL": "https://evil.example"},
+                    None):
+            with self.subTest(env=env):
+                self.assertAdminRefused(lambda wf, e=env: _admin_job(wf)["steps"][-1].update(env=e), "env must be exactly")
+
+    def test_read_step_count_refused(self) -> None:
+        self.assertAdminRefused(lambda wf: _admin_job(wf)["steps"].pop(), "exactly one")
+        self.assertAdminRefused(lambda wf: _admin_job(wf)["steps"].append(dict(ADMIN_STEP)), "exactly one")
+        self.assertAdminRefused(lambda wf: _admin_job(wf).pop("steps"), "exactly one")
+
+    def test_environment_refused_unless_the_admin_read_environment(self) -> None:
+        for env in (None, "prod", "Ruleset-Admin-Read", {"name": "ruleset-admin-read"}, "${{ 'ruleset-admin-read' }}"):
+            with self.subTest(env=env):
+                self.assertAdminRefused(lambda wf, e=env: _admin_job(wf).update(environment=e), "environment: ruleset-admin-read")
+        self.assertAdminRefused(lambda wf: _admin_job(wf).pop("environment"), "environment: ruleset-admin-read")
+
+    def test_job_shape_refused(self) -> None:
+        self.assertAdminRefused(lambda wf: wf["jobs"].update(other={"steps": []}), "exactly one job")
+        self.assertAdminRefused(lambda wf: wf.update(jobs={"x": wf["jobs"]["ruleset-admin-read"]}), "exactly one job")
+        self.assertAdminRefused(lambda wf: wf.update(jobs=None), "exactly one job")
+        self.assertAdminRefused(lambda wf: _admin_job(wf).update(name="other"), "must report context")
+        for key in ("if", "continue-on-error", "needs", "strategy"):
+            with self.subTest(key=key):
+                self.assertAdminRefused(lambda wf, k=key: _admin_job(wf).update({k: "x"}), f"must not set `{key}`")
+        self.assertAdminRefused(lambda wf: _admin_job(wf)["steps"][-1].update({"continue-on-error": True}), "must not set `if`")
+        self.assertAdminRefused(lambda wf: _admin_job(wf)["steps"][0].update({"if": "false"}), "must not set `if`")
 
     def test_manifest_drift_refused(self) -> None:
         for manifest in (

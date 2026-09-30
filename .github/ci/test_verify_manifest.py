@@ -2794,18 +2794,6 @@ class TestSsotOutputTools(unittest.TestCase):
                 self.assertNotEqual(rc, 0)
                 self.assertEqual(stdout, "")
 
-    def test_repo_admin_read_workflow_is_schedule_only(self) -> None:
-        import strict_yaml
-
-        path = os.path.join(HERE, "..", "workflows", "ruleset-admin-read.yml")
-        with open(path, encoding="utf-8") as f:
-            doc = strict_yaml.safe_load(f)
-        on = doc.get(True, doc.get("on"))
-        self.assertEqual(set(on), {"schedule"})
-        (job,) = doc["jobs"].values()
-        self.assertEqual(job["steps"][-1]["run"], "python3 .github/ci/check_required_set.py --fetch-admin")
-        self.assertEqual(job["steps"][-1]["env"]["GH_TOKEN"], "${{ secrets.RULESET_READ_TOKEN }}")
-
     def test_a_non_admin_read_leaves_bypass_actors_to_the_admin_read(self) -> None:
         spec = importlib.util.spec_from_file_location("check_required_set", os.path.join(HERE, "check_required_set.py"))
         crs = importlib.util.module_from_spec(spec)

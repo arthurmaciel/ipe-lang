@@ -19,7 +19,10 @@ and, always, on proof the nightly ruleset admin read is green:
      concluded `success`, is at most MAX_AGE_H hours old, and ran on a commit
      of main's own history. It proves the live ruleset has no bypass actor, a
      property of the repository rather than of any change, so no change's own
-     run stands in for it; recover a red one with `gh run rerun`.
+     run stands in for it. Recover a red one caused by the ruleset or its
+     token with `gh run rerun` (a re-run keeps `created_at`, so it does not
+     refresh a stale run); one caused by main's tree needs the break-glass
+     sequence in RECONCILIATION.md.
 
 Absence is not a pass: no run, an unreadable listing, an unexpected shape, a
 cancelled or stale nightly — each is a red.
@@ -31,8 +34,10 @@ Modes:
   --lint     fail unless nightly-green.yml runs `--verdict` unconditionally,
              the manifest declares `nightly-green` a gate and
              `ruleset-admin-read` a nightly-gate of ruleset-admin-read.yml,
-             and that workflow triggers on `schedule` alone. manifest-guard
-             runs it.
+             and that workflow triggers on `schedule` alone, with one job in
+             the admin-read environment whose one read step runs only
+             `check_required_set.py --fetch-admin` with the admin token
+             (`admin_read_wiring_errors`). manifest-guard runs it.
 """
 
 from __future__ import annotations
@@ -303,17 +308,57 @@ def wiring_errors(workflow: object, manifest: object) -> list[str]:
 
 
 ADMIN_READ_CONTEXT = "ruleset-admin-read"
+ADMIN_READ_INVOCATION = "python3 .github/ci/check_required_set.py --fetch-admin"
+ADMIN_READ_ENV = {
+    "GH_TOKEN": "${{ secrets.RULESET_READ_TOKEN }}",
+    "REPO": "${{ github.repository }}",
+}
 
 
 def admin_read_wiring_errors(workflow: object, manifest: object) -> list[str]:
     """Return why a green `ADMIN_READ` run could fail to be the manifest's
-    ruleset admin read, or []: the workflow must trigger on `ADMIN_READ.event`
-    alone, and the manifest must declare the context a `nightly-gate` it
-    produces."""
+    ruleset admin read, or []: the workflow triggers on `ADMIN_READ.event`
+    alone; its one job `ADMIN_READ_CONTEXT` runs unconditionally in the
+    admin-read environment, and exactly one step runs only
+    `ADMIN_READ_INVOCATION` with env exactly `ADMIN_READ_ENV` (the admin
+    token, not the workflow token); the manifest declares the context a
+    `nightly-gate` the workflow produces."""
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    import check_required_set  # noqa: PLC0415  # PyYAML-backed; owns the environment's name
+
     errors: list[str] = []
     on = workflow.get(True, workflow.get("on")) if isinstance(workflow, dict) else None
     if not isinstance(on, dict) or set(on) != {ADMIN_READ.event}:
         errors.append(f"{ADMIN_READ.workflow} must trigger on `{ADMIN_READ.event}` alone")
+    jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
+    job = jobs.get(ADMIN_READ_CONTEXT) if isinstance(jobs, dict) and len(jobs) == 1 else None
+    if not isinstance(job, dict):
+        errors.append(f"{ADMIN_READ.workflow} must define exactly one job, {ADMIN_READ_CONTEXT!r}")
+        job = {}
+    elif job.get("name", ADMIN_READ_CONTEXT) != ADMIN_READ_CONTEXT:
+        errors.append(f"the {ADMIN_READ.workflow} job must report context {ADMIN_READ_CONTEXT!r}")
+    for key in ("if", "continue-on-error", "needs", "strategy"):
+        if key in job:
+            errors.append(f"the {ADMIN_READ.workflow} job must not set `{key}` (the read runs unconditionally, once)")
+    if job and job.get("environment") != check_required_set.ADMIN_READ_ENVIRONMENT:
+        errors.append(
+            f"the {ADMIN_READ.workflow} job must declare `environment: {check_required_set.ADMIN_READ_ENVIRONMENT}`"
+        )
+    steps = job.get("steps") if isinstance(job.get("steps"), list) else []
+    for step in steps:
+        if isinstance(step, dict) and ("continue-on-error" in step or "if" in step):
+            errors.append(f"step {step.get('name', step.get('uses'))!r} must not set `if` or `continue-on-error`")
+    reads = [s for s in steps if isinstance(s, dict) and "check_required_set.py" in str(s.get("run", ""))]
+    if len(reads) != 1:
+        errors.append(f"exactly one {ADMIN_READ.workflow} step must run `{ADMIN_READ_INVOCATION}`")
+    else:
+        run = str(reads[0].get("run", "")).strip()
+        if run != ADMIN_READ_INVOCATION:
+            errors.append(f"the admin-read step must run only `{ADMIN_READ_INVOCATION}`, got {run!r}")
+        env = reads[0].get("env")
+        if not isinstance(env, dict) or {k: _strip_expr(str(v)) for k, v in env.items()} != ADMIN_READ_ENV:
+            errors.append(f"the admin-read step's env must be exactly {ADMIN_READ_ENV}")
     entries = manifest.get("checks") if isinstance(manifest, dict) else None
     mine = [e for e in entries or [] if isinstance(e, dict) and e.get("context") == ADMIN_READ_CONTEXT]
     if len(mine) != 1 or mine[0].get("disposition") != "nightly-gate" or mine[0].get("producer") != ADMIN_READ.workflow:
@@ -344,7 +389,7 @@ def lint(root: str = REPO_ROOT) -> int:
         return 1
     print(
         f"nightly-green lint: {WORKFLOW_FILE} runs the verdict unconditionally; the manifest gates it; "
-        f"{ADMIN_READ.workflow} is {ADMIN_READ.event}-only."
+        f"{ADMIN_READ.workflow} is {ADMIN_READ.event}-only and reads with the admin token in its environment."
     )
     return 0
 
@@ -361,7 +406,8 @@ def main(argv: list[str]) -> int:
             print(
                 "nightly-green: RED — fix main's nightly, or prove this commit with "
                 "`gh workflow run 'Build & test' --ref <branch>`; a red ruleset admin read "
-                "is fixed on the ruleset (or its token) and re-run with `gh run rerun`. "
+                "is fixed on the ruleset (or its token) and re-run with `gh run rerun`, or, "
+                "when main's tree causes it, by the break-glass in .github/ci/RECONCILIATION.md. "
                 "Then re-run this check.",
                 file=sys.stderr,
             )

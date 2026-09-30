@@ -95,7 +95,9 @@ reconciled. On a pull request it is not required; there it flags a
 required-set change the ruleset has not taken yet. `ruleset-admin-read` is a
 `nightly-gate` too, and `nightly-green` requires its latest scheduled run on
 `main` to be green and fresh on every change: a red admin read holds every
-merge until the ruleset (or its token) is fixed and the run re-run.
+merge until the ruleset (or its token) is fixed and the run re-run, or,
+when the tree on `main` causes the red, until the break-glass sequence below
+lands the fix.
 
 `strict_required_status_checks_policy` ("require branches to be up to date")
 is pinned `false` and `do_not_enforce_on_create` is pinned `false`. The strict
