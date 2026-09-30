@@ -334,7 +334,7 @@ impl TempRootRedactor {
     /// The root's length in bytes, to order it among other redactions
     /// longest-first.
     #[must_use]
-    pub fn byte_len(&self) -> usize {
+    pub const fn byte_len(&self) -> usize {
         self.0.len()
     }
 }
