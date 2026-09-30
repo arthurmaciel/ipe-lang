@@ -26,6 +26,7 @@ use crate::crate_specs;
 use crate::emit_expr::emit_func;
 use crate::emit_types::{emit_enum, emit_record_struct, emit_row_witnesses};
 use crate::preamble::{epilogue, preamble};
+use crate::runtime_features::{RuntimeFeature, RuntimeFeatureSet};
 use crate::rust_file;
 use crate::rust_file::{Partitioned, RustFileId, partition_items};
 
@@ -52,6 +53,9 @@ const CARGO_TOML: &str = include_str!("../templates/Cargo.toml");
 /// `ipe_runtime_dep/` alongside the emitted crate so the relative path resolves
 /// in any build environment.
 const CARGO_DEP_TOML: &str = include_str!("../templates/Cargo.dep.toml");
+
+/// The placeholder a dependency-model template holds for the runtime feature list.
+const DEP_FEATURES_ANCHOR: &str = "__IPE_RUNTIME_FEATURES__";
 
 /// The dependency-model project `Cargo.toml` for the browser-WASM target. The
 /// wasm counterpart of [`CARGO_DEP_TOML`]: the runtime is the SAME `ipe_runtime`
@@ -2085,11 +2089,6 @@ fn escape_toml_basic(s: &str) -> String {
 /// — a drifted dep-model manifest template, surfaced loudly rather than emitting
 /// a manifest that names no runtime.
 fn dep_model_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
-    let mut manifest = substitute_dep_manifest_anchors(
-        CARGO_DEP_TOML,
-        ctx,
-        "ipe_backend_rust::project::dep_model_cargo_toml",
-    )?;
     // A browser-shape program emits `#[derive(serde::Serialize, serde::Deserialize)]`
     // on serde-eligible types (see `emit_types`), so the APP crate references the
     // `serde` crate by path. Under the dependency model the app crate depends only
@@ -2105,10 +2104,144 @@ fn dep_model_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
     // program emits no serde derive, so its manifest stays serde-free. The gate is
     // the derive sites' own `derives_serde`. Inserted right after the runtime
     // dependency line, inside `[dependencies]`.
-    if ctx.derives_serde() {
-        manifest = insert_app_serde_dependency(&manifest)?;
+    render_dep_manifest(
+        &crate::runtime_features::runtime_features(ctx),
+        ctx.derives_serde(),
+    )
+}
+
+/// Render the native dependency-model `Cargo.toml` for one feature selection.
+///
+/// The one renderer both the emitter ([`dep_model_cargo_toml`]) and
+/// [`DepManifest::parse`] use, so a manifest the parser accepts is exactly one
+/// the compiler emits. `app_serde` adds the app-crate `serde` dependency.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if a template anchor is absent.
+fn render_dep_manifest(features: &RuntimeFeatureSet, app_serde: bool) -> DResult<String> {
+    let manifest = substitute_dep_manifest_anchors(
+        CARGO_DEP_TOML,
+        features,
+        "ipe_backend_rust::project::render_dep_manifest",
+    )?;
+    if app_serde {
+        insert_app_serde_dependency(&manifest)
+    } else {
+        Ok(manifest)
     }
-    Ok(manifest)
+}
+
+/// A native dependency-model `Cargo.toml` exactly as the compiler renders it.
+///
+/// The only way to build one is [`Self::parse`], which accepts a manifest only
+/// when re-rendering its feature selection reproduces it byte for byte. A
+/// manifest holding anything the compiler never writes (another dependency, a
+/// build script, a feature outside [`RuntimeFeature`], a reordered list) has no
+/// representation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DepManifest {
+    features: RuntimeFeatureSet,
+    app_serde: bool,
+}
+
+/// Why a manifest is not one the compiler renders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepManifestError {
+    /// The text around the runtime feature list is not the template's.
+    NotTemplate,
+    /// The feature list is not a `, `-separated list of quoted names.
+    MalformedFeatureList,
+    /// A listed name is not a runtime-crate feature.
+    UnknownFeature,
+    /// The list repeats or reorders features.
+    NotCanonical,
+    /// The compiler's own template lost an anchor.
+    TemplateDrift,
+}
+
+impl std::fmt::Display for DepManifestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotTemplate => "the manifest is not the one the compiler emits",
+            Self::MalformedFeatureList => "the manifest's runtime feature list is malformed",
+            Self::UnknownFeature => "the manifest names a feature the runtime does not declare",
+            Self::NotCanonical => "the manifest's runtime features are repeated or out of order",
+            Self::TemplateDrift => "the compiler's manifest template lost an anchor",
+        })
+    }
+}
+
+impl DepManifest {
+    /// Parse `manifest`, accepting only a byte-exact compiler rendering.
+    ///
+    /// # Errors
+    ///
+    /// The [`DepManifestError`] naming why `manifest` is not one.
+    pub fn parse(manifest: &str) -> Result<Self, DepManifestError> {
+        for app_serde in [false, true] {
+            let template = if app_serde {
+                insert_app_serde_dependency(CARGO_DEP_TOML)
+                    .map_err(|_| DepManifestError::TemplateDrift)?
+            } else {
+                CARGO_DEP_TOML.to_owned()
+            };
+            let Some((prefix, suffix)) = template
+                .split_once(DEP_FEATURES_ANCHOR)
+                .and_then(|(prefix, suffix)| Some((prefix, suffix.strip_prefix(']')?)))
+            else {
+                return Err(DepManifestError::TemplateDrift);
+            };
+            // No feature name holds `]`, so the list ends at the first one; the
+            // two templates differ after it, so at most one of them matches.
+            let Some(list) = manifest
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.split_once(']'))
+                .and_then(|(list, tail)| (tail == suffix).then_some(list))
+            else {
+                continue;
+            };
+            let features = parse_feature_list(list)?;
+            let rendered = render_dep_manifest(&features, app_serde)
+                .map_err(|_| DepManifestError::TemplateDrift)?;
+            if rendered != manifest {
+                return Err(DepManifestError::NotCanonical);
+            }
+            return Ok(Self {
+                features,
+                app_serde,
+            });
+        }
+        Err(DepManifestError::NotTemplate)
+    }
+
+    /// The runtime features the manifest selects.
+    #[must_use]
+    pub const fn features(&self) -> &RuntimeFeatureSet {
+        &self.features
+    }
+
+    /// Whether the manifest declares the app-crate `serde` dependency.
+    #[must_use]
+    pub const fn app_serde(&self) -> bool {
+        self.app_serde
+    }
+}
+
+/// Parse the body of a rendered `features = [...]` list.
+fn parse_feature_list(list: &str) -> Result<RuntimeFeatureSet, DepManifestError> {
+    if list.is_empty() {
+        return Ok(RuntimeFeatureSet::default());
+    }
+    list.split(", ")
+        .map(|item| {
+            let name = item
+                .strip_prefix('"')
+                .and_then(|rest| rest.strip_suffix('"'))
+                .ok_or(DepManifestError::MalformedFeatureList)?;
+            RuntimeFeature::parse(name).ok_or(DepManifestError::UnknownFeature)
+        })
+        .collect()
 }
 
 /// Render the dependency-model project `Cargo.toml` for the browser-WASM target:
@@ -2130,7 +2263,7 @@ fn dep_model_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
 fn dep_model_wasm_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
     let mut manifest = substitute_dep_manifest_anchors(
         CARGO_WASM_DEP_TOML,
-        ctx,
+        &crate::runtime_features::runtime_features(ctx),
         "ipe_backend_rust::project::dep_model_wasm_cargo_toml",
     )?;
     // The `mode = "hydrate"` second entry (`wasm_hydrate_entry`) parses the
@@ -2145,8 +2278,8 @@ fn dep_model_wasm_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
 }
 
 /// Substitute the `__IPE_RUNTIME_FEATURES__` anchor in a dependency-model
-/// manifest `template` with the [`crate::runtime_features`] SSOT selection for
-/// `ctx`. Shared by the native ([`dep_model_cargo_toml`]) and wasm
+/// manifest `template` with `features`, the [`crate::runtime_features`] SSOT
+/// selection. Shared by the native ([`dep_model_cargo_toml`]) and wasm
 /// ([`dep_model_wasm_cargo_toml`]) renderers so the anchor contract has ONE
 /// definition.
 ///
@@ -2168,12 +2301,9 @@ fn dep_model_wasm_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
 /// surfaced loudly rather than emitting a manifest that names no runtime.
 fn substitute_dep_manifest_anchors(
     template: &str,
-    ctx: &EmitCtx,
+    features: &RuntimeFeatureSet,
     where_: &'static str,
 ) -> DResult<String> {
-    const FEATURES_ANCHOR: &str = "__IPE_RUNTIME_FEATURES__";
-
-    let features = crate::runtime_features::runtime_features(ctx);
     let feature_list = features
         .as_feature_names()
         .iter()
@@ -2181,13 +2311,13 @@ fn substitute_dep_manifest_anchors(
         .collect::<Vec<_>>()
         .join(", ");
 
-    if !template.contains(FEATURES_ANCHOR) {
+    if !template.contains(DEP_FEATURES_ANCHOR) {
         return Err(Diagnostic::CompilerBug {
             where_,
-            detail: format!("dep-model manifest template lost the {FEATURES_ANCHOR:?} anchor"),
+            detail: format!("dep-model manifest template lost the {DEP_FEATURES_ANCHOR:?} anchor"),
         });
     }
-    Ok(template.replace(FEATURES_ANCHOR, &feature_list))
+    Ok(template.replace(DEP_FEATURES_ANCHOR, &feature_list))
 }
 
 /// Insert the app-crate `serde` dependency (version + `derive` feature identical
@@ -6775,5 +6905,100 @@ mod non_serde_tests {
             &IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)),
             &table
         ));
+    }
+}
+
+#[cfg(test)]
+mod dep_manifest_tests {
+    use super::{DepManifest, DepManifestError, render_dep_manifest};
+    use crate::runtime_features::{RuntimeFeature, RuntimeFeatureSet};
+    use ipe_diagnostics::DResult;
+
+    fn set(features: &[RuntimeFeature]) -> RuntimeFeatureSet {
+        features.iter().copied().collect()
+    }
+
+    #[test]
+    fn every_rendered_manifest_parses_back() -> DResult<()> {
+        for features in [
+            set(&[]),
+            set(&[RuntimeFeature::Json]),
+            set(&[
+                RuntimeFeature::Json,
+                RuntimeFeature::Async,
+                RuntimeFeature::Log,
+            ]),
+            RuntimeFeature::ALL.iter().copied().collect(),
+        ] {
+            for app_serde in [false, true] {
+                let manifest = render_dep_manifest(&features, app_serde)?;
+                let parsed = DepManifest::parse(&manifest);
+                assert_eq!(parsed.as_ref().map(DepManifest::app_serde), Ok(app_serde));
+                assert_eq!(parsed.as_ref().map(DepManifest::features), Ok(&features));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_manifest_the_compiler_never_writes_is_refused() -> DResult<()> {
+        let json = render_dep_manifest(&set(&[RuntimeFeature::Json]), false)?;
+        let with_serde = render_dep_manifest(&set(&[RuntimeFeature::Json]), true)?;
+        let refused = [
+            (
+                json.replace(
+                    "[dependencies]\n",
+                    "[dependencies]\nevil = { path = \"/\" }\n",
+                ),
+                DepManifestError::NotTemplate,
+            ),
+            (
+                format!("{json}[build-dependencies]\n"),
+                DepManifestError::NotTemplate,
+            ),
+            (
+                json.replace("edition = \"2024\"", "edition = \"2024\"\nbuild = \"b.rs\""),
+                DepManifestError::NotTemplate,
+            ),
+            (
+                with_serde.replace("version = \"1\"", "git = \"https://x\""),
+                DepManifestError::NotTemplate,
+            ),
+            (
+                json.replace("[\"json\"]", "[\"json\", \"nope\"]"),
+                DepManifestError::UnknownFeature,
+            ),
+            (
+                json.replace("[\"json\"]", "[json]"),
+                DepManifestError::MalformedFeatureList,
+            ),
+            (
+                json.replace("[\"json\"]", "[\"json\",]"),
+                DepManifestError::MalformedFeatureList,
+            ),
+            (
+                json.replace("[\"json\"]", "[\"json\", \"json\"]"),
+                DepManifestError::NotCanonical,
+            ),
+            (
+                json.replace("[\"json\"]", "[\"log\", \"json\"]"),
+                DepManifestError::NotCanonical,
+            ),
+            (String::new(), DepManifestError::NotTemplate),
+        ];
+        for (manifest, error) in refused {
+            assert_eq!(DepManifest::parse(&manifest), Err(error), "{manifest}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_feature_name_parses_only_to_its_own_variant() {
+        for feature in RuntimeFeature::ALL {
+            assert_eq!(RuntimeFeature::parse(feature.as_str()), Some(*feature));
+        }
+        assert_eq!(RuntimeFeature::parse("JSON"), None);
+        assert_eq!(RuntimeFeature::parse(""), None);
+        assert_eq!(RuntimeFeature::parse("json "), None);
     }
 }

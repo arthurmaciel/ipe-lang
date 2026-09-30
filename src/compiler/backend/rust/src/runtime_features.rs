@@ -283,6 +283,15 @@ impl RuntimeFeature {
 
     /// Variant equality usable in a `const` context (the derived [`PartialEq`]
     /// is not `const`).
+    /// The feature whose manifest name is exactly `name`, if any.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|feature| feature.as_str() == name)
+    }
+
     pub(crate) const fn const_eq(self, other: Self) -> bool {
         self.index() == other.index()
     }
@@ -355,6 +364,12 @@ impl RuntimeFeatureSet {
     /// list a dependency-model manifest would write.
     pub fn as_feature_names(&self) -> Vec<&'static str> {
         self.0.iter().map(|f| f.as_str()).collect()
+    }
+}
+
+impl FromIterator<RuntimeFeature> for RuntimeFeatureSet {
+    fn from_iter<I: IntoIterator<Item = RuntimeFeature>>(features: I) -> Self {
+        Self(features.into_iter().collect())
     }
 }
 

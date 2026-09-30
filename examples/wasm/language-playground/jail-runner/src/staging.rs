@@ -11,7 +11,7 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use ipe_wasm::RUNTIME_DEP_DIR;
+use ipe_wasm::{DepManifest, DepManifestError, RUNTIME_DEP_DIR};
 
 /// The program prewarm compiles and builds to fill the warm cache.
 pub const PREWARM_PROGRAM: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hello\"\n";
@@ -45,6 +45,10 @@ const MAX_STAGED_ENTRIES: usize = MAX_STAGED_FILES * MAX_SOURCE_SEGMENTS;
 pub const RUNTIME_SOURCE_MTIME_SECS: u64 = 1_000_000_000;
 
 const MANIFEST: &str = "Cargo.toml";
+
+/// The largest `Cargo.toml` the layout check reads; the compiler's rendering
+/// is a small fraction of it.
+const MAX_MANIFEST_BYTES: u64 = 16 * 1024;
 const SOURCE_DIR: &str = "src";
 const ENTRY_POINT: &str = "main.rs";
 
@@ -70,6 +74,10 @@ pub enum LayoutError {
     BadSourceName(PathBuf),
     /// A directory under `src/` that holds nothing; the server never stages one.
     EmptyDir(PathBuf),
+    /// `Cargo.toml` is larger than [`MAX_MANIFEST_BYTES`].
+    ManifestTooLarge,
+    /// `Cargo.toml` is not the manifest the compiler renders.
+    ForeignManifest(DepManifestError),
     /// The project tree could not be read.
     Unreadable {
         /// The entry that failed.
@@ -115,6 +123,11 @@ impl std::fmt::Display for LayoutError {
             Self::EmptyDir(path) => {
                 write!(f, "staged source directory `{}` is empty", path.display())
             }
+            Self::ManifestTooLarge => write!(
+                f,
+                "staged `{MANIFEST}` is larger than {MAX_MANIFEST_BYTES} bytes"
+            ),
+            Self::ForeignManifest(error) => write!(f, "staged `{MANIFEST}` refused: {error}"),
             Self::Unreadable { path, detail } => {
                 write!(
                     f,
@@ -133,7 +146,10 @@ impl std::fmt::Display for LayoutError {
 /// every directory is a non-empty `[A-Za-z0-9_]` name holding something, every
 /// file a regular `<name>.rs` at most [`MAX_SOURCE_SEGMENTS`] segments deep, a
 /// regular `src/main.rs` among them, and at most [`MAX_STAGED_FILES`] files in
-/// all. Symbolic links are refused everywhere.
+/// all. Symbolic links are refused everywhere. `Cargo.toml` must be exactly a
+/// manifest the compiler renders ([`DepManifest`]): the client picks runtime
+/// features from a closed set and nothing else, so no dependency, build script,
+/// or source override it names can reach cargo.
 ///
 /// # Errors
 ///
@@ -164,7 +180,29 @@ pub fn check_project_layout(project: &Path) -> Result<(), LayoutError> {
     if !is_regular {
         return Err(LayoutError::MissingEntryPoint);
     }
-    Ok(())
+    check_manifest(&project.join(MANIFEST))
+}
+
+/// Accept `path` only when it holds a manifest the compiler renders.
+fn check_manifest(path: &Path) -> Result<(), LayoutError> {
+    use std::io::Read as _;
+    let unreadable = |error: std::io::Error| LayoutError::Unreadable {
+        path: PathBuf::from(MANIFEST),
+        detail: error.to_string(),
+    };
+    let file = std::fs::File::open(path).map_err(unreadable)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_MANIFEST_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(unreadable)?;
+    if u64::try_from(bytes.len()).map_or(true, |len| len > MAX_MANIFEST_BYTES) {
+        return Err(LayoutError::ManifestTooLarge);
+    }
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| LayoutError::ForeignManifest(DepManifestError::NotTemplate))?;
+    DepManifest::parse(text)
+        .map(|_| ())
+        .map_err(LayoutError::ForeignManifest)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -375,18 +413,68 @@ fn write_new_file(
 #[cfg(test)]
 mod tests {
     use super::{
-        LayoutError, MAX_SOURCE_SEGMENTS, MAX_STAGED_FILES, RUNTIME_SOURCE_MTIME_SECS,
-        RuntimeFiles, StageError, check_project_layout, write_emitted, write_runtime,
+        LayoutError, MAX_SOURCE_SEGMENTS, MAX_STAGED_FILES, PREWARM_PROGRAM,
+        RUNTIME_SOURCE_MTIME_SECS, RuntimeFiles, StageError, check_project_layout, write_emitted,
+        write_runtime,
     };
-    use ipe_wasm::RUNTIME_DEP_DIR;
+    use ipe_wasm::{DepManifestError, RUNTIME_DEP_DIR};
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
 
+    /// The `Cargo.toml` the compiler emits for [`PREWARM_PROGRAM`].
+    fn emitted_manifest() -> std::io::Result<String> {
+        ipe_wasm::emit_files(PREWARM_PROGRAM)
+            .ok()
+            .and_then(|mut files| files.remove("Cargo.toml"))
+            .ok_or_else(|| std::io::Error::other("the prewarm program emits no manifest"))
+    }
+
     fn emitted_crate(root: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(root.join("src"))?;
-        std::fs::write(root.join("Cargo.toml"), "[package]\n")?;
+        std::fs::write(root.join("Cargo.toml"), emitted_manifest()?)?;
         std::fs::write(root.join("src").join("main.rs"), "fn main() {}\n")
+    }
+
+    #[test]
+    fn a_manifest_the_compiler_never_renders_is_refused() -> std::io::Result<()> {
+        let emitted = emitted_manifest()?;
+        let refused = [
+            (
+                emitted.replace(
+                    "[dependencies]\n",
+                    "[dependencies]\nevil = { path = \"/etc\" }\n",
+                ),
+                LayoutError::ForeignManifest(DepManifestError::NotTemplate),
+            ),
+            (
+                format!("{emitted}[patch.crates-io]\n"),
+                LayoutError::ForeignManifest(DepManifestError::NotTemplate),
+            ),
+            (
+                "[package]\n".to_owned(),
+                LayoutError::ForeignManifest(DepManifestError::NotTemplate),
+            ),
+            (
+                String::new(),
+                LayoutError::ForeignManifest(DepManifestError::NotTemplate),
+            ),
+            (" ".repeat(17 * 1024), LayoutError::ManifestTooLarge),
+        ];
+        for (manifest, error) in refused {
+            let dir = tempfile::tempdir()?;
+            emitted_crate(dir.path())?;
+            std::fs::write(dir.path().join("Cargo.toml"), manifest)?;
+            assert_eq!(check_project_layout(dir.path()), Err(error));
+        }
+        let dir = tempfile::tempdir()?;
+        emitted_crate(dir.path())?;
+        std::fs::write(dir.path().join("Cargo.toml"), [0xff_u8, 0xfe])?;
+        assert_eq!(
+            check_project_layout(dir.path()),
+            Err(LayoutError::ForeignManifest(DepManifestError::NotTemplate))
+        );
+        Ok(())
     }
 
     #[test]

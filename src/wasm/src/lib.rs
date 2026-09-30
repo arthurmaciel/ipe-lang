@@ -77,7 +77,9 @@ pub fn compile(source: &str) -> CompileOutcome {
     }
 }
 
-pub use ipe_backend_rust::RUNTIME_DEP_DIR;
+pub use ipe_backend_rust::{
+    DepManifest, DepManifestError, RUNTIME_DEP_DIR, RuntimeFeature, RuntimeFeatureSet,
+};
 
 /// The emitted project of one compile, as crate-relative path to file text.
 ///

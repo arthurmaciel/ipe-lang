@@ -36,9 +36,10 @@ mod emit_worker;
 mod naming;
 mod preamble;
 mod project;
-pub use project::RUNTIME_DEP_DIR;
+pub use project::{DepManifest, DepManifestError, RUNTIME_DEP_DIR};
 mod render;
 mod runtime_features;
+pub use runtime_features::{RuntimeFeature, RuntimeFeatureSet};
 mod rust_file;
 pub mod static_build;
 // The `update`-arm → transition-datum classifier: the compile-time half of the
