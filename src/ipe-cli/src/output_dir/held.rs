@@ -336,14 +336,17 @@ impl HeldDir {
     /// [`CliError::Io`] on a filesystem failure.
     pub fn ownership(&self) -> Result<Ownership, CliError> {
         if self.has_marker()? {
-            Ok(Ownership::Marked)
-        } else if self.is_empty()? {
-            Ok(Ownership::Empty)
-        } else if self.has_marker()? {
-            Ok(Ownership::Marked)
-        } else {
-            Ok(Ownership::User)
+            return Ok(Ownership::Marked);
         }
+        if self.is_empty()? {
+            return Ok(Ownership::Empty);
+        }
+        let marked_since = self.has_marker()?;
+        Ok(if marked_since {
+            Ownership::Marked
+        } else {
+            Ownership::User
+        })
     }
 
     /// Mark this directory ipe-owned, or refuse it as user territory.

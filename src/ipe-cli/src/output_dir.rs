@@ -4184,7 +4184,7 @@ mod tests {
         let out = OutputRoot::resolve(None, &proj).expect("default out");
         let root = out.path().to_path_buf();
         let planted = root.clone();
-        swap_when_held(proj.root.clone(), move || {
+        swap_when_held(proj.root, move || {
             std::fs::create_dir_all(&planted).expect("user root");
             std::fs::write(planted.join("notes.txt"), "mine").expect("user file");
         });
