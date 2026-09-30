@@ -6,10 +6,11 @@ use std::path::PathBuf;
 use e2e_support::Tier;
 use e2e_support::bin::{ResolveError, Source, parse_tier, resolve_bin, resolve_runtime_src};
 
+#[allow(clippy::expect_used)] // unwritable test scratch is an environment failure, not a case under test
 fn scratch(tag: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("resolve-{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&dir).expect("create test scratch dir");
     dir
 }
 
