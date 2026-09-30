@@ -1140,7 +1140,8 @@ fn unquote(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommitId, IndexEntry, PackageName, PinnedRev, SourceUrl, read_entry, resolve_version,
+        CommitId, IndexEntry, PackageName, PinnedRev, RequestedRev, RevMismatch, SourceUrl,
+        check_served, read_entry, resolve_version,
     };
     use ipe_ir::Capability;
     use std::path::{Path, PathBuf};
