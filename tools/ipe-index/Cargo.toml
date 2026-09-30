@@ -15,6 +15,10 @@ tree-sitter = "0.22"
 tree-sitter-rust = "0.21"
 tree-sitter-typescript = "0.21"
 
+[lints.rust]
+# Mirrors the compiler workspace's `unsafe_code` deny for this standalone tool.
+unsafe_code = "deny"
+
 [profile.dev]
 debug = 0
 

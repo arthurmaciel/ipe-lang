@@ -4863,8 +4863,8 @@ mod reload_push_tests {
     #[tokio::test]
     async fn web_shutdown_signal_skips_the_reload_push_in_production() {
         use crate::system::{locked_remove_var, locked_set_var};
-        let prior_env = std::env::var("ENV").ok();
-        let prior_ipe_env = std::env::var("IPE_ENV").ok();
+        let prior_env = crate::system::read_env_var("ENV").ok();
+        let prior_ipe_env = crate::system::read_env_var("IPE_ENV").ok();
 
         let store_impl: MemoryStore<(), ()> = MemoryStore::new(Duration::from_secs(60));
         let (sse_tx, mut sse_rx) = sse::channel();
@@ -5380,20 +5380,15 @@ mod admission_control_tests {
     // max_sessions(): env override, default, and the 0=unlimited opt-out.
     #[test]
     fn max_sessions_parsing() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_WEB_MAX_SESSIONS") };
+        crate::system::locked_remove_var("IPE_WEB_MAX_SESSIONS");
         assert_eq!(max_sessions(), 50_000);
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_WEB_MAX_SESSIONS", "7") };
+        crate::system::locked_set_var("IPE_WEB_MAX_SESSIONS", "7");
         assert_eq!(max_sessions(), 7);
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_WEB_MAX_SESSIONS", "0") };
+        crate::system::locked_set_var("IPE_WEB_MAX_SESSIONS", "0");
         assert_eq!(max_sessions(), 0, "0 = unlimited opt-out");
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_WEB_MAX_SESSIONS", "garbage") };
+        crate::system::locked_set_var("IPE_WEB_MAX_SESSIONS", "garbage");
         assert_eq!(max_sessions(), 50_000, "unparseable falls back to default");
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_WEB_MAX_SESSIONS") };
+        crate::system::locked_remove_var("IPE_WEB_MAX_SESSIONS");
     }
 }
 
@@ -5814,9 +5809,8 @@ mod recursion_session_isolation_tests {
 /// Each test covers: (a) the `IPE_WEB_*` name takes effect, (b) unset →
 /// unchanged default behavior.
 ///
-/// These are env-mutating tests and must not run in parallel — they use
-/// `std::env::set_var`/`remove_var` which are unsafe in Rust 2024 (see the
-/// ENV_LOCK rationale in system.rs). Each test cleans up after itself.
+/// These tests mutate the runtime's env overlay (never the process `environ`;
+/// see the rationale in `system.rs`). Each test cleans up after itself.
 #[cfg(all(test, feature = "server"))]
 mod security_env_tests {
 
@@ -5828,19 +5822,16 @@ mod security_env_tests {
 
     #[test]
     fn csrf_origin_check_new_name_takes_effect() {
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_WEB_CSRF_ORIGIN_CHECK") };
+        crate::system::locked_remove_var("IPE_WEB_CSRF_ORIGIN_CHECK");
 
         // (a) set → "on"
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_WEB_CSRF_ORIGIN_CHECK", "on") };
+        crate::system::locked_set_var("IPE_WEB_CSRF_ORIGIN_CHECK", "on");
         assert_eq!(
             crate::system::read_env_var("IPE_WEB_CSRF_ORIGIN_CHECK").as_deref(),
             Ok("on"),
             "IPE_WEB_CSRF_ORIGIN_CHECK must be read"
         );
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_WEB_CSRF_ORIGIN_CHECK") };
+        crate::system::locked_remove_var("IPE_WEB_CSRF_ORIGIN_CHECK");
 
         // (b) unset → Err (origin check stays OFF — secure default)
         assert!(
@@ -5856,19 +5847,16 @@ mod security_env_tests {
 
     #[test]
     fn frame_ancestors_new_name_takes_effect() {
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_WEB_FRAME_ANCESTORS") };
+        crate::system::locked_remove_var("IPE_WEB_FRAME_ANCESTORS");
 
         // (a) set → value
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_WEB_FRAME_ANCESTORS", "https://app.example.com") };
+        crate::system::locked_set_var("IPE_WEB_FRAME_ANCESTORS", "https://app.example.com");
         assert_eq!(
             crate::system::read_env_var("IPE_WEB_FRAME_ANCESTORS").as_deref(),
             Ok("https://app.example.com"),
             "IPE_WEB_FRAME_ANCESTORS must be read"
         );
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_WEB_FRAME_ANCESTORS") };
+        crate::system::locked_remove_var("IPE_WEB_FRAME_ANCESTORS");
 
         // (b) unset → Err; frame_ancestors() returns None (same-origin mode).
         assert!(
@@ -5887,8 +5875,7 @@ mod security_env_tests {
         use super::web_max_body_bytes;
         const DEFAULT: usize = 5 << 20;
 
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_WEB_MAX_BODY_BYTES") };
+        crate::system::locked_remove_var("IPE_WEB_MAX_BODY_BYTES");
 
         // (c) unset → default (5 MiB); a rename bug that silently zeros this
         // would reject all /_ipe/event POSTs.
@@ -5899,15 +5886,13 @@ mod security_env_tests {
         );
 
         // Set → override takes effect.
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_WEB_MAX_BODY_BYTES", "8192") };
+        crate::system::locked_set_var("IPE_WEB_MAX_BODY_BYTES", "8192");
         assert_eq!(
             web_max_body_bytes(),
             8192,
             "IPE_WEB_MAX_BODY_BYTES must take effect"
         );
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_WEB_MAX_BODY_BYTES") };
+        crate::system::locked_remove_var("IPE_WEB_MAX_BODY_BYTES");
 
         // Restore default.
         assert_eq!(web_max_body_bytes(), DEFAULT);

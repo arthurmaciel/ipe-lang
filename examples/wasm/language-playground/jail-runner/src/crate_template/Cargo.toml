@@ -59,10 +59,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 futures-util = "0.3"
 
-# Unix-only: `Io.readSecret` toggles terminal echo via termios (tcgetattr /
-# tcsetattr / isatty) in the vendored runtime's `io` module.
+# Unix-only: the vendored runtime reaches unix syscalls through rustix's safe
+# wrappers — `Io.readSecret` terminal echo (termios), `Process.runInPty`
+# (pty + termios), and the child parent-death floor (process).
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+rustix = { version = "1", features = ["pty", "termios", "fs", "process", "std"] }
 
 [profile.dev]
 debug = 0

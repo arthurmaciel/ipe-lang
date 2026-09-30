@@ -495,19 +495,50 @@ fn apply_env_overlay(builder: &mut std::process::Command) {
 /// `as_std_mut()` view — the `pre_exec` set here is honoured by tokio's spawn).
 /// Its `kill_on_drop` covers the graceful paths the std side handles via explicit
 /// `Child` tracking; this floor is the shared NON-graceful guarantee.
+///
+/// A parent that dies after the fork but before the child armed the signal
+/// leaves the child already reparented, so the signal would never fire. The
+/// child therefore compares its parent pid, AFTER arming, with the launcher
+/// pid captured before the spawn, and refuses to exec (`ESRCH`) on a mismatch:
+/// no orphan survives the fork-to-`prctl` window.
 pub fn harden_child_parent_death(_builder: &mut std::process::Command) {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt as _;
+        let launcher = rustix::process::getpid();
         // SAFETY: the closure runs in the forked child between fork and exec. It
-        // only calls prctl (async-signal-safe) — no allocation, no locks, no
-        // Rust runtime re-entry. Failure is non-fatal (best-effort hardening).
+        // only issues the raw `prctl(PR_SET_PDEATHSIG)` and `getppid` syscalls
+        // through rustix's safe wrappers (async-signal-safe) and builds its error
+        // from a raw errno — no allocation, no locks, no Rust runtime re-entry.
+        // A failed `prctl` is non-fatal (best-effort hardening); a reparented
+        // child is refused.
+        // IPE-RUST-AUDIT:ACCEPTED — std `pre_exec` is an unsafe API with no safe
+        // parent-death-signal equivalent; the workspace's sole non-FFI `unsafe`.
+        #[allow(unsafe_code)]
         unsafe {
-            _builder.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM as libc::c_ulong);
-                Ok(())
+            _builder.pre_exec(move || {
+                let _ = rustix::process::set_parent_process_death_signal(Some(
+                    rustix::process::Signal::TERM,
+                ));
+                still_parented_by(launcher, rustix::process::getppid())
             });
         }
+    }
+}
+
+/// Refuse (`ESRCH`) unless the child's current `parent` is still `launcher`.
+///
+/// Runs in the forked child, so it only compares and builds an error from a
+/// raw errno: no allocation.
+#[cfg(target_os = "linux")]
+fn still_parented_by(
+    launcher: rustix::process::Pid,
+    parent: Option<rustix::process::Pid>,
+) -> std::io::Result<()> {
+    if parent == Some(launcher) {
+        Ok(())
+    } else {
+        Err(rustix::io::Errno::SRCH.into())
     }
 }
 
@@ -1520,6 +1551,22 @@ mod parent_death_floor_tests {
         harden_child_parent_death(&mut cmd);
         let status = cmd.status().expect("hardened child must spawn");
         assert!(status.success(), "hardened /bin/true must exit 0");
+    }
+
+    /// A child reparented before it armed the signal (its launcher died in the
+    /// fork-to-`prctl` window) is refused; one still parented by the launcher
+    /// proceeds.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_reparented_child_is_refused() {
+        use super::still_parented_by;
+        let launcher = rustix::process::getpid();
+        assert!(still_parented_by(launcher, Some(launcher)).is_ok());
+        // Above every kernel `pid_max`, so never the launcher's own pid.
+        let other = rustix::process::Pid::from_raw(i32::MAX).expect("positive pid");
+        let refused = still_parented_by(launcher, Some(other)).map_err(|e| e.raw_os_error());
+        assert_eq!(refused, Err(Some(rustix::io::Errno::SRCH.raw_os_error())));
+        assert!(still_parented_by(launcher, None).is_err());
     }
 }
 

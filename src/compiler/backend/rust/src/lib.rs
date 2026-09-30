@@ -2613,7 +2613,7 @@ impl<'a> EmitCtx<'a> {
     /// selects the `json` runtime feature (`serde_json`, and via `json = […,
     /// "serde"]` the whole serde stack). A program that reaches neither drops both
     /// aliases and that whole dependency subtree — the last structural feature-floor
-    /// removal, leaving a bare emitted app at `app + ipe_runtime + libc`.
+    /// removal, leaving a bare emitted app at `app + ipe_runtime + rustix`.
     ///
     /// Reached directly by [`Self::uses_json`] (a `Json`-building kernel or a
     /// `Json`/`Decoder` type-mention), or transitively by a surface whose crate
