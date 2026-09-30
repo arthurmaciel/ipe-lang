@@ -32,6 +32,9 @@ const WASM_TRIPLE: &str = "wasm32-unknown-unknown";
 /// The most module files one target's walk reads before it fails.
 const MAX_MODULE_FILES: usize = 4096;
 
+/// The deepest chain of module files (`mod` and `include!`) one walk follows.
+const MAX_MODULE_DEPTH: usize = 64;
+
 /// The claim table, relative to this crate's manifest directory.
 const CLAIMS_PATH: &str = "../../../.github/ci/test-claims.yml";
 
@@ -439,6 +442,9 @@ struct Findings {
     /// `#[wasm_bindgen_test]` functions admitted: definitely in a cell,
     /// possibly in discovery.
     wasm_tests: usize,
+    /// The identity of each admitted `#[wasm_bindgen_test]`: its declaring
+    /// file and its item path, each segment tagged with its item ordinal.
+    wasm_test_ids: BTreeSet<String>,
     refusals: Vec<String>,
 }
 
@@ -453,6 +459,8 @@ struct Place<'p> {
     dir: &'p Path,
     /// Whether the items sit inside an inline `mod { … }`.
     inline: bool,
+    /// The item path of the items' module, each segment tagged with its ordinal.
+    module: &'p str,
 }
 
 /// The path an `include!` names, or why it names none.
@@ -472,6 +480,8 @@ struct Walk<'a> {
     /// Paths in refusals are shown relative to this directory.
     base: &'a Path,
     module_files: usize,
+    /// How many module files deep the walk currently is.
+    depth: usize,
     found: Findings,
 }
 
@@ -488,6 +498,7 @@ impl<'a> Walk<'a> {
             },
             base,
             module_files: 0,
+            depth: 0,
             found: Findings::default(),
         }
     }
@@ -565,14 +576,37 @@ impl<'a> Walk<'a> {
     /// Walk the module file `file`, whose child modules live in `dir`.
     ///
     /// `inline` is whether `file` is `include!`d inside an inline `mod { … }`,
-    /// where a `#[path]` resolves by rules the walk does not model.
-    fn walk_file(&mut self, file: &Path, dir: &Path, inline: bool, chain: &[Meta]) {
+    /// where a `#[path]` resolves by rules the walk does not model; `module` is
+    /// the item path its items are declared at.
+    fn walk_file(&mut self, file: &Path, dir: &Path, inline: bool, module: &str, chain: &[Meta]) {
         let rel = self.relative(file);
         self.module_files = self.module_files.saturating_add(1);
         if self.module_files > MAX_MODULE_FILES {
             self.refuse(&rel, format!("more than {MAX_MODULE_FILES} module files"));
             return;
         }
+        if self.depth >= MAX_MODULE_DEPTH {
+            self.refuse(
+                &rel,
+                format!("module files nested more than {MAX_MODULE_DEPTH} deep"),
+            );
+            return;
+        }
+        self.depth = self.depth.saturating_add(1);
+        self.read_module_file(file, &rel, dir, inline, module, chain);
+        self.depth = self.depth.saturating_sub(1);
+    }
+
+    /// Parse and walk the module file `file`, shown as `rel`.
+    fn read_module_file(
+        &mut self,
+        file: &Path,
+        rel: &str,
+        dir: &Path,
+        inline: bool,
+        module: &str,
+        chain: &[Meta],
+    ) {
         let parsed = match std::fs::read_to_string(file) {
             Ok(source) => syn::parse_file(&source).map_err(|error| error.to_string()),
             Err(error) => Err(error.to_string()),
@@ -580,26 +614,27 @@ impl<'a> Walk<'a> {
         let parsed = match parsed {
             Ok(parsed) => parsed,
             Err(why) => {
-                self.refuse(&rel, format!("unreadable module: {why}"));
+                self.refuse(rel, format!("unreadable module: {why}"));
                 return;
             }
         };
-        let Some(chain) = self.admit(&rel, &rel, chain, &parsed.attrs) else {
+        let Some(chain) = self.admit(rel, rel, chain, &parsed.attrs) else {
             return;
         };
         let file_dir = file.parent().map_or_else(PathBuf::new, Path::to_path_buf);
         let place = Place {
-            rel: &rel,
+            rel,
             file_dir: &file_dir,
             dir,
             inline,
+            module,
         };
         self.walk_items(&place, &parsed.items, &chain);
     }
 
     /// Walk `items` declared at `place`.
     fn walk_items(&mut self, place: &Place<'_>, items: &[Item], chain: &[Meta]) {
-        for item in items {
+        for (ordinal, item) in items.iter().enumerate() {
             let at = format!("{}: {}", place.rel, item_label(item));
             let Some(attrs) = item_attrs(item) else {
                 self.refuse(&at, "an item `syn` could not parse");
@@ -609,14 +644,30 @@ impl<'a> Walk<'a> {
                 continue;
             };
             match item {
-                Item::Mod(module) => self.walk_mod(place, &at, module, &item_chain),
-                Item::Fn(function) => self.check_fn(&at, function, &item_chain),
+                Item::Mod(module) => {
+                    let path = format!("{}::{}[{ordinal}]", place.module, module.ident);
+                    self.walk_mod(place, &at, &path, module, &item_chain);
+                }
+                Item::Fn(function) => {
+                    let id = format!(
+                        "{}: {}::{}[{ordinal}]",
+                        place.rel, place.module, function.sig.ident
+                    );
+                    self.check_fn(&at, id, function, &item_chain);
+                }
                 Item::Macro(mac) if mac.mac.path.is_ident("include") => {
                     match literal_path(mac.mac.parse_body::<syn::LitStr>()) {
                         Ok(path) => {
                             let file = place.file_dir.join(path);
+                            let module = format!("{}::include[{ordinal}]", place.module);
                             if plain_file(&file) {
-                                self.walk_file(&file, place.dir, place.inline, &item_chain);
+                                self.walk_file(
+                                    &file,
+                                    place.dir,
+                                    place.inline,
+                                    &module,
+                                    &item_chain,
+                                );
                             } else {
                                 self.refuse(&at, "`include!` names no regular file");
                             }
@@ -635,12 +686,19 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// Walk the reached module `module` declared at `place`.
+    /// Walk the reached module `module` declared at `place`, whose item path is `path`.
     ///
     /// A `#[path]` outside an inline module resolves against the declaring
     /// file's directory, and the file it names is a `mod.rs`-style module whose
     /// children live beside it.
-    fn walk_mod(&mut self, place: &Place<'_>, at: &str, module: &syn::ItemMod, chain: &[Meta]) {
+    fn walk_mod(
+        &mut self,
+        place: &Place<'_>,
+        at: &str,
+        path: &str,
+        module: &syn::ItemMod,
+        chain: &[Meta],
+    ) {
         let name = module.ident.to_string();
         let child_dir = place.dir.join(&name);
         let path_attrs: Vec<&Attribute> = module
@@ -656,6 +714,7 @@ impl<'a> Walk<'a> {
             let inner = Place {
                 dir: &child_dir,
                 inline: true,
+                module: path,
                 ..*place
             };
             self.walk_items(&inner, items, chain);
@@ -679,7 +738,7 @@ impl<'a> Walk<'a> {
                 let file = place.file_dir.join(value);
                 if plain_file(&file) {
                     let dir = file.parent().map_or_else(PathBuf::new, Path::to_path_buf);
-                    self.walk_file(&file, &dir, false, chain);
+                    self.walk_file(&file, &dir, false, path, chain);
                 } else {
                     self.refuse(at, "`#[path]` names no regular file");
                 }
@@ -693,15 +752,15 @@ impl<'a> Walk<'a> {
         let flat = place.dir.join(format!("{name}.rs"));
         let nested = child_dir.join("mod.rs");
         match (plain_file(&flat), plain_file(&nested)) {
-            (true, false) => self.walk_file(&flat, &child_dir, false, chain),
-            (false, true) => self.walk_file(&nested, &child_dir, false, chain),
+            (true, false) => self.walk_file(&flat, &child_dir, false, path, chain),
+            (false, true) => self.walk_file(&nested, &child_dir, false, path, chain),
             (true, true) => self.refuse(at, format!("both `{name}.rs` and `{name}/mod.rs` exist")),
             (false, false) => self.refuse(at, format!("no regular file for `mod {name};`")),
         }
     }
 
-    /// Classify the reached function `function` and count it if it is a wasm test.
-    fn check_fn(&mut self, at: &str, function: &syn::ItemFn, chain: &[Meta]) {
+    /// Classify the reached function `function` and count it, as `id`, if it is a wasm test.
+    fn check_fn(&mut self, at: &str, id: String, function: &syn::ItemFn, chain: &[Meta]) {
         let mut wasm_tests = 0usize;
         for attr in &function.attrs {
             match test_attr(&last_segment(attr.path())) {
@@ -734,6 +793,7 @@ impl<'a> Walk<'a> {
                 );
             }
             self.found.wasm_tests = self.found.wasm_tests.saturating_add(1);
+            self.found.wasm_test_ids.insert(id);
         }
         let mut hidden = HiddenTests::default();
         hidden.visit_block(&function.block);
@@ -766,8 +826,23 @@ impl<'a> Walk<'a> {
 fn scan_target(root: &Path, mode: Mode, wasm: CfgEnv<'_>, base: &Path) -> Findings {
     let mut walk = Walk::new(mode, wasm, base);
     let dir = root.parent().map_or_else(PathBuf::new, Path::to_path_buf);
-    walk.walk_file(root, &dir, false, &[]);
+    walk.walk_file(root, &dir, false, "crate", &[]);
     walk.found
+}
+
+/// Rule (d): why each `discovered` wasm test that no claimed cell runs is refused.
+///
+/// `run` is the union of what the target's claimed cells admit.
+fn unrun_refusals(discovered: &BTreeSet<String>, run: &BTreeSet<String>) -> Vec<String> {
+    discovered
+        .difference(run)
+        .map(|id| {
+            format!(
+                "`#[wasm_bindgen_test]` {id} runs in no claimed cell; \
+                 claim a cell whose features compile it"
+            )
+        })
+        .collect()
 }
 
 /// A test target of the runtime crate.
@@ -1110,6 +1185,7 @@ fn every_wasm_test_is_in_a_claimed_cell_with_its_claimed_count() {
     let mut refusals: Vec<String> = Vec::new();
 
     let mut claimed: BTreeSet<TargetName> = BTreeSet::new();
+    let mut run: BTreeMap<TargetName, BTreeSet<String>> = BTreeMap::new();
     for cell in cells
         .iter()
         .filter(|cell| cell.package == env!("CARGO_PKG_NAME"))
@@ -1149,6 +1225,9 @@ fn every_wasm_test_is_in_a_claimed_cell_with_its_claimed_count() {
         refusals.extend(
             count_refusal(found.wasm_tests, cell.expect_tests).map(|why| format!("{at}: {why}")),
         );
+        run.entry(cell.target.clone())
+            .or_default()
+            .extend(found.wasm_test_ids);
     }
 
     for (name, root) in &targets {
@@ -1164,7 +1243,15 @@ fn every_wasm_test_is_in_a_claimed_cell_with_its_claimed_count() {
                 "{name}: can hold {} `#[wasm_bindgen_test]` but no cell in test-claims.yml claims it",
                 found.wasm_tests
             ));
+            continue;
         }
+        let empty = BTreeSet::new();
+        let ran = run.get(name).unwrap_or(&empty);
+        refusals.extend(
+            unrun_refusals(&found.wasm_test_ids, ran)
+                .into_iter()
+                .map(|why| format!("{name}: {why}")),
+        );
     }
 
     assert!(
@@ -1296,6 +1383,49 @@ fn a_cfg_undecided_in_a_cell_is_refused() {
         "refusals: {:#?}",
         found.refusals
     );
+}
+
+/// Findings for the fixture `name` walked as a wasm32 cell of `features`.
+fn cell_fixture(name: &str, features: &[&str]) -> Findings {
+    let dir = crate_dir().join(FIXTURE_DIR);
+    let features: BTreeSet<String> = features.iter().copied().map(str::to_owned).collect();
+    let env = CfgEnv {
+        arch: Arch::Wasm32,
+        features: Some(&features),
+        test: true,
+    };
+    scan_target(&dir.join(name), Mode::Cell { lib: false }, env, &dir)
+}
+
+#[test]
+fn a_wasm_test_under_an_unclaimed_feature_is_refused() {
+    let name = "feature_gated_wasm_test.rs";
+    let discovered = fixture(name);
+    assert!(
+        discovered.refusals.is_empty(),
+        "refusals: {:#?}",
+        discovered.refusals
+    );
+    assert_eq!(discovered.wasm_test_ids.len(), 4);
+    let claimed = cell_fixture(name, &[]);
+    assert!(
+        claimed.refusals.is_empty(),
+        "refusals: {:#?}",
+        claimed.refusals
+    );
+    assert_eq!(claimed.wasm_tests, 2);
+    let unrun = unrun_refusals(&discovered.wasm_test_ids, &claimed.wasm_test_ids);
+    assert_eq!(unrun.len(), 2, "unrun: {unrun:#?}");
+    assert!(
+        unrun.iter().any(|why| why.contains("::never_runs[")),
+        "unrun: {unrun:#?}"
+    );
+    assert!(
+        unrun.iter().any(|why| why.contains("::unclaimed_mod[")),
+        "unrun: {unrun:#?}"
+    );
+    let every = cell_fixture(name, &["unclaimed"]);
+    assert!(unrun_refusals(&discovered.wasm_test_ids, &every.wasm_test_ids).is_empty());
 }
 
 #[test]
