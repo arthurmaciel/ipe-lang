@@ -1,0 +1,264 @@
+module Gate exposing (BindRefusal(..), Refusal(..), Token, TrustedRun, bindMessage, mintToken, parseToken, port, refusalMessage, refusalStatus, requireLoopback, tokenText, trustHealth, trustRun, trustedBody)
+
+import Ipe.Crypto as Crypto
+import Ipe.Error as Error exposing (Error)
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+
+
+-- The run server's trust boundary. It serves the machine it runs on and no one
+-- else: it starts only when bound to loopback, and a request reaches the jail
+-- only as a `TrustedRun`, which `trustRun` builds after proving the request
+-- came from the playground page this process served. The Host header pins the
+-- loopback authority (so a DNS-rebound name is refused), Origin and
+-- Sec-Fetch-Site pin the page's own origin (so a cross-site form or fetch is
+-- refused), Content-Type pins the JSON body (so no CORS-simple request can
+-- carry one), and a per-launch random token, readable only by a same-origin
+-- page through `/health`, must accompany every run.
+
+
+{-| The port the server listens on; the Host and Origin allowlists derive from it. -}
+port : Int
+port =
+    8000
+
+
+{-| A per-launch secret: 32 random bytes, URL-safe base64 without padding. -}
+type Token
+    = Token String
+
+
+{-| A `/run` request proven to come from the playground page. -}
+type TrustedRun
+    = TrustedRun String
+
+
+{-| Why a request is refused before it is decoded. -}
+type Refusal
+    = BadHost
+    | BadOrigin
+    | CrossSite
+    | BadContentType
+    | BadToken
+
+
+{-| Why the server refuses to start. -}
+type BindRefusal
+    = NotLoopback String
+    | PortRelocated String
+
+
+tokenChars : String
+tokenChars =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+
+
+{-| The encoded length of a 32-byte token. -}
+tokenLength : Int
+tokenLength =
+    43
+
+
+tokenHeader : String
+tokenHeader =
+    "x-ipe-playground-token"
+
+
+{-| Parse a token, accepting only the shape `mintToken` produces. -}
+parseToken : String -> Maybe Token
+parseToken raw =
+    if String.length raw == tokenLength && String.all (\c -> String.contains (String.fromChar c) tokenChars) raw then
+        Just (Token raw)
+
+    else
+        Nothing
+
+
+{-| Mint this launch's token from the OS entropy source. -}
+mintToken : Task Error Token
+mintToken =
+    do
+        raw <- Crypto.randomToken 32
+        case parseToken raw of
+            Just token ->
+                Task.succeed token
+
+            Nothing ->
+                Task.fail (Error.unexpected "the entropy source produced a malformed token")
+
+
+{-| The token's text, for the `/health` answer. -}
+tokenText : Token -> String
+tokenText token =
+    case token of
+        Token raw ->
+            raw
+
+
+{-| The body of a trusted run. -}
+trustedBody : TrustedRun -> String
+trustedBody run =
+    case run of
+        TrustedRun body ->
+            body
+
+
+allowedHosts : List String
+allowedHosts =
+    [ "127.0.0.1:" ++ String.fromInt port, "localhost:" ++ String.fromInt port ]
+
+
+{-| The request's Host, when it is one of the loopback authorities. -}
+requireHost : (String -> Maybe String) -> Result Refusal String
+requireHost header =
+    case header "host" of
+        Just host ->
+            if List.member host allowedHosts then
+                Ok host
+
+            else
+                Err BadHost
+
+        Nothing ->
+            Err BadHost
+
+
+{-| Origin, when present, must be the page's own origin on `host`. -}
+originMatches : String -> Maybe String -> Bool
+originMatches host origin =
+    origin == Just ("http://" ++ host)
+
+
+{-| Sec-Fetch-Site, when a browser sends it, must be one of `allowed`. -}
+siteAllowed : List String -> Maybe String -> Bool
+siteAllowed allowed site =
+    case site of
+        Just value ->
+            List.member value allowed
+
+        Nothing ->
+            True
+
+
+{-| Admit a `/run` request, or say why it is refused. -}
+trustRun : Token -> (String -> Maybe String) -> String -> Result Refusal TrustedRun
+trustRun token header body =
+    case requireHost header of
+        Err refusal ->
+            Err refusal
+
+        Ok host ->
+            if not (originMatches host (header "origin")) then
+                Err BadOrigin
+
+            else if not (siteAllowed [ "same-origin" ] (header "sec-fetch-site")) then
+                Err CrossSite
+
+            else if Maybe.map String.trim (header "content-type") /= Just "application/json" then
+                Err BadContentType
+
+            else if not (tokenPresented token (header tokenHeader)) then
+                Err BadToken
+
+            else
+                Ok (TrustedRun body)
+
+
+{-| Admit a `/health` request: a same-origin GET may omit Origin, but never names another. -}
+trustHealth : (String -> Maybe String) -> Result Refusal ()
+trustHealth header =
+    case requireHost header of
+        Err refusal ->
+            Err refusal
+
+        Ok host ->
+            if header "origin" /= Nothing && not (originMatches host (header "origin")) then
+                Err BadOrigin
+
+            else if not (siteAllowed [ "same-origin", "none" ] (header "sec-fetch-site")) then
+                Err CrossSite
+
+            else
+                Ok ()
+
+
+tokenPresented : Token -> Maybe String -> Bool
+tokenPresented token presented =
+    case presented of
+        Just value ->
+            Crypto.constantTimeEqual (tokenText token) value
+
+        Nothing ->
+            False
+
+
+{-| The HTTP status a refusal answers with. -}
+refusalStatus : Refusal -> Int
+refusalStatus refusal =
+    case refusal of
+        BadHost ->
+            403
+
+        BadOrigin ->
+            403
+
+        CrossSite ->
+            403
+
+        BadContentType ->
+            415
+
+        BadToken ->
+            403
+
+
+{-| The message a refusal answers with. -}
+refusalMessage : Refusal -> String
+refusalMessage refusal =
+    case refusal of
+        BadHost ->
+            "Refused: the Host is not this machine's loopback address."
+
+        BadOrigin ->
+            "Refused: the request did not come from the playground page."
+
+        CrossSite ->
+            "Refused: a cross-site request."
+
+        BadContentType ->
+            "Refused: expected Content-Type application/json."
+
+        BadToken ->
+            "Refused: missing or wrong playground token; reload the page."
+
+
+{-| Prove the listener binds loopback on `port`, from `IPE_HTTP_BIND` and `IPE_SERVER_PORT`. -}
+requireLoopback : { bind : String, serverPort : String } -> Result BindRefusal ()
+requireLoopback env =
+    if String.trim env.bind /= "127.0.0.1" then
+        Err (NotLoopback env.bind)
+
+    else if env.serverPort /= "" && String.trim env.serverPort /= String.fromInt port then
+        Err (PortRelocated env.serverPort)
+
+    else
+        Ok ()
+
+
+{-| The startup refusal message. -}
+bindMessage : BindRefusal -> String
+bindMessage refusal =
+    case refusal of
+        NotLoopback bind ->
+            "the playground run server serves loopback only: start it with IPE_HTTP_BIND=127.0.0.1 (got "
+                ++ String.left 80 bind
+                ++ ")"
+
+        PortRelocated serverPort ->
+            "the playground run server listens on port "
+                ++ String.fromInt port
+                ++ " only: unset IPE_SERVER_PORT (got "
+                ++ String.left 80 serverPort
+                ++ ")"

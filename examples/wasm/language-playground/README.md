@@ -52,21 +52,38 @@ Every step runs as a direct argv vector, never through a shell.
 
 ```sh
 cd examples/wasm/language-playground/server
-ipe run
+IPE_HTTP_BIND=127.0.0.1 ipe run
 ```
 
-The server listens on port 8000 and serves the playground root and `/pkg`
-statically. Open http://localhost:8000.
+The server listens on `127.0.0.1:8000` and serves the playground root and
+`/pkg` statically. Open http://localhost:8000. It refuses to start unless
+`IPE_HTTP_BIND` is exactly `127.0.0.1` and `IPE_SERVER_PORT` is unset or `8000`
+(so a relocated port, as under `ipe watch`, is refused rather than guessed).
 
 | Route | Answers |
 |---|---|
-| `GET /health` | `{"ok":true}`: the page enables Run only after this |
+| `GET /health` | `{"ok":true,"token":<launch token>}`, `Cache-Control: no-store`: the page enables Run only after this |
 | `POST /run` | `{"rust": <emitted crate>}` → `{"ok", "unsandboxed", "output"}` |
+
+Run executes code, so `POST /run` admits only the playground page served by
+this server. `server/src/Gate.ipe` requires, before the body is read:
+
+- `Host` is exactly `127.0.0.1:8000` or `localhost:8000` (refuses DNS rebinding);
+- `Origin` is `http://` followed by that `Host` (refuses cross-site pages);
+- `Sec-Fetch-Site` is absent or `same-origin`;
+- `Content-Type` is `application/json` (a form post cannot send it);
+- `X-Ipe-Playground-Token` equals the random token minted at startup, compared
+  in constant time. Only a same-origin page can read it from `/health`.
+
+`GET /health` applies the same `Host` rule, and an `Origin`, when sent, must
+match it. A restarted server mints a new token: reload the page.
 
 `POST /run` fails with one of these statuses:
 
 | Status | Meaning |
 |---|---|
+| 403 | `Gate` refused the request's `Host`, `Origin`, `Sec-Fetch-Site`, or token |
+| 415 | the `Content-Type` is not `application/json` |
 | 413 | the body is over 1 MiB |
 | 400 | the body is not `{"rust": String}` |
 | 422 | the staging allowlist refused the crate |
@@ -78,12 +95,17 @@ Environment:
 |---|---|
 | `IPE_PLAYGROUND_JAIL_RUNNER` | absolute path of another jail runner. A relative name is refused, never looked up on `PATH`. |
 | `IPE_PLAYGROUND_WARM_DIR` | the warm cache directory |
-| `IPE_HTTP_REQUEST_TIMEOUT` | the per-request deadline (default 30 s). The jail's wall-clock limit is set 5 s under it, so a jail never outlives its request. |
+| `IPE_HTTP_REQUEST_TIMEOUT` | the per-request deadline (default 30 s). The jail's wall-clock limit is 5 s under it, clamped to the jail runner's 10–600 s range. Keep it at 15 s or more, so the jail ends before the request. |
+
+`HOME` must be an absolute path: runs are staged under it.
 
 ## How Run works
 
 1. The in-browser compiler emits a Rust project: each file under a
    `// ==== path ====` banner, with the emitted `Cargo.toml` last.
+   `jail-runner` builds the `Cargo.toml` only when it is exactly a manifest
+   the compiler renders; the client picks only the runtime features, and any
+   other manifest is refused.
 2. The server checks the body's size before it decodes it. `server/src/Staging.ipe`
    then parses the banners into a staging plan. It accepts only `Cargo.toml` and
    `src/<segment>/…/<name>.rs`, where each segment is non-empty
@@ -118,8 +140,8 @@ pkg/ipe_wasm_bg.wasm
 
 All asset and endpoint URLs are relative to the page, so it works under any
 sub-path (e.g. `/compiler/playground/`). With no run server behind it, Run is
-disabled with "Run needs the local server — see README". To point the page at
-a run server elsewhere, add `?server=<url>`. A CI job builds `pkg/` with:
+disabled with "Run needs the local server — see README". The page runs only
+against the server it was loaded from. A CI job builds `pkg/` with:
 
 ```sh
 rustup target add wasm32-unknown-unknown

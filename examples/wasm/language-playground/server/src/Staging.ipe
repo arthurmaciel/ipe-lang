@@ -1,4 +1,4 @@
-module Staging exposing (Plan, StagedFile, files, maxFiles, maxSegments, plan)
+module Staging exposing (Plan, StagedFile, StagingError(..), errorMessage, files, maxFiles, maxSegments, plan)
 
 import Ipe.List as List
 import Ipe.Result as Result
@@ -32,6 +32,39 @@ files plan_ =
     case plan_ of
         Plan staged ->
             staged
+
+
+{-| Why a staging plan is refused; the whole request is refused with it. -}
+type StagingError
+    = Preamble
+    | TooManyFiles
+    | BadPath String
+    | DuplicatePath
+    | MissingManifest
+    | MissingEntryPoint
+
+
+{-| The user-facing text of a staging refusal. -}
+errorMessage : StagingError -> String
+errorMessage error =
+    case error of
+        Preamble ->
+            "text before the first file banner"
+
+        TooManyFiles ->
+            "more than " ++ String.fromInt maxFiles ++ " staged files"
+
+        BadPath path ->
+            "staged path " ++ String.left 80 path ++ " is outside Cargo.toml and src/<segment>/.../<name>.rs"
+
+        DuplicatePath ->
+            "a staged path appears twice"
+
+        MissingManifest ->
+            "missing " ++ manifestPath
+
+        MissingEntryPoint ->
+            "missing " ++ entryPath
 
 
 type alias SplitState =
@@ -70,33 +103,33 @@ segmentChars =
 
 
 {-| Parse the emitted Rust into the files to stage, or the reason it is refused. -}
-plan : String -> Result String Plan
+plan : String -> Result StagingError Plan
 plan emittedRust =
     let
         split =
             splitBanners emittedRust
     in
     if split.preamble then
-        Err "refused: text before the first file banner"
+        Err Preamble
 
     else
         split.files |> checkFiles |> Result.map Plan
 
 
-checkFiles : List StagedFile -> Result String (List StagedFile)
+checkFiles : List StagedFile -> Result StagingError (List StagedFile)
 checkFiles files =
     if List.length files > maxFiles then
-        Err ("refused: more than " ++ String.fromInt maxFiles ++ " staged files")
+        Err TooManyFiles
 
     else
         files
             |> Result.traverse checkFile
             |> Result.andThen checkUnique
-            |> Result.andThen (requirePath manifestPath)
-            |> Result.andThen (requirePath entryPath)
+            |> Result.andThen (requirePath manifestPath MissingManifest)
+            |> Result.andThen (requirePath entryPath MissingEntryPoint)
 
 
-checkFile : StagedFile -> Result String StagedFile
+checkFile : StagedFile -> Result StagingError StagedFile
 checkFile file =
     if file.path == manifestPath then
         Ok file
@@ -108,10 +141,10 @@ checkFile file =
                     Ok file
 
                 else
-                    Err (refusedPath file.path)
+                    Err (BadPath file.path)
 
             [] ->
-                Err (refusedPath file.path)
+                Err (BadPath file.path)
 
 
 validSource : List String -> Bool
@@ -134,7 +167,7 @@ validSegment segment =
         && String.all (\c -> String.contains (String.fromChar c) segmentChars) segment
 
 
-checkUnique : List StagedFile -> Result String (List StagedFile)
+checkUnique : List StagedFile -> Result StagingError (List StagedFile)
 checkUnique files =
     let
         paths =
@@ -144,21 +177,16 @@ checkUnique files =
         Ok files
 
     else
-        Err "refused: a staged path appears twice"
+        Err DuplicatePath
 
 
-requirePath : String -> List StagedFile -> Result String (List StagedFile)
-requirePath path files =
+requirePath : String -> StagingError -> List StagedFile -> Result StagingError (List StagedFile)
+requirePath path missing files =
     if List.any (\file -> file.path == path) files then
         Ok files
 
     else
-        Err ("refused: missing " ++ path)
-
-
-refusedPath : String -> String
-refusedPath path =
-    "refused staged path: " ++ String.left 80 path
+        Err missing
 
 
 splitBanners : String -> SplitState

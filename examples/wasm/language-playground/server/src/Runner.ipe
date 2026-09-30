@@ -1,4 +1,4 @@
-module Runner exposing (RunResult, absoluteRunner, runPlan)
+module Runner exposing (RunResult, absoluteHome, absoluteRunner, jailWallFor, maxJailWallSecs, minJailWallSecs, runPlan)
 
 import Ipe.Crypto as Crypto
 import Ipe.Error as Error exposing (Error)
@@ -44,11 +44,8 @@ type alias RawOutcome =
 
 runPlan : Staging.Plan -> Task Error RunResult
 runPlan plan =
-    let
-        home =
-            System.getenvOr "HOME" "."
-    in
     do
+        home <- System.getenvOr "HOME" "" |> absoluteHome |> Task.fromResult
         token <- Crypto.randomToken 8
         runDir <- toPath (home ++ "/.cache/ipe/playground-runs/" ++ token)
         File.mkdirAll runDir
@@ -82,6 +79,18 @@ runnerPath home =
     home ++ "/.cache/ipe/playground/bin/jail-runner" |> System.getenvOr "IPE_PLAYGROUND_JAIL_RUNNER" |> absoluteRunner
 
 
+{-| The home directory runs are staged under: an absolute `HOME`, never a
+relative fallback that would stage into the server's working directory.
+-}
+absoluteHome : String -> Result Error String
+absoluteHome home =
+    if String.startsWith "/" home then
+        Ok home
+
+    else
+        "HOME must be an absolute path, got: " ++ String.left 200 home |> Error.unexpected |> Err
+
+
 absoluteRunner : String -> Result Error String
 absoluteRunner runner =
     if String.startsWith "/" runner then
@@ -91,24 +100,37 @@ absoluteRunner runner =
         "IPE_PLAYGROUND_JAIL_RUNNER must be an absolute path, got: " ++ String.left 200 runner |> Error.unexpected |> Err
 
 
-{-| The jail's wall-clock budget: inside the server's per-request deadline
-(`IPE_HTTP_REQUEST_TIMEOUT`, 30 seconds unless set), so a jail never outlives
-the request that started it.
+{-| The shortest wall the jail runner accepts, in seconds. -}
+minJailWallSecs : Int
+minJailWallSecs =
+    10
+
+
+{-| The longest wall the jail runner accepts, in seconds. -}
+maxJailWallSecs : Int
+maxJailWallSecs =
+    600
+
+
+{-| The jail's wall-clock budget for the server's per-request deadline.
+
+Five seconds under `IPE_HTTP_REQUEST_TIMEOUT` (30 unless set), so a jail never
+outlives the request that started it, clamped to the range the jail runner
+accepts, so no deadline makes it refuse every run.
 -}
+jailWallFor : String -> Int
+jailWallFor raw =
+    raw
+        |> String.trim
+        |> String.toInt
+        |> Maybe.withDefault 30
+        |> clamp (minJailWallSecs + 5) (maxJailWallSecs + 5)
+        |> (\deadline -> deadline - 5)
+
+
 jailWallSecs : Int
 jailWallSecs =
-    let
-        deadline =
-            System.getenvOr "IPE_HTTP_REQUEST_TIMEOUT" "30"
-                |> String.trim
-                |> String.toInt
-                |> Maybe.withDefault 30
-    in
-    if deadline > 10 then
-        deadline - 5
-
-    else
-        5
+    jailWallFor (System.getenvOr "IPE_HTTP_REQUEST_TIMEOUT" "30")
 
 
 decodeOutcome : { exitCode : Int, stderr : String, stdout : String } -> Result Error RawOutcome

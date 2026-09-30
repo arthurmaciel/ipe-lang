@@ -378,18 +378,19 @@ main =
     // (no network, jailed filesystem, memory/CPU/fork/time caps) and returns a
     // {ok, unsandboxed, output} transcript.
     //
-    // The run server is separate from a static host (e.g. GitHub Pages). By
-    // default the page talks to the directory it was served from, so the
-    // server's own copy works under any sub-path; `?server=<origin>` points it
-    // elsewhere. With no server answering /health, Run stays disabled and the
-    // page is a pure in-browser emit preview.
-    const params = new URLSearchParams(location.search);
-    const RUN_BASE = new URL(params.get('server') || '.', location.href);
-    const endpoint = (name) => new URL(name, RUN_BASE.href.replace(/\/?$/, '/')).href;
+    // The run server is separate from a static host (e.g. GitHub Pages). The
+    // page talks only to the directory it was served from: the server admits
+    // /run from its own origin alone, with the launch token /health hands to
+    // that origin. With no server answering /health, Run stays disabled and
+    // the page is a pure in-browser emit preview.
+    const RUN_BASE = new URL('.', location.href);
+    const endpoint = (name) => new URL(name, RUN_BASE.href).href;
     const HEALTH_URL = endpoint('health');
     const RUN_URL = endpoint('run');
 
     let running = false;
+    // The server's launch token from GET /health; POST /run carries it.
+    let runToken = null;
 
     function markServerDown() {
       serverState = 'down';
@@ -408,10 +409,13 @@ main =
 
     async function probeServer() {
       try {
-        const resp = await fetch(HEALTH_URL, { signal: AbortSignal.timeout(5000) });
+        const resp = await fetch(HEALTH_URL, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
         const data = resp.ok ? await resp.json() : null;
-        serverState = data && data.ok === true ? 'up' : 'down';
+        const up = Boolean(data) && data.ok === true && typeof data.token === 'string';
+        runToken = up ? data.token : null;
+        serverState = up ? 'up' : 'down';
       } catch {
+        runToken = null;
         serverState = 'down';
       }
       if (serverState === 'down') markServerDown();
@@ -456,7 +460,7 @@ main =
         try {
           resp = await fetch(RUN_URL, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Ipe-Playground-Token': runToken },
             body: JSON.stringify({ rust: lastEmittedRust }),
           });
         } catch {

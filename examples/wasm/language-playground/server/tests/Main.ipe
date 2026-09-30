@@ -1,11 +1,13 @@
 module Main exposing (main)
 
+import Gate exposing (BindRefusal(..), Refusal(..), Token)
 import Ipe.List as List
+import Ipe.Maybe as Maybe
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
-import Ipe.Test as Test exposing (Test)
+import Ipe.Test as Test exposing (Test, TestResult)
 import Runner
-import Staging
+import Staging exposing (StagingError(..))
 
 
 -- The staging allowlist: the page's own emit is accepted, every path that
@@ -22,14 +24,14 @@ crate extra =
         ++ banner "Cargo.toml" "[package]"
 
 
-stagedPaths : String -> Result String (List String)
+stagedPaths : String -> Result StagingError (List String)
 stagedPaths emitted =
     Result.map (\p -> List.map (\ipe_accessor_arg -> ipe_accessor_arg.path) (Staging.files p)) (Staging.plan emitted)
 
 
-refuses : String -> String -> Test
-refuses name emitted =
-    Test.test name (\_ -> Test.err (Staging.plan emitted))
+refuses : String -> StagingError -> String -> Test
+refuses name expected emitted =
+    Test.test name (\_ -> Test.equal (Err expected) (Result.map (\_ -> ()) (Staging.plan emitted)))
 
 
 accepted : Test
@@ -50,25 +52,26 @@ accepted =
 refused : Test
 refused =
     Test.suite "refused"
-        [ refuses "a parent traversal" (crate [ "src/../../../../etc/cron.d/x.rs" ])
-        , refuses "a traversal that cleans back inside" (crate [ "src/a/../main2.rs" ])
-        , refuses "an absolute path" (crate [ "/tmp/x.rs" ])
-        , refuses "a path outside src" (crate [ "build.rs" ])
-        , refuses "a harness entry" (crate [ "Cargo.lock" ])
-        , refuses "a non-Rust source" (crate [ "src/data.json" ])
-        , refuses "an empty segment" (crate [ "src//x.rs" ])
-        , refuses "a hidden file" (crate [ "src/.x.rs" ])
-        , refuses "a bare extension" (crate [ "src/.rs" ])
-        , refuses "a non-ASCII segment" (crate [ "src/é.rs" ])
-        , refuses "a backslash segment" (crate [ "src/a\\b.rs" ])
-        , refuses "a duplicate path" (crate [ "src/main.rs" ])
-        , refuses "nesting past the ceiling" (crate [ "src/a/b/c/d/e/f/g/h/i.rs" ])
-        , refuses "text before the first banner" ("fn evil() {}\n" ++ crate [])
-        , refuses "a missing manifest" (banner "src/main.rs" "fn main() {}")
-        , refuses "a missing entry point" (banner "Cargo.toml" "[package]")
-        , refuses "no files at all" ""
+        [ refuses "a parent traversal" (BadPath "src/../../../../etc/cron.d/x.rs") (crate [ "src/../../../../etc/cron.d/x.rs" ])
+        , refuses "a traversal that cleans back inside" (BadPath "src/a/../main2.rs") (crate [ "src/a/../main2.rs" ])
+        , refuses "an absolute path" (BadPath "/tmp/x.rs") (crate [ "/tmp/x.rs" ])
+        , refuses "a path outside src" (BadPath "build.rs") (crate [ "build.rs" ])
+        , refuses "a harness entry" (BadPath "Cargo.lock") (crate [ "Cargo.lock" ])
+        , refuses "a non-Rust source" (BadPath "src/data.json") (crate [ "src/data.json" ])
+        , refuses "an empty segment" (BadPath "src//x.rs") (crate [ "src//x.rs" ])
+        , refuses "a hidden file" (BadPath "src/.x.rs") (crate [ "src/.x.rs" ])
+        , refuses "a bare extension" (BadPath "src/.rs") (crate [ "src/.rs" ])
+        , refuses "a non-ASCII segment" (BadPath "src/é.rs") (crate [ "src/é.rs" ])
+        , refuses "a backslash segment" (BadPath "src/a\\b.rs") (crate [ "src/a\\b.rs" ])
+        , refuses "a duplicate path" DuplicatePath (crate [ "src/main.rs" ])
+        , refuses "nesting past the ceiling" (BadPath "src/a/b/c/d/e/f/g/h/i.rs") (crate [ "src/a/b/c/d/e/f/g/h/i.rs" ])
+        , refuses "text before the first banner" Preamble ("fn evil() {}\n" ++ crate [])
+        , refuses "a missing manifest" MissingManifest (banner "src/main.rs" "fn main() {}")
+        , refuses "a missing entry point" MissingEntryPoint (banner "Cargo.toml" "[package]")
+        , refuses "no files at all" MissingManifest ""
         , refuses
             "too many files"
+            TooManyFiles
             (crate (List.map (\n -> "src/m" ++ String.fromInt n ++ ".rs") (List.range 1 Staging.maxFiles)))
         ]
 
@@ -84,5 +87,164 @@ runnerPath =
         ]
 
 
+-- Runs stage under an absolute HOME only, never the server's working directory.
+home : Test
+home =
+    Test.suite "home"
+        [ Test.test "an absolute home is used as given" (\_ -> Test.equal (Ok "/home/pg") (Runner.absoluteHome "/home/pg"))
+        , Test.test "an unset home is refused" (\_ -> Test.err (Runner.absoluteHome ""))
+        , Test.test "the working directory is refused" (\_ -> Test.err (Runner.absoluteHome "."))
+        , Test.test "a relative home is refused" (\_ -> Test.err (Runner.absoluteHome "home/pg"))
+        ]
+
+
+-- The jail wall sits five seconds under the request deadline, inside the range
+-- the jail runner accepts whatever the deadline says.
+wall : Test
+wall =
+    Test.suite "jail wall"
+        [ Test.test "the default deadline" (\_ -> Test.equal 25 (Runner.jailWallFor "30"))
+        , Test.test "a padded deadline" (\_ -> Test.equal 55 (Runner.jailWallFor " 60 "))
+        , Test.test "an unparsable deadline uses the default" (\_ -> Test.equal 25 (Runner.jailWallFor "soon"))
+        , Test.test "the lowest deadline above the floor" (\_ -> Test.equal 11 (Runner.jailWallFor "16"))
+        , Test.test "a short deadline is raised to the floor" (\_ -> Test.equal Runner.minJailWallSecs (Runner.jailWallFor "5"))
+        , Test.test "a negative deadline is raised to the floor" (\_ -> Test.equal Runner.minJailWallSecs (Runner.jailWallFor "-9223372036854775808"))
+        , Test.test "the highest deadline under the ceiling" (\_ -> Test.equal Runner.maxJailWallSecs (Runner.jailWallFor "605"))
+        , Test.test "a long deadline is capped at the ceiling" (\_ -> Test.equal Runner.maxJailWallSecs (Runner.jailWallFor "9223372036854775807"))
+        ]
+
+
+-- A request's headers, looked up the way `Server.header` does for the gate.
+headers : List ( String, String ) -> String -> Maybe String
+headers pairs name =
+    pairs
+        |> List.filter (\( key, _ ) -> key == name)
+        |> List.map (\( _, value ) -> value)
+        |> List.head
+
+
+validToken : String
+validToken =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJK0123-_"
+
+
+otherToken : String
+otherToken =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJK0123-A"
+
+
+{-| The headers the playground page sends with a run, minus the named ones. -}
+pageRun : List String -> List ( String, String ) -> List ( String, String )
+pageRun without extra =
+    [ ( "host", "127.0.0.1:8000" )
+    , ( "origin", "http://127.0.0.1:8000" )
+    , ( "sec-fetch-site", "same-origin" )
+    , ( "content-type", "application/json" )
+    , ( "x-ipe-playground-token", validToken )
+    ]
+        |> List.filter (\( key, _ ) -> not (List.member key without) && not (List.any (\( replaced, _ ) -> replaced == key) extra))
+        |> List.append extra
+
+
+runVerdict : List ( String, String ) -> Result Refusal String
+runVerdict pairs =
+    case Gate.parseToken validToken of
+        Just token ->
+            Result.map Gate.trustedBody (Gate.trustRun token (headers pairs) "{}")
+
+        Nothing ->
+            Ok "the fixture token does not parse"
+
+
+runRefused : String -> Refusal -> List ( String, String ) -> Test
+runRefused name expected pairs =
+    Test.test name (\_ -> Test.equal (Err expected) (runVerdict pairs))
+
+
+gateRun : Test
+gateRun =
+    Test.suite "run gate"
+        [ Test.test "the page's own run is admitted" (\_ -> Test.equal (Ok "{}") (runVerdict (pageRun [] [])))
+        , Test.test
+            "the page served as localhost is admitted"
+            (\_ -> Test.equal (Ok "{}") (runVerdict (pageRun [] [ ( "host", "localhost:8000" ), ( "origin", "http://localhost:8000" ) ])))
+        , Test.test "a browser without Sec-Fetch-Site is admitted" (\_ -> Test.equal (Ok "{}") (runVerdict (pageRun [ "sec-fetch-site" ] [])))
+        , runRefused "a missing Host" BadHost (pageRun [ "host" ] [])
+        , runRefused "a DNS-rebound Host" BadHost (pageRun [] [ ( "host", "attacker.example:8000" ) ])
+        , runRefused "a Host on another port" BadHost (pageRun [] [ ( "host", "127.0.0.1:8001" ) ])
+        , runRefused "a Host without a port" BadHost (pageRun [] [ ( "host", "127.0.0.1" ) ])
+        , runRefused "a Host of another loopback address" BadHost (pageRun [] [ ( "host", "127.0.0.2:8000" ) ])
+        , runRefused "a missing Origin" BadOrigin (pageRun [ "origin" ] [])
+        , runRefused "a foreign Origin" BadOrigin (pageRun [] [ ( "origin", "http://attacker.example" ) ])
+        , runRefused "an opaque Origin" BadOrigin (pageRun [] [ ( "origin", "null" ) ])
+        , runRefused "an Origin on another scheme" BadOrigin (pageRun [] [ ( "origin", "https://127.0.0.1:8000" ) ])
+        , runRefused "an Origin naming the other loopback name" BadOrigin (pageRun [] [ ( "origin", "http://localhost:8000" ) ])
+        , runRefused "a cross-site fetch" CrossSite (pageRun [] [ ( "sec-fetch-site", "cross-site" ) ])
+        , runRefused "a same-site fetch" CrossSite (pageRun [] [ ( "sec-fetch-site", "same-site" ) ])
+        , runRefused "a user-initiated navigation" CrossSite (pageRun [] [ ( "sec-fetch-site", "none" ) ])
+        , runRefused "a missing Content-Type" BadContentType (pageRun [ "content-type" ] [])
+        , runRefused "a form post" BadContentType (pageRun [] [ ( "content-type", "application/x-www-form-urlencoded" ) ])
+        , runRefused "a text/plain post" BadContentType (pageRun [] [ ( "content-type", "text/plain" ) ])
+        , runRefused "a multipart post" BadContentType (pageRun [] [ ( "content-type", "multipart/form-data" ) ])
+        , runRefused "a missing token" BadToken (pageRun [ "x-ipe-playground-token" ] [])
+        , runRefused "an empty token" BadToken (pageRun [] [ ( "x-ipe-playground-token", "" ) ])
+        , runRefused "a wrong token" BadToken (pageRun [] [ ( "x-ipe-playground-token", otherToken ) ])
+        , runRefused "a token prefix" BadToken (pageRun [] [ ( "x-ipe-playground-token", String.left 42 validToken ) ])
+        , runRefused "a token with a suffix" BadToken (pageRun [] [ ( "x-ipe-playground-token", validToken ++ "x" ) ])
+        ]
+
+
+healthRefused : String -> Refusal -> List ( String, String ) -> Test
+healthRefused name expected pairs =
+    Test.test name (\_ -> Test.equal (Err expected) (Gate.trustHealth (headers pairs)))
+
+
+gateHealth : Test
+gateHealth =
+    Test.suite "health gate"
+        [ Test.test "a same-origin GET without Origin is admitted" (\_ -> Test.ok (Gate.trustHealth (headers [ ( "host", "127.0.0.1:8000" ), ( "sec-fetch-site", "same-origin" ) ])))
+        , Test.test "a same-origin GET with Origin is admitted" (\_ -> Test.ok (Gate.trustHealth (headers [ ( "host", "localhost:8000" ), ( "origin", "http://localhost:8000" ) ])))
+        , Test.test "a typed-in URL is admitted" (\_ -> Test.ok (Gate.trustHealth (headers [ ( "host", "127.0.0.1:8000" ), ( "sec-fetch-site", "none" ) ])))
+        , healthRefused "a missing Host" BadHost []
+        , healthRefused "a DNS-rebound Host" BadHost [ ( "host", "attacker.example:8000" ) ]
+        , healthRefused "a foreign Origin" BadOrigin [ ( "host", "127.0.0.1:8000" ), ( "origin", "http://attacker.example" ) ]
+        , healthRefused "an opaque Origin" BadOrigin [ ( "host", "127.0.0.1:8000" ), ( "origin", "null" ) ]
+        , healthRefused "a cross-site fetch" CrossSite [ ( "host", "127.0.0.1:8000" ), ( "sec-fetch-site", "cross-site" ) ]
+        , healthRefused "a same-site fetch" CrossSite [ ( "host", "127.0.0.1:8000" ), ( "sec-fetch-site", "same-site" ) ]
+        ]
+
+
+tokenShape : Test
+tokenShape =
+    Test.suite "token shape"
+        [ Test.test "a minted-shape token parses" (\_ -> Test.equal (Just validToken) (Maybe.map Gate.tokenText (Gate.parseToken validToken)))
+        , Test.test "an empty token is refused" (\_ -> Test.equal Nothing (Maybe.map Gate.tokenText (Gate.parseToken "")))
+        , Test.test "a short token is refused" (\_ -> Test.equal Nothing (Maybe.map Gate.tokenText (Gate.parseToken (String.left 42 validToken))))
+        , Test.test "a long token is refused" (\_ -> Test.equal Nothing (Maybe.map Gate.tokenText (Gate.parseToken (validToken ++ "a"))))
+        , Test.test "a padded token is refused" (\_ -> Test.equal Nothing (Maybe.map Gate.tokenText (Gate.parseToken (String.left 42 validToken ++ "="))))
+        , Test.test "a standard-base64 token is refused" (\_ -> Test.equal Nothing (Maybe.map Gate.tokenText (Gate.parseToken (String.left 42 validToken ++ "+"))))
+        ]
+
+
+bindRefused : String -> BindRefusal -> { bind : String, serverPort : String } -> Test
+bindRefused name expected env =
+    Test.test name (\_ -> Test.equal (Err expected) (Gate.requireLoopback env))
+
+
+loopback : Test
+loopback =
+    Test.suite "loopback bind"
+        [ Test.test "loopback on the default port starts" (\_ -> Test.equal (Ok ()) (Gate.requireLoopback { bind = "127.0.0.1", serverPort = "" }))
+        , Test.test "a padded loopback bind starts" (\_ -> Test.equal (Ok ()) (Gate.requireLoopback { bind = " 127.0.0.1 ", serverPort = "8000" }))
+        , bindRefused "an unset bind" (NotLoopback "") { bind = "", serverPort = "" }
+        , bindRefused "every interface" (NotLoopback "0.0.0.0") { bind = "0.0.0.0", serverPort = "" }
+        , bindRefused "every IPv6 interface" (NotLoopback "::") { bind = "::", serverPort = "" }
+        , bindRefused "another address" (NotLoopback "192.168.1.5") { bind = "192.168.1.5", serverPort = "" }
+        , bindRefused "a name the resolver maps" (NotLoopback "localhost") { bind = "localhost", serverPort = "" }
+        , bindRefused "a relocated port" (PortRelocated "8123") { bind = "127.0.0.1", serverPort = "8123" }
+        , bindRefused "a malformed port" (PortRelocated "abc") { bind = "127.0.0.1", serverPort = "abc" }
+        ]
+
+
 main =
-    Test.runMain [ accepted, refused, runnerPath ]
+    Test.runMain [ accepted, refused, runnerPath, home, wall, gateRun, gateHealth, tokenShape, loopback ]

@@ -1,30 +1,43 @@
 module Main exposing (main)
 
+import Gate exposing (Token)
 import Ipe.Error as Error exposing (Error)
 import Ipe.Json.Decode as Json
 import Ipe.Json.Encode as Encode
+import Ipe.Result as Result
 import Ipe.Server.Http as Server
 import Ipe.String as String
+import Ipe.System as System
 import Ipe.Task as Task exposing (Task)
 import Runner
 import Staging
 
 
--- The playground's run server, started from this directory (`ipe run`). The
--- static roots resolve against the process cwd: ".." is the playground root
--- (index.html) and "../pkg" the wasm bundle. GET /health tells the page a run
--- server is present. POST /run takes `{"rust": <emitted crate>}` — the page's
--- own ipe-wasm emit, never Ipê source — and answers with the jailed transcript:
--- 413 for a body over the bound, 400 for a malformed one, 422 for a crate the
--- staging allowlist refuses, 500 when the jail itself fails.
+-- The playground's run server, started from this directory
+-- (`IPE_HTTP_BIND=127.0.0.1 ipe run`); it refuses to start on any other bind.
+-- The static roots resolve against the process cwd: ".." is the playground
+-- root (index.html) and "../pkg" the wasm bundle. GET /health tells the page a
+-- run server is present and hands it this launch's token. POST /run takes
+-- `{"rust": <emitted crate>}` (the page's own ipe-wasm emit, never Ipê source)
+-- and answers with the jailed transcript: 403 or 415 for a request `Gate`
+-- refuses, 413 for a body over the bound, 400 for a malformed one, 422 for a
+-- crate the staging allowlist refuses, 500 when the jail itself fails.
 main : Task Error ()
 main =
-    Server.listen 8000
-        [ Server.get "/health" health
-        , Server.post "/run" handleRun
-        , Server.static "/pkg" "../pkg"
-        , Server.static "/" ".."
-        ]
+    do
+        Gate.requireLoopback
+            { bind = System.getenvOr "IPE_HTTP_BIND" ""
+            , serverPort = System.getenvOr "IPE_SERVER_PORT" ""
+            }
+            |> Result.mapError (\refusal -> Error.unexpected (Gate.bindMessage refusal))
+            |> Task.fromResult
+        token <- Gate.mintToken
+        Server.listen Gate.port
+            [ Server.get "/health" (health token)
+            , Server.post "/run" (handleRun token)
+            , Server.static "/pkg" "../pkg"
+            , Server.static "/" ".."
+            ]
 
 
 {-| The largest request body `/run` decodes, in code points: the emitted crate
@@ -35,17 +48,32 @@ maxRequestChars =
     1048576
 
 
-health : Server.Request -> Task Error Server.Response
-health _ =
-    Task.succeed (Server.json "{\"ok\":true}")
+health : Token -> Server.Request -> Task Error Server.Response
+health token req =
+    case Gate.trustHealth (\name -> Server.header name req) of
+        Err refusal ->
+            refuse (Gate.refusalStatus refusal) (Gate.refusalMessage refusal)
+
+        Ok () ->
+            Encode.object [ ( "ok", Encode.bool True ), ( "token", Encode.string (Gate.tokenText token) ) ]
+                |> Encode.encode 0
+                |> Server.json
+                |> Server.withHeader "Cache-Control" "no-store"
+                |> Task.succeed
 
 
-handleRun : Server.Request -> Task Error Server.Response
-handleRun req =
-    let
-        raw =
-            Server.body req
-    in
+handleRun : Token -> Server.Request -> Task Error Server.Response
+handleRun token req =
+    case Gate.trustRun token (\name -> Server.header name req) (Server.body req) of
+        Err refusal ->
+            refuse (Gate.refusalStatus refusal) (Gate.refusalMessage refusal)
+
+        Ok trusted ->
+            runTrusted (Gate.trustedBody trusted)
+
+
+runTrusted : String -> Task Error Server.Response
+runTrusted raw =
     if String.length raw > maxRequestChars then
         refuse 413 "Program too large (over 1 MiB of emitted Rust)."
 
@@ -56,8 +84,8 @@ handleRun req =
 
             Ok rust ->
                 case Staging.plan rust of
-                    Err reason ->
-                        refuse 422 ("Program refused: " ++ reason)
+                    Err error ->
+                        refuse 422 ("Program refused: " ++ Staging.errorMessage error)
 
                     Ok plan ->
                         Runner.runPlan plan
