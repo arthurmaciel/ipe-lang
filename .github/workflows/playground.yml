@@ -12,8 +12,9 @@ name: Playground jail
 #   1. build  — cargo build -p ipe-wasm --target wasm32-unknown-unknown and
 #               cargo build -p playground-jail-runner.  Verifies the bundle
 #               and jail-runner compile end-to-end.
-#   2. playground-page — builds the page's wasm bundle and runs the headless
-#               Chromium page checks (CSP agreement, cross-origin frame
+#   2. playground-page — builds the page's wasm bundle and ipe, starts the
+#               real run server, and runs the headless Chromium page checks
+#               (the headers the server delivers, cross-origin frame
 #               refusals, same-origin-only loads).
 #   3. playground-jail — cargo nextest run -p playground-jail-runner, which
 #               includes sandbox_security.rs (gated by IPE_PLAYGROUND_E2E=1
@@ -93,15 +94,21 @@ jobs:
         run: cargo build -p playground-jail-runner
 
   # The page's refusals in a real browser (tools/scripts/lib/playground-verify.mjs,
-  # static mode): the page's <meta> CSP and the run server's policy in
-  # Gate.ipe agree as parsed directives, each framing header alone refuses a
+  # static mode): the verifier starts the real run server (`ipe run` in the
+  # playground's server/, no jail needed to serve the page) and requires the
+  # `GET /` it delivers to carry exactly one X-Frame-Options: DENY and exactly
+  # one CSP equal, as parsed directives, to the page's <meta> policy plus
+  # frame-ancestors 'none'; each delivered framing header alone refuses a
   # cross-origin frame (proved against a control frame that loads), no request
-  # leaves the page origin, and the vendored editor matches its SHA256SUMS.
+  # leaves the page origin, and every served vendored editor file matches its
+  # SHA256SUMS.
   playground-page:
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.playground == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
-    timeout-minutes: 20
+    timeout-minutes: 45
+    env:
+      IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -116,10 +123,13 @@ jobs:
           tool: wasm-bindgen@0.2.126
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "20"
+          node-version: "24.21.0"
 
       - name: Build ipe-wasm (wasm32-unknown-unknown)
         run: cargo build -p ipe-wasm --target wasm32-unknown-unknown --release
+
+      - name: Build ipe (starts the run server under test)
+        run: cargo build --release -p ipe
 
       - name: Generate the page's wasm bundle (pkg/)
         run: wasm-bindgen --target web --no-typescript --out-dir examples/wasm/language-playground/pkg --out-name ipe_wasm ${{ github.workspace }}/target/wasm32-unknown-unknown/release/ipe_wasm.wasm
@@ -128,12 +138,16 @@ jobs:
         working-directory: tools/scripts/lib
         run: npm ci
 
+      # The Chromium revision is the one the locked playwright-core
+      # (tools/scripts/lib/package-lock.json, integrity-pinned) names; Playwright
+      # verifies no digest of the browser archive it downloads, so no hash pin
+      # of the browser itself exists to add.
       - name: Install Chromium
         working-directory: tools/scripts/lib
         run: npx playwright install --with-deps chromium
 
-      - name: Verify the page (static mode)
-        run: node tools/scripts/lib/playground-verify.mjs examples/wasm/language-playground
+      - name: Verify the page (static mode, against the real run server)
+        run: node tools/scripts/lib/playground-verify.mjs examples/wasm/language-playground --ipe ${{ github.workspace }}/target/release/ipe
 
   # Run the jail-runner unit tests and, when bwrap is available, the full
   # sandbox security proofs (IPE_PLAYGROUND_E2E=1).

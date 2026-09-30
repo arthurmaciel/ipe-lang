@@ -199,15 +199,19 @@ wasm-bindgen --target web --no-typescript --out-dir pkg --out-name ipe_wasm \
 
 ```sh
 (cd tools/scripts/lib && npm ci && npx playwright install chromium)
-node tools/scripts/lib/playground-verify.mjs examples/wasm/language-playground        # Pages shape, no server
-node tools/scripts/lib/playground-verify.mjs --live 'http://127.0.0.1:8000/#t=<token>' # the printed launch URL; Run through the jail
+node tools/scripts/lib/playground-verify.mjs examples/wasm/language-playground --ipe "$(command -v ipe)"  # Pages shape, plus the real server's headers
+node tools/scripts/lib/playground-verify.mjs --live 'http://127.0.0.1:8000/#t=<token>'                 # the printed launch URL; Run through the jail
 ```
 
-The static mode needs `pkg/` built. Beyond booting the compiler, it checks that
-`Gate.pageContentSecurityPolicy` is the `<meta>` policy plus
-`frame-ancestors 'none'` (compared directive by directive), and that each
-framing header alone (that CSP, or `X-Frame-Options: DENY`) makes Chromium
-refuse the page to a cross-origin frame, while a control frame of the same
-origin loads. The `playground-page` CI job runs it on every relevant change.
-The live mode also checks the served headers and that a frame, or a missing or
-malformed token, keeps Run disabled.
+The static mode needs `pkg/` built and `127.0.0.1:8000` free. It serves the
+page with no run server behind it (the GitHub Pages shape) and checks the
+compiler boots and Run degrades to the local-server notice. It also starts the
+real run server (`<ipe> run` in `server/`) and requires its `GET /` to deliver
+`index.html` with exactly one `X-Frame-Options: DENY` and exactly one
+Content-Security-Policy equal to the `<meta>` policy plus
+`frame-ancestors 'none'` (compared directive by directive); then that each
+delivered framing header alone makes Chromium refuse the page to a
+cross-origin frame, while a control frame of the same origin loads. The
+`playground-page` CI job runs it on every relevant change. The live mode
+checks the same served headers, and that a frame, or a missing or malformed
+token, keeps Run disabled.

@@ -335,17 +335,22 @@ checks:
       tier: full
       run:
         - cargo build -p ipe-wasm --target wasm32-unknown-unknown --release
+        - cargo build --release -p ipe
         - wasm-bindgen --target web --no-typescript --out-dir examples/wasm/language-playground/pkg --out-name ipe_wasm {target_dir}/wasm32-unknown-unknown/release/ipe_wasm.wasm
         - cmd: npm ci
           cwd: tools/scripts/lib
         - cmd: npx playwright install chromium
           cwd: tools/scripts/lib
           differs: CI also installs Chromium's system libraries (--with-deps), which needs root
-        - node tools/scripts/lib/playground-verify.mjs examples/wasm/language-playground
+        - cmd: node tools/scripts/lib/playground-verify.mjs examples/wasm/language-playground --ipe {target_dir}/release/ipe
+          env:
+            IPE_RUNTIME_DIR: "{repo_root}/src/runtime/rust/src"
     guards: >-
-      Security — the page holds the run token and runs compiled code: its
-      <meta> CSP and the run server's policy agree, each framing header alone
-      refuses a cross-origin frame, and it loads nothing from another origin.
+      Security — the page holds the run token and runs compiled code: the
+      real run server delivers it with one X-Frame-Options: DENY and one CSP
+      equal to its <meta> policy plus frame-ancestors 'none', each delivered
+      framing header alone refuses a cross-origin frame, and it loads nothing
+      from another origin.
   - context: "linux-x64 (seccomp socket-deny + bubblewrap)"
     disposition: gate
     producer: admission-sandbox.yml

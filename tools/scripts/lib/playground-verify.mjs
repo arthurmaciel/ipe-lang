@@ -6,18 +6,22 @@
 // and emits Rust for the sample, Run is disabled with the local-server notice
 // (never a raw fetch error), the ACE theme re-themes the UI, a type error
 // surfaces as a diagnostic, and the GitHub link target. It also checks every
-// vendored ACE file against `static/vendor/ace/SHA256SUMS`, and that the
-// policy the run server sends (`pageContentSecurityPolicy` in
-// `server/src/Gate.ipe`, and the `X-Frame-Options` in `server/src/Main.ipe`)
-// is the page's `<meta>` policy plus `frame-ancestors 'none'`, compared as
-// parsed directives. It then serves the page with each of those framing
-// headers alone and proves a cross-origin frame is refused it by that header:
-// a control frame of the same origin loads, the page's response is delivered,
-// and Chromium blocks it naming the header.
+// file under `static/vendor/ace/` against `static/vendor/ace/SHA256SUMS`.
+// The framing headers are proved against what the run server delivers: the
+// verifier starts the real server (`<ipe> run` in `server/`, no jail needed to
+// serve the page), fetches `GET /`, and requires exactly one
+// `X-Frame-Options`, equal to `DENY`, and exactly one Content-Security-Policy,
+// equal as parsed directives to the page's `<meta>` policy plus
+// `frame-ancestors 'none'`, on a body that is `index.html`. A cross-origin frame
+// of that server is refused the page; then the static host serves the page
+// with each delivered header alone and proves a cross-origin frame is refused
+// it by that header: a control frame of the same origin loads, the page's
+// response is delivered, and Chromium blocks it naming the header. Each
+// refused target is framed on its own, beside the control only, so the
+// refusal logged can only be that target's.
 //
-// Live mode (`--live <url>`): checks `GET /` carries `X-Frame-Options: DENY`
-// and the page's Content-Security-Policy (the `<meta>` policy plus
-// `frame-ancestors 'none'`); that Run stays disabled without a well-formed
+// Live mode (`--live <url>`): checks `GET /` carries the same headers, counted
+// the same way; that Run stays disabled without a well-formed
 // `#t=` fragment and inside a same-origin frame; that a cross-origin frame is
 // refused the page (proved as in static mode); then opens the launch URL the playground
 // server printed (with its `#t=<token>` fragment), presses Run, and waits for
@@ -27,12 +31,14 @@
 // another origin is aborted and fails the check: the page holds the launch
 // token, so it may load nothing from a third party.
 //
-// Usage: node playground-verify.mjs <playground-dir> [port]   (needs `pkg/`)
+// Usage: node playground-verify.mjs <playground-dir> --ipe <ipe-binary> [--port <n>]
+//          (needs `pkg/`; `127.0.0.1:8000`, the run server's port, must be free)
 //        node playground-verify.mjs --live 'http://127.0.0.1:8000/#t=<token>'
 // Exit 0 on pass, non-zero on any failure.
 
 import { chromium } from 'playwright';
-import { createServer } from 'node:http';
+import { createServer, get as httpGet } from 'node:http';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -48,12 +54,31 @@ const FRAME_ANCESTORS_NONE = "frame-ancestors 'none'";
 const REFUSED_BY_CSP = /frame-ancestors 'none'/;
 const REFUSED_BY_XFO = /X-Frame-Options/i;
 const REFUSED_BY_EITHER = /frame-ancestors 'none'|X-Frame-Options/i;
+// The line the run server prints once it listens, and how long its first
+// `ipe run` (an emitted cargo build) may take to reach it.
+const LAUNCH_LINE = /Ipê playground: open (http:\/\/127\.0\.0\.1:8000\/#t=[A-Za-z0-9_-]{43})/;
+const SERVER_START_MS = 25 * 60 * 1000;
 
-const live = process.argv[2] === '--live' ? process.argv[3] : null;
-const dir = live ? null : path.resolve(process.argv[2] || '');
-const port = parseInt(process.argv[3] || '8199', 10);
-if (!live && (!dir || !fs.existsSync(path.join(dir, 'index.html')))) {
-  console.error('usage: node playground-verify.mjs <playground-dir> [port] | --live <url>');
+const USAGE = 'usage: node playground-verify.mjs <playground-dir> --ipe <ipe-binary> [--port <n>] | --live <url>';
+function parseArgs(argv) {
+  if (argv[0] === '--live') return argv.length === 2 ? { live: argv[1] } : null;
+  const [dirArg, ...rest] = argv;
+  const opts = { dir: dirArg, ipe: null, port: 8199 };
+  for (let i = 0; i < rest.length; i += 2) {
+    const value = rest[i + 1];
+    if (value === undefined) return null;
+    if (rest[i] === '--ipe') opts.ipe = value;
+    else if (rest[i] === '--port' && /^[1-9][0-9]{0,4}$/.test(value)) opts.port = parseInt(value, 10);
+    else return null;
+  }
+  return opts.dir && opts.ipe ? opts : null;
+}
+const args = parseArgs(process.argv.slice(2));
+const live = args?.live ?? null;
+const dir = args?.dir ? path.resolve(args.dir) : null;
+const port = args?.port ?? 8199;
+if (!args || (!live && !fs.existsSync(path.join(dir, 'index.html'))) || (!live && !fs.existsSync(args.ipe))) {
+  console.error(USAGE);
   process.exit(2);
 }
 
@@ -101,13 +126,15 @@ async function sameOriginOnly(context, origin, missing) {
   return foreign;
 }
 
-// Every vendored file is the one `SHA256SUMS` records, and every one is recorded.
+// Every file served from the vendor directory is the one `SHA256SUMS` records,
+// and every one but `SHA256SUMS` itself is recorded; anything that is not a
+// regular file (a directory, a link) is refused, since it too would be served.
 function vendorChecks() {
   const vendor = path.join(dir, VENDOR_DIR);
   const listed = new Map(fs.readFileSync(path.join(vendor, 'SHA256SUMS'), 'utf8')
     .trim().split('\n').map((line) => { const [sum, name] = line.split(/\s+/); return [name, sum]; }));
-  const present = fs.readdirSync(vendor).filter((f) => f.endsWith('.js'));
-  const unlisted = present.filter((f) => !listed.has(f));
+  const entries = fs.readdirSync(vendor, { withFileTypes: true }).filter((e) => e.name !== 'SHA256SUMS');
+  const unlisted = entries.filter((e) => !e.isFile() || !listed.has(e.name)).map((e) => e.name);
   const drifted = [...listed].filter(([name, sum]) => !fs.existsSync(path.join(vendor, name))
     || createHash('sha256').update(fs.readFileSync(path.join(vendor, name))).digest('hex') !== sum);
   check(unlisted.length === 0 && drifted.length === 0 && listed.size > 0,
@@ -166,37 +193,95 @@ function cspSelfChecks() {
     'the CSP comparison does not refuse a drifted policy');
 }
 
-// The string-literal list `name` joins with "; " in an Ipê source: the policy
-// as the run server builds it. Any other shape is refused, so a policy the
-// server computes some other way cannot slip past as "not found".
-function ipeJoinedLiterals(file, name) {
-  const src = fs.readFileSync(file, 'utf8');
-  const m = new RegExp(`^${name} =\\s*\\n\\s*String\\.join "; "\\s*\\[([^\\]]*)\\]`, 'm').exec(src);
-  const literal = /"((?:[^"\\]|\\.)*)"/g;
-  if (!m || m[1].replace(literal, '').replace(/[\s,]/g, '') !== '') {
-    throw new Error(`${file}: ${name} is no longer a String.join "; " of string literals`);
-  }
-  return [...m[1].matchAll(literal)].map((x) => x[1]).join('; ');
+// `GET /` of `origin` exactly as delivered: status, every header value by
+// lower-cased name (a repeated header keeps every copy, which `fetch` would
+// merge into one), and the body.
+function getPage(origin) {
+  return new Promise((resolve, reject) => {
+    const req = httpGet(`${origin}/`, (res) => {
+      const headers = new Map();
+      for (let i = 0; i + 1 < res.rawHeaders.length; i += 2) {
+        const name = res.rawHeaders[i].toLowerCase();
+        headers.set(name, [...(headers.get(name) ?? []), res.rawHeaders[i + 1]]);
+      }
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, headers, body: Buffer.concat(chunks) }));
+      res.on('error', reject);
+    });
+    req.setTimeout(15000, () => req.destroy(new Error(`GET ${origin}/ timed out`)));
+    req.on('error', reject);
+  });
 }
 
-// The X-Frame-Options value `page` sets in the run server's `Main.ipe`.
-function ipeFrameOptions(file) {
-  const found = [...fs.readFileSync(file, 'utf8').matchAll(/Server\.withHeader "X-Frame-Options" "([^"]*)"/g)];
-  if (found.length !== 1) throw new Error(`${file}: expected one X-Frame-Options header, found ${found.length}`);
-  return found[0][1];
+// The page's framing headers as the server delivered them: exactly one
+// `X-Frame-Options`, equal to `DENY`, and exactly one Content-Security-Policy,
+// equal as parsed directives to the page's <meta> policy plus
+// `frame-ancestors 'none'`. Returns the delivered values, or null when either
+// check fails.
+function framingHeaderChecks(delivered, meta, label) {
+  const xfo = delivered.headers.get('x-frame-options') ?? [];
+  const csp = delivered.headers.get('content-security-policy') ?? [];
+  check(xfo.length === 1 && xfo[0] === 'DENY', `${label} sends one X-Frame-Options: DENY`,
+    `${label} X-Frame-Options: ${JSON.stringify(xfo)}`);
+  check(csp.length === 1, `${label} sends one Content-Security-Policy`,
+    `${label} Content-Security-Policy headers: ${JSON.stringify(csp)}`);
+  const diff = csp.length === 1 ? cspDiff(servedPolicy(meta), parseCsp(csp[0], `the ${label} CSP header`)) : ['(no single header)'];
+  check(diff.length === 0, `${label} CSP is the page <meta> policy plus frame-ancestors`,
+    `${label} CSP drifted from the page <meta> policy: ${diff.join('; ')}`);
+  return xfo.length === 1 && xfo[0] === 'DENY' && diff.length === 0
+    ? { csp: { 'Content-Security-Policy': csp[0] }, xfo: { 'X-Frame-Options': xfo[0] } }
+    : null;
 }
 
-// The run server's page policy, as its source defines it, is the page's
-// <meta> policy plus frame-ancestors, and its X-Frame-Options is DENY.
-function serverPolicyChecks(meta) {
-  const gateFile = path.join(dir, 'server', 'src', 'Gate.ipe');
-  const gate = ipeJoinedLiterals(gateFile, 'pageContentSecurityPolicy');
-  const diff = cspDiff(servedPolicy(meta), parseCsp(gate, 'Gate.pageContentSecurityPolicy'));
-  check(diff.length === 0, 'Gate.pageContentSecurityPolicy is the page <meta> policy plus frame-ancestors',
-    `Gate.pageContentSecurityPolicy drifted from the page <meta> policy: ${diff.join('; ')}`);
-  const xfo = ipeFrameOptions(path.join(dir, 'server', 'src', 'Main.ipe'));
-  check(xfo === 'DENY', 'the run server sends X-Frame-Options: DENY', `the run server sends X-Frame-Options: ${xfo}`);
-  return { csp: { 'Content-Security-Policy': gate }, xfo: { 'X-Frame-Options': xfo } };
+// The run server, started from the playground's `server/` directory the way
+// its README does (bound to loopback, on its fixed port), in its own process
+// group so stopping it stops the build and the program it runs. `launch`
+// resolves to the launch URL it prints once it listens.
+function startRunServer(ipe) {
+  const env = { ...process.env, IPE_HTTP_BIND: '127.0.0.1' };
+  delete env.IPE_SERVER_PORT;
+  const child = spawn(ipe, ['run'], { cwd: path.join(dir, 'server'), env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  let tail = '';
+  const keep = (chunk) => { tail = (tail + chunk).slice(-4000); };
+  const launch = new Promise((resolve, reject) => {
+    let out = '';
+    const timer = setTimeout(() => reject(new Error(`the run server printed no launch URL within ${SERVER_START_MS / 60000} min: ${tail}`)), SERVER_START_MS);
+    child.stdout.on('data', (chunk) => {
+      keep(chunk);
+      out = (out + chunk).slice(-4000);
+      const m = LAUNCH_LINE.exec(out);
+      if (m) { clearTimeout(timer); resolve(m[1]); }
+    });
+    child.stderr.on('data', keep);
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('exit', (code, signal) => { clearTimeout(timer); reject(new Error(`the run server exited (${code ?? signal}) before listening: ${tail}`)); });
+  });
+  launch.catch(() => {});
+  const stop = async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise((r) => child.once('exit', r));
+    try { process.kill(-child.pid, 'SIGTERM'); } catch { return; }
+    const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } }, 5000);
+    await exited;
+    clearTimeout(timer);
+  };
+  return { launch, stop };
+}
+
+// The real run server delivers the page with the framing headers, and a
+// cross-origin frame of it is refused. Returns the delivered header values.
+async function deliveredChecks(browser, runServer, meta) {
+  const launchUrl = await runServer.launch;
+  const origin = new URL(launchUrl).origin;
+  const delivered = await getPage(origin);
+  const indexHtml = fs.readFileSync(path.join(dir, 'index.html'));
+  check(delivered.status === 200 && delivered.body.equals(indexHtml), 'the run server delivers index.html at GET /',
+    `the run server GET /: status ${delivered.status}, body ${delivered.body.equals(indexHtml) ? 'is' : 'is not'} index.html`);
+  const headers = framingHeaderChecks(delivered, meta, 'the run server GET /');
+  await crossOriginFrameChecks(browser, `${origin}/static/app.js`,
+    [{ label: 'the run server page', url: launchUrl, refusedBy: REFUSED_BY_EITHER }]);
+  return headers;
 }
 
 // Frame each target from another loopback origin, beside a control frame of
@@ -208,9 +293,15 @@ function serverPolicyChecks(meta) {
 // part of the page rendered. The framer is a real loopback server: a routed
 // page counts as a public origin, which Chromium's local-network checks bar
 // from framing loopback at all, the control included, which would make every
-// refusal vacuous.
+// refusal vacuous. Each target gets its own framer holding it and the control
+// only, and the refusal must name the target's origin: the control renders, so
+// a refusal logged there is the target's.
 async function crossOriginFrameChecks(browser, controlUrl, targets) {
-  const body = [controlUrl, ...targets.map((t) => t.url)]
+  for (const target of targets) await crossOriginFrameCheck(browser, controlUrl, target);
+}
+
+async function crossOriginFrameCheck(browser, controlUrl, t) {
+  const body = [controlUrl, t.url]
     .map((src, i) => `<iframe id="f${i}" src="${src}" width="800" height="600"></iframe>`).join('');
   const framer = createServer((_req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -232,7 +323,7 @@ async function crossOriginFrameChecks(browser, controlUrl, targets) {
     const settled = async () => {
       const control = await frameOf(0);
       const shown = control ? await control.evaluate(() => (document.body?.textContent ?? '').length > 0).catch(() => false) : false;
-      return shown && targets.every((t) => failures.has(bare(t.url)));
+      return shown && failures.has(bare(t.url));
     };
     for (let deadline = Date.now() + 15000; !(await settled()) && Date.now() < deadline;) await page.waitForTimeout(100);
     const control = await frameOf(0);
@@ -241,21 +332,19 @@ async function crossOriginFrameChecks(browser, controlUrl, targets) {
       : false;
     check(controlShown && statuses.get(controlUrl) === 200, `control: a cross-origin frame of ${controlUrl} renders`,
       `control: a cross-origin frame of ${controlUrl} did not render (status ${statuses.get(controlUrl)}), so no refusal below is proven`);
-    for (const [i, t] of targets.entries()) {
-      const frame = await frameOf(i + 1);
-      const rendered = frame ? await frame.evaluate(() => Boolean(document.getElementById('run-btn'))).catch(() => false) : false;
-      const evidence = {
-        status: statuses.get(bare(t.url)),
-        failure: failures.get(bare(t.url)),
-        frameUrl: frame?.url(),
-        logged: logged.some((m) => t.refusedBy.test(m)),
-        rendered,
-      };
-      check(evidence.status === 200 && evidence.failure === 'net::ERR_BLOCKED_BY_RESPONSE'
-          && evidence.frameUrl?.startsWith('chrome-error://') && evidence.logged && !rendered,
-        `${t.label}: a cross-origin frame is refused the page (delivered 200, blocked by the header, refusal logged)`,
-        `${t.label}: cross-origin frame refusal not proven: ${JSON.stringify(evidence)}`);
-    }
+    const frame = await frameOf(1);
+    const rendered = frame ? await frame.evaluate(() => Boolean(document.getElementById('run-btn'))).catch(() => false) : false;
+    const evidence = {
+      status: statuses.get(bare(t.url)),
+      failure: failures.get(bare(t.url)),
+      frameUrl: frame?.url(),
+      logged: logged.some((m) => t.refusedBy.test(m) && m.includes(new URL(t.url).origin)),
+      rendered,
+    };
+    check(evidence.status === 200 && evidence.failure === 'net::ERR_BLOCKED_BY_RESPONSE'
+        && evidence.frameUrl?.startsWith('chrome-error://') && evidence.logged && !rendered,
+      `${t.label}: a cross-origin frame is refused the page (delivered 200, blocked by the header, refusal logged)`,
+      `${t.label}: cross-origin frame refusal not proven: ${JSON.stringify(evidence)}`);
   } finally {
     await context.close();
     framer.close();
@@ -280,12 +369,7 @@ async function runRefused(frame, label) {
 }
 
 async function refusalChecks(browser, origin, token) {
-  const resp = await fetch(origin + '/');
-  const xfo = resp.headers.get('x-frame-options');
-  const csp = resp.headers.get('content-security-policy') ?? '';
-  check(xfo === 'DENY', 'GET / sends X-Frame-Options: DENY', `X-Frame-Options: ${xfo}`);
-  check(csp.split(';').map((d) => d.trim()).includes(SCRIPT_SRC),
-    `GET / CSP pins ${SCRIPT_SRC}`, `GET / CSP: ${csp}`);
+  const delivered = await getPage(origin);
 
   const fresh = async () => {
     const context = await browser.newContext();
@@ -302,9 +386,7 @@ async function refusalChecks(browser, origin, token) {
   const first = await fresh();
   await first.page.goto(origin + '/', { waitUntil: 'load' });
   const meta = await metaPolicy(first.page);
-  const headerDiff = cspDiff(servedPolicy(meta), parseCsp(csp, 'the GET / CSP header'));
-  check(headerDiff.length === 0, 'GET / CSP is the page <meta> policy plus frame-ancestors',
-    `GET / CSP drifted from the page <meta> policy: ${headerDiff.join('; ')}`);
+  framingHeaderChecks(delivered, meta, 'GET /');
   await runRefused(first.page, 'no #t= fragment');
   await done(first, 'no fragment');
 
@@ -429,6 +511,7 @@ async function liveChecks(page) {
 }
 
 if (server) await new Promise((r) => server.listen(port, r));
+const runServer = live ? null : startRunServer(args.ipe);
 const browser = await chromium.launch();
 try {
   const target = live || `http://localhost:${port}${SUB_PATH}`;
@@ -455,11 +538,14 @@ try {
   if (live) await liveChecks(page);
   else {
     await staticChecks(page);
-    framingHeaders = serverPolicyChecks(meta);
-    await crossOriginFrameChecks(browser, `${target}static/app.js`, [
-      { label: "Gate's CSP alone", url: `${target}?frame=csp`, refusedBy: REFUSED_BY_CSP },
-      { label: 'X-Frame-Options alone', url: `${target}?frame=xfo`, refusedBy: REFUSED_BY_XFO },
-    ]);
+    const delivered = await deliveredChecks(browser, runServer, meta);
+    if (delivered) {
+      framingHeaders = delivered;
+      await crossOriginFrameChecks(browser, `${target}static/app.js`, [
+        { label: 'the delivered CSP alone', url: `${target}?frame=csp`, refusedBy: REFUSED_BY_CSP },
+        { label: 'the delivered X-Frame-Options alone', url: `${target}?frame=xfo`, refusedBy: REFUSED_BY_XFO },
+      ]);
+    }
   }
   check(foreign.length === 0, 'no request left the page origin', 'foreign requests: ' + foreign.join(', '));
   check(missing.length === 0, 'every same-origin load succeeded', 'failed loads: ' + missing.join(', '));
@@ -469,5 +555,6 @@ try {
 } finally {
   await browser.close();
   if (server) server.close();
+  if (runServer) await runServer.stop();
 }
 process.exit(ok ? 0 : 1);
