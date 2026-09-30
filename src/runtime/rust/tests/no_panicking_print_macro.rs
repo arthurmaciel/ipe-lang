@@ -15,6 +15,7 @@
 //! `#[cfg(test)]` honoured, since the macro decides what its attributes mean;
 //! a print-macro name followed by `!` there, or renamed by a `use`, counts as
 //! a call.
+#![cfg(not(target_arch = "wasm32"))]
 
 use proc_macro2::{TokenStream, TokenTree};
 use std::path::Path;
