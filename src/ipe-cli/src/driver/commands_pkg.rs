@@ -1098,7 +1098,7 @@ pub fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<PathBuf, Cl
 /// The directory name a governing manifest's test tree lives under, relative
 /// to the project root — the one spelling [`resolve_analysis_target`] and
 /// [`run_project_tests_with`] both key off, so the two can never drift apart.
-pub(crate) const TESTS_DIR_NAME: &str = "tests";
+const TESTS_DIR_NAME: &str = "tests";
 
 /// The analysis an `ipe type-check`-family `<path>` argument resolved to.
 ///
