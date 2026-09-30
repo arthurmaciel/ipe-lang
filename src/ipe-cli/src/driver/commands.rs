@@ -3407,10 +3407,7 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
 /// Returns [`CliError::Pipeline`] when the compiler rejects the program, or
 /// [`CliError::Io`] when the entry file cannot be read.
 pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
-    emit_ir_text_for_target(&AnalysisTarget::File {
-        file: entry.to_path_buf(),
-        src_root: None,
-    })
+    emit_ir_text_for_target(&AnalysisTarget::LooseFile(entry.to_path_buf()))
 }
 
 // ===========================================================================
@@ -3999,19 +3996,17 @@ fn typecheck_graph(graph: &SourceGraph, blame_path: &Path) -> Result<(), CliErro
 pub fn typecheck_target(target: &AnalysisTarget) -> Result<(), CliError> {
     match target {
         AnalysisTarget::Project(entry) => typecheck_entry_via_graph(entry),
-        AnalysisTarget::File {
-            file,
-            src_root: None,
-        } => typecheck_entry_via_graph(file),
-        AnalysisTarget::File {
-            file,
-            src_root: Some(src_root),
-        } => typecheck_manifest_file_via_graph(src_root, file),
+        AnalysisTarget::LooseFile(file) => typecheck_entry_via_graph(file),
+        AnalysisTarget::SourceFile { file, src_root } => {
+            typecheck_manifest_file_via_graph(src_root.as_path(), file.as_path())
+        }
         AnalysisTarget::TestFile {
             file,
             src_root,
             tests_root,
-        } => typecheck_test_entry_via_graph(src_root, tests_root, file),
+        } => {
+            typecheck_test_entry_via_graph(src_root.as_path(), tests_root.as_path(), file.as_path())
+        }
     }
 }
 
@@ -4025,24 +4020,18 @@ pub fn source_graph_for_target(
 ) -> Result<(SourceGraph, PathBuf), CliError> {
     match target {
         AnalysisTarget::Project(entry) => Ok((build_source_graph(entry)?, entry.clone())),
-        AnalysisTarget::File {
-            file,
-            src_root: None,
-        } => Ok((build_source_graph(file)?, file.clone())),
-        AnalysisTarget::File {
-            file,
-            src_root: Some(src_root),
-        } => Ok((
-            build_source_graph_for_manifest_file(src_root, file)?,
-            file.clone(),
+        AnalysisTarget::LooseFile(file) => Ok((build_source_graph(file)?, file.clone())),
+        AnalysisTarget::SourceFile { file, src_root } => Ok((
+            build_source_graph_for_manifest_file(src_root.as_path(), file.as_path())?,
+            file.as_path().to_path_buf(),
         )),
         AnalysisTarget::TestFile {
             file,
             src_root,
             tests_root,
         } => Ok((
-            build_source_graph_for_test(src_root, tests_root, file)?,
-            file.clone(),
+            build_source_graph_for_test(src_root.as_path(), tests_root.as_path(), file.as_path())?,
+            file.as_path().to_path_buf(),
         )),
     }
 }

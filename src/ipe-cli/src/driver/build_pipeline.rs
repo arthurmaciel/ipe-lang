@@ -525,15 +525,13 @@ pub fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliE
 ///
 /// The loose closure ([`collect_entry_and_siblings`]) resolves an import
 /// relative to the ENTRY's directory, which is only correct when the entry's
-/// directory IS the project's source root (true for [`AnalysisTarget::Project`],
-/// whose entry is always `<src_root>/Main.ipe`). A nested file's own directory
+/// directory IS the project's source root (as for the default `<src_root>/Main.ipe`
+/// entry). A nested file's own directory
 /// is a subdirectory of `src_root`, not `src_root` itself, so the same closure
 /// would look for `Api.Types` at `<entry-dir>/Api/Types.ipe` instead of
 /// `src_root/Api/Types.ipe`. Discovering the whole `src_root` tree side-steps
 /// this: every module's path is relativised against `src_root`, matching what
 /// the emitted build sees.
-///
-/// [`AnalysisTarget::Project`]: super::commands_pkg::AnalysisTarget::Project
 ///
 /// # Errors
 /// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on

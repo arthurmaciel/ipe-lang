@@ -491,3 +491,76 @@ fn check_rejects_an_unexpected_option() -> TestResult {
     );
     Ok(())
 }
+
+/// Write a manifest-governed project whose nested `src/Api/Handlers.ipe`
+/// imports `Api.Types` by its full module path, and return its root.
+fn nested_import_project(name: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let root = support::scratch_root().join(name);
+    let _ = std::fs::remove_dir_all(&root);
+    let api = root.join("src").join("Api");
+    std::fs::create_dir_all(&api)?;
+    std::fs::write(root.join("package.ipe"), support::package_ipe("app"))?;
+    std::fs::write(
+        root.join("src").join("Main.ipe"),
+        "module Main exposing (main)\nmain = 1\n",
+    )?;
+    std::fs::write(
+        api.join("Types.ipe"),
+        "module Api.Types exposing (id)\nid = 1\n",
+    )?;
+    std::fs::write(
+        api.join("Handlers.ipe"),
+        "module Api.Handlers exposing (handler)\nimport Api.Types as Types\nhandler = Types.id\n",
+    )?;
+    Ok(root)
+}
+
+/// Run `ipe type-check <arg>` from `cwd`, capturing `(success, stderr)`.
+fn type_check_from(cwd: &Path, arg: &str) -> Result<(bool, String), Box<dyn Error>> {
+    let out = Command::new(support::ipe_bin())
+        .args(["type-check", arg])
+        .current_dir(cwd)
+        .output()?;
+    Ok((
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
+}
+
+/// A cwd-relative file argument is project-rooted exactly as its absolute
+/// spelling is: the nested import resolves against the whole `src/` tree,
+/// which only a source-rooted analysis sees (the loose closure rooted at
+/// `src/Api/` cannot find `Api.Types`).
+#[test]
+fn relative_nested_src_file_argument_is_analysed_against_the_src_tree() -> TestResult {
+    let root = nested_import_project("type_check_relative_nested_src_arg")?;
+    let relative = type_check_from(&root, "src/Api/Handlers.ipe");
+    let dotted = type_check_from(&root.join("src"), "../src/Api/Handlers.ipe");
+    let _ = std::fs::remove_dir_all(&root);
+    let (ok, stderr) = relative?;
+    assert!(
+        ok,
+        "a cwd-relative nested src file must type-check, got:\n{stderr}"
+    );
+    let (ok, stderr) = dotted?;
+    assert!(
+        ok,
+        "a `..`-bearing relative src file must type-check, got:\n{stderr}"
+    );
+    Ok(())
+}
+
+/// A cwd-relative file argument that does not exist is refused, never
+/// substituted for the project's default entry.
+#[test]
+fn relative_missing_file_argument_is_refused() -> TestResult {
+    let root = nested_import_project("type_check_relative_missing_arg")?;
+    let result = type_check_from(&root, "src/Missing.ipe");
+    let _ = std::fs::remove_dir_all(&root);
+    let (ok, stderr) = result?;
+    assert!(
+        !ok,
+        "a missing file argument must be refused, got:\n{stderr}"
+    );
+    Ok(())
+}
