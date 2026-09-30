@@ -1245,11 +1245,62 @@ fn conflict_at(method: &str, path: &str) -> String {
     )
 }
 
+/// An endpoint whose path holds a parameter name outside the runtime's one
+/// parameter-name grammar ([`crate::encoding::ParamNames`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EndpointParamRefusal {
+    method: String,
+    path: String,
+    refusal: crate::encoding::ParamNameRefusal,
+}
+
+impl std::fmt::Display for EndpointParamRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Server.listen: endpoint `{} {}` has a malformed path parameter: {}",
+            self.method, self.path, self.refusal
+        )
+    }
+}
+
+/// Admit every parameter name of a router path through
+/// [`crate::encoding::ParamNames`].
+///
+/// The router starts a parameter at the first `:` or `*` of a segment and runs
+/// it to the segment's end, so the text after that sigil is the name; a second
+/// sigil in the same segment is a non-identifier byte of that name.
+fn path_param_names(path: &str) -> Result<(), crate::encoding::ParamNameRefusal> {
+    let mut names = crate::encoding::ParamNames::default();
+    path.split('/')
+        .filter_map(|seg| seg.split_once([':', '*']).map(|(_, name)| name))
+        .try_for_each(|name| names.admit(name).map(drop))
+}
+
+/// The first endpoint (declaration order) whose path parameters are refused.
+fn endpoint_param_refusal(routes: &[ServerRoute]) -> Option<EndpointParamRefusal> {
+    routes.iter().find_map(|r| {
+        path_param_names(&r.path)
+            .err()
+            .map(|refusal| EndpointParamRefusal {
+                method: r.method.to_uppercase(),
+                path: r.path.clone(),
+                refusal,
+            })
+    })
+}
+
 pub fn server_listen<E: From<String> + Send + 'static>(
     port: i64,
     routes: Vec<ServerRoute>,
 ) -> IpeTask<E, ()> {
     Box::pin(async move {
+        // Fail-closed parameter-name gate: an empty, non-identifier or repeated
+        // path parameter name would make a captured value ambiguous or
+        // unreachable, so the whole route set is refused before any insert.
+        if let Some(refusal) = endpoint_param_refusal(&routes) {
+            return IpeResult::Err(refusal.to_string().into());
+        }
         // Fail-closed endpoint-conflict gate (see `endpoint_conflict`): refuse an
         // overlapping route set with a typed error before any axum insert, so a
         // matchit conflict can never panic the listener task.
@@ -2683,6 +2734,78 @@ mod tests {
         // the same path — axum would panic on the overlapping method route.
         let any = [("ANY".to_string(), "/hook"), ("POST".to_string(), "/hook")];
         assert!(conflict_in(&any).is_some());
+    }
+
+    #[test]
+    fn identifier_path_params_are_admitted() {
+        for ok in [
+            "/",
+            "/api/users",
+            "/api/users/:id",
+            "/raw/*rest",
+            "/a/:x/b/:_y",
+            "/a/:a_Z9/:Z",
+            "/a/:x/*y",
+            "/v-:id",
+        ] {
+            assert_eq!(path_param_names(ok), Ok(()), "{ok}");
+        }
+    }
+
+    /// Prove the refusals: every name outside `[A-Za-z_][A-Za-z0-9_]*`, and
+    /// every repeat, is refused with its typed cause.
+    #[test]
+    fn malformed_path_params_are_refused() {
+        use crate::encoding::ParamNameRefusal as R;
+        assert_eq!(path_param_names("/:"), Err(R::Empty));
+        assert_eq!(path_param_names("/files/*"), Err(R::Empty));
+        for (bad, at) in [
+            ("/:1a", 0),
+            ("/:9", 0),
+            ("/:\u{e9}", 0),
+            ("/:a-b", 1),
+            ("/:a:b", 1),
+            ("/:a*b", 1),
+            ("/:a_Z9-", 5),
+            ("/:id.json", 2),
+        ] {
+            let refused = path_param_names(bad);
+            assert!(
+                matches!(refused, Err(R::NotIdentifier { at: off }) if off.get() == at),
+                "{bad} must break at byte {at}, got {refused:?}"
+            );
+        }
+        for dup in ["/:id/:id", "/:id/*id", "/x/:a/y/:a"] {
+            assert!(
+                matches!(path_param_names(dup), Err(R::Duplicate { .. })),
+                "{dup} must be refused as a repeat"
+            );
+        }
+    }
+
+    /// The listener refuses a route set with a malformed parameter name
+    /// before any insert or bind, naming the endpoint and the cause.
+    #[tokio::test]
+    async fn listen_refuses_a_malformed_path_param_before_bind() {
+        let routes = vec![
+            server_static("/ok".to_string(), "dir".to_string()),
+            server_static("/:id/:id".to_string(), "dir".to_string()),
+        ];
+        let refusal = endpoint_param_refusal(&routes);
+        assert_eq!(refusal.as_ref().map(|r| r.path.as_str()), Some("/:id/:id"));
+        let listened: IpeResult<String, ()> = server_listen(0, routes).await;
+        assert!(
+            matches!(listened, IpeResult::Err(_)),
+            "a malformed parameter name must refuse the listener"
+        );
+        let IpeResult::Err(msg) = listened else {
+            return;
+        };
+        assert!(
+            msg.contains("endpoint `GET /:id/:id` has a malformed path parameter")
+                && msg.contains("parameter `id` appears twice"),
+            "{msg}"
+        );
     }
 
     #[test]

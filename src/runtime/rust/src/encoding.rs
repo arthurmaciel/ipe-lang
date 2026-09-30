@@ -221,6 +221,104 @@ impl DecodedPath {
     }
 }
 
+/// A route parameter name, proven to match `[A-Za-z_][A-Za-z0-9_]*`.
+///
+/// This is the one parameter-name grammar of every route syntax in the
+/// runtime: a `Web.route` pattern and an `Ipe.Server` path both admit their
+/// names through [`ParamNames::admit`], so no route table can hold an empty,
+/// non-identifier or repeated name.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ParamName(String);
+
+impl ParamName {
+    /// Parse `raw` (the text after the `:` or `*` sigil) as a parameter name.
+    ///
+    /// # Errors
+    ///
+    /// `Empty` for an empty name, `NotIdentifier` at the first byte outside the
+    /// identifier grammar (a leading digit included).
+    pub fn parse(raw: &str) -> Result<Self, ParamNameRefusal> {
+        let bytes = raw.as_bytes();
+        let Some(&first) = bytes.first() else {
+            return Err(ParamNameRefusal::Empty);
+        };
+        let bad = if first.is_ascii_alphabetic() || first == b'_' {
+            bytes
+                .iter()
+                .position(|&b| !(b.is_ascii_alphanumeric() || b == b'_'))
+        } else {
+            Some(0)
+        };
+        bad.map_or_else(
+            || Ok(Self(raw.to_owned())),
+            |at| Err(ParamNameRefusal::NotIdentifier { at: ByteOffset(at) }),
+        )
+    }
+
+    /// The name as text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ParamName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Why a route parameter name was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ParamNameRefusal {
+    /// The sigil is not followed by a name.
+    Empty,
+    /// The byte at this offset of the name breaks `[A-Za-z_][A-Za-z0-9_]*`.
+    NotIdentifier { at: ByteOffset },
+    /// An earlier parameter of the same route already has this name.
+    Duplicate { name: ParamName },
+}
+
+impl std::fmt::Display for ParamNameRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => f.write_str("a parameter has no name (write `:name`)"),
+            Self::NotIdentifier { at } => write!(
+                f,
+                "a parameter name breaks `[A-Za-z_][A-Za-z0-9_]*` at byte {} of the name",
+                at.get()
+            ),
+            Self::Duplicate { name } => write!(
+                f,
+                "parameter `{name}` appears twice (each parameter of a route needs its own name)"
+            ),
+        }
+    }
+}
+
+/// The parameter names one route has admitted so far.
+///
+/// A route parser admits each name through one `ParamNames`, which parses it
+/// ([`ParamName::parse`]) and refuses a repeat.
+#[derive(Debug, Default)]
+pub struct ParamNames(std::collections::HashSet<ParamName>);
+
+impl ParamNames {
+    /// Parse `raw` as a parameter name this route has not admitted yet.
+    ///
+    /// # Errors
+    ///
+    /// The refusal of [`ParamName::parse`], or `Duplicate` for a repeat.
+    pub fn admit(&mut self, raw: &str) -> Result<ParamName, ParamNameRefusal> {
+        let name = ParamName::parse(raw)?;
+        if self.0.insert(name.clone()) {
+            Ok(name)
+        } else {
+            Err(ParamNameRefusal::Duplicate { name })
+        }
+    }
+}
+
 /// `decode_component` under an explicit length cap.
 fn decode_component_within(
     raw: &str,
@@ -888,5 +986,43 @@ mod tests {
         assert_eq!(dp("/%61pp/x").strip_base(&base), Some(dp("/x")));
         // The root base strips nothing.
         assert_eq!(dp("/app/x").strip_base(&dp("/")), Some(dp("/app/x")));
+    }
+
+    /// The one parameter-name grammar admits exactly `[A-Za-z_][A-Za-z0-9_]*`
+    /// and refuses a repeat within one route.
+    #[test]
+    fn param_name_grammar_and_uniqueness() {
+        for ok in ["a", "_", "_x", "A", "a_Z9", "snake_case_1"] {
+            assert!(
+                ParamName::parse(ok).is_ok_and(|n| n.as_str() == ok && n.to_string() == ok),
+                "{ok} must be admitted verbatim"
+            );
+        }
+        assert_eq!(ParamName::parse(""), Err(ParamNameRefusal::Empty));
+        for (bad, at) in [
+            ("1a", 0),
+            ("-", 0),
+            ("\u{e9}", 0),
+            ("a\u{e9}", 1),
+            ("a-b", 1),
+            ("a_Z9 ", 4),
+        ] {
+            assert_eq!(
+                ParamName::parse(bad),
+                Err(ParamNameRefusal::NotIdentifier { at: ByteOffset(at) }),
+                "{bad}"
+            );
+        }
+        let mut names = ParamNames::default();
+        assert!(names.admit("id").is_ok());
+        assert!(names.admit("Id").is_ok());
+        assert!(matches!(
+            names.admit("id"),
+            Err(ParamNameRefusal::Duplicate { name }) if name.as_str() == "id"
+        ));
+        assert!(matches!(
+            names.admit("9"),
+            Err(ParamNameRefusal::NotIdentifier { .. })
+        ));
     }
 }
