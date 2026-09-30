@@ -72,7 +72,7 @@ under = Kernel.kernel "Path_under"
 
 -- | `absolute path` — resolve `path` against the working directory. A path
 -- rooted with its own volume is returned re-sealed. On Windows, a path rooted
--- without a volume (`\\x`) takes the working directory's volume, and is refused
+-- without a volume (`\x`) takes the working directory's volume, and is refused
 -- when the working directory has none. A relative path is joined beneath the
 -- working directory with `under`, so it inherits every refusal (including a
 -- drive-relative `C:x`). A working directory that is not UTF-8 is refused.
