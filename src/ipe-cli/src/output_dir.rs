@@ -24,7 +24,12 @@
 //!   additionally proven disjoint from the project's sources and from every
 //!   [`ReservedName`] directory (version-control metadata, any ipe cache
 //!   namespace). Products go in fixed subdirectories ([`OutputArea`]) of it, so no
-//!   product name can clash with a user file.
+//!   product name can clash with a user file. A claim holds the deepest existing
+//!   level of the root's path (the anchor) and never follows a link from it
+//!   down; the levels above the anchor are not ipe's and are opened following
+//!   links, so disjointness is proven again on the anchor's canonical path. The
+//!   root itself and the leaf area are always claimed (created and marked, or
+//!   adopted); the levels between them and above the root are passed through.
 //!
 //! A tree ipe hands over to the user (`ipe eject`) goes through [`HandoverRoot`]
 //! and [`HandoverDir`] instead: it must lie outside every tree ipe owns or may
@@ -434,35 +439,85 @@ fn hold_level(path: &ProvenOutPath) -> Result<held::HeldDir, CliError> {
     enter_in(&hold_level(&parent_path)?, name)
 }
 
-/// Claim `names` below the held `anchor`: every level but the last is entered, the last claimed.
+/// Where the output root sits relative to the held anchor of a claim.
+#[derive(Debug, Clone, Copy)]
+enum RootStep<'a> {
+    /// The root exists and is the anchor itself.
+    Anchor,
+    /// The root is the entry of this name below the levels above it.
+    Named(&'a std::ffi::OsStr),
+}
+
+/// The levels of an area claim below its held anchor, each with its ownership step.
 ///
-/// With no names the anchor itself is the leaf and is adopted. An intermediate
-/// level is traversed like the anchor, so a sibling claim creating or filling
-/// a shared ancestor at the same moment never makes it look like user
-/// territory; only the leaf is ever adopted.
-fn claim_leaf_below(
-    anchor: held::HeldDir,
-    names: &[&std::ffi::OsStr],
-) -> Result<held::HeldDir, CliError> {
-    held::level_held(anchor.path());
-    let Some((leaf, above)) = names.split_last() else {
-        anchor.adopt()?;
-        return Ok(anchor);
-    };
-    let mut dir = anchor;
-    for name in above {
-        dir = enter_in(&dir, name)?;
-        held::level_held(dir.path());
+/// Levels above the root are entered (a shared ancestor is never adopted), the
+/// root is always claimed, the areas above the leaf are entered, and the leaf
+/// area is claimed. With no areas the root is the leaf. The root's step is a
+/// field of its own, so no claim can reach an area without claiming the root.
+#[derive(Debug)]
+struct ClaimPlan<'a> {
+    /// The missing levels between the anchor and the root, outermost first.
+    above_root: &'a [std::ffi::OsString],
+    /// The root itself.
+    root: RootStep<'a>,
+    /// The product areas below the root, outermost first; the last is the leaf.
+    areas: &'a [OutputArea],
+}
+
+impl<'a> ClaimPlan<'a> {
+    /// The plan for claiming `areas` of the root whose missing levels are `tail`.
+    fn new(tail: &'a [std::ffi::OsString], areas: &'a [OutputArea]) -> Self {
+        let (above_root, root) = match tail.split_last() {
+            None => (tail, RootStep::Anchor),
+            Some((root, above)) => (above, RootStep::Named(root.as_os_str())),
+        };
+        Self {
+            above_root,
+            root,
+            areas,
+        }
     }
-    let dir = claim_in(&dir, leaf)?;
-    held::level_held(dir.path());
-    Ok(dir)
+
+    /// Run the plan from the held `anchor`, returning the claimed leaf's handle.
+    ///
+    /// # Errors
+    /// [`CliError::OutputRefused`] for a link, a non-directory, or user
+    /// territory at a claimed level; [`CliError::Io`] on a filesystem failure.
+    fn run(&self, anchor: held::HeldDir) -> Result<held::HeldDir, CliError> {
+        held::level_held(anchor.path());
+        let mut dir = anchor;
+        for name in self.above_root {
+            dir = enter_in(&dir, name)?;
+            held::level_held(dir.path());
+        }
+        dir = match self.root {
+            RootStep::Anchor => {
+                dir.adopt()?;
+                dir
+            }
+            RootStep::Named(name) => {
+                let root = claim_in(&dir, name)?;
+                held::level_held(root.path());
+                root
+            }
+        };
+        let Some((leaf, above)) = self.areas.split_last() else {
+            return Ok(dir);
+        };
+        for area in above {
+            dir = enter_in(&dir, std::ffi::OsStr::new(area.dir_name()))?;
+            held::level_held(dir.path());
+        }
+        let dir = claim_in(&dir, std::ffi::OsStr::new(leaf.dir_name()))?;
+        held::level_held(dir.path());
+        Ok(dir)
+    }
 }
 
 /// Enter the intermediate level `name` of the held `parent`: created and marked when absent.
 ///
-/// An existing directory is traversed without an ownership check, as the
-/// anchor is; a link or a non-directory is refused.
+/// An existing directory is traversed without an ownership check; a link or a
+/// non-directory is refused.
 fn enter_in(parent: &held::HeldDir, name: &std::ffi::OsStr) -> Result<held::HeldDir, CliError> {
     let (dir, created) = parent.create_child(name)?;
     if created {
@@ -722,12 +777,12 @@ pub fn contained_in(root: &Path, path: &Path) -> Result<PathBuf, CliError> {
 /// [`CliError::OutputRefused`] for a symlink, a non-directory, or a non-empty
 /// unmarked directory; [`CliError::Io`] on a filesystem failure.
 fn check_claimable(path: &Path) -> Result<bool, CliError> {
-    if !check_traversable(path)? {
-        Ok(false)
-    } else if has_marker(path)? || is_empty_dir(path)? {
-        Ok(true)
-    } else {
-        Err(OutputRefusal::NotIpeOwned(path.to_path_buf()).into())
+    let Some(dir) = held::HeldDir::open(path)? else {
+        return Ok(false);
+    };
+    match dir.ownership()? {
+        held::Ownership::Marked | held::Ownership::Empty => Ok(true),
+        held::Ownership::User => Err(OutputRefusal::NotIpeOwned(path.to_path_buf()).into()),
     }
 }
 
@@ -1005,15 +1060,16 @@ impl OutputRoot {
     /// The path of a (possibly nested) product area, e.g. `release/rust`.
     ///
     /// Every level that already exists is checked — a symlink or non-directory
-    /// planted at any level is refused, and so is a user directory at the area
-    /// itself — but nothing is created: the writer claims the area when it
-    /// writes. A level above the area is only passed through, never checked
-    /// for ownership.
+    /// planted at any level is refused, and so is a user directory at the root
+    /// or at the area itself — but nothing is created: the writer claims the
+    /// area when it writes. An area above the leaf area is only passed
+    /// through, never checked for ownership.
     ///
     /// # Errors
     /// [`CliError::OutputRefused`] for an unclaimable existing level.
     pub fn area_path(&self, areas: &[OutputArea]) -> Result<PathBuf, CliError> {
         let mut path = self.path.as_path().to_path_buf();
+        check_claimable(&path)?;
         if let Some((leaf, above)) = areas.split_last() {
             for area in above {
                 path.push(area.dir_name());
@@ -1030,8 +1086,10 @@ impl OutputRoot {
     /// The disjointness proof is taken again on the held handle of the
     /// deepest existing level, and every missing level is created and marked
     /// through the handle above it — a level swapped after the proof cannot
-    /// redirect the claim into the project. Only the area itself (the root,
-    /// for no areas) is adopted; every level above it is passed through.
+    /// redirect the claim into the project. The root and the leaf area are
+    /// claimed — created and marked, or adopted — through a `ClaimPlan`;
+    /// the levels above the root and the areas between root and leaf are
+    /// only passed through.
     ///
     /// # Errors
     /// As [`OutputRoot::area_path`] and [`OutputRoot::resolve`];
@@ -1039,18 +1097,7 @@ impl OutputRoot {
     pub fn claim_area(&self, areas: &[OutputArea]) -> Result<OwnedDir, CliError> {
         self.area_path(areas)?;
         let checked = check_disjoint(self.path.as_path(), &self.project)?;
-        let names: Vec<&std::ffi::OsStr> = checked
-            .anchor
-            .tail
-            .iter()
-            .map(std::ffi::OsString::as_os_str)
-            .chain(
-                areas
-                    .iter()
-                    .map(|area| std::ffi::OsStr::new(area.dir_name())),
-            )
-            .collect();
-        let dir = claim_leaf_below(checked.anchor.dir, &names)?;
+        let dir = ClaimPlan::new(&checked.anchor.tail, areas).run(checked.anchor.dir)?;
         let mut path = checked.absolute.into_path_buf();
         path.extend(areas.iter().map(|area| area.dir_name()));
         Ok(OwnedDir {
@@ -4004,6 +4051,146 @@ mod tests {
             !rust.join(OWNERSHIP_MARKER).exists(),
             "the user area is not marked"
         );
+
+        let victim = base.join("victim");
+        std::fs::create_dir_all(&victim).expect("make victim");
+        std::fs::remove_dir_all(&release).expect("clear release");
+        plant_link(&victim, &release);
+        let nested = [OutputArea::Release, OutputArea::Bundle];
+        let checked = out.area_path(&nested);
+        assert!(
+            matches!(refused(&checked), Some(OutputRefusal::Symlink(_))),
+            "a linked area above the leaf must be refused by the area check, got {checked:?}"
+        );
+        let claimed = out.claim_area(&nested);
+        assert!(
+            matches!(refused(&claimed), Some(OutputRefusal::Symlink(_))),
+            "a linked area above the leaf must be refused by the claim, got {claimed:?}"
+        );
+        assert_eq!(
+            std::fs::read_dir(&victim).expect("read victim").count(),
+            0,
+            "nothing reaches the link target"
+        );
+
+        std::fs::remove_file(&release)
+            .or_else(|_| std::fs::remove_dir(&release))
+            .expect("remove link");
+        std::fs::write(&release, "not a directory").expect("plant file");
+        let checked = out.area_path(&nested);
+        assert!(
+            matches!(refused(&checked), Some(OutputRefusal::NotADirectory(_))),
+            "a file at an area above the leaf must be refused by the area check, got {checked:?}"
+        );
+        let claimed = out.claim_area(&nested);
+        assert!(
+            matches!(refused(&claimed), Some(OutputRefusal::NotADirectory(_))),
+            "a file at an area above the leaf must be refused by the claim, got {claimed:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&release).ok().as_deref(),
+            Some("not a directory")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A non-directory planted at an intermediate level mid-claim is refused.
+    #[test]
+    fn a_file_planted_at_an_intermediate_level_mid_claim_is_refused() {
+        let base = scratch("file_mid");
+        let proj = project(&base);
+        let shared = base.join("shared");
+        let out =
+            OutputRoot::resolve(Some(&shared.join("a").to_string_lossy()), &proj).expect("resolve");
+        let planted = shared.clone();
+        swap_when_held(base.clone(), move || {
+            std::fs::write(&planted, "theirs").expect("plant file");
+        });
+        let claimed = out.claim();
+        super::held::set_level_hook(None);
+        assert!(
+            matches!(
+                claimed,
+                Err(CliError::OutputRefused(OutputRefusal::NotADirectory(_)))
+            ),
+            "a file at an intermediate level must be refused, got {claimed:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&shared).ok().as_deref(),
+            Some("theirs")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Assert an area claim was refused as user territory at the root, which is left untouched.
+    fn assert_user_root_refused(root: &Path, claimed: &Result<OwnedDir, CliError>) {
+        assert!(
+            matches!(refused(claimed), Some(OutputRefusal::NotIpeOwned(_))),
+            "a user root must be refused by the area claim, got {claimed:?}"
+        );
+        assert!(
+            !root.join(OutputArea::Rust.dir_name()).exists(),
+            "no area is created inside a user root"
+        );
+        assert!(
+            !root.join(OWNERSHIP_MARKER).exists(),
+            "the user root is not marked"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("notes.txt"))
+                .ok()
+                .as_deref(),
+            Some("mine")
+        );
+    }
+
+    /// A user directory appearing at the root after it was resolved is refused by an area claim.
+    #[test]
+    fn a_user_root_created_after_resolve_is_refused_by_an_area_claim() {
+        let base = scratch("user_root_late");
+        let proj = project(&base);
+        let out = OutputRoot::resolve(None, &proj).expect("default out");
+        assert!(!out.path().exists(), "the root starts absent");
+        std::fs::create_dir_all(out.path()).expect("user root");
+        std::fs::write(out.path().join("notes.txt"), "mine").expect("user file");
+        let claimed = out.claim_area(&[OutputArea::Rust]);
+        assert_user_root_refused(out.path(), &claimed);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An existing empty root filled by the user mid-claim is refused when the claim adopts it.
+    #[test]
+    fn an_anchor_root_filled_mid_claim_is_refused() {
+        let base = scratch("user_root_anchor");
+        let proj = project(&base);
+        let out = OutputRoot::resolve(None, &proj).expect("default out");
+        std::fs::create_dir_all(out.path()).expect("empty root");
+        let root = out.path().to_path_buf();
+        let planted = root.clone();
+        swap_when_held(root.clone(), move || {
+            std::fs::write(planted.join("notes.txt"), "mine").expect("user file");
+        });
+        let claimed = out.claim_area(&[OutputArea::Rust]);
+        super::held::set_level_hook(None);
+        assert_user_root_refused(&root, &claimed);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A user root planted below the anchor mid-claim is refused when the claim reaches it.
+    #[test]
+    fn a_named_root_planted_mid_claim_is_refused() {
+        let base = scratch("user_root_named");
+        let proj = project(&base);
+        let out = OutputRoot::resolve(None, &proj).expect("default out");
+        let root = out.path().to_path_buf();
+        let planted = root.clone();
+        swap_when_held(proj.root.clone(), move || {
+            std::fs::create_dir_all(&planted).expect("user root");
+            std::fs::write(planted.join("notes.txt"), "mine").expect("user file");
+        });
+        let claimed = out.claim_area(&[OutputArea::Rust]);
+        super::held::set_level_hook(None);
+        assert_user_root_refused(&root, &claimed);
         let _ = std::fs::remove_dir_all(&base);
     }
 }
