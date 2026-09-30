@@ -5137,6 +5137,10 @@ def _tc_ci(steps: str, *, job: str = "wasm", name: str = "wasm") -> str:
     return f"name: ci\non: [push]\njobs:\n  {job}:\n    name: {name}\n    runs-on: ubuntu-latest\n    steps:\n{steps}"
 
 
+def _tc_env(claim: str, line: str) -> str:
+    return claim.replace("        env:\n", f"        env:\n          {line}\n")
+
+
 _TC_OK = _tc_ci(_TC_PIN + _TC_CLAIM % _TC_RUN)
 
 
@@ -5235,9 +5239,89 @@ class TestTestClaims(unittest.TestCase):
             ("missing runner env", _TC_PIN + claim.replace("wasm-bindgen-test-runner", "node"), "is not 'wasm-bindgen-test-runner'"),
             ("no pin", claim, "no earlier step of the job installs wasm-bindgen@0.2.126"),
             ("pin after", claim + _TC_PIN, "no earlier step of the job installs"),
+            ("toolchain", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("cargo test", "cargo +nightly test"), "picks toolchain `+nightly`"),
+            ("step rustflags cfg", _TC_PIN + _tc_env(claim, 'RUSTFLAGS: "--cfg x"'), "sets RUSTFLAGS to '--cfg x'"),
+            ("encoded rustflags", _TC_PIN + _tc_env(claim, 'CARGO_ENCODED_RUSTFLAGS: "--cfg\\x1fx"'), "sets CARGO_ENCODED_RUSTFLAGS"),
+            ("target rustflags", _TC_PIN + _tc_env(claim, 'CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: "--cfg x"'), "sets CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"),
+            ("cargo home", _TC_PIN + _tc_env(claim, "CARGO_HOME: /tmp/h"), "sets CARGO_HOME"),
+            ("unknown cargo key", _TC_PIN + _tc_env(claim, "CARGO_BUILD_TARGET: wasm32-wasip1"), "sets CARGO_BUILD_TARGET"),
+            ("rustc wrapper", _TC_PIN + _tc_env(claim, "RUSTC_WRAPPER: x"), "sets RUSTC_WRAPPER"),
+            ("chromedriver other", _TC_PIN + _tc_env(claim, "CHROMEDRIVER: /tmp/driver"), "sets CHROMEDRIVER to '/tmp/driver'"),
+            ("rustflags not string", _TC_PIN + _tc_env(claim, "RUSTFLAGS: 0"), "sets RUSTFLAGS to 0"),
+            ("env not a mapping", _TC_PIN + claim.replace("        env:\n          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner\n", "        env: ${{ fromJSON(vars.E) }}\n"), "is not a literal mapping"),
         ):
             with self.subTest(name):
                 self.assertRefused(_tc_ci(steps), needle)
+        job_env = _TC_OK.replace("    runs-on:", '    env:\n      RUSTFLAGS: "--cfg x"\n    runs-on:')
+        wf_env = _TC_OK.replace("on: [push]\n", 'on: [push]\nenv:\n  RUSTFLAGS: "--cfg x"\n')
+        for name, ci, needle in (
+            ("job rustflags cfg", job_env, "sets RUSTFLAGS to '--cfg x'"),
+            ("workflow rustflags cfg", wf_env, "sets RUSTFLAGS to '--cfg x'"),
+            ("job env not a mapping", _TC_OK.replace("    runs-on:", "    env: ${{ vars.E }}\n    runs-on:"), "is not a literal mapping"),
+            ("job defaults working directory", _TC_OK.replace("    runs-on:", "    defaults:\n      run:\n        working-directory: x\n    runs-on:"), "working-directory"),
+            ("workflow defaults working directory", _TC_OK.replace("on: [push]\n", "on: [push]\ndefaults:\n  run:\n    working-directory: x\n"), "working-directory"),
+        ):
+            with self.subTest(name):
+                self.assertRefused(ci, needle)
+        for name, config, needle in (
+            ("config target cfg", '[target.wasm32-unknown-unknown]\nrustflags = ["--cfg", "x"]\n', "passes '--cfg'"),
+            ("config target cfg string", '[target.wasm32-unknown-unknown]\nrustflags = "-C debuginfo=0 --cfg x"\n', "passes '--cfg'"),
+            ("config build cfg", '[build]\nrustflags = ["--cfg=x"]\n', "[build] rustflags passes '--cfg=x'"),
+            ("config cfg table target feature", "[target.'cfg(target_arch = \"wasm32\")']\nrustflags = [\"-Ctarget-feature=+simd128\"]\n", "passes `-C target-feature=+simd128`"),
+            ("config codegen panic", '[target.wasm32-unknown-unknown]\nrustflags = ["--codegen", "panic=abort"]\n', "passes `-C panic=abort`"),
+            ("config trailing codegen", '[build]\nrustflags = ["-C"]\n', "passes `-C `"),
+            ("config rustflags not list", "[build]\nrustflags = 3\n", "is not a string or a list of strings"),
+            ("config opt level", '[build]\nrustflags = ["-C", "opt-level=1"]\n', "passes `-C opt-level=1`"),
+            ("config runner", '[target.wasm32-unknown-unknown]\nrunner = "x"\n', "sets ['runner']"),
+            ("config linker", '[target.wasm32-unknown-unknown]\nlinker = "x"\n', "sets ['linker']"),
+            ("config build rustc", '[build]\nrustc-wrapper = "x"\n', "[build] sets ['rustc-wrapper']"),
+            ("config patch table", '[patch.crates-io]\np = { path = "x" }\n', "sets ['patch']"),
+            ("config env table", '[env]\nX = "y"\n', "sets ['env']"),
+            ("config unreadable", "[build\n", "`.cargo/config.toml` is unreadable"),
+        ):
+            with self.subTest(name):
+                self.files[".cargo/config.toml"] = config
+                self.assertRefused(_TC_OK, needle)
+        del self.files[".cargo/config.toml"]
+        with self.subTest("legacy config"):
+            self.files[".cargo/config"] = "[build]\n"
+            self.assertRefused(_TC_OK, "`.cargo/config` is a cargo config this check does not read")
+
+    def test_claim_env_and_config_admitted(self) -> None:
+        claim = _TC_CLAIM % _TC_RUN
+        mold = _tc_ci(_TC_PIN + _tc_env(claim, 'RUSTFLAGS: ""')).replace("    runs-on:", "    env:\n      RUSTFLAGS: -C link-arg=-fuse-ld=mold\n    runs-on:")
+        wf_env = _TC_OK.replace("on: [push]\n", 'on: [push]\nenv:\n  CARGO_TERM_COLOR: always\n  CARGO_INCREMENTAL: "0"\n')
+        for name, ci in (
+            ("empty rustflags", _tc_ci(_TC_PIN + _tc_env(claim, 'RUSTFLAGS: ""'))),
+            ("job rustflags overridden by step", mold),
+            ("chromedriver", _tc_ci(_TC_PIN + _tc_env(claim, "CHROMEDRIVER: chromedriver"))),
+            ("inert key expression", _tc_ci(_TC_PIN + _tc_env(claim, "IPE_RUNTIME_DIR: ${{ github.workspace }}/x"))),
+            ("workflow term env", wf_env),
+        ):
+            with self.subTest(name):
+                self.assertEqual(self.errors(ci), [])
+        for name, config in (
+            ("config debuginfo", '[target.wasm32-unknown-unknown]\nrustflags = ["-C", "debuginfo=0"]\n'),
+            ("config joined codegen", '[build]\nrustflags = "-Cstrip=symbols --codegen=codegen-units=1"\n'),
+            ("config other target cfg", '[target.wasm32-wasip1]\nrustflags = ["--cfg", "x"]\n'),
+        ):
+            with self.subTest(name):
+                self.files[".cargo/config.toml"] = config
+                self.assertEqual(self.errors(_TC_OK), [])
+
+    def test_inert_claim_env_unread_by_build_scripts(self) -> None:
+        inert = [k for k, v in verify_manifest._CLAIM_ENV.items() if v is None]
+        self.assertTrue(inert)
+        scripts = subprocess.run(
+            ["git", "ls-files", "-z", "--", "build.rs", "*/build.rs"],
+            cwd=os.path.dirname(verify_manifest.REPO_ROOT), capture_output=True, check=True,
+        ).stdout.decode().split("\0")
+        for rel in filter(None, scripts):
+            with open(os.path.join(os.path.dirname(verify_manifest.REPO_ROOT), rel), encoding="utf-8") as f:
+                text = f.read()
+            for key in inert:
+                with self.subTest(rel=rel, key=key):
+                    self.assertNotIn(key, text)
 
     def test_job_level_continue_on_error_refused(self) -> None:
         ci = _TC_OK.replace("    runs-on:", "    continue-on-error: true\n    runs-on:")
