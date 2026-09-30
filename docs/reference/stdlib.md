@@ -988,7 +988,7 @@ Ipe.Cache — in-memory LRU + TTL cache.
 | `defaultCfg` | Default cache config: 1024 entries, no TTL, no byte cap. |
 | `withMaxEntries` | Override the max number of entries.  Triggers LRU eviction when |
 | `withTTL` | Override the per-entry TTL as an `Ipe.Duration` (e.g. `Duration.seconds |
-| `withMaxBytes` | Override the approximate byte cap as an `Ipe.ByteSize` (e.g. `ByteSize.mib |
+| `withMaxBytes` | Request a byte cap as an `Ipe.ByteSize`.  The runtime has no per-value |
 | `new` | `new cfg` — create a new cache.  Resolves once the underlying |
 | `get` | `get cache key` — look up `key` in `cache`.  Returns |
 | `put` | `put cache key value` — insert (or update) `key → value`.  May |
@@ -1918,7 +1918,7 @@ Ipe.File -- filesystem I/O.
 | Export | Summary |
 |--------|----------|
 | `readFile` | (no summary) |
-| `readFileLimit` | (no summary) |
+| `readFileLimit` | `readFileLimit path cap` — read at most `cap` bytes from the file. |
 | `readFileBytes` | Read raw bytes as a list of Int.  Use for binary content |
 | `writeFile` | `writeFile path content` -- overwrites the file. |
 | `append` | `append path content` -- appends to the end of the file |

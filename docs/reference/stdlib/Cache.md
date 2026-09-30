@@ -76,11 +76,11 @@ runtime `CacheCfg` fold.
 withMaxBytes : ByteSize -> CacheCfg -> CacheCfg
 ```
 
-Override the approximate byte cap as an `Ipe.ByteSize` (e.g. `ByteSize.mib
-8`).  `ByteSize.zero` disables the byte cap.  Reserved for v0.16+ — the
-entry-count LRU is byte-unaware today; byte tracking lands when the runtime
-gains per-value size accounting.  The raw byte count is unwrapped here for the
-runtime `CacheCfg` fold.
+Request a byte cap as an `Ipe.ByteSize`.  The runtime has no per-value
+byte accounting, so `Cache.new` fails on any non-zero cap rather than accept
+a bound it cannot enforce; bound the cache with `withMaxEntries`.
+`ByteSize.zero` (the `defaultCfg` value) requests no byte cap.  The raw byte
+count is unwrapped here for the runtime `CacheCfg` fold.
 
 ## `new`
 

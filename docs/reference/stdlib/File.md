@@ -26,6 +26,13 @@ readFile : Path -> Task Error String
 readFileLimit : Path -> ByteSize -> Task Error String
 ```
 
+`readFileLimit path cap` — read at most `cap` bytes from the file.
+Use `ByteSize.mib 10` or `ByteSize.bytes n` to name the unit at the
+call site and prevent silent unit confusion (a bare `Int` of 10 could
+mean 10 bytes or 10 MiB). Returns `Err` when the file exceeds the
+ceiling; useful to cap memory on untrusted-size inputs. `ByteSize.zero`
+is a zero-byte ceiling: only an empty file reads.
+
 ## `readFileBytes`
 
 ```ipe
