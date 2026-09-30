@@ -159,13 +159,10 @@ fn start_watch(
     out_dir: &Path,
     port: u16,
     sink: &EventSink,
-) -> Result<
-    (
-        std::thread::JoinHandle<Result<(), ipe::CliError>>,
-        WatchHandle,
-    ),
-    BoxError,
-> {
+) -> (
+    std::thread::JoinHandle<Result<(), ipe::CliError>>,
+    WatchHandle,
+) {
     let runtime_dir = e2e_support::require_runtime().into_path_buf();
     let mut opts = WatchOptions::new(entry.to_path_buf(), out_dir.to_path_buf(), runtime_dir);
     opts.port = port;
@@ -181,7 +178,7 @@ fn start_watch(
         hard_cap: Duration::from_millis(600),
     };
     opts.on_event = Some(sink.as_callback());
-    Ok(ipe::watch::spawn(opts))
+    ipe::watch::spawn(opts)
 }
 
 /// Same as [`start_watch`] but with the blue-green proxy turned ON, so proxy
@@ -192,13 +189,10 @@ fn start_watch_bluegreen(
     out_dir: &Path,
     port: u16,
     sink: &EventSink,
-) -> Result<
-    (
-        std::thread::JoinHandle<Result<(), ipe::CliError>>,
-        WatchHandle,
-    ),
-    BoxError,
-> {
+) -> (
+    std::thread::JoinHandle<Result<(), ipe::CliError>>,
+    WatchHandle,
+) {
     let runtime_dir = e2e_support::require_runtime().into_path_buf();
     let mut opts = WatchOptions::new(entry.to_path_buf(), out_dir.to_path_buf(), runtime_dir);
     opts.port = port;
@@ -209,7 +203,7 @@ fn start_watch_bluegreen(
         hard_cap: Duration::from_millis(600),
     };
     opts.on_event = Some(sink.as_callback());
-    Ok(ipe::watch::spawn(opts))
+    ipe::watch::spawn(opts)
 }
 
 /// A view-less worker that ticks forever — a LONG-LIVED non-HTTP shape. It emits
@@ -327,7 +321,7 @@ fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
 
     let sink = EventSink::default();
     let port = 19151;
-    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink);
 
     assert!(
         wait_for_body(port, "v1", Duration::from_mins(4)),
@@ -354,7 +348,7 @@ fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError
 
     let sink = EventSink::default();
     let port = 19152;
-    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink);
 
     assert!(
         wait_for_body(port, "v1", Duration::from_mins(4)),
@@ -397,7 +391,7 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
 
     let sink = EventSink::default();
     let port = 19153;
-    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink);
 
     assert!(
         wait_for_body(port, "v1", Duration::from_mins(4)),
@@ -456,7 +450,7 @@ fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Re
 
     let sink = EventSink::default();
     let port = 19155;
-    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink);
 
     assert!(
         wait_for_body(port, "v1", Duration::from_mins(4)),
@@ -518,7 +512,7 @@ fn watch_does_not_bind_a_proxy_for_a_non_http_shape() -> Result<(), BoxError> {
 
     let sink = EventSink::default();
     let port = 19156;
-    let (join, handle) = start_watch_bluegreen(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch_bluegreen(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink);
 
     // Wait for the cold build to spawn the worker (its child carries the
     // injected IPE_WEB_PORT/IPE_SERVER_PORT — discoverable via /proc).
@@ -575,7 +569,7 @@ fn watch_proxies_a_hardcoded_port_server_on_an_internal_port() -> Result<(), Box
     // opts.port must be a different port — proving the app relocated (T1) and the
     // proxy fronts it (T2).
     let port = 19157;
-    let (join, handle) = start_watch_bluegreen(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch_bluegreen(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink);
 
     // The proxy answers on opts.port with the app's body — the app came up on an
     // internal port BEHIND the proxy despite hardcoding 8000. (Were the 502
