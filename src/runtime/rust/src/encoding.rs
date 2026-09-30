@@ -526,9 +526,9 @@ fn decode_kernel<E: From<String>>(
     }
 }
 
-/// Ipê `hexEncode : String -> String` — encodes the input's UTF-8 bytes
-/// )`). Non-ASCII
-/// than truncating codepoints > 255.
+/// Ipê `hexEncode : String -> String` — encodes the input's UTF-8 bytes, so a
+/// non-ASCII character becomes the hex of its UTF-8 encoding rather than a
+/// codepoint truncated to one byte.
 #[must_use]
 pub fn encoding_hex_encode(s: String) -> String {
     hex::encode(s.as_bytes())
