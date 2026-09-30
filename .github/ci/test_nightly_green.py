@@ -149,6 +149,22 @@ class ListingTest(unittest.TestCase):
             self.assertIsNotNone(chosen)
             self.assertEqual(chosen and chosen["id"], 2)
 
+    def test_unfinished_run_skipped_for_the_newest_completed(self) -> None:
+        done = _run(id=1, created_at="2026-09-28T10:50:15Z")
+        for status in ("in_progress", "queued", "waiting", None):
+            with self.subTest(status):
+                running = _run(id=2, status=status, conclusion=None, created_at="2026-09-29T10:34:21Z")
+                chosen = ng.latest_run(_listing(running, done))
+                self.assertEqual(chosen and chosen["id"], 1)
+        self.assertIsNone(ng.latest_run(_listing(_run(status="in_progress", conclusion=None))))
+
+    def test_listing_is_not_status_filtered(self) -> None:
+        api = FakeApi(_listing(_run()))
+        _verdict(api)
+        self.assertTrue(api.calls)
+        for path in api.calls:
+            self.assertNotIn("status=", path)
+
     def test_untimed_entry_refused(self) -> None:
         for created in (None, "yesterday", 5):
             with self.assertRaises(ng.NightlyError):
