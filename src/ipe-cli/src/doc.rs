@@ -1885,11 +1885,15 @@ fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError>
     // query type-checks one module, not all ~130 compiled-source modules.
     let project = query_project_modules();
     if let Some(module) = project.into_iter().find(|m| m.name == module_name) {
-        return render_query_module(module, format);
+        render_query_module(&module, format);
+        return Ok(());
     }
 
     match query_single_stdlib_module(module_name) {
-        StdlibModuleLookup::Found(module) => render_query_module(module, format),
+        StdlibModuleLookup::Found(module) => {
+            render_query_module(&module, format);
+            Ok(())
+        }
         StdlibModuleLookup::Ambiguous(candidates) => {
             Err(ambiguous_module_error(module_name, &candidates, format))
         }
@@ -1912,7 +1916,7 @@ fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError>
 }
 
 /// Render a resolved module's API per `format`.
-fn render_query_module(module: ModuleDoc, format: OutputFormat) -> Result<(), CliError> {
+fn render_query_module(module: &ModuleDoc, format: OutputFormat) {
     // Build a single-module DocsJson for the anchor index (cross-reference
     // resolution within this module's own types).
     let docs = DocsJson {
@@ -1936,15 +1940,14 @@ fn render_query_module(module: ModuleDoc, format: OutputFormat) -> Result<(), Cl
         }
         OutputFormat::Json => {
             let mut out = String::new();
-            render_module_json(&mut out, &module, &index);
+            render_module_json(&mut out, module, &index);
             out.push('\n');
             crate::screen::emit_machine(crate::screen::Stream::Stdout, &out);
         }
         OutputFormat::Human => {
-            render_module_human(&module, &index);
+            render_module_human(module, &index);
         }
     }
-    Ok(())
 }
 
 /// Assemble one [`ModuleDoc`] from its checked API surface and its scanned
