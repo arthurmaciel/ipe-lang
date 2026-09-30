@@ -658,13 +658,77 @@ pub fn wait_for(deadline: Duration, mut pred: impl FnMut() -> bool) -> bool {
     }
 }
 
+/// Why a re-exec of the current test binary did not prove its one test passed.
+#[derive(Debug)]
+pub enum RerunError {
+    /// The running test binary's own path could not be read.
+    Locate(std::io::Error),
+    /// The re-exec could not be spawned.
+    Spawn(std::io::Error),
+    /// The re-exec ran and failed.
+    Failed {
+        status: std::process::ExitStatus,
+        stdout: String,
+        stderr: String,
+    },
+    /// The re-exec exited 0 without running exactly one passing test: libtest
+    /// exits 0 when `--exact` matches nothing, so a success alone proves
+    /// nothing.
+    DidNotRun { stdout: String },
+}
+
+/// Re-exec the current test binary running only `test` (its full path under
+/// the crate root, e.g. `tests::name`), with `configure` adding the spawn-time
+/// environment and any extra harness flags, and require that the child ran
+/// and passed exactly that one test.
+///
+/// The one shared re-exec for tests whose body needs a process environment
+/// fixed at spawn: a success exit alone is vacuous, since a `test` name that
+/// matches nothing (a renamed test, a wrong module path) also exits 0.
+///
+/// # Errors
+///
+/// [`RerunError`] when the binary cannot be located or spawned, the child
+/// fails, or the child's libtest summary does not show one passed test.
+pub fn rerun_this_test_exact(
+    test: &str,
+    configure: impl FnOnce(&mut Command),
+) -> Result<(), RerunError> {
+    let exe = std::env::current_exe().map_err(RerunError::Locate)?;
+    let mut cmd = Command::new(exe);
+    cmd.args(["--exact", test]);
+    configure(&mut cmd);
+    let out = cmd.output().map_err(RerunError::Spawn)?;
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    if !out.status.success() {
+        return Err(RerunError::Failed {
+            status: out.status,
+            stdout,
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        });
+    }
+    if ran_exactly_one_passing_test(&stdout) {
+        Ok(())
+    } else {
+        Err(RerunError::DidNotRun { stdout })
+    }
+}
+
+/// Whether a libtest run's `stdout` carries the summary of exactly one test
+/// run and passed.
+fn ran_exactly_one_passing_test(stdout: &str) -> bool {
+    stdout
+        .lines()
+        .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed;"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         CRATE_IDENTITY_HASH_PLACEHOLDER, DEFAULT_EMITTED_BUILD_IDLE_SECS,
         DEFAULT_EMITTED_BUILD_TIMEOUT_SECS, emitted_build_idle, emitted_build_timeout,
-        normalize_crate_identity_hash, replace_package_name, resolve_emitted_target,
-        run_bounded_build, wait_for,
+        normalize_crate_identity_hash, ran_exactly_one_passing_test, replace_package_name,
+        rerun_this_test_exact, resolve_emitted_target, run_bounded_build, wait_for,
     };
     use std::process::Command;
     use std::time::{Duration, Instant};
@@ -994,6 +1058,42 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The re-exec target of the positive rerun test: passes trivially.
+    #[test]
+    fn a_rerun_target_that_passes() {}
+
+    #[test]
+    fn a_rerun_of_a_real_test_proves_it_ran() {
+        let rerun = rerun_this_test_exact("tests::a_rerun_target_that_passes", |_| {});
+        assert!(
+            rerun.is_ok(),
+            "the real test must be re-run and pass: {rerun:?}"
+        );
+    }
+
+    #[test]
+    fn a_rerun_of_a_test_name_that_matches_nothing_is_refused() {
+        let rerun = rerun_this_test_exact("tests::no_test_has_this_name", |_| {});
+        assert!(
+            matches!(rerun, Err(super::RerunError::DidNotRun { .. })),
+            "a zero-match re-exec exits 0 yet must be refused: {rerun:?}"
+        );
+    }
+
+    #[test]
+    fn only_a_one_passed_summary_counts_as_a_run() {
+        assert!(ran_exactly_one_passing_test(
+            "running 1 test\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s\n"
+        ));
+        assert!(!ran_exactly_one_passing_test(
+            "running 0 tests\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s\n"
+        ));
+        assert!(!ran_exactly_one_passing_test(
+            "running 1 test\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 9 filtered out; finished in 0.00s\n"
+        ));
+        assert!(!ran_exactly_one_passing_test(""));
     }
 
     #[test]

@@ -635,29 +635,33 @@ mod time_string_tests {
         if std::env::var_os(TZ_CHILD_MARKER).is_some() {
             return;
         }
-        // `TZ` is read by the host time library from the real process
-        // environment, so each non-UTC zone is set at spawn time on a re-exec
-        // of this binary running only this test.
-        let exe = std::env::current_exe();
-        assert!(exe.is_ok(), "test binary path: {exe:?}");
-        let Ok(exe) = exe else { return };
+        rerun_under_non_utc_zones();
+    }
+
+    /// `TZ` is read by the host time library from the real process
+    /// environment, so each non-UTC zone is set at spawn time on a re-exec of
+    /// this binary that must actually run and pass this one test.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn rerun_under_non_utc_zones() {
         let module = module_path!();
         let name = format!(
             "{}::time_string_is_utc_regardless_of_tz",
             module.split_once("::").map_or(module, |(_, rest)| rest)
         );
         for tz in ["America/New_York", "Asia/Tokyo"] {
-            let status = std::process::Command::new(&exe)
-                .args(["--exact", name.as_str(), "--test-threads=1"])
-                .env(TZ_CHILD_MARKER, "1")
-                .env("TZ", tz)
-                .status();
-            assert!(
-                status.as_ref().is_ok_and(std::process::ExitStatus::success),
-                "TZ={tz} re-exec failed: {status:?}"
-            );
+            let rerun = e2e_support::rerun_this_test_exact(&name, |cmd| {
+                cmd.arg("--test-threads=1")
+                    .env(TZ_CHILD_MARKER, "1")
+                    .env("TZ", tz);
+            });
+            assert!(rerun.is_ok(), "TZ={tz} re-exec did not pass: {rerun:?}");
         }
     }
+
+    /// A wasm32 test binary cannot re-exec itself; the fixed-instant assertion
+    /// above is its whole check.
+    #[cfg(target_arch = "wasm32")]
+    const fn rerun_under_non_utc_zones() {}
 
     #[test]
     fn time_string_epoch_is_midnight() {

@@ -57,24 +57,22 @@ const SEAL_CHILD_MARKER: &str = "IPE_WASI_SEAL_CHILD";
 /// `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` outranks the emitter's own
 /// `[target.<triple>]` config, so a pass proves the end-user seal only when
 /// the build sees exactly the emitted config — set at spawn, never mutated
-/// in-process.
+/// in-process. The child must actually run and pass `test`: a name matching
+/// nothing is refused, never a vacuous green.
 fn in_seal_child(test: &str, target_dir: &Path) -> bool {
     if ipe_env::var_os(SEAL_CHILD_MARKER).is_some() {
         return true;
     }
-    let exe = std::env::current_exe();
-    assert!(exe.is_ok(), "test binary path: {exe:?}");
-    let Ok(exe) = exe else { return false };
-    let status = Command::new(exe)
-        .args(["--exact", test, "--nocapture"])
-        .env(SEAL_CHILD_MARKER, "1")
-        .env("CARGO_TARGET_DIR", target_dir)
-        .env_remove("RUSTFLAGS")
-        .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .status();
+    let rerun = e2e_support::rerun_this_test_exact(test, |cmd| {
+        cmd.arg("--nocapture")
+            .env(SEAL_CHILD_MARKER, "1")
+            .env("CARGO_TARGET_DIR", target_dir)
+            .env_remove("RUSTFLAGS")
+            .env_remove("CARGO_ENCODED_RUSTFLAGS");
+    });
     assert!(
-        status.as_ref().is_ok_and(std::process::ExitStatus::success),
-        "{test}: the cargo-env re-exec failed: {status:?}"
+        rerun.is_ok(),
+        "{test}: the cargo-env re-exec did not pass: {rerun:?}"
     );
     false
 }

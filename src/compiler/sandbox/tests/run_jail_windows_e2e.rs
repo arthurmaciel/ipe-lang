@@ -186,21 +186,22 @@ fn a_non_allowlisted_env_var_is_absent_from_the_jailed_child_but_present_under_c
     // The launcher scrubs the environment: only the allowlist re-enters. The
     // secret must be in THIS process's environment so it would be inherited if
     // the scrub were bypassed. The environment is set at spawn time on a re-exec
-    // of this test binary (running only this test), never mutated in-process.
+    // of this test binary (running only this test), never mutated in-process;
+    // the re-exec must actually run and pass this test, never match nothing.
     if ipe_env::var_os(ENV_CHILD_MARKER).is_none() {
-        let exe = std::env::current_exe().expect("test binary path");
-        let status = Command::new(exe)
-            .args([
-                "--exact",
-                "a_non_allowlisted_env_var_is_absent_from_the_jailed_child_but_present_under_control",
-                "--nocapture",
-            ])
-            .env(ENV_CHILD_MARKER, "1")
-            .env("IPE_SECRET_E2E", "leak")
-            .env("IPE_ALLOWED_E2E", "ok")
-            .status()
-            .expect("re-exec the env test");
-        assert!(status.success(), "the env-seeded re-exec failed: {status}");
+        let rerun = e2e_support::rerun_this_test_exact(
+            "a_non_allowlisted_env_var_is_absent_from_the_jailed_child_but_present_under_control",
+            |cmd| {
+                cmd.arg("--nocapture")
+                    .env(ENV_CHILD_MARKER, "1")
+                    .env("IPE_SECRET_E2E", "leak")
+                    .env("IPE_ALLOWED_E2E", "ok");
+            },
+        );
+        assert!(
+            rerun.is_ok(),
+            "the env-seeded re-exec did not pass: {rerun:?}"
+        );
         return;
     }
     let scratch = scratch_dir("env");

@@ -45,5 +45,10 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
 ] }
 
+# `rerun_this_test_exact`: the Windows e2e env test's re-exec must prove the
+# child ran its test, not merely exited 0.
+[target.'cfg(windows)'.dev-dependencies]
+e2e-support = { path = "../../../tools/e2e-support" }
+
 [lints]
 workspace = true
