@@ -144,6 +144,19 @@ mod tests {
     }
 
     #[test]
+    fn the_wall_range_matches_the_server_clamp() {
+        let source = include_str!("../../server/src/Runner.ipe");
+        assert_eq!(
+            crate::ipe_source::constant(source, "minJailWallSecs"),
+            Some(MIN_WALL_SECS)
+        );
+        assert_eq!(
+            crate::ipe_source::constant(source, "maxJailWallSecs"),
+            Some(MAX_WALL_SECS)
+        );
+    }
+
+    #[test]
     fn a_zero_or_oversized_wall_is_unrepresentable() {
         assert_eq!(WallSecs::new(0), None);
         assert_eq!(WallSecs::new(MAX_WALL_SECS + 1), None);

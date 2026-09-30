@@ -629,18 +629,15 @@ mod tests {
     }
 
     /// The integer `name` is bound to in the server's `Staging.ipe`.
-    fn staging_constant(source: &str, name: &str) -> Option<usize> {
-        let header = format!("\n{name} =\n");
-        let (_, rest) = source.split_once(&header)?;
-        rest.lines().next()?.trim().parse().ok()
-    }
-
     #[test]
     fn the_layout_ceilings_match_the_server_allowlist() {
         let source = include_str!("../../server/src/Staging.ipe");
-        assert_eq!(staging_constant(source, "maxFiles"), Some(MAX_STAGED_FILES));
         assert_eq!(
-            staging_constant(source, "maxSegments"),
+            crate::ipe_source::constant(source, "maxFiles"),
+            Some(MAX_STAGED_FILES)
+        );
+        assert_eq!(
+            crate::ipe_source::constant(source, "maxSegments"),
             Some(MAX_SOURCE_SEGMENTS)
         );
         let chars: String = ('a'..='z')
