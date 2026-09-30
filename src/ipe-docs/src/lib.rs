@@ -602,6 +602,7 @@ fn index_line_docs(
 /// short-name rule: index construction and every `ipe doc` module lookup
 /// call this (directly, or through [`stdlib_module_matches`]), so a key form
 /// that resolves for one never silently misses for the other.
+#[must_use]
 pub fn stdlib_short_name(dotted: &str) -> &str {
     dotted.strip_prefix("Ipe.").unwrap_or(dotted)
 }
