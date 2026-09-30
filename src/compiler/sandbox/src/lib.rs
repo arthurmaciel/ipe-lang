@@ -480,6 +480,10 @@ pub fn run_in_bwrap_jail_deny_subprocess(
     // across the spawn. Clearing close-on-exec here, in the parent, refuses the
     // run (fail-closed) when the flag cannot be cleared, rather than run the
     // payload without its filter.
+    // Known limit: between this close-on-exec clear and the spawn, a sibling child
+    // forked by another thread inherits the same open file description. The seal
+    // blocks writes, not a shared-offset `lseek`/`read`, so this fd must reach only
+    // its one child.
     let seccomp_fd = owned.make_inheritable().map_err(|e| SandboxDefect::Spawn {
         program: "seccomp".to_owned(),
         detail: format!("clearing close-on-exec on the seccomp memfd failed: {e}"),
@@ -498,7 +502,7 @@ fn run_bwrap(
     caps: &Capabilities,
     spec: &JailSpec,
     payload: &[OsString],
-    seccomp_fd: Option<run_jail::SealedFdNumber>,
+    seccomp_fd: Option<run_jail::SealedFdNumber<'_>>,
 ) -> Result<JailedOutput, SandboxDefect> {
     let Some(bwrap) = &caps.bwrap else {
         return Err(SandboxDefect::NoIsolationMechanism);
@@ -647,7 +651,7 @@ fn bwrap_argv_with_seccomp(
     timeout: &Path,
     spec: &JailSpec,
     payload: &[OsString],
-    seccomp_fd: Option<run_jail::SealedFdNumber>,
+    seccomp_fd: Option<run_jail::SealedFdNumber<'_>>,
 ) -> Result<Vec<OsString>, SandboxDefect> {
     let mut argv = bwrap_argv(bwrap, prlimit, timeout, spec, payload);
     let Some(fd) = seccomp_fd else {
@@ -1110,15 +1114,25 @@ mod tests {
         assert!(dev > proc, "--dev /dev must follow --proc /proc: {joined}");
     }
 
+    /// A live stand-in descriptor for a test `SealedFdNumber` to borrow.
+    #[cfg(unix)]
+    #[allow(clippy::expect_used)] // a test host with no `/dev/null` cannot build the fixture
+    fn stand_in_fd() -> std::fs::File {
+        std::fs::File::open("/dev/null").expect("open /dev/null")
+    }
+
+    #[cfg(unix)]
     #[test]
     fn seccomp_flag_is_injected_after_the_bwrap_token() {
+        use std::os::fd::{AsFd as _, AsRawFd as _};
+        let filter = stand_in_fd();
         let argv = bwrap_argv_with_seccomp(
             Path::new("/usr/bin/bwrap"),
             Path::new("/usr/bin/prlimit"),
             Path::new("/usr/bin/timeout"),
             &spec(),
             &[OsString::from("ipe-ffi-inspector")],
-            Some(run_jail::SealedFdNumber::for_test(7)),
+            Some(run_jail::SealedFdNumber::for_test(filter.as_fd())),
         )
         .expect("bwrap token present, so the seccomp flag attaches");
         let rendered: Vec<String> = argv
@@ -1133,11 +1147,18 @@ mod tests {
             rendered.get(bwrap + 1).map(String::as_str),
             Some("--seccomp")
         );
-        assert_eq!(rendered.get(bwrap + 2).map(String::as_str), Some("7"));
+        let number = filter.as_raw_fd().to_string();
+        assert_eq!(
+            rendered.get(bwrap + 2).map(String::as_str),
+            Some(number.as_str())
+        );
     }
 
+    #[cfg(unix)]
     #[test]
     fn seccomp_is_attached_and_never_silently_dropped() {
+        use std::os::fd::{AsFd as _, AsRawFd as _};
+        let filter = stand_in_fd();
         // A requested seccomp filter must always reach the argv, whatever the
         // bwrap path — never silently dropped, which would run the payload
         // unfiltered. The `SeccompNotAttached` arm is a fail-closed backstop
@@ -1149,7 +1170,7 @@ mod tests {
             Path::new("/usr/bin/timeout"),
             &spec(),
             &[OsString::from("ipe-ffi-inspector")],
-            Some(run_jail::SealedFdNumber::for_test(7)),
+            Some(run_jail::SealedFdNumber::for_test(filter.as_fd())),
         )
         .expect("a requested seccomp filter must attach, never drop");
         let rendered: Vec<String> = argv
@@ -1165,7 +1186,11 @@ mod tests {
             Some("--seccomp"),
             "seccomp must be injected right after the bwrap token"
         );
-        assert_eq!(rendered.get(bwrap + 2).map(String::as_str), Some("7"));
+        let number = filter.as_raw_fd().to_string();
+        assert_eq!(
+            rendered.get(bwrap + 2).map(String::as_str),
+            Some(number.as_str())
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@
 ))]
 
 use std::ffi::OsString;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
 use super::{
@@ -364,9 +364,9 @@ impl SealedSeccompFd {
     /// # Errors
     ///
     /// [`std::io::Error`] when either `fcntl` fails.
-    pub fn make_inheritable(&self) -> std::io::Result<SealedFdNumber> {
+    pub fn make_inheritable(&self) -> std::io::Result<SealedFdNumber<'_>> {
         clear_cloexec(self.fd.as_fd())?;
-        Ok(SealedFdNumber(self.fd.as_raw_fd()))
+        Ok(SealedFdNumber(self.fd.as_fd()))
     }
 }
 
@@ -412,9 +412,9 @@ impl SealedApp {
     /// # Errors
     ///
     /// [`std::io::Error`] when either `fcntl` fails.
-    pub fn make_inheritable(&self) -> std::io::Result<SealedFdNumber> {
+    pub fn make_inheritable(&self) -> std::io::Result<SealedFdNumber<'_>> {
         clear_cloexec(self.fd.as_fd())?;
-        Ok(SealedFdNumber(self.fd.as_raw_fd()))
+        Ok(SealedFdNumber(self.fd.as_fd()))
     }
 
     /// Read the full sealed contents by reading through the fd.

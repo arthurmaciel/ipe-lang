@@ -361,6 +361,10 @@ pub fn build_in_jail(
         Ok(fd) => fd,
         Err(defect) => return JailOutcome::Unavailable { defect },
     };
+    // Known limit: between this close-on-exec clear and the spawn, a sibling child
+    // forked by another thread inherits the same open file description. The seal
+    // blocks writes, not a shared-offset `lseek`/`read`, so this fd must reach only
+    // its one child.
     let seccomp_fd = match seccomp_owned.make_inheritable() {
         Ok(fd) => fd,
         Err(e) => {
