@@ -11,7 +11,7 @@
 //! (d) `path` used as a plain identifier (not followed by a string literal)
 //!     compiles and runs normally — contextual keyword regression.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 mod support;
 
