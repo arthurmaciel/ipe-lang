@@ -445,8 +445,9 @@ tui = ["unicode-width", "crossterm", "tokio", "random"]
 # THIS feature (not `web`), so the core compiles wherever any of the three is
 # selected. `serde_json` backs the webview IPC parse + the floor wire; `json`
 # pulls `serde` (the `Patch`/`FormData` derives); `serde_urlencoded` is the typed
-# form-record decode (`dom/form.rs`).
-web-core = ["dep:serde_json", "json", "serde", "dep:serde_urlencoded"]
+# form-record decode (`dom/form.rs`); `encoding` is the strict percent-decoder
+# the route matcher decodes each path segment with (`web/route.rs`).
+web-core = ["dep:serde_json", "json", "serde", "dep:serde_urlencoded", "encoding"]
 # Real native-window Webview backend (opt-in; needs the system webview dev libs).
 # NOT in `full` — default/CI builds compile the cross-platform stub instead.
 # Pulls ONLY the server-free `web-core` render core (the `Html` renderer +

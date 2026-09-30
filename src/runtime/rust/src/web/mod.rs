@@ -2446,6 +2446,11 @@ mod handlers {
         FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
         FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
     {
+        // The router's URL gate already refused a malformed path or query;
+        // this is the second, independent boundary before any session work.
+        if let Err(rejection) = crate::server::strict_url_query(&uri) {
+            return rejection.status_and_reason().into_response();
+        }
         // Cookie-based session lifecycle:
         //   * Web hit  → reuse the in-process session; re-apply routing for
         //                 this GET's path + re-render (no new driver).
@@ -2678,9 +2683,10 @@ mod handlers {
             Ok(qs) => qs,
             Err(rejection) => return rejection.status_and_reason().into_response(),
         };
-        // `?path=` names a browser path the route matcher decodes segment by
-        // segment, so it must itself be a well-formed path: a malformed one is
-        // refused with the same fixed 400, before any session is touched.
+        // `?path=` names a browser path the route matcher reads through
+        // `route::DecodedPath` (each segment decoded once by the strict core);
+        // `check_path` refuses exactly the paths that parse refuses, so a
+        // malformed one gets the same fixed 400 before any session is touched.
         let client_path = match qs.get("path").map(String::as_str).map(str::trim) {
             Some(p) if crate::server::check_path(p).is_err() => {
                 return crate::server::RequestRejection::BadRequest

@@ -586,9 +586,10 @@ pub(crate) struct DriverParityQuery<'u>(&'u Url);
 
 #[cfg_attr(not(feature = "db"), allow(dead_code))]
 impl<'u> DriverParityQuery<'u> {
-    /// The query of `url`.
-    pub(crate) const fn of(url: &'u Url) -> Self {
-        Self(url)
+    /// The query of `url`: only a database URL whose userinfo the ambiguity
+    /// check cleared is read this way.
+    pub(crate) const fn of(url: &'u UnambiguousUrl) -> Self {
+        Self(url.url())
     }
 
     /// The query's key/value pairs, decoded as the driver decodes them.
@@ -658,7 +659,7 @@ impl UnambiguousUrl {
     /// The value of a `host` or `hostaddr` query parameter of this URL equal to
     /// `value`.
     pub(crate) fn query_host(&self, value: &str) -> Option<ConfiguredHost> {
-        DriverParityQuery::of(&self.parsed)
+        DriverParityQuery::of(self)
             .pairs()
             .find(|(key, named)| matches!(&**key, "host" | "hostaddr") && named == value)
             .map(|(_, named)| ConfiguredHost(named.into_owned()))

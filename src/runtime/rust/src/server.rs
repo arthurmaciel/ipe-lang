@@ -836,13 +836,15 @@ fn parse_query(q: Option<&str>) -> Result<HashMap<String, String>, crate::encodi
 /// Refuse a request path that is not a well-formed RFC 3986 path.
 ///
 /// Every raw segment must decode through `decode_component` under the path
-/// grammar. This is what makes the path parameters sound: the router hands back
-/// each parameter already percent-decoded once by a lenient decoder, and on a
-/// path that passes this check that decoding is byte-for-byte the strict one.
-/// The parameters are therefore used as handed back and never decoded again (a
-/// second decode would turn `%2541` into `A`).
+/// grammar (`decode_path_segments`, the same split-then-decode the Ipe.Web
+/// route matcher reads its segments from, so the gate and the matcher refuse
+/// the same paths). This is what makes the Ipe.Server path parameters sound:
+/// the router hands back each parameter already percent-decoded once by a
+/// lenient decoder, and on a path that passes this check that decoding is
+/// byte-for-byte the strict one. The parameters are therefore used as handed
+/// back and never decoded again (a second decode would turn `%2541` into `A`).
 pub(crate) fn check_path(path: &str) -> Result<(), crate::encoding::DecodeRefusal> {
-    crate::encoding::decode_component(path, crate::encoding::UrlGrammar::Path).map(drop)
+    crate::encoding::decode_path_segments(path).map(drop)
 }
 
 /// Refuse a request URI whose path or query is not well-formed, and hand back
@@ -869,6 +871,16 @@ pub(crate) async fn refuse_malformed_url(
         Ok(_) => next.run(req).await,
         Err(rejection) => rejection.status_and_reason().into_response(),
     }
+}
+
+/// The listener-wide strict URL gate: no route, mount or fallback of `app`
+/// sees a malformed path or query.
+///
+/// Each entry point also gates itself (`build_request`, the Web router and
+/// page handler, `strict_serve_dir`), so this is the independent second
+/// boundary.
+fn gate_listener(app: axum::Router) -> axum::Router {
+    app.layer(axum::middleware::from_fn(refuse_malformed_url))
 }
 
 /// A static file service behind the strict URL gate.
@@ -1302,11 +1314,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
                 }
             }
         }
-        // Listener-wide strict URL gate: no route, mount or fallback on this
-        // listener sees a malformed path or query. Each entry point also gates
-        // itself (`build_request`, the Web router, `strict_serve_dir`), so this
-        // is the independent second boundary.
-        let app = app.layer(axum::middleware::from_fn(refuse_malformed_url));
+        let app = gate_listener(app);
         // Ipê doctrine: a panicking handler returns 500, never crashes the
         // process. The custom
         // responder classifies + logs the panic SERVER-SIDE (errId) and returns a
@@ -2910,6 +2918,71 @@ mod tests {
         let (status, body) = serve_static("/static/hello.txt").await;
         assert_eq!(status, axum::http::StatusCode::OK);
         assert_eq!(body, "hi");
+    }
+
+    /// Serve `uri` through `gate_listener` over a raw axum route and fallback
+    /// that do no URL check of their own. Returns the status, the body and how
+    /// many times either inner handler ran.
+    async fn serve_gated(uri: &str) -> (axum::http::StatusCode, String, usize) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tower::ServiceExt;
+        let runs = Arc::new(AtomicUsize::new(0));
+        let on_route = Arc::clone(&runs);
+        let on_fallback = Arc::clone(&runs);
+        let inner = axum::Router::new()
+            .route(
+                "/raw/*rest",
+                axum::routing::get(move || async move {
+                    on_route.fetch_add(1, Ordering::SeqCst);
+                    "route"
+                }),
+            )
+            .fallback(move || async move {
+                on_fallback.fetch_add(1, Ordering::SeqCst);
+                "fallback"
+            });
+        let app = gate_listener(inner);
+        let wire = axum::http::Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .expect("test request builds");
+        let resp = match app.oneshot(wire).await {
+            Ok(r) => r,
+            Err(e) => match e {},
+        };
+        let status = resp.status();
+        let body = axum_body_string(resp).await;
+        (status, body, runs.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn listener_gate_refuses_a_malformed_url_before_any_route_or_fallback() {
+        // Prove the refusals of the listener-wide layer on its own: the inner
+        // route and fallback carry no URL check, so only the layer stands
+        // between them and a malformed path or query.
+        for uri in [
+            "/raw/%zz",
+            "/raw/a%C3/%A9",
+            "/raw/x?q=%zz",
+            "/elsewhere/%C0%AF",
+            "/elsewhere?%C3=1",
+        ] {
+            let (status, body, runs) = serve_gated(uri).await;
+            assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{uri:?}");
+            assert_eq!(body, "Bad Request", "{uri:?} must not echo the request");
+            assert_eq!(runs, 0, "{uri:?} must never reach a route or fallback");
+        }
+        for (uri, want) in [
+            ("/raw/a%20b", "route"),
+            ("/raw/a%2Fb?q=a+b", "route"),
+            ("/elsewhere", "fallback"),
+        ] {
+            let (status, body, runs) = serve_gated(uri).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{uri:?}");
+            assert_eq!(body, want, "{uri:?}");
+            assert_eq!(runs, 1, "{uri:?}");
+        }
     }
 
     #[tokio::test]
