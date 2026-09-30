@@ -1985,7 +1985,7 @@ mod tests {
             buf.fill(0xab);
             Ok::<(), EntropyUnavailable>(())
         };
-        for label in ["nul.x", "CON.log", "com1.db", "conin$.x"] {
+        for label in ["nul.x", "CON.log", "com1.db"] {
             let refused = scratch_name(label, NameShape::Plain, &mut entropy).err();
             assert_eq!(
                 refused.as_ref().map(io::Error::kind),
@@ -1993,6 +1993,9 @@ mod tests {
                 "{label:?}"
             );
         }
+        // Confinement maps `$` to `_`, so no label spells `CONIN$` or `CONOUT$`.
+        let confined = scratch_name("conin$.x", NameShape::Plain, &mut entropy)?;
+        assert!(confined.as_str().starts_with("conin_.x-"), "{confined:?}");
         let tree = Tree::new("devlabel")?;
         let dir = ScratchDir::new_under(&tree.0, "nul.x").err();
         let file = private_file_under(&tree.0, "nul.x").err();
