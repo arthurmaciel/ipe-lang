@@ -4872,6 +4872,8 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 name = "playground-jail-runner"
 version = "0.3.4"
 dependencies = [
+ "ipe",
+ "ipe-wasm",
  "ipe_env",
  "ipe_sandbox",
  "serde",

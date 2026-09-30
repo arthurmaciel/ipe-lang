@@ -1,9 +1,13 @@
 //! `jail-runner` — jailed build+run harness for the Ipê playground `/run` surface.
 //!
-//! Process boundary: argv in, JSON out. The Ipê server stages a Rust crate
-//! (Cargo.toml + src/main.rs, split from the client's banner-delimited
+//! Process boundary: argv in, JSON out. The Ipê server stages the client's
+//! emitted crate (`Cargo.toml` + `src/`, split from the banner-delimited
 //! emitted Rust) under a scratch dir and execs this binary with the project
-//! dir as the single positional argument. Every outcome is printed as one
+//! dir as the single positional argument. The harness refuses any other entry
+//! in that dir, then adds the trusted rest itself: the runtime crate, the
+//! lockfile, the read-only vendored crate sources and a private copy of the
+//! warm target.
+//! Every outcome is printed as one
 //! JSON document on stdout; the exit code is `0` whenever JSON was printed,
 //! `1` only when JSON could not be printed (crash), and `2` on usage errors
 //! or harness wall-clock expiry.
@@ -15,7 +19,6 @@
 //! the runtime only honours on the driver's loud trust warning.
 #![allow(clippy::module_name_repetitions)]
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -25,12 +28,16 @@ use serde::Serialize;
 
 use ipe_sandbox::unsandboxed_override_set;
 use playground_jail_runner::run_jailed::{
-    self, app_binary_path, jailed_build, jailed_run, probe_or_refuse, seed_cargo_home,
-    seed_target_dir,
+    self, VendorSource, app_binary_path, jailed_build, jailed_run, probe_or_refuse, seed_target_dir,
+};
+use playground_jail_runner::staging::{
+    PREWARM_PROGRAM, RuntimeFiles, check_project_layout, write_emitted, write_runtime,
 };
 
 const HARNESS_WALL_DEFAULT_SECS: u64 = 60;
 const UNSANDBOXED_OUTPUT_CAP_BYTES: u64 = 64 * 1024;
+/// Output cap for one trusted prewarm cargo step, run `--quiet`.
+const PREWARM_OUTPUT_CAP_BYTES: u64 = 1024 * 1024;
 const WARM_DIR_ENV: &str = "IPE_PLAYGROUND_WARM_DIR";
 const DEFAULT_WARM_DIR: &str = ".cache/ipe/playground-warm";
 
@@ -78,12 +85,10 @@ impl Outcome {
     }
 }
 
-fn main() {
-    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — playground binary `main`
-    // process-boundary entry: argv in, JSON out, no other surface.
+fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
-    let code = match args.first().map(String::as_str) {
+    let code: u8 = match args.first().map(String::as_str) {
         Some("run") => cmd_run(rest),
         Some("prewarm") => cmd_prewarm(rest),
         Some("help" | "--help" | "-h") => {
@@ -95,7 +100,7 @@ fn main() {
             2
         }
     };
-    std::process::exit(code);
+    std::process::ExitCode::from(code)
 }
 
 fn usage() {
@@ -108,14 +113,14 @@ fn usage() {
          \n\
          \x20   run      Build (cargo build --offline) and run the staged Rust project\n\
          \x20            inside a bubblewrap jail; prints one JSON document to stdout.\n\
-         \x20   prewarm  Build the embedded hello project into the warm cache so jailed\n\
-         \x20            builds can resolve dependencies with --offline.\n\
+         \x20   prewarm  Fetch the emitted crate's dependencies and build a hello program\n\
+         \x20            into the warm cache so jailed builds run --offline.\n\
          \n\
          The warm cache defaults to $IPE_PLAYGROUND_WARM_DIR or ~/.cache/ipe/playground-warm."
     );
 }
 
-fn cmd_run(args: &[String]) -> i32 {
+fn cmd_run(args: &[String]) -> u8 {
     let parsed = match parse_run_args(args) {
         Ok(parsed) => parsed,
         Err(message) => {
@@ -126,9 +131,9 @@ fn cmd_run(args: &[String]) -> i32 {
     };
     start_watchdog(parsed.wall_secs, &parsed.project_dir);
     let outcome = run_project(&parsed.project_dir, &parsed.warm_dir);
-    print_json(&outcome);
+    let code = print_json(&outcome);
     cleanup_project(&parsed.project_dir);
-    0
+    code
 }
 
 struct RunArgs {
@@ -183,7 +188,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
     })
 }
 
-fn cmd_prewarm(args: &[String]) -> i32 {
+fn cmd_prewarm(args: &[String]) -> u8 {
     let mut warm_dir: Option<PathBuf> = None;
     let mut index = 0;
     while index < args.len() {
@@ -218,9 +223,7 @@ fn cmd_prewarm(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let outcome = prewarm(&warm_dir);
-    print_json(&outcome);
-    0
+    print_json(&prewarm(&warm_dir))
 }
 
 /// Harness-level wall-clock: after `wall_secs` the watchdog prints a timeout
@@ -238,7 +241,7 @@ fn start_watchdog(wall_secs: u64, project_dir: &Path) {
             exit: None,
             error: Some(format!("timed out after {wall_secs}s (harness wall-clock)")),
         };
-        print_json(&outcome);
+        let _ = print_json(&outcome);
         // Best-effort: remove the staged project (compiled artifacts can be
         // large). Children may still hold cwd entries; leftover files in that
         // race are bounded by the wall budget and harmless.
@@ -307,50 +310,54 @@ fn resolve_warm_dir_from(
         .ok_or(WarmDirError::HomeUnresolved)
 }
 
-/// The jailed pipeline. Returns the JSON outcome; never panics.
-/// Pin the dependency graph before building: with `Cargo.lock` present,
-/// `cargo build --offline` never re-resolves from the registry index, so the
-/// jail's cargo cannot prune sparse-index cache entries (hard-linked from the
-/// warm cache during seeding — observed: entries for the direct dependencies
-/// vanished from the project's seeded index after a jailed build, leaving
-/// later runs with "no matching package named `X` found" resolution errors).
-/// The lock is the warm template's own lock: the emitted `Cargo.toml` is a
-/// fixed template, so the graph is identical for every submitted program.
-fn provision_lock(project_dir: &Path, warm_dir: &Path) -> Option<Outcome> {
-    if project_dir.join("Cargo.lock").is_file() {
-        return None;
-    }
-    let warm_lock = warm_dir.join("Cargo.lock");
-    if !warm_lock.is_file() {
-        return Some(Outcome::failure(format!(
-            "warm cache has no Cargo.lock at {} — re-run `jail-runner prewarm`",
-            warm_lock.display()
-        )));
-    }
-    if let Err(error) = std::fs::copy(&warm_lock, project_dir.join("Cargo.lock")) {
-        return Some(Outcome::failure(format!(
-            "failed to copy warm Cargo.lock: {error}"
-        )));
-    }
-    None
+/// The embedded runtime crate source, the same text `ipe build` materialises.
+fn runtime_files() -> Result<&'static RuntimeFiles, String> {
+    ipe::runtime_embed::collect_embedded_crate_text()
+        .map_err(|error| format!("embedded runtime unavailable: {error}"))
 }
 
+/// Add the trusted files the emitted crate builds against: the runtime crate
+/// and the warm lockfile.
+///
+/// The lock pins the build to exactly the crates prewarm fetched, so the
+/// offline build never re-resolves. Cargo's lockfile is independent of the
+/// features a program selects, so the one lock covers every emitted crate.
+fn stage_harness_files(project_dir: &Path, warm_lock: &Path) -> Result<(), String> {
+    write_runtime(project_dir, runtime_files()?)
+        .map_err(|error| format!("failed to stage the runtime: {error}"))?;
+    let lock = project_dir.join("Cargo.lock");
+    let copied = std::fs::File::open(warm_lock).and_then(|mut input| {
+        let mut output = std::fs::File::create_new(&lock)?;
+        std::io::copy(&mut input, &mut output)
+    });
+    copied
+        .map(drop)
+        .map_err(|error| format!("failed to stage the warm Cargo.lock: {error}"))
+}
+
+/// The jailed pipeline. Returns the JSON outcome; never panics.
 fn run_project(project_dir: &Path, warm_dir: &Path) -> Outcome {
-    let manifest = project_dir.join("Cargo.toml");
-    let entry = project_dir.join("src/main.rs");
-    if !manifest.is_file() || !entry.is_file() {
-        return Outcome::failure("project dir is missing Cargo.toml or src/main.rs");
+    if let Err(error) = check_project_layout(project_dir) {
+        return Outcome::failure(error.to_string());
     }
-    let warm_cargo_home = warm_dir.join("cargo-home");
     let warm_target = warm_dir.join("crate-target");
-    if !warm_cargo_home.is_dir() || !warm_target.is_dir() {
+    let warm_lock = warm_dir.join("Cargo.lock");
+    let warm_vendor = warm_dir.join("vendor");
+    if !warm_vendor.is_dir() || !warm_target.is_dir() || !warm_lock.is_file() {
         return Outcome::failure(format!(
             "warm cache missing at {} — run `jail-runner prewarm` first",
             warm_dir.display()
         ));
     }
-    if let Some(outcome) = provision_lock(project_dir, warm_dir) {
-        return outcome;
+    if let Err(message) = stage_harness_files(project_dir, &warm_lock) {
+        return Outcome::failure(message);
+    }
+    let vendor = match VendorSource::resolve(&warm_vendor) {
+        Ok(vendor) => vendor,
+        Err(defect) => return Outcome::failure(format!("warm vendor dir unusable: {defect}")),
+    };
+    if let Err(defect) = seed_target_dir(project_dir, &warm_target) {
+        return Outcome::failure(format!("failed to seed target dir: {defect}"));
     }
 
     let caps = match probe_or_refuse() {
@@ -362,20 +369,13 @@ fn run_project(project_dir: &Path, warm_dir: &Path) -> Outcome {
                      submitted program WITHOUT a jail. This is a trust boundary breach; \
                      only use it on a throwaway host."
                 );
-                return run_unsandboxed(project_dir);
+                return run_unsandboxed(project_dir, &vendor);
             }
             return Outcome::failure(format!("sandbox unavailable: {}", refusal.reason));
         }
     };
 
-    if let Err(defect) = seed_cargo_home(project_dir, &warm_cargo_home) {
-        return Outcome::failure(format!("failed to seed cargo home: {defect}"));
-    }
-    if let Err(defect) = seed_target_dir(project_dir, &warm_target) {
-        return Outcome::failure(format!("failed to seed target dir: {defect}"));
-    }
-
-    let build = match jailed_build(&caps, project_dir) {
+    let build = match jailed_build(&caps, project_dir, &vendor) {
         Ok(build) => build,
         Err(defect) => return Outcome::failure(format!("jail build failed: {defect}")),
     };
@@ -429,9 +429,9 @@ fn run_project(project_dir: &Path, warm_dir: &Path) -> Outcome {
 
 /// The `IPE_FFI_ALLOW_UNSANDBOXED=1` escape hatch: same phases, plain
 /// subprocesses, output capped, wall-clock still enforced by the watchdog.
-fn run_unsandboxed(project_dir: &Path) -> Outcome {
+fn run_unsandboxed(project_dir: &Path, vendor: &VendorSource) -> Outcome {
     let build = match run_captured(
-        &mut cargo_build_cmd(project_dir),
+        &mut cargo_build_cmd(project_dir, vendor),
         UNSANDBOXED_OUTPUT_CAP_BYTES,
     ) {
         Ok(build) => build,
@@ -480,158 +480,200 @@ struct Captured {
     stderr: String,
 }
 
-/// Bounded capture: each stream is read up to `cap_bytes + 1` so oversize
-/// output is truncated but still distinguishable from an exact fit.
-fn read_capped<R: std::io::Read>(stream: R, cap_bytes: u64) -> String {
-    let mut buf = Vec::new();
-    let _ = stream.take(cap_bytes + 1).read_to_end(&mut buf);
-    String::from_utf8_lossy(&buf).into_owned()
-}
-
+/// Run `cmd` outside the jail with both streams drained concurrently under
+/// `cap_bytes`, so a stream-heavy child never wedges and an oversize one is
+/// killed and reported rather than buffered.
 fn run_captured(cmd: &mut Command, cap_bytes: u64) -> Result<Captured, String> {
-    cmd.stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .stdin(std::process::Stdio::null());
-    let mut child = cmd.spawn().map_err(|error| {
-        format!(
-            "failed to spawn {}: {error}",
-            cmd.get_program().to_string_lossy()
-        )
-    })?;
-    let stdout = child
-        .stdout
-        .take()
-        .map_or_else(String::new, |stream| read_capped(stream, cap_bytes));
-    let stderr = child
-        .stderr
-        .take()
-        .map_or_else(String::new, |stream| read_capped(stream, cap_bytes));
-    let status = child.wait().map_err(|error| {
-        format!(
-            "failed to wait on {}: {error}",
-            cmd.get_program().to_string_lossy()
-        )
-    })?;
-    Ok(Captured {
-        status: status.code(),
-        stdout,
-        stderr,
-    })
+    ipe_sandbox::run_captured_bounded(cmd, cap_bytes)
+        .map(|output| Captured {
+            status: output.status,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+        .map_err(|defect| defect.to_string())
 }
 
-fn cargo_build_cmd(project_dir: &Path) -> Command {
+fn cargo_build_cmd(project_dir: &Path, vendor: &VendorSource) -> Command {
     let mut cmd = Command::new("cargo");
     cmd.arg("build")
         .arg("--offline")
+        .args(vendor.cargo_config_args())
         .arg("--manifest-path")
         .arg(project_dir.join("Cargo.toml"))
         .arg("--target-dir")
         .arg(project_dir.join("crate-target"))
+        .env("CARGO_HOME", project_dir.join("cargo-home"))
         .env("CARGO_TERM_PROGRESS_WHEN", "never");
     cmd
 }
 
-/// Build the embedded hello project into the warm cache so `--offline`
-/// jailed builds can resolve the crate template's dependency closure.
-fn prewarm(warm_dir: &Path) -> Outcome {
-    let warm_cargo_home = warm_dir.join("cargo-home");
-    let warm_target = warm_dir.join("crate-target");
-    if let Err(error) = std::fs::create_dir_all(&warm_cargo_home) {
-        return Outcome::failure(format!(
-            "failed to create warm cargo home {}: {error}",
-            warm_cargo_home.display()
-        ));
-    }
-    if let Err(error) = std::fs::create_dir_all(&warm_target) {
-        return Outcome::failure(format!(
-            "failed to create warm target {}: {error}",
-            warm_target.display()
-        ));
-    }
-
-    let scratch = match ipe_sandbox::scratch::ScratchDir::new("ipe-playground-prewarm") {
-        Ok(scratch) => scratch,
-        Err(error) => return Outcome::failure(format!("failed to create scratch dir: {error}")),
-    };
-    let src_dir = scratch.path().join("src");
-    if let Err(error) = std::fs::create_dir_all(&src_dir) {
-        return Outcome::failure(format!("failed to create scratch src dir: {error}"));
-    }
-    let manifest = include_str!("crate_template/Cargo.toml");
-    let hello = include_str!("crate_template/main.rs");
-    if let Err(error) = std::fs::write(scratch.path().join("Cargo.toml"), manifest) {
-        return Outcome::failure(format!("failed to stage template Cargo.toml: {error}"));
-    }
-    if let Err(error) = std::fs::write(src_dir.join("main.rs"), hello) {
-        return Outcome::failure(format!("failed to stage template main.rs: {error}"));
-    }
-
+/// A cargo invocation for prewarm over the scratch crate.
+///
+/// The environment is cleared down to what the jail also passes, and the
+/// working directory is the scratch crate, so the toolchain rustup selects and
+/// every build input match the jailed build that later reuses the artifacts.
+fn prewarm_cargo(subcommand: &str, scratch: &Path, warm_cargo_home: &Path) -> Command {
     let mut cmd = Command::new("cargo");
-    cmd.arg("build")
+    cmd.arg(subcommand)
+        .arg("--quiet")
         .arg("--manifest-path")
-        .arg(scratch.path().join("Cargo.toml"))
-        .arg("--target-dir")
-        .arg(&warm_target)
-        .env("CARGO_HOME", &warm_cargo_home)
+        .arg(scratch.join("Cargo.toml"))
+        .current_dir(scratch)
+        .env_clear()
+        .env("CARGO_HOME", warm_cargo_home)
         .env("CARGO_TERM_PROGRESS_WHEN", "never");
-    match run_captured(&mut cmd, UNSANDBOXED_OUTPUT_CAP_BYTES) {
-        Ok(captured) if captured.status == Some(0) => {
-            // Save the resolved lockfile: `run` copies it into each project so
-            // the jailed cargo never re-resolves from the registry index.
-            let lock_src = scratch.path().join("Cargo.lock");
-            let lock_dst = warm_dir.join("Cargo.lock");
-            if !lock_src.is_file() {
-                return Outcome::failure("prewarm build produced no Cargo.lock");
-            }
-            if let Err(error) = std::fs::copy(&lock_src, &lock_dst) {
-                return Outcome::failure(format!(
-                    "failed to save warm Cargo.lock to {}: {error}",
-                    lock_dst.display()
-                ));
-            }
-            Outcome {
-                ok: true,
-                unsandboxed: false,
-                build: None,
-                run: None,
-                exit: None,
-                error: None,
-            }
+    for key in ["PATH", "HOME", "RUSTUP_HOME"] {
+        if let Some(value) = ipe_env::var_os(key) {
+            cmd.env(key, value);
         }
-        Ok(captured) => Outcome::failure(format!(
-            "prewarm build failed: {}",
+    }
+    cmd
+}
+
+/// Run one prewarm cargo step, turning a failure into its message.
+fn prewarm_step(cmd: &mut Command, step: &str) -> Result<(), String> {
+    match run_captured(cmd, PREWARM_OUTPUT_CAP_BYTES) {
+        Ok(captured) if captured.status == Some(0) => Ok(()),
+        Ok(captured) => Err(format!(
+            "prewarm {step} failed: {}",
             tail(&captured.stderr, 2000)
         )),
-        Err(message) => Outcome::failure(format!("prewarm build error: {message}")),
+        Err(message) => Err(format!("prewarm {step} error: {message}")),
     }
 }
 
+/// Fill the warm cache the jailed builds run `--offline` against.
+///
+/// Compiles [`PREWARM_PROGRAM`] through the same emit the page shows, stages
+/// the runtime crate as `run` does, vendors every crate the resolved lock names
+/// into the warm vendor dir, builds into the warm target against that vendor
+/// dir exactly as the jailed build does, and saves the lock `run` stages into
+/// each project.
+fn prewarm(warm_dir: &Path) -> Outcome {
+    match prewarm_into(warm_dir) {
+        Ok(()) => Outcome {
+            ok: true,
+            unsandboxed: false,
+            build: None,
+            run: None,
+            exit: None,
+            error: None,
+        },
+        Err(message) => Outcome::failure(message),
+    }
+}
+
+fn prewarm_into(warm_dir: &Path) -> Result<(), String> {
+    let warm_cargo_home = warm_dir.join("cargo-home");
+    let warm_target = warm_dir.join("crate-target");
+    let warm_vendor = warm_dir.join("vendor");
+    for dir in [&warm_cargo_home, &warm_target] {
+        std::fs::create_dir_all(dir)
+            .map_err(|error| format!("failed to create {}: {error}", dir.display()))?;
+    }
+    let scratch = ipe_sandbox::scratch::ScratchDir::new("ipe-playground-prewarm")
+        .map_err(|error| format!("failed to create scratch dir: {error}"))?;
+    let files = ipe_wasm::emit_files(PREWARM_PROGRAM)
+        .map_err(|diagnostic| format!("prewarm program rejected: {diagnostic}"))?;
+    write_emitted(scratch.path(), &files)
+        .map_err(|error| format!("failed to stage prewarm crate: {error}"))?;
+    write_runtime(scratch.path(), runtime_files()?)
+        .map_err(|error| format!("failed to stage the runtime: {error}"))?;
+
+    prewarm_step(
+        &mut prewarm_cargo("fetch", scratch.path(), &warm_cargo_home),
+        "fetch",
+    )?;
+    let mut vendor_cmd = prewarm_cargo("vendor", scratch.path(), &warm_cargo_home);
+    vendor_cmd
+        .arg("--locked")
+        .arg("--offline")
+        .arg(&warm_vendor);
+    prewarm_step(&mut vendor_cmd, "vendor")?;
+    let vendor = VendorSource::resolve(&warm_vendor)
+        .map_err(|error| format!("warm vendor dir unusable: {error}"))?;
+
+    // The second pass settles the build-script outputs whose recorded
+    // modification times the first pass leaves older than their inputs, so the
+    // warm target is fresh for every seeded copy.
+    for pass in ["build", "settle"] {
+        let mut build = prewarm_cargo("build", scratch.path(), &warm_cargo_home);
+        build
+            .arg("--offline")
+            .args(vendor.cargo_config_args())
+            .arg("--target-dir")
+            .arg(&warm_target);
+        prewarm_step(&mut build, pass)?;
+    }
+
+    let lock_src = scratch.path().join("Cargo.lock");
+    let lock_dst = warm_dir.join("Cargo.lock");
+    std::fs::copy(&lock_src, &lock_dst).map_err(|error| {
+        format!(
+            "failed to save warm Cargo.lock to {}: {error}",
+            lock_dst.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// The last at most `max_bytes` bytes of `text`, cut on a character boundary.
 fn tail(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
-        return text.to_owned();
+    let wanted = text.len().saturating_sub(max_bytes);
+    let start = (wanted..=text.len())
+        .find(|&index| text.is_char_boundary(index))
+        .unwrap_or(text.len());
+    match text.get(start..) {
+        Some(rest) if start > 0 => format!("…{rest}"),
+        _ => text.to_owned(),
     }
-    let mut result = text.to_owned();
-    result.drain(..result.len() - max_bytes);
-    format!("…{result}")
 }
 
-fn print_json(outcome: &Outcome) {
+/// Print `outcome` as the one JSON document on stdout; the exit code to report.
+///
+/// A document that cannot be serialised is reported on stderr with exit 1, so
+/// the harness never exits 0 without a complete document.
+fn print_json(outcome: &Outcome) -> u8 {
     match serde_json::to_string(outcome) {
-        Ok(json) => println!("{json}"),
+        Ok(json) => {
+            println!("{json}");
+            0
+        }
         Err(error) => {
-            // JSON cannot fail here (all fields are simple), but never exit 0
-            // with a partial document: print the error on stderr and exit 1.
             eprintln!("[jail-runner] fatal: failed to serialize outcome: {error}");
-            std::process::exit(1);
+            1
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_WARM_DIR, WarmDirError, resolve_warm_dir_from};
+    use super::{DEFAULT_WARM_DIR, WarmDirError, resolve_warm_dir_from, run_captured, tail};
     use std::ffi::OsString;
     use std::path::PathBuf;
+    use std::process::Command;
+
+    /// A child that writes `stderr_bytes` to stderr while its stdout stays open.
+    fn stderr_heavy(stderr_bytes: u32) -> Command {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(format!("head -c {stderr_bytes} /dev/zero >&2; echo done"));
+        cmd
+    }
+
+    #[test]
+    fn a_stderr_heavy_child_is_drained_without_wedging() {
+        let captured = run_captured(&mut stderr_heavy(256 * 1024), 1024 * 1024);
+        assert!(matches!(
+            captured,
+            Ok(ref out) if out.status == Some(0) && out.stdout == "done\n" && out.stderr.len() == 256 * 1024
+        ));
+    }
+
+    #[test]
+    fn a_child_past_the_output_cap_is_refused() {
+        assert!(run_captured(&mut stderr_heavy(256 * 1024), 64 * 1024).is_err());
+    }
 
     #[test]
     fn a_missing_home_without_an_override_is_refused() {
@@ -655,6 +697,14 @@ mod tests {
             resolve_warm_dir_from(Some(OsString::from("warm")), Some(PathBuf::from("/home/u"))),
             Err(WarmDirError::RelativeOverride)
         );
+    }
+
+    #[test]
+    fn a_tail_never_splits_a_character() {
+        assert_eq!(tail("short", 10), "short");
+        assert_eq!(tail("abcdef", 3), "…def");
+        // `é` is two bytes; a cut landing inside it moves past it.
+        assert_eq!(tail("aéb", 2), "…b");
     }
 
     #[test]

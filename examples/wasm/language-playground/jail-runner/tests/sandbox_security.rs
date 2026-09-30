@@ -28,8 +28,8 @@ use std::process::Command;
 
 use ipe_sandbox::run_jail::netns_jail_available;
 use playground_jail_runner::run_jailed::{
-    self, PhaseOutcome, app_binary_path, jailed_build, jailed_run, probe_or_refuse,
-    seed_cargo_home, seed_target_dir,
+    self, PhaseOutcome, VendorSource, app_binary_path, jailed_build, jailed_run, probe_or_refuse,
+    seed_target_dir,
 };
 
 fn e2e_enabled() -> bool {
@@ -104,6 +104,8 @@ struct Staged {
     #[allow(dead_code)]
     scratch: tempfile::TempDir,
     crate_dir: PathBuf,
+    /// The warm vendored crate sources the jailed build reads, bound read-only.
+    vendor: VendorSource,
 }
 
 impl Staged {
@@ -142,8 +144,12 @@ fn stage_ipe(source: &str) -> Staged {
         String::from_utf8_lossy(&emit.stderr)
     );
 
-    warm_and_seed(&crate_dir);
-    Staged { scratch, crate_dir }
+    let vendor = warm_and_seed(&crate_dir);
+    Staged {
+        scratch,
+        crate_dir,
+        vendor,
+    }
 }
 
 /// Stage an adversarial crate: an emitted native crate whose `src/main.rs` is
@@ -191,24 +197,44 @@ fn stage_scaffold_only() -> Staged {
         "scaffold emit failed:\n{}",
         String::from_utf8_lossy(&emit.stderr)
     );
-    warm_and_seed(&crate_dir);
-    Staged { scratch, crate_dir }
+    let vendor = warm_and_seed(&crate_dir);
+    Staged {
+        scratch,
+        crate_dir,
+        vendor,
+    }
 }
 
-/// Pre-warm the crate's fixed dependency closure by `cargo build`ing it once into
-/// a warm `CARGO_HOME` + target (only our trusted deps run build scripts here),
-/// then seed BOTH into the jail-visible scratch — mirroring the server, so the
-/// jailed build is fully offline and compiles only the user crate.
+/// Pre-warm the crate's fixed dependency closure by vendoring it and `cargo
+/// build`ing it once into a warm target (only our trusted deps run build scripts
+/// here), then seed the target into the jail-visible scratch — mirroring the
+/// server, so the jailed build is fully offline and compiles only the user crate.
 ///
 /// A repo-level warm target (`IPE_PLAYGROUND_WARM_TARGET`, else a shared cache
 /// dir) is reused across tests so only the FIRST test pays the closure build.
-fn warm_and_seed(crate_dir: &Path) {
+fn warm_and_seed(crate_dir: &Path) -> VendorSource {
     let warm_home = warm_root().join("cargo-home");
     let warm_target = warm_root().join("target");
+    let warm_vendor = warm_root().join("vendor");
     std::fs::create_dir_all(&warm_home).unwrap();
     std::fs::create_dir_all(&warm_target).unwrap();
+    let vendored = Command::new("cargo")
+        .arg("vendor")
+        .arg("--manifest-path")
+        .arg(crate_dir.join("Cargo.toml"))
+        .arg(&warm_vendor)
+        .env("CARGO_HOME", &warm_home)
+        .output()
+        .expect("spawn cargo vendor");
+    assert!(
+        vendored.status.success(),
+        "warm cargo vendor failed:\n{}",
+        String::from_utf8_lossy(&vendored.stderr)
+    );
+    let vendor = VendorSource::resolve(&warm_vendor).expect("resolve vendor dir");
     let build = Command::new("cargo")
         .arg("build")
+        .args(vendor.cargo_config_args())
         .arg("--manifest-path")
         .arg(crate_dir.join("Cargo.toml"))
         .arg("--target-dir")
@@ -222,8 +248,8 @@ fn warm_and_seed(crate_dir: &Path) {
         "warm cargo build failed:\n{}",
         String::from_utf8_lossy(&build.stderr)
     );
-    seed_cargo_home(crate_dir, &warm_home).expect("seed cargo home");
     seed_target_dir(crate_dir, &warm_target).expect("seed target dir");
+    vendor
 }
 
 /// A shared warm-cache root reused across tests (so the dependency closure builds
@@ -240,7 +266,7 @@ fn warm_root() -> PathBuf {
 fn build_and_run(staged: &Staged) -> (PhaseOutcome, Option<PhaseOutcome>) {
     let caps = probe_or_refuse().expect("jail primitives present");
     let scoped_tmp = staged.scoped_tmp();
-    let build = jailed_build(&caps, scoped_tmp).expect("jailed build spawns");
+    let build = jailed_build(&caps, scoped_tmp, &staged.vendor).expect("jailed build spawns");
     if build.status != Some(0) {
         return (build, None);
     }

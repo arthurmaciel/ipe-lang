@@ -19,7 +19,8 @@
 //! If the host lacks the jail primitives (`bwrap`, `timeout`, `prlimit`), the
 //! endpoint REFUSES — it never falls back to an unsandboxed build or run. The
 //! only writable mount inside the jail is a per-request scratch directory, which
-//! is removed after the request. Which jail knob enforces each control:
+//! is removed after the request; the build phase also sees the warm vendored
+//! crate sources read-only. Which jail knob enforces each control:
 //!
 //! | Control    | Enforcer (via [`ipe_sandbox`])                               |
 //! |------------|--------------------------------------------------------------|
@@ -34,6 +35,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use crate::staging::MAX_TREE_DEPTH;
 use ipe_sandbox::{
     CanonicalPath, Capabilities, HomeMasks, JailPathError, JailSpec, NetworkPolicy, ResourceLimits,
     SandboxDefect, missing_caps, probe, run_in_bwrap_jail, run_in_bwrap_jail_deny_subprocess,
@@ -262,6 +264,7 @@ fn run_phase(
     scoped_tmp: &CanonicalPath,
     run_caps: RunCaps,
     binds: ToolchainBinds,
+    registry_cache: Option<CanonicalPath>,
     subprocess: Subprocess,
     payload: &[OsString],
 ) -> Result<PhaseOutcome, SandboxDefect> {
@@ -271,7 +274,7 @@ fn run_phase(
         // misconfigured.
         network: NetworkPolicy::Denied,
         scoped_tmp: scoped_tmp.clone(),
-        registry_cache: None,
+        registry_cache,
         toolchain: None,
         toolchain_ro_binds: binds.ro_binds,
         path_prepend: binds.path_prepend,
@@ -310,11 +313,10 @@ const fn is_wall_clock_kill(status: Option<i32>) -> bool {
 /// Build the emitted crate inside the jail, writing artifacts into the
 /// jail-visible `scoped_tmp` target.
 ///
-/// The build runs fully **offline** under `--unshare-net`: the emitted crate's
-/// dependency closure (a FIXED, trusted set — the same for every program) must
-/// already be present in `scoped_tmp/cargo-home`, which the caller seeds from a
-/// pre-warmed registry ([`seed_cargo_home`]) before this runs. No network is ever
-/// available to user-derived code.
+/// The build runs fully **offline** under `--unshare-net` against the lockfile
+/// the harness staged: every crate the lock names is vendored in `vendor`, the
+/// build's only registry, bound read-only. No network is ever available to
+/// user-derived code.
 ///
 /// The crate directory and the target directory both live under `scoped_tmp` (the
 /// only writable bind), so their paths resolve inside the jail.
@@ -323,7 +325,11 @@ const fn is_wall_clock_kill(status: Option<i32>) -> bool {
 ///
 /// [`SandboxDefect`] on a jail-spawn / output-cap failure, or when a jail path
 /// does not resolve.
-pub fn jailed_build(caps: &Capabilities, scoped_tmp: &Path) -> Result<PhaseOutcome, SandboxDefect> {
+pub fn jailed_build(
+    caps: &Capabilities,
+    scoped_tmp: &Path,
+    vendor: &VendorSource,
+) -> Result<PhaseOutcome, SandboxDefect> {
     // One canonical spelling for the writable bind and every payload path
     // under it.
     let scoped_tmp = CanonicalPath::resolve(scoped_tmp).map_err(SandboxDefect::Path)?;
@@ -333,25 +339,24 @@ pub fn jailed_build(caps: &Capabilities, scoped_tmp: &Path) -> Result<PhaseOutco
     // build fails loudly rather than silently trying (and failing) egress on top
     // of the structural `--unshare-net`.
     //
-    // The project dir IS the crate root: the server stages `Cargo.toml` +
-    // `src/main.rs` (from the client's banner-delimited emitted Rust) directly
-    // under the project dir.
+    // The project dir IS the crate root: the emitted `Cargo.toml` + `src/`, plus
+    // the runtime crate and lockfile the harness wrote.
     let manifest = scoped_tmp.as_path().join("Cargo.toml");
     let target = scoped_tmp.as_path().join("crate-target");
-    let payload: Vec<OsString> = vec![
-        "cargo".into(),
-        "build".into(),
-        "--offline".into(),
+    let mut payload: Vec<OsString> = vec!["cargo".into(), "build".into(), "--offline".into()];
+    payload.extend(vendor.cargo_config_args());
+    payload.extend([
         "--manifest-path".into(),
         manifest.into_os_string(),
         "--target-dir".into(),
         target.into_os_string(),
-    ];
+    ]);
     run_phase(
         caps,
         &scoped_tmp,
         RunCaps::build_defaults(),
         binds,
+        Some(vendor.0.clone()),
         // The build spawns rustc + a linker — subprocess creation is required.
         Subprocess::Allowed,
         &payload,
@@ -369,129 +374,315 @@ pub fn app_binary_path(scoped_tmp: &Path) -> PathBuf {
         .join("ipe-app")
 }
 
-/// Seed the jail-visible `CARGO_HOME` registry from a pre-warmed one.
+/// Name of the cargo source that replaces crates.io with the warm vendor dir.
+const VENDOR_SOURCE_NAME: &str = "ipe-warm-vendor";
+
+/// The warm vendored crate sources, canonical, as every build's only registry.
 ///
-/// This lets the offline build find its fixed dependency closure without ever
-/// reaching the network. The registry cache is copied (not bound) because the
-/// in-jail `CARGO_HOME` path
-/// is fixed by the jail argv to `scoped_tmp/cargo-home` — a writable mount cargo
-/// may also write lock metadata into. The copy is the registry index + cached
-/// crate sources only; it carries no credentials (the warm `CARGO_HOME` is a
-/// dedicated playground cache, never the operator's `~/.cargo`).
-///
-/// # Errors
-///
-/// [`std::io::Error`] when the copy fails.
-pub fn seed_cargo_home(scoped_tmp: &Path, warm_cargo_home: &Path) -> std::io::Result<()> {
-    let dst = scoped_tmp.join("cargo-home");
-    // Only the registry subtree is needed for an offline build; copying the whole
-    // warm CARGO_HOME (which may hold a large `bin/`) is wasteful.
-    let registry = warm_cargo_home.join("registry");
-    if registry.is_dir() {
-        copy_dir_recursive(&registry, &dst.join("registry"))?;
+/// Cargo's directory source verifies each crate against its vendored checksum,
+/// needs no index or cargo-home state, and names every crate by a path under
+/// this one fixed directory. Prewarm and the jailed build therefore see the same
+/// source paths, which is what keeps the copied warm artifacts fresh. Only
+/// [`VendorSource::resolve`] builds one, so holding one proves the path is
+/// canonical and spells as a TOML basic string without escaping.
+#[derive(Debug, Clone)]
+pub struct VendorSource(CanonicalPath);
+
+impl VendorSource {
+    /// Resolve the warm vendor dir.
+    ///
+    /// # Errors
+    ///
+    /// [`SeedError::Path`] when it does not resolve, [`SeedError::NotPlain`]
+    /// when it is not a directory, and [`SeedError::Unquotable`] when its
+    /// canonical spelling is not UTF-8 or holds a quote, a backslash or a
+    /// control character.
+    pub fn resolve(warm_vendor: &Path) -> Result<Self, SeedError> {
+        let canonical = CanonicalPath::resolve(warm_vendor).map_err(SeedError::Path)?;
+        if !canonical.as_path().is_dir() {
+            return Err(SeedError::NotPlain(canonical.as_path().to_path_buf()));
+        }
+        let quotable = canonical.as_path().to_str().is_some_and(|text| {
+            !text
+                .chars()
+                .any(|c| c == '"' || c == '\\' || c.is_control())
+        });
+        if quotable {
+            Ok(Self(canonical))
+        } else {
+            Err(SeedError::Unquotable(canonical.as_path().to_path_buf()))
+        }
     }
-    Ok(())
+
+    /// The canonical vendor dir.
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        self.0.as_path()
+    }
+
+    /// The `cargo` arguments that replace crates.io with this vendor dir.
+    #[must_use]
+    pub fn cargo_config_args(&self) -> [OsString; 4] {
+        let directory = self.as_path().display();
+        [
+            "--config".into(),
+            format!("source.crates-io.replace-with=\"{VENDOR_SOURCE_NAME}\"").into(),
+            "--config".into(),
+            format!("source.{VENDOR_SOURCE_NAME}.directory=\"{directory}\"").into(),
+        ]
+    }
+}
+
+#[derive(Debug)]
+pub enum SeedError {
+    /// A warm-cache path does not resolve to a canonical location.
+    Path(JailPathError),
+    /// The warm tree holds an entry that is neither a file nor a directory.
+    NotPlain(PathBuf),
+    /// The warm tree nests deeper than [`MAX_TREE_DEPTH`].
+    TooDeep(PathBuf),
+    /// A path cannot be spelled as a TOML basic string without escaping.
+    Unquotable(PathBuf),
+    /// A filesystem operation failed.
+    Io {
+        /// The path being read or written.
+        path: PathBuf,
+        /// The underlying error.
+        source: std::io::Error,
+    },
+}
+
+impl std::fmt::Display for SeedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Path(error) => write!(f, "{error}"),
+            Self::NotPlain(path) => write!(
+                f,
+                "warm cache entry `{}` is not a plain file or directory",
+                path.display()
+            ),
+            Self::TooDeep(path) => write!(
+                f,
+                "warm cache nests deeper than {MAX_TREE_DEPTH} directories at `{}`",
+                path.display()
+            ),
+            Self::Unquotable(path) => write!(
+                f,
+                "warm cache path `{}` is not UTF-8 or holds a quote, backslash or control character",
+                path.display()
+            ),
+            Self::Io { path, source } => write!(f, "`{}`: {source}", path.display()),
+        }
+    }
+}
+
+fn io_at(path: &Path) -> impl FnOnce(std::io::Error) -> SeedError + '_ {
+    move |source| SeedError::Io {
+        path: path.to_path_buf(),
+        source,
+    }
 }
 
 /// Seed the jail-visible target dir from a warm one holding the prebuilt deps.
 ///
-/// The warm target already holds the FIXED dependency closure's compiled
-/// artifacts, so the offline jailed build only compiles+links the user's own
-/// crate instead of recompiling every dependency from source per request.
-///
-/// Hard-linked where possible (same filesystem). Cargo treats the pre-built dep
-/// `.rlib`s as up-to-date (their fingerprints match — the deps are byte-identical
-/// every request) and rebuilds only the user crate.
+/// The warm target holds the runtime and dependency artifacts prewarm compiled,
+/// so the offline jailed build only compiles and links the user's crate. Every
+/// file is a private byte copy carrying its warm modification time (cargo's
+/// freshness input), so nothing the jailed build writes can reach the warm
+/// cache.
 ///
 /// # Errors
 ///
-/// [`std::io::Error`] when the copy fails.
-pub fn seed_target_dir(scoped_tmp: &Path, warm_target: &Path) -> std::io::Result<()> {
-    if warm_target.is_dir() {
-        copy_dir_recursive(warm_target, &scoped_tmp.join("crate-target"))?;
-    }
-    Ok(())
+/// [`SeedError`] when the target dir already exists, the warm tree holds a
+/// symbolic link or nests past [`MAX_TREE_DEPTH`], or a copy fails.
+pub fn seed_target_dir(scoped_tmp: &Path, warm_target: &Path) -> Result<(), SeedError> {
+    copy_tree(warm_target, &scoped_tmp.join("crate-target"), 0)
 }
 
-/// Recursively materialise a directory tree at `to` from `from`, hard-linking
-/// each file when possible (same filesystem — cheap, no data copy) and falling
-/// back to a byte copy across filesystems. The registry cache is immutable crate
-/// sources, so hard links are safe: the jailed build never mutates them.
-///
-/// Existing destination entries are NEVER touched. A prior seed of the same
-/// warm cache may have left a hard link to the very file we would otherwise
-/// write; falling back to `fs::copy` there would truncate that shared inode
-/// in place, corrupting the warm cache for every later run. Skip instead —
-/// a pre-existing entry is either that harmless link or a file the jailed
-/// build replaced under a fresh inode (cargo writes via rename).
-fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
+/// Copy the directory tree at `from` to the not-yet-existing `to`.
+fn copy_tree(from: &Path, to: &Path, depth: usize) -> Result<(), SeedError> {
+    if depth > MAX_TREE_DEPTH {
+        return Err(SeedError::TooDeep(from.to_path_buf()));
+    }
+    std::fs::create_dir(to).map_err(io_at(to))?;
+    for entry in std::fs::read_dir(from).map_err(io_at(from))? {
+        let entry = entry.map_err(io_at(from))?;
         let src = entry.path();
         let dst = to.join(entry.file_name());
+        let file_type = entry.file_type().map_err(io_at(&src))?;
         if file_type.is_dir() {
-            // A file squatting the name (the jailed cargo created a dir where
-            // warm has a file) is left alone; the next run's fresh project
-            // dir gets a clean seed.
-            if !dst.is_dir() && dst.exists() {
-                continue;
-            }
-            copy_dir_recursive(&src, &dst)?;
+            copy_tree(&src, &dst, depth.saturating_add(1))?;
         } else if file_type.is_file() {
-            if dst.exists() {
-                continue;
-            }
-            // Hard link first (near-free); copy only if that fails (cross-device).
-            if std::fs::hard_link(&src, &dst).is_err() {
-                std::fs::copy(&src, &dst)?;
-            }
+            copy_file(&src, &dst)?;
+        } else {
+            return Err(SeedError::NotPlain(src));
         }
     }
     Ok(())
 }
 
+/// Permission bits a seeded file may carry: rwx for owner, group and other, never setuid, setgid or sticky.
+const SEEDED_MODE_MASK: u32 = 0o777;
+
+/// Byte-copy one regular file into a new inode, keeping its mode and modification time.
+fn copy_file(src: &Path, dst: &Path) -> Result<(), SeedError> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::symlink_metadata(src).map_err(io_at(src))?;
+    let modified = meta.modified().map_err(io_at(src))?;
+    let mode = meta.permissions().mode() & SEEDED_MODE_MASK;
+    let mut input = std::fs::File::open(src).map_err(io_at(src))?;
+    let mut output = std::fs::File::create_new(dst).map_err(io_at(dst))?;
+    std::io::copy(&mut input, &mut output).map_err(io_at(dst))?;
+    output
+        .set_permissions(std::fs::Permissions::from_mode(mode))
+        .map_err(io_at(dst))?;
+    output.set_modified(modified).map_err(io_at(dst))
+}
+
 #[cfg(test)]
 mod copy_tests {
-    use super::copy_dir_recursive;
+    use super::{SeedError, VendorSource, seed_target_dir};
+    use std::os::unix::fs::MetadataExt;
 
     #[test]
-    fn reseeding_never_corrupts_the_warm_source() -> std::io::Result<()> {
+    fn a_seeded_file_never_shares_the_warm_inode() -> std::io::Result<()> {
         let base = tempfile::tempdir()?;
         let warm = base.path().join("warm");
-        let entry_dir = warm
-            .join("registry")
-            .join("index")
-            .join(".cache")
-            .join("ae")
-            .join("s-");
-        std::fs::create_dir_all(&entry_dir)?;
-        let entry = entry_dir.join("aes-gcm");
-        std::fs::write(&entry, "some index content")?;
+        std::fs::create_dir_all(warm.join("debug").join("deps"))?;
+        let artifact = warm.join("debug").join("deps").join("libdep.rlib");
+        std::fs::write(&artifact, "warm artifact")?;
+        let stamp = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_234_567);
+        std::fs::File::options()
+            .write(true)
+            .open(&artifact)?
+            .set_modified(stamp)?;
 
         let project = base.path().join("project");
-        copy_dir_recursive(&warm, &project)?;
-        // Re-seed into the same project dir: the first seed left a hard link
-        // inside `project` pointing at the warm inode. A naive re-seed would
-        // truncate it — and with it, warm.
-        copy_dir_recursive(&warm, &project)?;
-
-        let warm_content = std::fs::read_to_string(&entry)?;
-        assert_eq!(
-            warm_content, "some index content",
-            "warm entry was corrupted by re-seeding"
+        std::fs::create_dir(&project)?;
+        assert!(seed_target_dir(&project, &warm).is_ok());
+        let seeded = project
+            .join("crate-target")
+            .join("debug")
+            .join("deps")
+            .join("libdep.rlib");
+        assert_ne!(
+            std::fs::metadata(&seeded)?.ino(),
+            std::fs::metadata(&artifact)?.ino()
         );
-        let project_content = std::fs::read_to_string(
-            project
-                .join("registry")
-                .join("index")
-                .join(".cache")
-                .join("ae")
-                .join("s-")
-                .join("aes-gcm"),
-        )?;
-        assert_eq!(project_content, "some index content");
+        assert_eq!(std::fs::metadata(&seeded)?.modified()?, stamp);
+
+        // A jailed build writing through the seeded file leaves warm untouched.
+        std::fs::write(&seeded, "poisoned")?;
+        assert_eq!(std::fs::read_to_string(&artifact)?, "warm artifact");
+        Ok(())
+    }
+
+    #[test]
+    fn a_seeded_executable_stays_executable_without_special_bits() -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::tempdir()?;
+        let warm = base.path().join("warm");
+        std::fs::create_dir_all(&warm)?;
+        let script = warm.join("build-script-build");
+        std::fs::write(&script, "#!/bin/sh\n")?;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o4755))?;
+        let data = warm.join("output");
+        std::fs::write(&data, "data")?;
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o644))?;
+
+        let project = base.path().join("project");
+        std::fs::create_dir(&project)?;
+        assert!(seed_target_dir(&project, &warm).is_ok());
+        let target = project.join("crate-target");
+        let script_mode = std::fs::metadata(target.join("build-script-build"))?
+            .permissions()
+            .mode();
+        assert_eq!(script_mode & 0o7777, 0o755);
+        let data_mode = std::fs::metadata(target.join("output"))?
+            .permissions()
+            .mode();
+        assert_eq!(data_mode & 0o7777, 0o644);
+        Ok(())
+    }
+
+    #[test]
+    fn a_second_seed_into_the_same_project_is_refused() -> std::io::Result<()> {
+        let base = tempfile::tempdir()?;
+        let warm = base.path().join("warm");
+        std::fs::create_dir_all(&warm)?;
+        std::fs::write(warm.join("f"), "warm")?;
+        let project = base.path().join("project");
+        std::fs::create_dir(&project)?;
+        assert!(seed_target_dir(&project, &warm).is_ok());
+        assert!(matches!(
+            seed_target_dir(&project, &warm),
+            Err(SeedError::Io { .. })
+        ));
+        assert_eq!(std::fs::read_to_string(warm.join("f"))?, "warm");
+        Ok(())
+    }
+
+    #[test]
+    fn a_symbolic_link_in_the_warm_target_is_refused() -> std::io::Result<()> {
+        let base = tempfile::tempdir()?;
+        let warm = base.path().join("warm");
+        std::fs::create_dir_all(&warm)?;
+        std::os::unix::fs::symlink("/etc/passwd", warm.join("leak"))?;
+        let project = base.path().join("project");
+        std::fs::create_dir(&project)?;
+        assert!(matches!(
+            seed_target_dir(&project, &warm),
+            Err(SeedError::NotPlain(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn the_vendor_source_names_its_canonical_dir() -> std::io::Result<()> {
+        let base = tempfile::tempdir()?;
+        let vendor = base.path().join("vendor");
+        std::fs::create_dir(&vendor)?;
+        let Ok(source) = VendorSource::resolve(&vendor) else {
+            return Err(std::io::Error::other("vendor dir did not resolve"));
+        };
+        let canonical = vendor.canonicalize()?;
+        assert_eq!(source.as_path(), canonical);
+        let args = source.cargo_config_args();
+        let expected = format!(
+            "source.ipe-warm-vendor.directory=\"{}\"",
+            canonical.display()
+        );
+        assert!(matches!(args.get(3), Some(arg) if *arg == *expected));
+        Ok(())
+    }
+
+    #[test]
+    fn a_vendor_path_needing_toml_escapes_is_refused() -> std::io::Result<()> {
+        let base = tempfile::tempdir()?;
+        for name in ["quo\"te", "back\\slash", "new\nline"] {
+            let vendor = base.path().join(name);
+            std::fs::create_dir(&vendor)?;
+            assert!(matches!(
+                VendorSource::resolve(&vendor),
+                Err(SeedError::Unquotable(_))
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_missing_or_non_directory_vendor_is_refused() -> std::io::Result<()> {
+        let base = tempfile::tempdir()?;
+        assert!(matches!(
+            VendorSource::resolve(&base.path().join("absent")),
+            Err(SeedError::Path(_))
+        ));
+        let file = base.path().join("file");
+        std::fs::write(&file, "not a dir")?;
+        assert!(matches!(
+            VendorSource::resolve(&file),
+            Err(SeedError::NotPlain(_))
+        ));
         Ok(())
     }
 }
@@ -522,6 +713,7 @@ pub fn jailed_run(
         // No toolchain binds for the run phase — the emitted program does not need
         // rustc/cargo, so nothing extra is exposed.
         ToolchainBinds::default(),
+        None,
         // The untrusted program runs under the seccomp subprocess-deny filter.
         Subprocess::Denied,
         &payload,
@@ -568,17 +760,17 @@ mod tests {
     }
 
     /// A host layout with `cargo/bin` and a disjoint `rustup`, canonicalized.
-    fn toolchain_tree() -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().canonicalize().expect("canonical tempdir");
-        std::fs::create_dir_all(root.join("cargo").join("bin")).expect("cargo/bin");
-        std::fs::create_dir_all(root.join("rustup")).expect("rustup");
-        (dir, root)
+    fn toolchain_tree() -> std::io::Result<(tempfile::TempDir, PathBuf)> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        std::fs::create_dir_all(root.join("cargo").join("bin"))?;
+        std::fs::create_dir_all(root.join("rustup"))?;
+        Ok((dir, root))
     }
 
     #[test]
-    fn a_rustup_home_at_or_above_the_cargo_home_is_refused() {
-        let (_dir, root) = toolchain_tree();
+    fn a_rustup_home_at_or_above_the_cargo_home_is_refused() -> std::io::Result<()> {
+        let (_dir, root) = toolchain_tree()?;
         let cargo_home = root.join("cargo");
         for rustup in [cargo_home.clone(), root] {
             let refused = toolchain_binds_from(Some(&cargo_home), Some(rustup));
@@ -587,15 +779,16 @@ mod tests {
                 Err(SandboxDefect::Path(JailPathError::ExposesCargoHome { .. }))
             ));
         }
+        Ok(())
     }
 
     #[test]
-    fn a_disjoint_rustup_home_binds_bin_and_rustup_only() {
-        let (_dir, root) = toolchain_tree();
+    fn a_disjoint_rustup_home_binds_bin_and_rustup_only() -> std::io::Result<()> {
+        let (_dir, root) = toolchain_tree()?;
         let cargo_home = root.join("cargo");
         let result = toolchain_binds_from(Some(&cargo_home), Some(root.join("rustup")));
         assert!(result.is_ok(), "a disjoint layout must bind");
-        let Ok(binds) = result else { return };
+        let Ok(binds) = result else { return Ok(()) };
         let bound: Vec<&Path> = binds.ro_binds.iter().map(CanonicalPath::as_path).collect();
         assert_eq!(
             bound,
@@ -605,5 +798,6 @@ mod tests {
             ]
         );
         assert!(!bound.contains(&cargo_home.as_path()));
+        Ok(())
     }
 }
