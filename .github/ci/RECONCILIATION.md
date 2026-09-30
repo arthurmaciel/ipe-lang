@@ -21,6 +21,7 @@ the pair, not the name, is what every comparison below checks.
 | `verify-manifest.py` check 4 | manifest ⇄ `required-set.json` | `manifest-guard`, the local gate |
 | `check_required_set.py` | manifest ⇄ `required-set.json` | `manifest-guard` |
 | `check_required_set.py --fetch` | manifest ⇄ the live ruleset | `ruleset-drift` job in `ci.yml` |
+| `check_required_set.py --fetch-admin` | manifest ⇄ the live ruleset, `bypass_actors` included | `ruleset-admin-read` job in `ruleset-admin-read.yml`, nightly |
 
 The live ruleset is `main-protection` (`RULESET_ID` in
 `check_required_set.py`). `--fetch` parses it into a closed `Ruleset`: every
@@ -32,15 +33,25 @@ the last with pairs equal to the derived set in both directions.
 `current_user_can_bypass`, when returned, must be `never`.
 
 GitHub returns `bypass_actors` only to a ruleset admin, and the workflow token
-is not one. `--fetch` refuses a non-empty list when it sees one, but the proof
-that no bypass actor exists comes only from an owner's `--live` read, which
-refuses a ruleset without the list. That read runs at reconciliation (step 3),
-not nightly, so a bypass actor added between reconciliations is invisible to
-`ruleset-drift`; re-run the `--live` check after any ruleset edit. A key GitHub
-adds to the response turns `ruleset-drift` red until this check examines it. `ruleset-drift` is a `nightly-gate`: a red nightly makes the
+is not one. `--fetch` refuses a non-empty list when it sees one; the proof
+that no bypass actor exists is an admin read, which refuses a ruleset body
+without the list. `--fetch-admin` is that read: `ruleset-admin-read.yml` runs
+it nightly with the `RULESET_READ_TOKEN` secret (a fine-grained token with
+Administration read-only on this repository). It fails closed when the token
+is absent or empty, when the body lacks `bypass_actors` (the token cannot see
+them), when the list is non-empty, or when the pairs differ from the derived
+set. The workflow triggers on `schedule` alone — `verify-manifest.py` check 8
+refuses any other trigger on a workflow naming that secret — so no pull
+request or merge-queue run executes with it; recover a red run with
+`gh run rerun`. An owner's `--live` read (step 3) is the same admin check at
+reconciliation time.
+
+A key GitHub adds to the response turns `ruleset-drift` red until this check
+examines it. `ruleset-drift` is a `nightly-gate`: a red nightly makes the
 required `nightly-green` context hold every merge until the ruleset is
 reconciled. On a pull request it is not required; there it flags a
-required-set change the ruleset has not taken yet.
+required-set change the ruleset has not taken yet. `ruleset-admin-read` is a
+`nightly-gate` too; `ci-health` surfaces its red.
 
 `strict_required_status_checks_policy` ("require branches to be up to date")
 is pinned `false` and `do_not_enforce_on_create` is pinned `false`. The strict

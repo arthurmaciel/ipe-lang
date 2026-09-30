@@ -420,6 +420,13 @@ class ApiGuards(unittest.TestCase):
         with self.assertRaises(tr.Refused):
             tr.Api("http://api.github.com", "o/r", "t")
 
+    def test_unsendable_token_is_refused_without_echoing_it(self) -> None:
+        for token in ("", "zq7\nX-Injected: 1", "zq7 zq7", "zq7\u00e9", "zq7\x00"):
+            with self.subTest(token=token), self.assertRaises(tr.Refused) as cm:
+                tr.Api("https://api.github.com", "o/r", token)
+            if token:
+                self.assertNotIn("zq7", str(cm.exception))
+
     def test_malformed_repo_is_refused(self) -> None:
         with self.assertRaises(tr.Refused):
             tr.Api("https://api.github.com", "o/r/../x", "t")

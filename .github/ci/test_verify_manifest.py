@@ -2432,19 +2432,19 @@ class TestSsotOutputTools(unittest.TestCase):
         with open(path, "wb") as f:
             f.write(content)
 
-    def run_tool(self, name: str, *args: str) -> tuple[int, str, str]:
+    def run_tool(self, name: str, *args: str, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         import subprocess
 
         open(self.output, "w").close()
-        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_OUTPUT": self.output}
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_OUTPUT": self.output, **(env or {})}
         proc = subprocess.run(
             [sys.executable, os.path.join(self.dir, name), *args],
             env=env, capture_output=True, text=True, check=False,
         )
         return proc.returncode, proc.stdout, proc.stderr
 
-    def assertFailsClosed(self, name: str, *args: str) -> None:
-        rc, stdout, stderr = self.run_tool(name, *args)
+    def assertFailsClosed(self, name: str, *args: str, env: dict[str, str] | None = None) -> str:
+        rc, stdout, stderr = self.run_tool(name, *args, env=env)
         self.assertEqual(rc, 1)
         self.assertEqual(stdout, "")
         # A refusal, not a crash that happens to exit 1.
@@ -2452,6 +2452,7 @@ class TestSsotOutputTools(unittest.TestCase):
         self.assertNotEqual(stderr, "")
         with open(self.output, encoding="utf-8") as f:
             self.assertEqual(f.read(), "")
+        return stderr
 
     def test_deterministic_checks_output_publishes_a_valid_ssot(self) -> None:
         self.put("deterministic-checks.json", b'{"checks": [{"context": "c", "step": "s"}]}')
@@ -2599,6 +2600,84 @@ class TestSsotOutputTools(unittest.TestCase):
         self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
         self.put("required-set.json", _RS_A)
         self.assertFailsClosed("check_required_set.py", "--fetch")
+
+    def test_check_required_set_fetch_admin_needs_its_environment(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+        for env in ({}, {"REPO": "o/r"}, {"REPO": "o/r", "GH_TOKEN": ""}, {"GH_TOKEN": "tok"}, {"REPO": "", "GH_TOKEN": "tok"}):
+            with self.subTest(env=env):
+                self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+
+    def test_check_required_set_fetch_admin_never_prints_the_token(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+        sentinel = "sentinel-token-3f9c"
+        for token in (sentinel, f"{sentinel}\nX-Injected: 1", f"{sentinel} {sentinel}", f"{sentinel}\u00e9"):
+            with self.subTest(token=token):
+                # An unreachable origin: the read fails after the token is in hand.
+                env = {"REPO": "o/r", "GH_TOKEN": token, "GITHUB_API_URL": "https://127.0.0.1:1"}
+                stderr = self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+                self.assertNotIn(sentinel, stderr)
+
+    def _stub_api(self, rs: object) -> dict[str, str]:
+        """Replace `trust_roots` with an `Api` whose GET returns `rs`."""
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+        self.put("rs.json", json.dumps(rs).encode())
+        self.put(
+            "trust_roots.py",
+            b"import json, os\n"
+            b"class Refused(Exception):\n    pass\n"
+            b"class Api:\n"
+            b"    def __init__(self, base, repo, token):\n        pass\n"
+            b"    def get(self, path):\n"
+            b"        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rs.json')) as f:\n"
+            b"            return json.load(f)\n",
+        )
+        return {"REPO": "o/r", "GH_TOKEN": "tok"}
+
+    def test_check_required_set_fetch_admin_refuses_a_body_without_bypass_actors(self) -> None:
+        env = self._stub_api({k: v for k, v in _ruleset().items() if k != "bypass_actors"})
+        self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+        # The workflow-token read cannot see the list, so it is not its proof.
+        rc, _, stderr = self.run_tool("check_required_set.py", "--fetch", env=env)
+        self.assertEqual(rc, 0, stderr)
+
+    def test_check_required_set_fetch_admin_refuses_a_bypass_actor(self) -> None:
+        actor = [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]
+        env = self._stub_api(_ruleset(bypass_actors=actor))
+        self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+
+    def test_check_required_set_fetch_admin_refuses_a_drifted_set(self) -> None:
+        env = self._stub_api(_ruleset(checks=[{"context": "b", "integration_id": 15368}]))
+        self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+
+    def test_check_required_set_fetch_admin_passes_a_matching_body(self) -> None:
+        env = self._stub_api(_ruleset())
+        rc, stdout, stderr = self.run_tool("check_required_set.py", "--fetch-admin", env=env)
+        self.assertEqual(rc, 0, stderr)
+        self.assertIn("ruleset 22326541 match", stdout)
+
+    def test_fetch_admin_is_exclusive_with_the_other_modes(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+        for other in (("--fetch",), ("--write",), ("--live", "x")):
+            with self.subTest(other=other):
+                rc, stdout, _ = self.run_tool("check_required_set.py", "--fetch-admin", *other)
+                self.assertNotEqual(rc, 0)
+                self.assertEqual(stdout, "")
+
+    def test_repo_admin_read_workflow_is_schedule_only(self) -> None:
+        import strict_yaml
+
+        path = os.path.join(HERE, "..", "workflows", "ruleset-admin-read.yml")
+        with open(path, encoding="utf-8") as f:
+            doc = strict_yaml.safe_load(f)
+        on = doc.get(True, doc.get("on"))
+        self.assertEqual(set(on), {"schedule"})
+        (job,) = doc["jobs"].values()
+        self.assertEqual(job["steps"][-1]["run"], "python3 .github/ci/check_required_set.py --fetch-admin")
+        self.assertEqual(job["steps"][-1]["env"]["GH_TOKEN"], "${{ secrets.RULESET_READ_TOKEN }}")
 
     def test_a_non_admin_read_leaves_bypass_actors_to_the_admin_read(self) -> None:
         spec = importlib.util.spec_from_file_location("check_required_set", os.path.join(HERE, "check_required_set.py"))
@@ -2817,6 +2896,31 @@ class TestMergeQueueSafety(unittest.TestCase):
             "github.event_name != 'pull_request'",
         )
         self.assertRefused(bad, "a merge-group run would take the full tier")
+
+    def test_schedule_only_secret_admitted_on_a_schedule_only_workflow(self) -> None:
+        ok = (
+            "on:\n  schedule:\n    - cron: '30 4 * * *'\npermissions:\n  contents: read\n"
+            "jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - run: echo x\n        env:\n          T: ${{ secrets.RULESET_READ_TOKEN }}\n"
+        )
+        self.assertEqual(self.errors(ok, gates=set()), [])
+
+    def test_schedule_only_secret_refused_beside_any_other_trigger(self) -> None:
+        base = (
+            "on:\n  schedule:\n    - cron: '30 4 * * *'\n{extra}permissions:\n  contents: read\n"
+            "jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - run: echo x\n        env:\n          T: {ref}\n"
+        )
+        refs = (
+            "${{ secrets.RULESET_READ_TOKEN }}",
+            "${{ secrets.ruleset_read_token }}",
+            # An escape only the parser decodes still names the secret.
+            '"${{ secrets.\\x52ULESET_READ_TOKEN }}"',
+        )
+        for extra in ("  workflow_dispatch: {}\n", "  push:\n", "  pull_request:\n", "  workflow_run:\n    workflows: [x]\n"):
+            for ref in refs:
+                with self.subTest(extra=extra, ref=ref):
+                    self.assertRefused(base.format(extra=extra, ref=ref), "schedule-only secret", gates=set())
 
     def test_non_gate_workflow_without_merge_group_is_not_checked(self) -> None:
         bad = _MQ_OK.replace("  merge_group:\n", "").replace("run: echo full", "run: echo ${{ secrets.X }}")

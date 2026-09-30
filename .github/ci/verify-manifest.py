@@ -124,6 +124,9 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
      order) must be followed by `&& github.event_name != 'merge_group'`, so a
      merge-group run takes the PR tier rather than silently running the full
      tier.
+     A workflow naming a repository-admin secret (`SCHEDULE_ONLY_SECRETS`)
+     triggers on `schedule` alone, so no pull request, queued commit, push,
+     or manual dispatch of another ref ever runs with it.
      Limit: this catches honest mistakes, not a hostile PR.  A merge-group run
      executes the workflow files of the queued commit, so a queued PR that
      edits `.github/**` runs its own edit with the base secrets.  The boundary
@@ -939,6 +942,10 @@ _BARE_PR_TIER = re.compile(
     r"(?!\s*&&\s*github\.event_name\s*!=\s*['\"]merge_group['\"])"
 )
 _SECRETS_WORD = re.compile(r"\bsecrets\b", re.IGNORECASE)
+# Secrets carrying repository-admin read scope: only a `schedule`-triggered
+# workflow, which runs the default branch's tree, may name one.
+SCHEDULE_ONLY_SECRETS = ("RULESET_READ_TOKEN",)
+_SCHEDULE_ONLY_SECRET = re.compile(r"\b(?:" + "|".join(SCHEDULE_ONLY_SECRETS) + r")\b", re.IGNORECASE)
 _PR_ONLY = "github.event_name == 'pull_request'"
 
 
@@ -1049,6 +1056,11 @@ def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = R
         if triggers is None:
             errors.append(f"{fname}: `on:` is not a string, list of strings, or mapping")
             continue
+        if (_SCHEDULE_ONLY_SECRET.search(text) or _mentions(doc, _SCHEDULE_ONLY_SECRET)) and triggers != {"schedule"}:
+            errors.append(
+                f"{fname}: names a schedule-only secret ({', '.join(SCHEDULE_ONLY_SECRETS)}) but "
+                f"triggers on {sorted(triggers)} — only a `schedule`-only workflow may carry it"
+            )
         if fname in gate_producers:
             # A `pull_request_target` producer reports the PR-side context from
             # the base workflow; check 12 holds it to running no head code.

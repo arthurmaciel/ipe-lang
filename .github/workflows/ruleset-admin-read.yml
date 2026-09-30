@@ -1,0 +1,41 @@
+# The nightly admin read of the `main` ruleset.
+#
+# GitHub shows a ruleset's `bypass_actors` only to a ruleset admin, so the
+# workflow token that `ruleset-drift` reads with cannot see them. This job reads
+# the ruleset with `RULESET_READ_TOKEN` (Administration: read-only on this
+# repository) and fails closed when the body lacks `bypass_actors`, carries a
+# non-empty list, or differs from the derived required set — and when the token
+# is absent or empty.
+#
+# The trigger is `schedule` alone: a secret-bearing workflow never runs on a pull
+# request, the merge queue, or a push, so no untrusted tree ever executes with
+# the token. Scheduled runs use the default branch's tree. Recover a red run
+# with `gh run rerun`.
+name: Ruleset admin read
+
+on:
+  schedule:
+    - cron: "30 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  ruleset-admin-read:
+    name: ruleset-admin-read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install PyYAML
+        run: 'PIP_CONFIG_FILE=/dev/null python3 -m pip install --isolated --require-hashes --only-binary :all: -r "$GITHUB_WORKSPACE/.github/ci/requirements.txt"'
+      - name: The live ruleset has no bypass actor and requires exactly the derived set
+        env:
+          GH_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: python3 .github/ci/check_required_set.py --fetch-admin

@@ -438,6 +438,13 @@ checks:
       Security — the live `main-protection` ruleset requires exactly the
       derived `{context, integration_id}` set, so no gate is dropped from the
       merge path and no required check is satisfiable by another app's status.
+  - context: ruleset-admin-read
+    disposition: nightly-gate
+    producer: ruleset-admin-read.yml
+    guards: >-
+      Security — an admin read of the live `main-protection` ruleset proves it
+      has no bypass actor; a token that cannot see `bypass_actors` fails the
+      read instead of passing it.
 
   # ── Cross-platform jail proofs — nightly-gate (Security §1) ───────────────
   # The Linux jail Tier-2 proofs — the containment gate CI produces on GitHub-

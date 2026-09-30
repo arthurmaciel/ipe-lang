@@ -406,6 +406,10 @@ class Api:
         parsed = urllib.parse.urlsplit(base_url)
         if parsed.scheme != "https" or not parsed.netloc:
             raise Refused(f"API URL {base_url!r} is not https")
+        # A token that would be refused as a header value is rejected here, where
+        # the message can name the fault without carrying the token.
+        if not re.fullmatch(r"[!-~]+", token):
+            raise Refused("the API token is empty or not printable ASCII")
         self.base = base_url.rstrip("/")
         self.repo = repo
         self.token = token

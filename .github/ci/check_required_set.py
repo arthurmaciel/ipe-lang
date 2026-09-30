@@ -18,6 +18,9 @@ Modes:
               `gh api repos/OWNER/REPO/rulesets/ID` returns it).
   --fetch     also compare ruleset `RULESET_ID` read from the REST API
               ($REPO, $GH_TOKEN, optional $GITHUB_API_URL).
+  --fetch-admin
+              `--fetch` with a ruleset-admin token: the body must also carry
+              `bypass_actors`, and the list must be empty.
 
 The live ruleset is parsed into a closed `Ruleset`: every key the API
 returns is either examined and pinned or named as display metadata, and any
@@ -28,11 +31,13 @@ default branch with no exclusions and no bypass actors, carry exactly one
 pairs equal the derived set in both directions, and exactly one all-green
 `merge_queue` rule. GitHub returns `bypass_actors` only to a ruleset admin, so
 `--fetch` (a workflow token) cannot see them: it refuses a non-empty list when
-one is returned and otherwise leaves the bypass proof to an owner's `--live`
-read, which refuses a ruleset without the list. That read happens when an
-owner reconciles the ruleset, not nightly: a bypass actor added between
-reconciliations is invisible to `ruleset-drift`. Every unreadable
-or malformed input fails closed (exit 1) with nothing printed to stdout.
+one is returned and otherwise leaves the bypass proof to an admin read.
+`--fetch-admin` and `--live` are admin reads: a body without the list is
+refused, so a token that cannot see bypass actors fails rather than passes.
+`--fetch-admin` runs nightly in `ruleset-admin-read.yml` with the
+`RULESET_READ_TOKEN` secret, outside every merge-queue workflow. The token is
+never printed. Every unreadable or malformed input — a missing or empty token
+included — fails closed (exit 1) with nothing printed to stdout.
 """
 from __future__ import annotations
 
@@ -273,7 +278,7 @@ def fetch_ruleset() -> object:
 
     repo, token = os.environ.get("REPO", ""), os.environ.get("GH_TOKEN", "")
     if not repo or not token:
-        raise Refused("--fetch needs $REPO and $GH_TOKEN")
+        raise Refused("reading the live ruleset needs $REPO and a non-empty $GH_TOKEN")
     try:
         api = trust_roots.Api(os.environ.get("GITHUB_API_URL") or "https://api.github.com", repo, token)
         return api.get(f"rulesets/{RULESET_ID}")
@@ -303,6 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--live", metavar="FILE")
     mode.add_argument("--fetch", action="store_true")
+    mode.add_argument("--fetch-admin", action="store_true")
     args = ap.parse_args(argv)
     try:
         required = derive(_load_manifest())
@@ -318,10 +324,12 @@ def main(argv: list[str] | None = None) -> int:
             required, on_disk, ".github/ci/required-set.json",
             "regenerate it: python3 .github/ci/check_required_set.py --write",
         )
-        if args.live or args.fetch:
+        live = bool(args.live or args.fetch or args.fetch_admin)
+        if live:
             rs = _load_json(args.live, args.live) if args.live else fetch_ruleset()
+            admin_read = bool(args.live or args.fetch_admin)
             problems += diff(
-                required, list(parse_ruleset(rs, admin_read=bool(args.live)).required), f"ruleset {RULESET_ID}",
+                required, list(parse_ruleset(rs, admin_read=admin_read).required), f"ruleset {RULESET_ID}",
                 "reconcile it per .github/ci/RECONCILIATION.md",
             )
     except Refused as e:
@@ -330,7 +338,6 @@ def main(argv: list[str] | None = None) -> int:
     if problems:
         print("\n".join(problems), file=sys.stderr)
         return 1
-    live = args.live or args.fetch
     where = f"required-set.json and ruleset {RULESET_ID} match" if live else "required-set.json matches"
     print(f"{where} the manifest ({len(required)} required contexts).")
     return 0
