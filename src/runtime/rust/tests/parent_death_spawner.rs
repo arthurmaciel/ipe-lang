@@ -58,13 +58,13 @@ fn proc_state(pid: u32) -> Option<char> {
 #[test]
 fn a_hardened_child_dies_with_its_killed_parent() {
     if let Some(pid_file) = std::env::var_os(PROBE_PID_FILE_ENV) {
-        // Probe mode: spawn the hardened grandchild, publish its pid, then wait
-        // to be SIGKILLed by the outer test.
-        let child = spawn_hardened(sleep_30()).expect("probe hardened spawn");
+        // Probe mode: spawn the hardened grandchild, publish its pid, then block
+        // on it until the outer test SIGKILLs this probe.
+        let mut child = spawn_hardened(sleep_30()).expect("probe hardened spawn");
         let staged = std::path::PathBuf::from(&pid_file).with_extension("staged");
         std::fs::write(&staged, child.id().to_string()).expect("stage pid");
         std::fs::rename(&staged, &pid_file).expect("publish pid");
-        std::thread::sleep(Duration::from_secs(30));
+        let _ = child.wait();
         return;
     }
 
