@@ -1121,15 +1121,6 @@ pub enum AnalysisTarget {
     },
 }
 
-impl AnalysisTarget {
-    /// The file this target analyses — the one a diagnostic blames.
-    pub fn entry_file(&self) -> &Path {
-        match self {
-            Self::Project(p) | Self::File(p) | Self::TestFile { file: p, .. } => p,
-        }
-    }
-}
-
 /// Strip `.` components and resolve `..` by popping the output path — pure
 /// lexical rewriting, no filesystem access, so it works for a file argument
 /// that may not exist yet.
