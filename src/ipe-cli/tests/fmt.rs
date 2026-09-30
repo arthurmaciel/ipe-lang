@@ -8,7 +8,7 @@
 //! never a self-report.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ipe::fmt::{self, format_source};
 
@@ -298,4 +298,39 @@ fn init_template_is_a_near_fixed_point() {
     let out = format_source(src).expect("template formats");
     let out2 = format_source(&out).expect("second pass formats");
     assert_eq!(out, out2, "fmt must be idempotent on its own output");
+}
+
+// -- do-block statement round trip ---------------------------------------
+
+/// Regression pin for the reported ICE: formatting a bare (un-bound) statement
+/// in a `do` block — `migrate db` with no `let _ =` wrapper — must succeed and
+/// preserve the `do` block rather than re-emit a form the parser refuses. Read
+/// at test time (not `include_str!`) so the fixture is checked against its
+/// live, current content rather than a copy baked in at compile time.
+#[test]
+fn code_review_db_bare_run_formats() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("tools")
+        .join("code-review")
+        .join("src")
+        .join("Lib")
+        .join("Db.ipe");
+    let read = fs::read_to_string(&path);
+    assert!(read.is_ok(), "reading fixture {}: {read:?}", path.display());
+    let Ok(src) = read else { return };
+    let out = format_source(&src);
+    assert!(
+        out.is_ok(),
+        "formatting a do block with a bare run statement must succeed: {out:?}"
+    );
+    let out = out.expect("checked Ok above");
+    assert!(
+        out.contains("do\n"),
+        "the do block must survive formatting:\n{out}"
+    );
+    // Idempotent: re-parsing and re-formatting the output is a fixed point.
+    let out2 = format_source(&out).expect("second pass must also format");
+    assert_eq!(out, out2, "do-block bare-run formatting is not idempotent");
 }
