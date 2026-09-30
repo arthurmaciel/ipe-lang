@@ -455,7 +455,7 @@ fn point_free_tui_on_key_emits_the_bridge() -> Result<(), BoxError> {
         .collect::<Vec<_>>()
         .join(" ");
     if emitted.is_empty() {
-        return Ok(()); // runtime unavailable — structural assertion skipped
+        return Err("point_free_on_key: the accepted build emitted no Rust".into());
     }
     if !emitted.contains("tui_sub_on_key(") || !emitted.contains("|kind: String, value: String|") {
         return Err(

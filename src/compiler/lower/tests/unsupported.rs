@@ -1813,7 +1813,7 @@ fn partial_application_eta_expands_to_a_closure() -> DResult<()> {
     };
     assert_eq!(params.len(), 1, "one missing parameter");
     let Some((eta_sym, eta_ty)) = params.first() else {
-        return Ok(());
+        panic!("one missing parameter");
     };
     assert_eq!(*eta_ty, IrType::Int, "missing param keeps its solved type");
     assert_eq!(
@@ -2104,7 +2104,7 @@ fn partial_application_of_a_first_class_value_eta_expands() -> DResult<()> {
     };
     assert_eq!(params.len(), 1, "one missing parameter");
     let Some((_, eta_ty)) = params.first() else {
-        return Ok(());
+        panic!("one missing parameter");
     };
     assert_eq!(*eta_ty, IrType::Int, "missing param keeps its solved type");
     assert_eq!(*ret, IrType::Int, "residual return type");

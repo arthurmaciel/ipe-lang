@@ -220,9 +220,10 @@ fn tui_onkey_record_typechecks() {
 
     // ── Tui.tea subscribing with `Sub.onKey : (KeyEvent -> Msg) -> Sub Msg` ──
     let app_rs = compile_ok("terminal_app_screen", IPE_TUI_COUNTER);
-    if app_rs.is_empty() {
-        return; // runtime unavailable — structural assertions skipped
-    }
+    assert!(
+        !app_rs.is_empty(),
+        "the accepted terminal app must emit Rust"
+    );
 
     // The emitter must produce the bridging wrapper as ONE expression: the
     // `|kind: String, value: String|` closure whose body constructs
