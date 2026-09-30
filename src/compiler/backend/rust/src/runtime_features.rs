@@ -23,7 +23,9 @@ use std::collections::BTreeSet;
 
 use crate::EmitCtx;
 
-/// One runtime-crate cargo feature. Every variant maps to a feature declared in
+/// One runtime-crate cargo feature.
+///
+/// Every variant maps to a feature declared in
 /// `src/runtime/rust/Cargo.toml`'s `[features]` table; [`Self::as_str`] is that
 /// exact feature name. Keeping the set closed as an enum makes a
 /// "select a feature the crate does not declare" state unrepresentable at the
@@ -281,8 +283,6 @@ impl RuntimeFeature {
         }
     }
 
-    /// Variant equality usable in a `const` context (the derived [`PartialEq`]
-    /// is not `const`).
     /// The feature whose manifest name is exactly `name`, if any.
     #[must_use]
     pub fn parse(name: &str) -> Option<Self> {
@@ -292,6 +292,8 @@ impl RuntimeFeature {
             .find(|feature| feature.as_str() == name)
     }
 
+    /// Variant equality usable in a `const` context (the derived [`PartialEq`]
+    /// is not `const`).
     pub(crate) const fn const_eq(self, other: Self) -> bool {
         self.index() == other.index()
     }
@@ -314,6 +316,7 @@ impl RuntimeFeature {
     }
 
     /// The exact cargo feature name in `src/runtime/rust/Cargo.toml`.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Json => "json",
@@ -353,8 +356,9 @@ impl RuntimeFeature {
     }
 }
 
-/// The set of runtime-crate features a program selects. A thin newtype over a
-/// sorted, deduplicated [`BTreeSet`] so callers get a canonical, stable
+/// The set of runtime-crate features a program selects.
+///
+/// A thin newtype over a sorted, deduplicated [`BTreeSet`] so callers get a canonical, stable
 /// `features = [...]` order and cannot construct a set from arbitrary strings.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RuntimeFeatureSet(BTreeSet<RuntimeFeature>);
@@ -362,6 +366,7 @@ pub struct RuntimeFeatureSet(BTreeSet<RuntimeFeature>);
 impl RuntimeFeatureSet {
     /// The selected feature names, canonical order — the `features = [...]`
     /// list a dependency-model manifest would write.
+    #[must_use]
     pub fn as_feature_names(&self) -> Vec<&'static str> {
         self.0.iter().map(|f| f.as_str()).collect()
     }
