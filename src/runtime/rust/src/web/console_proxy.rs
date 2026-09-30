@@ -88,7 +88,10 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
 /// handler) cover the graceful paths, and on Linux `PR_SET_PDEATHSIG` makes the
 /// kernel SIGTERM the child if the parent dies by ANY means — including SIGKILL
 /// / OOM / a crash the signal handler can't catch. A refused hardened spawn
-/// falls back to the in-process console, never to an unhardened child.
+/// falls back to the in-process console, never to an unhardened child. A
+/// refusal tokio raises after the fork (`SpawnRefusal::Spawn` /
+/// `SpawnPanicked`) can leave that child running unproxied on `child_port`
+/// until this process exits, when the parent-death floor SIGTERMs it.
 pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Option<()> {
     let bin = console_bin_path()?;
     let mut cmd = Command::new(&bin);
@@ -116,7 +119,8 @@ pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Opti
     // parent as an orphan. `spawn_hardened_tokio` forks it from the runtime's
     // process-lifetime spawner thread (the signal is bound to the forking
     // thread), registered with this caller's tokio runtime. `kill_on_drop` above
-    // remains the graceful-path floor tokio adds on top. No-op on non-Linux.
+    // remains the graceful-path floor tokio adds on top, for a registered child
+    // only. No-op on non-Linux.
     match crate::system::spawn_hardened_tokio(cmd) {
         Ok(child) => {
             if let Ok(mut g) = CHILD.lock() {

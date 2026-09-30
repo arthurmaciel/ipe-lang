@@ -55,11 +55,36 @@ fn a_child_outlives_the_thread_that_requested_it() {
     );
 }
 
-/// The pid's `/proc` state letter, or `None` once the pid no longer exists.
-fn proc_state(pid: u32) -> Option<char> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let (_, rest) = stat.rsplit_once(')')?;
-    rest.trim_start().chars().next()
+/// One process as `/proc/<pid>/stat` reports it.
+struct ProcStat {
+    /// Executable name, between the first `(` and the last `)`.
+    comm: String,
+    /// State letter (field 3).
+    state: char,
+    /// Start time in clock ticks since boot (field 22).
+    start_ticks: u64,
+}
+
+impl ProcStat {
+    /// The pid's current stat line, or `None` once the pid no longer exists.
+    fn read(pid: u32) -> Option<Self> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let (head, rest) = stat.rsplit_once(')')?;
+        let (_, comm) = head.split_once('(')?;
+        let mut fields = rest.split_whitespace();
+        let state = fields.next()?.chars().next()?;
+        let start_ticks = fields.nth(18)?.parse().ok()?;
+        Some(Self {
+            comm: comm.to_owned(),
+            state,
+            start_ticks,
+        })
+    }
+
+    /// Whether `other` is this same process rather than a reuse of its pid.
+    fn same_process(&self, other: &Self) -> bool {
+        self.start_ticks == other.start_ticks && self.comm == other.comm
+    }
 }
 
 #[test]
@@ -102,20 +127,29 @@ fn a_hardened_child_dies_with_its_killed_parent() {
         }
     });
     let grandchild = pid_rx.recv_timeout(POLL_CEILING).ok();
+    // Captured before the probe dies, while its pid names the grandchild.
+    let identity = grandchild.and_then(ProcStat::read);
     let _ = probe.kill();
     let _ = probe.wait();
     reader.join().expect("probe stdout reader");
     let grandchild = grandchild.expect("the probe must report its hardened child's pid");
+    let identity = identity.expect("the hardened child must be running before its parent dies");
 
     let killed = Instant::now();
     let died = loop {
-        match proc_state(grandchild) {
-            None | Some('Z') => break true,
+        match ProcStat::read(grandchild) {
+            None => break true,
+            Some(current) if !identity.same_process(&current) || current.state == 'Z' => {
+                break true;
+            }
             Some(_) if killed.elapsed() >= POLL_CEILING => break false,
             Some(_) => std::thread::sleep(Duration::from_millis(20)),
         }
     };
-    if !died {
+    // Kill only the process first observed: a reused pid belongs to someone else.
+    let still_ours =
+        ProcStat::read(grandchild).is_some_and(|current| identity.same_process(&current));
+    if !died && still_ours {
         let _ = Command::new("/bin/kill")
             .args(["-KILL", &grandchild.to_string()])
             .status();
