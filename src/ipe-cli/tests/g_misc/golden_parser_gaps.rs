@@ -206,7 +206,7 @@ fn unterminated_blockcomment_is_ipe_p0017() {
 
     let res = ipe::build(&entry, &out, &runtime());
     assert!(res.is_err(), "{name} must fail to compile");
-    let Err(err) = res else { return };
+    let err = res.expect_err("`res` must be rejected");
     assert_eq!(
         diag_code(&err),
         Some(ipe_diagnostics::IPE_P0017),
@@ -223,7 +223,7 @@ fn unknown_module_in_annotation_is_ipe_n0004() {
 
     let res = ipe::build_project(&dir.join("package.ipe"), &out, &runtime());
     assert!(res.is_err(), "{name} must fail to compile");
-    let Err(err) = res else { return };
+    let err = res.expect_err("`res` must be rejected");
     assert_eq!(
         diag_code(&err),
         Some(ipe_diagnostics::IPE_N0004),

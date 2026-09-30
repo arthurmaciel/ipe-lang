@@ -71,7 +71,7 @@ fn server_request_accessor_emit_inserts_clone() {
         main_rs_path.display(),
         main_rs_result.err()
     );
-    let Ok(main_rs) = main_rs_result else { return };
+    let main_rs = main_rs_result.expect("`main_rs_result` must succeed");
 
     // Each accessor must appear at a call site that includes `.clone()`.
     // The fixture calls all seven on the same `req` binding — without `.clone()`

@@ -235,7 +235,7 @@ fn closed_superset_is_ipe_t0001() {
     let runtime = e2e_support::require_runtime().into_path_buf();
     let res = ipe::build(&entry, &out, &runtime);
     assert!(res.is_err(), "{name} must fail to compile");
-    let Err(err) = res else { return };
+    let err = res.expect_err("`res` must be rejected");
     assert_eq!(
         diag_code(&err),
         Some(ipe_diagnostics::IPE_T0001),
@@ -281,7 +281,7 @@ fn two_different_supersets_is_ipe_t0001() {
     let runtime = e2e_support::require_runtime().into_path_buf();
     let res = ipe::build(&entry, &out, &runtime);
     assert!(res.is_err(), "{name} must fail to compile");
-    let Err(err) = res else { return };
+    let err = res.expect_err("`res` must be rejected");
     assert_eq!(
         diag_code(&err),
         Some(ipe_diagnostics::IPE_T0001),
@@ -631,7 +631,7 @@ fn let_rebind_of_row_is_ipe_l0131() {
         res.is_err(),
         "{name} must fail to compile (row value escapes)"
     );
-    let Err(err) = res else { return };
+    let err = res.expect_err("`res` must be rejected");
     assert_eq!(
         diag_code(&err),
         Some(ipe_diagnostics::IPE_L0131),
@@ -661,7 +661,7 @@ fn subset_pattern_param_of_row_is_ipe_l0131() {
         res.is_err(),
         "{name} must fail to compile (subset pattern over a row)"
     );
-    let Err(err) = res else { return };
+    let err = res.expect_err("`res` must be rejected");
     assert_eq!(
         diag_code(&err),
         Some(ipe_diagnostics::IPE_L0131),
@@ -690,7 +690,7 @@ fn non_first_arg_row_is_ipe_l0131_not_ice() {
     let runtime = e2e_support::require_runtime().into_path_buf();
     let res = ipe::build(&entry, &out, &runtime);
     assert!(res.is_err(), "{name} must fail to compile");
-    let Err(err) = res else { return };
+    let err = res.expect_err("`res` must be rejected");
     assert_eq!(
         diag_code(&err),
         Some(ipe_diagnostics::IPE_L0131),
@@ -722,7 +722,7 @@ fn captured_clone_field_read_is_ipe_l0131() {
         res.is_err(),
         "{name} must fail to compile (captured row field read escapes)"
     );
-    let Err(err) = res else { return };
+    let err = res.expect_err("`res` must be rejected");
     assert_eq!(
         diag_code(&err),
         Some(ipe_diagnostics::IPE_L0131),

@@ -51,12 +51,13 @@ fn assert_byte_identical(name: &str) {
 
 /// The cons head and the empty-tail turbofish must both be on the `Arc` carrier —
 /// no `Box`-carried fn value may sit in the same `ipe_list_cons` element position.
+#[allow(clippy::expect_used)] // a failed precondition is the test failure
 fn assert_cons_head_arc_carrier(name: &str) {
     let root = repo_root();
     let golden = root.join("tests").join("golden").join(name).join("main.rs");
     let read = std::fs::read_to_string(&golden);
     assert!(read.is_ok(), "golden main.rs readable: {:?}", read.err());
-    let Ok(src) = read else { return };
+    let src = read.expect("`read` must succeed");
 
     // Locate the `ipe_list_cons(` call that constructs `gs` and split it at the
     // empty-tail turbofish, so `head` is exactly the cons head fn-value.
@@ -64,7 +65,7 @@ fn assert_cons_head_arc_carrier(name: &str) {
         .find("let gs = ipe_runtime::list::ipe_list_cons(")
         .map(|at| &src[at..]);
     assert!(cons.is_some(), "gs cons call present in golden");
-    let Some(cons_slice) = cons else { return };
+    let cons_slice = cons.expect("`cons` must be present");
     // The empty-tail turbofish anchors the element type to `Arc`.
     assert!(
         cons_slice.contains("Vec::<::std::sync::Arc<dyn Fn(i64) -> i64"),
@@ -72,7 +73,7 @@ fn assert_cons_head_arc_carrier(name: &str) {
     );
     let head = cons_slice.find("Vec::<").map(|at| &cons_slice[..at]);
     assert!(head.is_some(), "turbofish follows the head");
-    let Some(head) = head else { return };
+    let head = head.expect("`head` must be present");
     // The head fn-value read is minted on the Arc carrier, not Box.
     assert!(
         head.contains("::std::sync::Arc<") && head.contains("::std::sync::Arc::new("),
@@ -122,12 +123,13 @@ fn cons_fn_value_end_to_end() {
 
 /// The `Just g` payload must ride the `Box` carrier `ipe_maybe_map` consumes —
 /// no `Arc` fn shim may sit in a built-in `Maybe`/`Result` payload position.
+#[allow(clippy::expect_used)] // a failed precondition is the test failure
 fn assert_maybe_payload_box_carrier(name: &str) {
     let root = repo_root();
     let golden = root.join("tests").join("golden").join(name).join("main.rs");
     let read = std::fs::read_to_string(&golden);
     assert!(read.is_ok(), "golden main.rs readable: {:?}", read.err());
-    let Ok(src) = read else { return };
+    let src = read.expect("`read` must succeed");
     // The Arc-promoted binding is still emitted `Arc::new` at its own site, but
     // its `Just` payload read must be the plain boxed `Box<dyn Fn…>` carrier the
     // maybe-map kernel expects — the storage flip must not reach a built-in

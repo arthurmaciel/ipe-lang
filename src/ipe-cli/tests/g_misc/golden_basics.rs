@@ -114,7 +114,7 @@ fn pipeline_error_renders_with_code_and_explain_pointer() {
         matches!(&built, Err(ipe::CliError::Pipeline { .. })),
         "expected a pipeline error, got: {built:?}"
     );
-    let Err(err) = built else { return };
+    let err = built.expect_err("`built` must be rejected");
 
     let rendered = err.to_string();
     assert!(

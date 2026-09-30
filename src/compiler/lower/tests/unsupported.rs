@@ -79,12 +79,13 @@ fn run_with_regions(
 
 /// Assert the lowering failed with exactly the expected unsupported feature,
 /// code, and primary span — and that it is a `Lower`, never a `CompilerBug`.
+#[allow(clippy::expect_used)] // a failed precondition is the test failure
 fn assert_unsupported(res: DResult<ipe_ir::Program>, feature: Feature, code: Code, span: Span) {
     assert!(
         res.is_err(),
         "expected an unsupported-feature diagnostic for {feature:?}, got a successful lowering"
     );
-    let Err(d) = res else { return };
+    let d = res.expect_err("`res` must be rejected");
     assert_eq!(d.code(), code, "code mismatch ({feature:?}): {d:?}");
     assert_eq!(d.primary_span(), span, "span mismatch ({feature:?}): {d:?}");
     assert_ne!(
@@ -382,7 +383,7 @@ fn return_only_wildcard_any_is_rejected() -> DResult<()> {
         res.is_err(),
         "return-only `List any` must be rejected, got a successful lowering: {res:?}"
     );
-    let Err(d) = res else { return Ok(()) };
+    let d = res.expect_err("`res` must be rejected");
     assert!(
         matches!(
             d,

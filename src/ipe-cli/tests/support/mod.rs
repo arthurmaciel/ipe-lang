@@ -733,6 +733,7 @@ pub fn build_and_run_emitted_capturing_stderr(
 /// always a hard failure — never a skip — so a golden without a captured
 /// expected output cannot pass silently.
 #[allow(dead_code)] // exercised by goldens with a captured expected output
+#[allow(clippy::expect_used)] // a failed precondition is the test failure
 pub fn assert_self_regression(golden_name: &str, golden_dir: &Path, ipe_stdout: &str) {
     // Bless mode: overwrite `expected.txt` with the compiler's actual stdout
     // instead of asserting. The counterpart to `IPE_BLESS` in the byte-diff
@@ -755,7 +756,7 @@ pub fn assert_self_regression(golden_name: &str, golden_dir: &Path, ipe_stdout: 
         "{golden_name}: {}",
         expected.as_ref().err().map_or("", String::as_str)
     );
-    let Ok(expected) = expected else { return };
+    let expected = expected.expect("`expected` must succeed");
     assert_eq!(
         ipe_stdout, expected,
         "{golden_name}: stdout does not match expected.txt"

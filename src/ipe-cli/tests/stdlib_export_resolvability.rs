@@ -1163,7 +1163,7 @@ fn alias_gate_probes_a_module_without_the_kernel_import() {
         bytes.is_some(),
         "`Ipe.Bytes` must be a compiled-source module"
     );
-    let Some(bytes) = bytes else { return };
+    let bytes = bytes.expect("`bytes` must be present");
     assert!(
         !bytes.source.contains("import Ipe.Ffi.Kernel"),
         "the refusal needs a module that does not import `Ipe.Ffi.Kernel`"
@@ -1181,7 +1181,7 @@ fn alias_gate_probes_a_module_without_the_kernel_import() {
         aliases.as_ref().is_ok_and(|a| a.contains("length")),
         "canon must record `Ipe.Bytes.length` as a kernel alias: {aliases:?}"
     );
-    let Ok(aliases) = aliases else { return };
+    let aliases = aliases.expect("`aliases` must succeed");
     let members = alias_members(
         "Ipe.Bytes",
         &drifted,
@@ -1194,7 +1194,7 @@ fn alias_gate_probes_a_module_without_the_kernel_import() {
         "`Ipe.Bytes.length` must be selected for probing: {:?}",
         members.as_ref().err()
     );
-    let Ok(mut m) = members else { return };
+    let mut m = members.expect("`members` must succeed");
     m.replacement = Some(drifted);
     let drifts = module_drifts(&m);
     assert!(
@@ -1277,7 +1277,7 @@ fn unprobeable_gate_accepts_the_shipped_entry() {
         .iter()
         .find(|u| u.path == "Ipe.Ffi.Js.CustomElement.node");
     assert!(entry.is_some(), "`CustomElement.node` must be listed");
-    let Some(entry) = entry else { return };
+    let entry = entry.expect("`entry` must be present");
     let checked = check_unprobeable(&m, &member, entry);
     assert!(checked.is_ok(), "the shipped entry must pass: {checked:?}");
 }
@@ -1381,7 +1381,7 @@ fn seal_comparison_is_bijective() {
     let mut interner = Interner::new();
     let seal = interner.intern("IpeProbeSeal0");
     assert!(seal.is_ok(), "interning a seal name must succeed");
-    let Ok(seal) = seal else { return };
+    let seal = seal.expect("`seal` must succeed");
     let seal_ty = Ty::Con {
         module: Vec::new(),
         name: seal,

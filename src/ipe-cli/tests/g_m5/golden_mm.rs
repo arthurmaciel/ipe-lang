@@ -115,6 +115,7 @@ fn mm_qualtype_local_shadow_compiles() {
 // Negative helpers
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::expect_used)] // a failed precondition is the test failure
 fn expect_error_code(fixture_name: &str, expected: ipe_diagnostics::Code) {
     let fixture = golden_dir(fixture_name);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(fixture_name);
@@ -125,7 +126,7 @@ fn expect_error_code(fixture_name: &str, expected: ipe_diagnostics::Code) {
         res.is_err(),
         "fixture `{fixture_name}` must fail but succeeded"
     );
-    let Err(err) = res else { return };
+    let err = res.expect_err("`res` must be rejected");
     // Extract the Code from a Pipeline error; other variants have no code.
     let code = match &err {
         ipe::CliError::Pipeline { diag, .. } => Some(diag.code()),

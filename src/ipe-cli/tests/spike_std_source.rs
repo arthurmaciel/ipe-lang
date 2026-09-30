@@ -110,7 +110,7 @@ fn hostile_std_squat_is_ipe_n0025() {
     let out = root.join("out");
     let res = ipe::build_project(&root.join("package.ipe"), &out, &runtime());
     assert!(res.is_err(), "hostile Ipe.Palette squat must be rejected");
-    let Err(err) = res else { return };
+    let err = res.expect_err("`res` must be rejected");
     let code = match &err {
         ipe::CliError::Pipeline { diag, .. } => Some(diag.code()),
         _ => None,

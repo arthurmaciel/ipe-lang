@@ -87,7 +87,7 @@ fn record_then_replay_is_deterministic_and_refuses_bad_logs() {
         "{}",
         exe.as_ref().err().map_or("", String::as_str)
     );
-    let Ok(exe) = exe else { return };
+    let exe = exe.expect("`exe` must succeed");
 
     let logs =
         crate::support::scratch_root().join(format!("ipe_session_replay_{}", std::process::id()));
@@ -116,7 +116,7 @@ fn record_then_replay_is_deterministic_and_refuses_bad_logs() {
         "a replay must exit 0: {first:?}"
     );
     assert_eq!(first, second, "replaying twice must be byte-identical");
-    let Some((_, stdout)) = first else { return };
+    let (_, stdout) = first.expect("`first` must be present");
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 5, "start + 3 steps + final: {stdout:?}");
     assert!(

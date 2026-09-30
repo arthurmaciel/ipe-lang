@@ -79,7 +79,7 @@ fn record_ctor_and_literal_share_one_struct() {
 
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"));
     assert!(emitted.is_ok(), "emitted main.rs must read");
-    let Ok(src) = emitted else { return };
+    let src = emitted.expect("`emitted` must succeed");
 
     // The `{ x, y }` shape resolves to `RecXY` (camel-cased field set). It must
     // be declared exactly once — the constructor reuses the literal's struct.
@@ -140,7 +140,7 @@ fn seal_fn_field_alias_emits_no_struct() {
 
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"));
     assert!(emitted.is_ok(), "emitted main.rs must read");
-    let Ok(src) = emitted else { return };
+    let src = emitted.expect("`emitted` must succeed");
     // No constructor was synthesised, so the field-set struct (`RecChecks`) and
     // the `main_Handlers` ctor function must be ABSENT — their presence would
     // mean a `Box<dyn Fn>`-field struct was emitted (the seal hole).
@@ -216,7 +216,7 @@ fn seal_opaque_field_alias_emits_no_struct() {
 
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"));
     assert!(emitted.is_ok(), "emitted main.rs must read");
-    let Ok(src) = emitted else { return };
+    let src = emitted.expect("`emitted` must succeed");
     // No constructor was synthesised, so the field-set struct (`RecDec`) and the
     // `main_D` ctor function must be ABSENT — their presence would mean a
     // `#[derive(…)]` struct over the non-derivable `Decoder` was emitted (the
