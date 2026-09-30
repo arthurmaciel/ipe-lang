@@ -37,9 +37,11 @@ one is returned and otherwise leaves the bypass proof to an admin read.
 refused, so a token that cannot see bypass actors fails rather than passes.
 `--fetch-admin` runs nightly in `ruleset-admin-read.yml` with the
 `RULESET_READ_TOKEN` secret of the `ADMIN_READ_ENVIRONMENT` environment, and
-first proves that environment's deployment-branch policy admits `main` alone
-(protected branches only, or the one custom branch `main`); any other policy,
-or none, is refused. The token is never printed. Every unreadable or malformed input — a missing or empty token
+first parses that environment's deployment-branch policy into a closed
+`EnvPolicy` whose one variant is custom branch policies of exactly `main`;
+any other policy (protected-branches mode included), or none, is refused, and
+an unreadable environment names the token permission it needs. The token is
+never printed. Every unreadable or malformed input — a missing or empty token
 included — fails closed (exit 1) with nothing printed to stdout.
 """
 from __future__ import annotations
@@ -48,6 +50,7 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 
 CI_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -281,25 +284,46 @@ def diff(expected: list[Pair], actual: list[Pair], what: str, fix: str) -> list[
     return out
 
 
-def environment_policy_errors(env: object, policies: object | None) -> list[str]:
-    """Why the `ADMIN_READ_ENVIRONMENT` read (`env`, and its custom branch
-    policies when it has them) does not confine the environment's secrets to
-    `main`, or []. Admitted: protected branches only, or custom branch
-    policies that are exactly the one branch `main`."""
+@dataclass(frozen=True)
+class CustomMainOnly:
+    """The one deployment-branch policy `ADMIN_READ_ENVIRONMENT` may carry:
+    custom branch policies that are exactly the branch `main`. Protected-
+    branches mode is not admitted: with no classic protection rule on the
+    repository, GitHub lets every branch deploy under it."""
+
+
+EnvPolicy = CustomMainOnly
+
+ENV_POLICY_FIX = "set it up per .github/ci/RECONCILIATION.md"
+ENV_READ_FIX = (
+    f"cannot read environment {ADMIN_READ_ENVIRONMENT!r} — RULESET_READ_TOKEN needs the fine-grained "
+    "repository permission Actions: read (see .github/ci/RECONCILIATION.md)"
+)
+
+
+def parse_env_policy(env: object, fetch_policies: Callable[[], object]) -> EnvPolicy:
+    """The `ADMIN_READ_ENVIRONMENT` read (`env`) as its closed policy, or
+    `Refused`. `fetch_policies` reads the custom branch policies; it is
+    called only once `env` is in custom mode."""
     where = f"environment {ADMIN_READ_ENVIRONMENT!r}"
     if not isinstance(env, dict) or env.get("name") != ADMIN_READ_ENVIRONMENT:
-        return [f"{where}: the API returned no environment of that name"]
+        raise Refused(f"{where}: the API returned no environment of that name — {ENV_POLICY_FIX}")
     policy = env.get("deployment_branch_policy")
-    if not isinstance(policy, dict):
-        return [f"{where}: no deployment-branch policy — every branch may deploy to it"]
-    protected, custom = policy.get("protected_branches"), policy.get("custom_branch_policies")
-    if protected is True and custom is False:
-        return []
-    if not (protected is False and custom is True):
-        return [f"{where}: deployment-branch policy {policy!r} is neither protected branches only nor custom"]
+    if policy is None:
+        raise Refused(f"{where}: no deployment-branch policy, so every branch may deploy — {ENV_POLICY_FIX}")
+    try:
+        mode = _closed(
+            policy, f"{where} deployment-branch policy", frozenset({"protected_branches", "custom_branch_policies"})
+        )
+        _pin(mode["protected_branches"], False, f"{where} protected_branches")
+        _pin(mode["custom_branch_policies"], True, f"{where} custom_branch_policies")
+    except Refused as e:
+        raise Refused(f"{e}; only custom branch policies of exactly {MAIN_BRANCH!r} are admitted — {ENV_POLICY_FIX}") from e
+    policies = fetch_policies()
     items = policies.get("branch_policies") if isinstance(policies, dict) else None
     if (
         not isinstance(policies, dict)
+        or type(policies.get("total_count")) is not int
         or policies.get("total_count") != 1
         or not isinstance(items, list)
         or len(items) != 1
@@ -307,13 +331,13 @@ def environment_policy_errors(env: object, policies: object | None) -> list[str]
         or items[0].get("name") != MAIN_BRANCH
         or items[0].get("type") != "branch"
     ):
-        return [f"{where}: custom deployment-branch policies are not exactly the branch {MAIN_BRANCH!r}"]
-    return []
+        raise Refused(f"{where}: custom deployment-branch policies are not exactly the branch {MAIN_BRANCH!r} — {ENV_POLICY_FIX}")
+    return CustomMainOnly()
 
 
 def fetch_live(*, admin: bool) -> object:
-    """The live ruleset. An admin read first proves `ADMIN_READ_ENVIRONMENT`
-    confines its secrets to `main`, refusing otherwise."""
+    """The live ruleset. An admin read first parses `ADMIN_READ_ENVIRONMENT`
+    into its `EnvPolicy`, refusing any other policy."""
     import trust_roots  # noqa: PLC0415  # the pinned-origin authenticated GET
 
     repo, token = os.environ.get("REPO", ""), os.environ.get("GH_TOKEN", "")
@@ -323,13 +347,14 @@ def fetch_live(*, admin: bool) -> object:
         api = trust_roots.Api(os.environ.get("GITHUB_API_URL") or "https://api.github.com", repo, token)
         if admin:
             env_path = f"environments/{ADMIN_READ_ENVIRONMENT}"
-            env = api.get(env_path)
-            policy = env.get("deployment_branch_policy") if isinstance(env, dict) else None
-            custom = isinstance(policy, dict) and policy.get("custom_branch_policies") is True
-            policies = api.get(f"{env_path}/deployment-branch-policies") if custom else None
-            errors = environment_policy_errors(env, policies)
-            if errors:
-                raise Refused("; ".join(errors) + " — set it up per .github/ci/RECONCILIATION.md")
+
+            def read_env(path: str) -> object:
+                try:
+                    return api.get(path)
+                except trust_roots.Refused as e:
+                    raise Refused(f"{ENV_READ_FIX}: {e}") from e
+
+            parse_env_policy(read_env(env_path), lambda: read_env(f"{env_path}/deployment-branch-policies"))
         return api.get(f"rulesets/{RULESET_ID}")
     except trust_roots.Refused as e:
         raise Refused(str(e)) from e

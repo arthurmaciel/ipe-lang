@@ -2648,10 +2648,12 @@ class TestSsotOutputTools(unittest.TestCase):
                 stderr = self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
                 self.assertNotIn(sentinel, stderr)
 
-    def _stub_api(self, rs: object, env: object = _ENV_MAIN_ONLY, policies: object = _POLICIES_MAIN) -> dict[str, str]:
+    def _stub_api(self, rs: object, env: object = _ENV_MAIN_ONLY, policies: object = _POLICIES_MAIN,
+                  refuse: tuple[str, ...] = ()) -> dict[str, str]:
         """Replace `trust_roots` with an `Api` whose GET returns `env` for the
         admin-read environment, `policies` for its branch policies, and `rs`
-        for the ruleset; any other path is refused."""
+        for the ruleset; any other path, and every path in `refuse`, is
+        refused."""
         self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
         self.put("required-set.json", _RS_A)
         bodies = {
@@ -2659,6 +2661,7 @@ class TestSsotOutputTools(unittest.TestCase):
             "environments/ruleset-admin-read/deployment-branch-policies": policies,
             "rulesets/22326541": rs,
         }
+        bodies = {path: body for path, body in bodies.items() if path not in refuse}
         self.put("bodies.json", json.dumps(bodies).encode())
         self.put(
             "trust_roots.py",
@@ -2676,13 +2679,20 @@ class TestSsotOutputTools(unittest.TestCase):
         return {"REPO": "o/r", "GH_TOKEN": "tok"}
 
     def test_check_required_set_fetch_admin_admits_a_main_only_environment(self) -> None:
-        protected = {"name": "ruleset-admin-read",
-                     "deployment_branch_policy": {"protected_branches": True, "custom_branch_policies": False}}
-        for env, policies in ((_ENV_MAIN_ONLY, _POLICIES_MAIN), (protected, None)):
-            with self.subTest(env=env):
-                rc, stdout, stderr = self.run_tool("check_required_set.py", "--fetch-admin", env=self._stub_api(_ruleset(), env, policies))
-                self.assertEqual(rc, 0, stderr)
-                self.assertIn("ruleset 22326541 match", stdout)
+        rc, stdout, stderr = self.run_tool("check_required_set.py", "--fetch-admin", env=self._stub_api(_ruleset()))
+        self.assertEqual(rc, 0, stderr)
+        self.assertIn("ruleset 22326541 match", stdout)
+
+    def test_check_required_set_fetch_admin_names_the_permission_an_unreadable_environment_needs(self) -> None:
+        sentinel = "sentinel-token-7d2e"
+        for refused in ("environments/ruleset-admin-read", "environments/ruleset-admin-read/deployment-branch-policies"):
+            with self.subTest(refused=refused):
+                env = {**self._stub_api(_ruleset(), refuse=(refused,)), "GH_TOKEN": sentinel}
+                stderr = self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+                self.assertIn("cannot read environment 'ruleset-admin-read'", stderr)
+                self.assertIn("Actions: read", stderr)
+                self.assertIn("RECONCILIATION.md", stderr)
+                self.assertNotIn(sentinel, stderr)
 
     def test_check_required_set_fetch_admin_refuses_an_environment_not_confined_to_main(self) -> None:
         def env_with(policy: object, name: str = "ruleset-admin-read") -> dict:
@@ -2701,10 +2711,20 @@ class TestSsotOutputTools(unittest.TestCase):
             # Every branch may deploy.
             (env_with(None), None),
             (env_with("all"), None),
-            # Neither shape, or both.
+            # Protected-branches mode: with no classic protection rule every
+            # branch may deploy, so it is not proof of `main` alone.
+            (env_with({"protected_branches": True, "custom_branch_policies": False}), None),
+            (env_with({"protected_branches": True, "custom_branch_policies": False}), _POLICIES_MAIN),
+            # Neither mode, or both.
             (env_with({"protected_branches": False, "custom_branch_policies": False}), None),
             (env_with({"protected_branches": True, "custom_branch_policies": True}), _POLICIES_MAIN),
             (env_with({"protected_branches": "true", "custom_branch_policies": False}), None),
+            (env_with({"protected_branches": 0, "custom_branch_policies": 1}), _POLICIES_MAIN),
+            # A mode field missing, or one this check does not examine.
+            (env_with({"custom_branch_policies": True}), _POLICIES_MAIN),
+            (env_with({"protected_branches": False}), _POLICIES_MAIN),
+            (env_with({}), _POLICIES_MAIN),
+            (env_with({**custom, "tag_policies": True}), _POLICIES_MAIN),
             # Custom policies other than exactly the branch `main`.
             (env_with(custom), None),
             (env_with(custom), policies()),
@@ -2714,6 +2734,9 @@ class TestSsotOutputTools(unittest.TestCase):
             (env_with(custom), policies({"name": "main*", "type": "branch"})),
             (env_with(custom), policies({"name": "main", "type": "tag"})),
             (env_with(custom), {"total_count": 1, "branch_policies": main}),
+            (env_with(custom), {"total_count": True, "branch_policies": [main]}),
+            (env_with(custom), {"branch_policies": [main]}),
+            (env_with(custom), [main]),
         )
         for env, pol in cases:
             with self.subTest(env=env, policies=pol):

@@ -36,8 +36,8 @@ GitHub returns `bypass_actors` only to a ruleset admin, and the workflow token
 is not one. `--fetch` refuses a non-empty list when it sees one; the proof
 that no bypass actor exists is an admin read, which refuses a ruleset body
 without the list. `--fetch-admin` is that read: `ruleset-admin-read.yml` runs
-it nightly with the `RULESET_READ_TOKEN` secret (a fine-grained token with
-Administration read-only on this repository). It fails closed when the token
+it nightly with the `RULESET_READ_TOKEN` secret (a fine-grained token; its
+permissions are in the one-time setup below). It fails closed when the token
 is absent or empty, when the body lacks `bypass_actors` (the token cannot see
 them), when the list is non-empty, or when the pairs differ from the derived
 set.
@@ -49,9 +49,11 @@ GitHub hands the token to no run of any other ref, so a branch that edits the
 workflow to add a `pull_request` or `push` trigger runs with an empty token,
 and neither its pull-request run nor its merge-queue run can read it.
 `--fetch-admin` first reads the environment
-(`GET repos/{repo}/environments/ruleset-admin-read`) and fails closed unless
-its policy is protected branches only or custom branch policies of exactly
-`main`. Defence in depth under the policy, `verify-manifest.py` check 8
+(`GET repos/{repo}/environments/ruleset-admin-read` and its
+`deployment-branch-policies`) and fails closed unless its policy is custom
+branch policies of exactly the branch `main`. Protected-branches mode is
+refused: without a classic protection rule it lets every branch deploy. An
+environment the token cannot read fails closed naming the missing permission. Defence in depth under the policy, `verify-manifest.py` check 8
 refuses the secret in a workflow triggering on anything but `schedule`, the
 secret or the environment in any job but `ruleset-admin-read.yml`'s
 `ruleset-admin-read`, and a job environment whose name is computed at run
@@ -65,11 +67,13 @@ reconciliation time.
 An owner does this once, before the first scheduled run:
 
 1. Create the environment `ruleset-admin-read` (Settings → Environments) with
-   deployment branches set to `main` only (a custom branch policy naming
-   `main`).
-2. Add `RULESET_READ_TOKEN` to it as an environment secret. The token also
-   needs read access to the repository's environments, or `--fetch-admin`
-   cannot prove the policy and fails closed.
+   deployment branches set to selected branches, with one branch rule naming
+   exactly `main` (the protected-branches setting is refused).
+2. Add `RULESET_READ_TOKEN` to it as an environment secret: a fine-grained
+   token on this repository with the repository permissions Administration:
+   read (the ruleset, `bypass_actors` included) and Actions: read (the
+   environment and its deployment-branch policies). Without either,
+   `--fetch-admin` cannot prove its claim and fails closed.
 3. Delete the repository-level `RULESET_READ_TOKEN` secret, so no job outside
    the environment can reach it.
 
