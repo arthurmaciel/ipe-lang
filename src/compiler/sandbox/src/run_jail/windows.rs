@@ -330,8 +330,12 @@ fn env_block_from_pairs(pairs: &[(OsString, OsString)]) -> Vec<u16> {
 // occurrence adds noise without clarity, and the Win32 argument-count is
 // intrinsic to the API surface. Scoped allows for exactly those doc/style lints;
 // every soundness lint stays enforced.
+// IPE-RUST-AUDIT:ACCEPTED — every `windows-sys` Win32 entry point is an `unsafe
+// extern` FFI call with no safe wrapper in the dependency set; `unsafe` is
+// confined to this module, each block carrying its own SAFETY argument.
 #[cfg(target_os = "windows")]
 #[allow(
+    unsafe_code,
     clippy::doc_markdown,
     clippy::too_long_first_doc_paragraph,
     clippy::too_many_arguments
