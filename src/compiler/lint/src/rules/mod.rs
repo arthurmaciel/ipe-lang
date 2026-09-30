@@ -50,7 +50,7 @@ mod simplify_double_not;
 mod simplify_map_identity;
 mod unsafe_convention;
 mod unused_bindings;
-mod unused_imports;
+pub mod unused_imports;
 mod wrapper_consistency;
 mod wrapper_consistency_cross;
 

@@ -18,14 +18,10 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use ipe_lint::{LintConfig, SourceModule};
+use ipe_lint::{LINT_CONFIG_FILE as LINT_IPE, LintConfig, SourceModule};
 
 use crate::screen::{self, Screen, Stream, Tone};
 use crate::{CliError, cli_args, text, watch};
-
-/// The `lint.ipe` file name, resolved next to a project's `package.ipe` (or in
-/// the current directory for a single-file lint).
-const LINT_IPE: &str = "lint.ipe";
 
 /// Parsed `ipe lint` arguments.
 pub(crate) struct LintArgs {
@@ -122,18 +118,36 @@ pub(crate) fn run_lint(rest: &[String]) -> Result<(), CliError> {
 
 /// Read `lint.ipe` from the directory holding `blame_path` (the resolved
 /// manifest or entry file), returning defaults when none exists.
+///
+/// The read goes through [`ipe_lint::load_lint_config`], the one bounded,
+/// open-once reader the language server shares. `lint.ipe` is found by
+/// convention, not named by the user, so a symlink, FIFO, device, or
+/// directory at that name is [`CliError::SourceRefused`] and an oversized
+/// one [`CliError::FileTooLarge`] — never followed, waited on, or ignored.
 fn load_config(blame_path: &Path) -> Result<LintConfig, CliError> {
-    let dir = blame_path
-        .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let lint_ipe = dir.join(LINT_IPE);
-    if !lint_ipe.is_file() {
-        return Ok(LintConfig::default());
-    }
-    let text =
-        crate::io_bounded::read_to_string_capped(&lint_ipe, crate::io_bounded::MANIFEST_READ_CAP)?;
-    ipe_lint::read_lint_config(&text, &lint_ipe.display().to_string())
-        .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))
+    use ipe_lint::{LintConfigLoadError, WorkspaceReadError};
+
+    use crate::io_bounded::{SourceRefusal, access_error, source_refused};
+
+    let dir = ipe_lint::lint_config_dir(blame_path);
+    let path = dir.join(LINT_IPE);
+    ipe_lint::load_lint_config(&dir).map_err(|e| match e {
+        LintConfigLoadError::Read(WorkspaceReadError::Unreadable(source)) => {
+            access_error(&path, source)
+        }
+        LintConfigLoadError::Read(WorkspaceReadError::NotAFile) => {
+            source_refused(&path, SourceRefusal::NotRegularFile)
+        }
+        LintConfigLoadError::Read(WorkspaceReadError::NotUtf8) => CliError::Io {
+            path: path.clone(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, "not valid UTF-8"),
+        },
+        LintConfigLoadError::Read(WorkspaceReadError::TooLarge { max }) => CliError::FileTooLarge {
+            path: path.clone(),
+            max,
+        },
+        LintConfigLoadError::Invalid(e) => CliError::Usage(crate::text::Message::relay(&e)),
+    })
 }
 
 /// Run the linter and print each finding; fail the gate if any survives at or

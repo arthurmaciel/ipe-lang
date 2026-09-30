@@ -38,8 +38,9 @@ Two pieces make an editor understand Ipê:
 
 - **`ipe lsp`** — semantics over stdio: type-directed completion,
   go-to-definition, find-references, rename, formatting, code actions (add a
-  missing annotation or import, remove an unused import, …), semantic tokens,
-  signature help, inlay hints and diagnostics.
+  missing annotation or import, remove an unused import, …, plus the
+  whole-document `source.organizeImports` and `source.fixAll`), semantic
+  tokens, signature help, inlay hints and diagnostics.
 - **`tree-sitter-ipe`** — syntax highlighting from the grammar in
   `editors/tree-sitter-ipe/` (Helix, Neovim, Zed). Emacs highlights through
   `ipe-mode`'s own font-lock rules.
@@ -52,6 +53,19 @@ from the type-checker `ipe build` runs. After a qualifier (`Font.`, an alias
 that module's exposed members — never the whole in-scope list — and accepting
 an item replaces whatever member name is already typed rather than appending to
 it.
+
+Lint findings arrive with the diagnostics, configured by the same `lint.ipe`
+`ipe lint` reads (next to `package.ipe`, or next to a loose file). A `lint.ipe`
+that fails to load — invalid, oversized, or not a regular file — shows one error
+on `lint.ipe` itself and no lint findings until it loads. A file shown before its
+project loads (a broken `package.ipe`, say) gets no lint findings and no
+`source.fixAll` until the load succeeds: the editor never lints with rules the
+project did not configure.
+
+A project the compiler refuses to load (an untrusted FFI or manifest, a source
+past a size limit) shows one error — the refusal `ipe build` would print — on
+the file that triggered the load, and every earlier finding is withdrawn: the
+editor never keeps showing analysis of a project the compiler rejects.
 
 ## Helix
 

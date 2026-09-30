@@ -33,6 +33,11 @@ pub struct LoadedProject {
     pub files: BTreeMap<Vec<String>, LoadedFile>,
     /// The entry module's path segments (e.g. `["Main"]`).
     pub entry_module: Vec<String>,
+    /// The directory `lint.ipe` is read from.
+    ///
+    /// The driver names it exactly as `ipe lint` does for the same project,
+    /// so the editor and the batch linter configure one set of rules.
+    pub lint_config_dir: PathBuf,
 }
 
 /// A project-resolution failure, typed by how the server must answer it.
@@ -83,10 +88,10 @@ pub enum LimitSource {
 pub enum LoadDisposition {
     /// Serve the open buffer as a single-file fallback layout.
     Degrade,
-    /// Serve no fallback layout; only a layout from an earlier trusted load stays.
+    /// Serve no layout at all, withdrawing any trusted or fallback one.
     ///
     /// The failure is one no edit to the buffer can lift (a filesystem
-    /// ceiling, a trust refusal), so a fallback would show analysis the
+    /// ceiling, a trust refusal), so any layout kept would show analysis the
     /// compiler refuses to give.
     Refuse,
 }

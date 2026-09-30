@@ -61,7 +61,7 @@ pub const LIBC: CrateSpec = CrateSpec {
 };
 pub const CROSSTERM: CrateSpec = CrateSpec {
     name: "crossterm",
-    version: "0.28",
+    version: "0.29",
 };
 pub const UNICODE_WIDTH: CrateSpec = CrateSpec {
     name: "unicode-width",

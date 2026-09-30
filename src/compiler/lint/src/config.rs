@@ -61,6 +61,12 @@ impl LintConfig {
     }
 }
 
+/// The workspace lint-configuration file name.
+pub const LINT_CONFIG_FILE: &str = "lint.ipe";
+
+/// The largest `lint.ipe` any reader accepts, in bytes.
+pub const LINT_CONFIG_MAX_BYTES: u64 = 512 * 1024;
+
 /// A `lint.ipe` reader failure.
 ///
 /// Mirrors the `package.ipe` reader's fail-closed, position-anchored rejection:
