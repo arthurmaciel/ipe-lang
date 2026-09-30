@@ -36,42 +36,40 @@ pub fn io_read_line<E: Send + From<String> + 'static>(_: ()) -> IpeTask<E, Strin
 /// on even if the read errors or the thread unwinds. This is the fail-safe: the
 /// terminal is never left with echo disabled once the guard leaves scope.
 #[cfg(all(unix, feature = "secret"))]
-struct EchoGuard {
-    fd: std::os::unix::io::RawFd,
-    prior: libc::termios,
+struct EchoGuard<F: std::os::fd::AsFd> {
+    fd: F,
+    prior: rustix::termios::Termios,
 }
 
 #[cfg(all(unix, feature = "secret"))]
-impl Drop for EchoGuard {
+impl<F: std::os::fd::AsFd> Drop for EchoGuard<F> {
     fn drop(&mut self) {
         // Best-effort restore; a failure here cannot itself be surfaced from
         // `drop`, and there is no safer state to fall back to than "re-apply the
         // attributes we captured before we changed them".
-        unsafe {
-            libc::tcsetattr(self.fd, libc::TCSAFLUSH, &self.prior);
-        }
+        let _ = rustix::termios::tcsetattr(
+            &self.fd,
+            rustix::termios::OptionalActions::Flush,
+            &self.prior,
+        );
     }
 }
 
-/// Disable terminal echo on `fd`, returning a guard that restores the prior mode
-/// on drop. `None` when `fd` is not a tty (nothing to toggle — the caller then
-/// reads with echo unchanged, i.e. a plain line read).
+/// Disable terminal echo on `fd`, returning a guard that restores the prior mode on drop.
+///
+/// `None` when `fd` is not a tty (nothing to toggle — the caller then reads with
+/// echo unchanged, i.e. a plain line read).
 #[cfg(all(unix, feature = "secret"))]
-fn suppress_echo(fd: std::os::unix::io::RawFd) -> Option<EchoGuard> {
+fn suppress_echo<F: std::os::fd::AsFd>(fd: F) -> Option<EchoGuard<F>> {
     // Not a terminal (piped/redirected stdin): there is no echo state to change,
     // so report "no guard" and let the caller fall back to a normal read.
-    if unsafe { libc::isatty(fd) } != 1 {
+    if !rustix::termios::isatty(&fd) {
         return None;
     }
-    let mut prior: libc::termios = unsafe { std::mem::zeroed() };
-    if unsafe { libc::tcgetattr(fd, &mut prior) } != 0 {
-        return None;
-    }
-    let mut raw = prior;
-    raw.c_lflag &= !libc::ECHO;
-    if unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, &raw) } != 0 {
-        return None;
-    }
+    let prior = rustix::termios::tcgetattr(&fd).ok()?;
+    let mut raw = prior.clone();
+    raw.local_modes.remove(rustix::termios::LocalModes::ECHO);
+    rustix::termios::tcsetattr(&fd, rustix::termios::OptionalActions::Flush, &raw).ok()?;
     Some(EchoGuard { fd, prior })
 }
 
@@ -104,10 +102,7 @@ pub fn io_read_secret<E: Send + From<String> + 'static>(
         }
 
         #[cfg(unix)]
-        let _echo_guard = {
-            use std::os::unix::io::AsRawFd;
-            suppress_echo(std::io::stdin().as_raw_fd())
-        };
+        let _echo_guard = suppress_echo(std::io::stdin());
 
         let mut line = String::new();
         let stdin = std::io::stdin();
@@ -211,47 +206,36 @@ pub fn io_eprintln<E: Send + From<String> + 'static>(msg: String) -> IpeTask<E, 
 #[cfg(all(test, unix, feature = "secret"))]
 mod echo_guard_tests {
     use super::suppress_echo;
+    use std::os::fd::OwnedFd;
 
     /// Read the current `ECHO` bit of a tty fd.
-    fn echo_on(fd: std::os::unix::io::RawFd) -> bool {
-        let mut t: libc::termios = unsafe { std::mem::zeroed() };
-        assert_eq!(
-            unsafe { libc::tcgetattr(fd, &mut t) },
-            0,
-            "tcgetattr failed"
-        );
-        (t.c_lflag & libc::ECHO) != 0
+    fn echo_on(fd: &OwnedFd) -> bool {
+        rustix::termios::tcgetattr(fd)
+            .is_ok_and(|t| t.local_modes.contains(rustix::termios::LocalModes::ECHO))
     }
 
-    /// A real pty pair whose fds are closed on drop.
+    /// A real pty pair; both ends close when dropped.
     struct Pty {
-        master: std::os::unix::io::RawFd,
-        slave: std::os::unix::io::RawFd,
+        _master: OwnedFd,
+        replica: OwnedFd,
     }
 
-    impl Drop for Pty {
-        fn drop(&mut self) {
-            unsafe {
-                libc::close(self.master);
-                libc::close(self.slave);
-            }
-        }
-    }
-
-    fn open_pty() -> Pty {
-        let mut master = 0;
-        let mut slave = 0;
-        let rc = unsafe {
-            libc::openpty(
-                &mut master,
-                &mut slave,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                std::ptr::null(),
-            )
-        };
-        assert_eq!(rc, 0, "openpty failed");
-        Pty { master, slave }
+    fn open_pty() -> Option<Pty> {
+        use rustix::pty::OpenptFlags;
+        let master = rustix::pty::openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).ok()?;
+        rustix::pty::grantpt(&master).ok()?;
+        rustix::pty::unlockpt(&master).ok()?;
+        let name = rustix::pty::ptsname(&master, Vec::new()).ok()?;
+        let replica = rustix::fs::open(
+            name.as_c_str(),
+            rustix::fs::OFlags::RDWR | rustix::fs::OFlags::NOCTTY,
+            rustix::fs::Mode::empty(),
+        )
+        .ok()?;
+        Some(Pty {
+            _master: master,
+            replica,
+        })
     }
 
     // On a real tty, `suppress_echo` turns ECHO off for the guard's lifetime and
@@ -259,24 +243,30 @@ mod echo_guard_tests {
     #[test]
     fn suppresses_then_restores_echo_on_a_tty() {
         let pty = open_pty();
+        assert!(pty.is_some(), "pty allocation failed");
+        let Some(pty) = pty else { return };
         // Ensure the starting state has ECHO on.
-        let mut t: libc::termios = unsafe { std::mem::zeroed() };
-        assert_eq!(unsafe { libc::tcgetattr(pty.slave, &mut t) }, 0);
-        t.c_lflag |= libc::ECHO;
-        assert_eq!(unsafe { libc::tcsetattr(pty.slave, libc::TCSANOW, &t) }, 0);
-        assert!(echo_on(pty.slave), "precondition: ECHO on");
+        let start = rustix::termios::tcgetattr(&pty.replica);
+        assert!(start.is_ok(), "tcgetattr failed");
+        let Ok(mut t) = start else { return };
+        t.local_modes.insert(rustix::termios::LocalModes::ECHO);
+        assert!(
+            rustix::termios::tcsetattr(&pty.replica, rustix::termios::OptionalActions::Now, &t)
+                .is_ok()
+        );
+        assert!(echo_on(&pty.replica), "precondition: ECHO on");
 
         {
-            let guard = suppress_echo(pty.slave);
+            let guard = suppress_echo(&pty.replica);
             assert!(guard.is_some(), "a tty must yield an echo guard");
             assert!(
-                !echo_on(pty.slave),
+                !echo_on(&pty.replica),
                 "ECHO must be off while the guard lives"
             );
         } // guard drops here
 
         assert!(
-            echo_on(pty.slave),
+            echo_on(&pty.replica),
             "ECHO must be restored after the guard drops"
         );
     }
@@ -285,16 +275,14 @@ mod echo_guard_tests {
     // `None`, so the caller falls back to a plain read — never panics.
     #[test]
     fn non_tty_yields_no_guard() {
-        let mut fds = [0; 2];
-        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0, "pipe failed");
-        let read_fd = fds[0];
+        let fds = rustix::pipe::pipe();
+        assert!(fds.is_ok(), "pipe failed");
+        let Ok((read_fd, _write_fd)) = fds else {
+            return;
+        };
         assert!(
-            suppress_echo(read_fd).is_none(),
+            suppress_echo(&read_fd).is_none(),
             "a pipe is not a tty; no echo guard"
         );
-        unsafe {
-            libc::close(fds[0]);
-            libc::close(fds[1]);
-        }
     }
 }

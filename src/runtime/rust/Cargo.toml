@@ -187,18 +187,14 @@ crossterm = { version = "0.29", optional = true }
 wry = { version = "0.55", optional = true }
 tao = { version = "0.35", optional = true }
 
-# Unix-only: the Ipe.Web console reverse-proxy (live/console_proxy.rs) uses
-# libc::prctl(PR_SET_PDEATHSIG) on Linux so the spawned console child dies with
-# the parent even on SIGKILL. Tiny, ubiquitous; referenced only under
-# cfg(target_os = "linux").
+# Unix-only syscalls go through rustix's safe wrappers — no hand-written `unsafe`
+# FFI. `pty` + `termios`: `Ipe.Process.runInPty` allocates a pseudo-terminal
+# (openpt / grantpt / unlockpt / ptsname) and sizes it (tcsetwinsize), and
+# `Io.readSecret` toggles terminal echo (isatty / tcgetattr / tcsetattr).
+# `process`: the child parent-death floor (`prctl(PR_SET_PDEATHSIG)`, Linux).
+# `fs` backs `open`ing the pty replica; `std` re-exports `OwnedFd`.
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
-# `Ipe.Process.runInPty` allocates a pseudo-terminal (openpt / grantpt / unlockpt
-# / ptsname) and sizes it (tcsetwinsize) through rustix's safe `pty` + `termios`
-# wrappers — no hand-written `unsafe` FFI. Unix-only: the pty surface has no
-# meaning on non-unix targets, where the kernel returns an honest unsupported
-# `Err`. `fs` backs `open`ing the replica side; `std` re-exports `OwnedFd`.
-rustix = { version = "1", features = ["pty", "termios", "fs", "std"] }
+rustix = { version = "1", features = ["pty", "termios", "fs", "process", "std"] }
 
 # tokio is native-only. Every tokio code path in this crate is already
 # `not(target_arch = "wasm32")`-gated at the use site (the wasm target drives
@@ -630,7 +626,11 @@ proc-macro2 = "1"
 
 # `wasm-bindgen-test` drives the headless-browser test harness (`tests/
 # wasm_*` files, `#[wasm_bindgen_test]`) — meaningless on native, so it is
-# wasm32-only (see the `[target.'cfg(target_arch = "wasm32")'.dev-dependencies]`
+# wasm32-only (see the `# `pipe`: the echo-guard tests build a non-tty fd pair.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1", features = ["pipe"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]`
 # table below), never pulled into a native `cargo test`.
 #
 # `proptest`/`bcrypt`/`jsonwebtoken`/`aes-gcm`/`chacha20poly1305`/`pbkdf2` are

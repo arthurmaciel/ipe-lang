@@ -500,11 +500,17 @@ pub fn harden_child_parent_death(_builder: &mut std::process::Command) {
     {
         use std::os::unix::process::CommandExt as _;
         // SAFETY: the closure runs in the forked child between fork and exec. It
-        // only calls prctl (async-signal-safe) — no allocation, no locks, no
-        // Rust runtime re-entry. Failure is non-fatal (best-effort hardening).
+        // only issues the raw `prctl(PR_SET_PDEATHSIG)` syscall through rustix's
+        // safe wrapper (async-signal-safe) — no allocation, no locks, no Rust
+        // runtime re-entry. Failure is non-fatal (best-effort hardening).
+        // IPE-RUST-AUDIT:ACCEPTED — std `pre_exec` is an unsafe API with no safe
+        // parent-death-signal equivalent; the workspace's sole non-FFI `unsafe`.
+        #[allow(unsafe_code)]
         unsafe {
             _builder.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM as libc::c_ulong);
+                let _ = rustix::process::set_parent_process_death_signal(Some(
+                    rustix::process::Signal::TERM,
+                ));
                 Ok(())
             });
         }
