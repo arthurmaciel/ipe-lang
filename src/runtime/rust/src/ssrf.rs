@@ -1427,9 +1427,10 @@ mod pinned_relay {
     #[cfg(test)]
     mod tests {
         use super::{
-            PinnedRelay, RelayUnavailable, SOCKET_PATH_MAX_BYTES, Semaphore, VettedAddr,
-            create_private_dir_in, owner_only, relay_ceiling,
+            PinnedRelay, RELAY_DIR_LABEL, RelayUnavailable, SOCKET_PATH_MAX_BYTES, Semaphore,
+            VettedAddr, create_private_dir_in, owner_only, relay_ceiling,
         };
+        use crate::scratch_core::scratch_name_len;
         use std::fs::Permissions;
         use std::os::unix::fs::PermissionsExt;
         use std::path::{Path, PathBuf};
@@ -1609,6 +1610,10 @@ mod pinned_relay {
             assert!(std::fs::create_dir(&open).is_ok());
             let set = std::fs::set_permissions(&open, Permissions::from_mode(0o777));
             assert!(set.is_ok(), "{set:?}");
+            assert!(
+                socket_path_fits(&open),
+                "{open:?} must be refused for trust, not length"
+            );
             let made = create_private_dir_in(std::slice::from_ref(&open), ".s.PGSQL.5432");
             assert_eq!(made, Err(RelayUnavailable));
             let entries = std::fs::read_dir(&open).map(Iterator::count);
@@ -1620,13 +1625,29 @@ mod pinned_relay {
             VettedAddr::assume_vetted_for_test(std::net::SocketAddr::from(([127, 0, 0, 1], 9)))
         }
 
+        /// Whether a relay directory under `base` holds a `.s.PGSQL.5432` socket within a `sockaddr_un`.
+        fn socket_path_fits(base: &Path) -> bool {
+            base.as_os_str().len()
+                + 1
+                + scratch_name_len(RELAY_DIR_LABEL)
+                + 1
+                + ".s.PGSQL.5432".len()
+                <= SOCKET_PATH_MAX_BYTES
+        }
+
         /// A test's own directory under `/tmp`, removed when dropped.
+        ///
+        /// Its path leaves room for a relay socket, so a test expecting a
+        /// relay directory never meets the length refusal instead.
         struct Scratch(PathBuf);
 
         impl Scratch {
             fn new(label: &str) -> Self {
-                let dir = PathBuf::from("/tmp")
-                    .join(format!("ipe-relay-test-{}-{label}", std::process::id()));
+                let dir = PathBuf::from("/tmp").join(format!("ipr-{}-{label}", std::process::id()));
+                assert!(
+                    socket_path_fits(&dir),
+                    "{dir:?} leaves no room for a relay socket"
+                );
                 let _stale = std::fs::remove_dir_all(&dir);
                 assert!(std::fs::create_dir(&dir).is_ok(), "{dir:?}");
                 Self(dir)
