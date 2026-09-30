@@ -32,7 +32,7 @@ use std::ffi::OsString;
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use crate::JailMounts;
@@ -354,17 +354,17 @@ pub fn build_in_jail(
         };
     };
     let bytes = seccomp::program_bytes(&program);
-    let seccomp_fd = match crate::run_jail::write_seccomp_memfd(&bytes) {
-        Ok(fd) => fd,
-        Err(defect) => return JailOutcome::Unavailable { defect },
-    };
-    // Own the memfd so it is closed when this function returns. bwrap reads the
+    // The memfd is owned so it is closed when this function returns. bwrap reads the
     // seccomp filter by fd number during jail setup — before the child runs — so
     // closing it after the child is waited on is safe. Unlike the run jail
     // (which `exec`s and never returns), this build jail RETURNS and is called
     // once per axis in the audit tightening loop; a raw fd would leak one memfd
-    // per call in the long-lived audit/CI process.
-    let seccomp_owned = unsafe { OwnedFd::from_raw_fd(seccomp_fd) };
+    // per call in the long-lived audit/CI process. It is born without
+    // close-on-exec, so the spawned bwrap inherits it.
+    let seccomp_owned = match crate::run_jail::write_seccomp_memfd(&bytes) {
+        Ok(fd) => fd,
+        Err(defect) => return JailOutcome::Unavailable { defect },
+    };
 
     let host_env = crate::host_env::granted;
     let argv = run_jail_argv(

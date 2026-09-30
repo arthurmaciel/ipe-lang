@@ -8,6 +8,7 @@
 ))]
 
 use std::ffi::OsString;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
 use super::{
@@ -152,7 +153,7 @@ pub fn exec_in_run_jail(
         tools,
         profile,
         &mounts,
-        Some(seccomp_fd),
+        Some(seccomp_fd.as_raw_fd()),
         &host_env,
         &payload,
     );
@@ -162,22 +163,13 @@ pub fn exec_in_run_jail(
     })?;
     let mut cmd = std::process::Command::new(program_path);
     cmd.args(rest);
-    // The seccomp fd MUST survive exec so bwrap can read the program from it;
-    // clear its close-on-exec flag right before exec via a pre_exec hook.
-    let fd = seccomp_fd;
-    // SAFETY: `pre_exec` runs in the child between fork and exec. `fcntl` with
-    // `F_SETFD`/`0` is async-signal-safe and touches only this process's fd
-    // table; no allocation, no lock. A failure returns an error that aborts the
-    // exec, so a jail that could not un-cloexec its filter fd refuses rather
-    // than running the app without the filter.
-    unsafe {
-        cmd.pre_exec(move || {
-            let flags = libc_fcntl_getfd(fd)?;
-            let cleared = flags & !FD_CLOEXEC;
-            libc_fcntl_setfd(fd, cleared)?;
-            Ok(())
-        });
-    }
+    // The seccomp fd MUST survive exec so bwrap can read the program from it.
+    // `exec` replaces THIS process (no fork), so clearing close-on-exec here is
+    // the same fd-table state a pre-exec hook would see. A failure refuses
+    // rather than run the app without the filter.
+    clear_cloexec(seccomp_fd.as_fd()).map_err(|e| RunJailDefect::Spawn {
+        detail: format!("clearing close-on-exec on the seccomp memfd failed: {e}"),
+    })?;
     let err = cmd.exec();
     Err(RunJailDefect::Spawn {
         detail: err.to_string(),
@@ -240,7 +232,7 @@ pub fn exec_embedded_in_run_jail(
         tools,
         profile,
         &mounts,
-        Some(seccomp_fd),
+        Some(seccomp_fd.as_raw_fd()),
         Some((app_fd, &dest)),
         &host_env,
         &payload,
@@ -252,76 +244,23 @@ pub fn exec_embedded_in_run_jail(
     let mut cmd = std::process::Command::new(program_path);
     cmd.args(rest);
     // Both the seccomp filter fd and the sealed app fd MUST survive the exec so
-    // bwrap can read them; clear their close-on-exec flags right before exec.
-    let seccomp_fd_move = seccomp_fd;
-    let app_fd_move = app_fd;
-    // SAFETY: `pre_exec` runs in the child between fork and exec (here it is the
-    // process-replacing `exec`, so there is no fork — the closure runs in this
-    // process just before execve). `clear_cloexec` performs only
-    // async-signal-safe `fcntl` calls on owned fds; a failure aborts the exec,
-    // so a jail that could not un-cloexec a required fd refuses rather than
-    // running the app without its filter or without a delivered binary.
-    unsafe {
-        cmd.pre_exec(move || {
-            clear_cloexec(seccomp_fd_move)?;
-            clear_cloexec(app_fd_move)?;
-            Ok(())
-        });
-    }
+    // bwrap can read them. `exec` replaces THIS process (no fork), so clearing
+    // close-on-exec here is the same fd-table state a pre-exec hook would see. A
+    // failure refuses rather than run the app without its filter or without a
+    // delivered binary.
+    let cloexec_err = |what: &str, e: std::io::Error| RunJailDefect::Spawn {
+        detail: format!("clearing close-on-exec on the {what} failed: {e}"),
+    };
+    clear_cloexec(seccomp_fd.as_fd()).map_err(|e| cloexec_err("seccomp memfd", e))?;
+    clear_cloexec(app.as_fd()).map_err(|e| cloexec_err("sealed app memfd", e))?;
     let err = cmd.exec();
     Err(RunJailDefect::Spawn {
         detail: err.to_string(),
     })
 }
 
-// The two `fcntl` operations the pre_exec hook needs, wrapped so the raw
-// `extern "C"` surface is contained. `FD_CLOEXEC` is the close-on-exec flag.
-const FD_CLOEXEC: i32 = 1;
-
-unsafe extern "C" {
-    fn fcntl(fd: i32, cmd: i32, ...) -> i32;
-    fn memfd_create(name: *const core::ffi::c_char, flags: core::ffi::c_uint) -> i32;
-    fn write(fd: i32, buf: *const core::ffi::c_void, count: usize) -> isize;
-    fn read(fd: i32, buf: *mut core::ffi::c_void, count: usize) -> isize;
-    fn lseek(fd: i32, offset: i64, whence: i32) -> i64;
-    fn close(fd: i32) -> i32;
-}
-
-// memfd sealing constants (`<linux/memfd.h>` / `<linux/fcntl.h>`). A sealing
-// memfd is created with `MFD_ALLOW_SEALING`; `F_ADD_SEALS` then applies the
-// seal set. `F_SEAL_SEAL` forbids further seals — after it the byte content and
-// size are frozen and cannot be re-opened writable by anyone holding the fd.
-const MFD_ALLOW_SEALING: core::ffi::c_uint = 0x0002;
-const F_ADD_SEALS: i32 = 1033;
-const F_SEAL_SEAL: i32 = 0x0001;
-const F_SEAL_SHRINK: i32 = 0x0002;
-const F_SEAL_GROW: i32 = 0x0004;
-const F_SEAL_WRITE: i32 = 0x0008;
-
-const F_GETFD: i32 = 1;
-const F_SETFD: i32 = 2;
-
-fn libc_fcntl_getfd(fd: i32) -> std::io::Result<i32> {
-    // SAFETY: a plain fcntl(F_GETFD) query on an owned fd; no memory is touched.
-    let r = unsafe { fcntl(fd, F_GETFD) };
-    if r < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(r)
-}
-
-fn libc_fcntl_setfd(fd: i32, flags: i32) -> std::io::Result<()> {
-    // SAFETY: fcntl(F_SETFD, flags) on an owned fd; the variadic arg is a plain
-    // int as the ABI requires.
-    let r = unsafe { fcntl(fd, F_SETFD, flags) };
-    if r < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 /// Clear the close-on-exec flag on `fd` so an inherited fd (the seccomp memfd)
-/// survives an exec. Async-signal-safe — safe to call from a `pre_exec` hook.
+/// survives an exec.
 ///
 /// Shared by the run jail's own launcher and the captured-child build jail's
 /// subprocess-denied variant, so the fd-inheritance handling is defined once.
@@ -329,86 +268,88 @@ fn libc_fcntl_setfd(fd: i32, flags: i32) -> std::io::Result<()> {
 /// # Errors
 ///
 /// [`std::io::Error`] when either `fcntl` fails.
-pub fn clear_cloexec(fd: i32) -> std::io::Result<()> {
-    let flags = libc_fcntl_getfd(fd)?;
-    libc_fcntl_setfd(fd, flags & !FD_CLOEXEC)
+pub fn clear_cloexec(fd: BorrowedFd<'_>) -> std::io::Result<()> {
+    let flags = rustix::io::fcntl_getfd(fd)?;
+    rustix::io::fcntl_setfd(fd, flags.difference(rustix::io::FdFlags::CLOEXEC))?;
+    Ok(())
+}
+
+/// Write all of `bytes` to `fd`, treating a zero-length write as a failure.
+///
+/// A short write is a hard error: a truncated seccomp program is a malformed
+/// filter and a truncated app is a corrupt executable, so the caller refuses.
+fn write_all_fd(fd: BorrowedFd<'_>, bytes: &[u8]) -> std::io::Result<()> {
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        let n = rustix::io::write(fd, remaining)?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::WriteZero.into());
+        }
+        remaining = remaining.get(n..).unwrap_or_default();
+    }
+    Ok(())
+}
+
+/// Rewind `fd` to offset 0.
+fn rewind_fd(fd: BorrowedFd<'_>) -> std::io::Result<()> {
+    rustix::fs::seek(fd, rustix::fs::SeekFrom::Start(0))?;
+    Ok(())
 }
 
 /// Write the compiled seccomp program to an anonymous in-memory file and return
-/// its file descriptor, rewound to offset 0, ready for `bwrap --seccomp <fd>`.
+/// its owned descriptor, rewound to offset 0, ready for `bwrap --seccomp <fd>`.
 ///
 /// A `memfd` is used rather than a temp file so the program bytes never touch
 /// the filesystem (nothing to race or tamper on disk) and the fd is
-/// self-cleaning when closed.
+/// self-cleaning when closed. It is created WITHOUT `MFD_CLOEXEC`, so it is
+/// inheritable from birth: a spawned `bwrap` receives it with no child-side hook.
 ///
 /// # Errors
 ///
 /// [`RunJailDefect::Spawn`] on any `memfd_create`, write, or seek failure — a
 /// truncated or unwritten filter would be a malformed seccomp program, so the
 /// jail refuses rather than run unfiltered.
-pub fn write_seccomp_memfd(bytes: &[u8]) -> Result<i32, RunJailDefect> {
+pub fn write_seccomp_memfd(bytes: &[u8]) -> Result<OwnedFd, RunJailDefect> {
     let spawn = |detail: String| RunJailDefect::Spawn { detail };
-    let name = c"ipe-seccomp";
-    // SAFETY: `memfd_create` with a valid NUL-terminated name and 0 flags
-    // returns a new fd or -1; no memory is shared.
-    let fd = unsafe { memfd_create(name.as_ptr(), 0) };
-    if fd < 0 {
-        return Err(spawn(format!(
-            "memfd_create for the seccomp program failed: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    // Write the whole program. A short write is a hard error — a truncated
-    // seccomp program would be a malformed/rejected filter, so refuse.
-    let mut written: usize = 0;
-    while written < bytes.len() {
-        let Some(remaining) = bytes.get(written..) else {
-            break;
-        };
-        // SAFETY: `write` reads `remaining.len()` bytes from a valid slice
-        // pointer into the owned memfd; the slice outlives the call.
-        let n = unsafe {
-            write(
-                fd,
-                remaining.as_ptr().cast::<core::ffi::c_void>(),
-                remaining.len(),
-            )
-        };
-        if n <= 0 {
-            return Err(spawn(format!(
-                "writing the seccomp program to the memfd failed: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        written += usize::try_from(n).unwrap_or(0);
-    }
+    let fd =
+        rustix::fs::memfd_create(c"ipe-seccomp", rustix::fs::MemfdFlags::empty()).map_err(|e| {
+            spawn(format!(
+                "memfd_create for the seccomp program failed: {}",
+                std::io::Error::from(e)
+            ))
+        })?;
+    write_all_fd(fd.as_fd(), bytes).map_err(|e| {
+        spawn(format!(
+            "writing the seccomp program to the memfd failed: {e}"
+        ))
+    })?;
     // Rewind so bwrap reads the program from the start.
-    // SAFETY: lseek to absolute offset 0 (SEEK_SET = 0) on the owned fd.
-    if unsafe { lseek(fd, 0, 0) } < 0 {
-        return Err(spawn(format!(
-            "rewinding the seccomp memfd failed: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    rewind_fd(fd.as_fd()).map_err(|e| spawn(format!("rewinding the seccomp memfd failed: {e}")))?;
     Ok(fd)
 }
 
-/// A sealed anonymous file holding the embedded app binary, owned by its raw
-/// descriptor.  The descriptor is closed on drop.
+/// A sealed anonymous file holding the embedded app binary, owning its
+/// descriptor (closed on drop).
 ///
 /// The bytes are frozen by `F_SEAL_WRITE | F_SEAL_SHRINK | F_SEAL_GROW |
 /// F_SEAL_SEAL`, so what a caller verifies by reading the fd is exactly what the
 /// jail delivers from the same fd — there is no on-disk name to race, and no
 /// writable re-open is possible even for a process holding the fd.
 pub struct SealedApp {
-    fd: i32,
+    fd: OwnedFd,
+}
+
+impl AsFd for SealedApp {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.fd.as_fd()
+    }
 }
 
 impl SealedApp {
-    /// The raw descriptor of the sealed anonymous file.
+    /// The raw descriptor number of the sealed anonymous file.
     #[must_use]
-    pub const fn as_raw_fd(&self) -> i32 {
-        self.fd
+    pub fn as_raw_fd(&self) -> i32 {
+        self.fd.as_raw_fd()
     }
 
     /// Read the full sealed contents by reading through the fd.
@@ -423,60 +364,33 @@ impl SealedApp {
     /// [`RunJailDefect::Spawn`] on any seek or read failure.
     pub fn read_sealed_bytes(&self) -> Result<Vec<u8>, RunJailDefect> {
         let spawn = |detail: String| RunJailDefect::Spawn { detail };
-        // SAFETY: lseek to absolute offset 0 (SEEK_SET = 0) on the owned fd.
-        if unsafe { lseek(self.fd, 0, 0) } < 0 {
-            return Err(spawn(format!(
-                "rewinding the sealed app memfd failed: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
+        let fd = self.fd.as_fd();
+        rewind_fd(fd).map_err(|e| spawn(format!("rewinding the sealed app memfd failed: {e}")))?;
         let mut out: Vec<u8> = Vec::new();
         // Heap-allocated read buffer (a large on-stack array is a stack-size
         // hazard).
         let mut chunk = vec![0u8; 65536];
         loop {
-            // SAFETY: `read` writes at most `chunk.len()` bytes into the owned,
-            // fully-initialised `chunk` buffer; the pointer and length describe
-            // exactly that buffer.
-            let n = unsafe {
-                read(
-                    self.fd,
-                    chunk.as_mut_ptr().cast::<core::ffi::c_void>(),
-                    chunk.len(),
-                )
-            };
-            if n < 0 {
-                return Err(spawn(format!(
+            let n = rustix::io::read(fd, &mut chunk).map_err(|e| {
+                spawn(format!(
                     "reading the sealed app memfd failed: {}",
-                    std::io::Error::last_os_error()
-                )));
-            }
+                    std::io::Error::from(e)
+                ))
+            })?;
             if n == 0 {
                 break;
             }
-            let read_len = usize::try_from(n).unwrap_or(0);
-            if let Some(slice) = chunk.get(..read_len) {
+            if let Some(slice) = chunk.get(..n) {
                 out.extend_from_slice(slice);
             }
         }
         // Rewind so a subsequent consumer reads from the start.
-        // SAFETY: lseek to absolute offset 0 on the owned fd.
-        if unsafe { lseek(self.fd, 0, 0) } < 0 {
-            return Err(spawn(format!(
-                "rewinding the sealed app memfd after read failed: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
+        rewind_fd(fd).map_err(|e| {
+            spawn(format!(
+                "rewinding the sealed app memfd after read failed: {e}"
+            ))
+        })?;
         Ok(out)
-    }
-}
-
-impl Drop for SealedApp {
-    fn drop(&mut self) {
-        // SAFETY: `close` on the owned fd; after this the descriptor is not used.
-        unsafe {
-            close(self.fd);
-        }
     }
 }
 
@@ -493,64 +407,32 @@ impl Drop for SealedApp {
 ///
 /// [`RunJailDefect::Spawn`] on any syscall failure.
 pub fn write_sealed_app_memfd(bytes: &[u8]) -> Result<SealedApp, RunJailDefect> {
+    use rustix::fs::SealFlags;
     let spawn = |detail: String| RunJailDefect::Spawn { detail };
-    let name = c"ipe-embedded-app";
-    // SAFETY: `memfd_create` with a valid NUL-terminated name and the
-    // `MFD_ALLOW_SEALING` flag returns a new fd or -1; no memory is shared.
     // `MFD_CLOEXEC` is deliberately NOT set: the fd must survive the exec into
     // bwrap so bwrap can read the app from it.
-    let fd = unsafe { memfd_create(name.as_ptr(), MFD_ALLOW_SEALING) };
-    if fd < 0 {
-        return Err(spawn(format!(
+    let fd = rustix::fs::memfd_create(c"ipe-embedded-app", rustix::fs::MemfdFlags::ALLOW_SEALING)
+        .map_err(|e| {
+        spawn(format!(
             "memfd_create for the embedded app failed: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    let sealed = SealedApp { fd };
-    // Write the whole binary. A short write is a hard error — a truncated app
-    // would be a corrupt executable, so refuse.
-    let mut written: usize = 0;
-    while written < bytes.len() {
-        let Some(remaining) = bytes.get(written..) else {
-            break;
-        };
-        // SAFETY: `write` reads `remaining.len()` bytes from a valid slice
-        // pointer into the owned memfd; the slice outlives the call.
-        let n = unsafe {
-            write(
-                fd,
-                remaining.as_ptr().cast::<core::ffi::c_void>(),
-                remaining.len(),
-            )
-        };
-        if n <= 0 {
-            return Err(spawn(format!(
-                "writing the embedded app to the memfd failed: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        written += usize::try_from(n).unwrap_or(0);
-    }
+            std::io::Error::from(e)
+        ))
+    })?;
+    write_all_fd(fd.as_fd(), bytes)
+        .map_err(|e| spawn(format!("writing the embedded app to the memfd failed: {e}")))?;
     // Seal against write, shrink, grow, and further sealing. After this the
     // byte content and size are frozen for the lifetime of the fd.
-    let seals = F_SEAL_WRITE | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL;
-    // SAFETY: fcntl(F_ADD_SEALS, seals) on the owned sealing-capable memfd; the
-    // variadic arg is a plain int as the ABI requires.
-    if unsafe { fcntl(fd, F_ADD_SEALS, seals) } < 0 {
-        return Err(spawn(format!(
+    let seals = SealFlags::WRITE | SealFlags::SHRINK | SealFlags::GROW | SealFlags::SEAL;
+    rustix::fs::fcntl_add_seals(fd.as_fd(), seals).map_err(|e| {
+        spawn(format!(
             "sealing the embedded app memfd failed: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+            std::io::Error::from(e)
+        ))
+    })?;
     // Rewind so the first reader (verification scan) starts at the beginning.
-    // SAFETY: lseek to absolute offset 0 (SEEK_SET = 0) on the owned fd.
-    if unsafe { lseek(fd, 0, 0) } < 0 {
-        return Err(spawn(format!(
-            "rewinding the embedded app memfd failed: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    Ok(sealed)
+    rewind_fd(fd.as_fd())
+        .map_err(|e| spawn(format!("rewinding the embedded app memfd failed: {e}")))?;
+    Ok(SealedApp { fd })
 }
 
 #[cfg(test)]

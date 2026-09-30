@@ -461,7 +461,7 @@ pub fn run_in_bwrap_jail_deny_subprocess(
     spec: &JailSpec,
     payload: &[OsString],
 ) -> Result<JailedOutput, SandboxDefect> {
-    use std::os::fd::FromRawFd as _;
+    use std::os::fd::{AsFd as _, AsRawFd as _};
 
     // `allow_subprocess = false` ⇒ the fork/process-clone family is denied.
     let Some(program) = seccomp::subprocess_deny_program(false) else {
@@ -469,29 +469,33 @@ pub fn run_in_bwrap_jail_deny_subprocess(
         return Err(SandboxDefect::NoIsolationMechanism);
     };
     let bytes = seccomp::program_bytes(&program);
-    let raw = run_jail::write_seccomp_memfd(&bytes).map_err(|d| SandboxDefect::Spawn {
-        program: "seccomp".to_owned(),
-        detail: d.to_string(),
-    })?;
-    // Own the memfd in the PARENT so it is closed on return — this launcher
+    // The memfd is owned in the PARENT so it is closed on return — this launcher
     // `spawn`s (not `exec`s) and the server is long-lived, so a leaked fd per
     // request would exhaust the process's file-descriptor limit. The child gets
     // its own inherited copy across `spawn`, so closing the parent's copy after
     // the run does not disturb the jailed process.
-    // SAFETY: `raw` is a fresh, owned memfd from `write_seccomp_memfd`; wrapping
-    // it in `OwnedFd` transfers that sole ownership so `Drop` closes it exactly
-    // once.
-    let owned = unsafe { std::os::fd::OwnedFd::from_raw_fd(raw) };
-    let out = run_bwrap(caps, spec, payload, Some(raw));
+    let owned = run_jail::write_seccomp_memfd(&bytes).map_err(|d| SandboxDefect::Spawn {
+        program: "seccomp".to_owned(),
+        detail: d.to_string(),
+    })?;
+    // The seccomp fd MUST be inheritable so bwrap reads the filter from it across
+    // the spawn. Clearing close-on-exec here, in the parent, refuses the run
+    // (fail-closed) when the flag cannot be cleared, rather than run the payload
+    // without its filter.
+    run_jail::clear_cloexec(owned.as_fd()).map_err(|e| SandboxDefect::Spawn {
+        program: "seccomp".to_owned(),
+        detail: format!("clearing close-on-exec on the seccomp memfd failed: {e}"),
+    })?;
+    let out = run_bwrap(caps, spec, payload, Some(owned.as_raw_fd()));
     drop(owned);
     out
 }
 
 /// The shared spawn+drain core for both the plain and the subprocess-denied jail.
 ///
-/// When `seccomp_fd` is `Some`, `--seccomp <fd>` is inserted into the bwrap argv
-/// and the fd is un-cloexec'd in the child (via a `pre_exec` hook) so bwrap can
-/// read the filter from it across the exec.
+/// When `seccomp_fd` is `Some`, `--seccomp <fd>` is inserted into the bwrap argv;
+/// the caller owns that fd and has already made it inheritable, so bwrap reads the
+/// filter from it across the exec.
 fn run_bwrap(
     caps: &Capabilities,
     spec: &JailSpec,
@@ -522,31 +526,6 @@ fn run_bwrap(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    // The seccomp fd MUST survive exec so bwrap can read the program from it: the
-    // pre_exec hook clears its close-on-exec flag right before exec. A failure
-    // aborts the exec, so a jail that could not un-cloexec its filter refuses
-    // rather than running the payload without the filter (fail-closed).
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    ))]
-    if let Some(fd) = seccomp_fd {
-        // The seccomp fd must survive the exec so bwrap reads the filter from it;
-        // `run_jail::clear_cloexec` is async-signal-safe and defined once, shared
-        // with the run jail's own launcher.
-        // SAFETY: `pre_exec` runs in the child between fork and exec; the hook
-        // only clears a close-on-exec flag on this process's fd table.
-        unsafe {
-            use std::os::unix::process::CommandExt as _;
-            cmd.pre_exec(move || run_jail::clear_cloexec(fd));
-        }
-    }
-    // On platforms without the seccomp path, no caller ever passes a fd.
-    #[cfg(not(all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    )))]
-    let _ = seccomp_fd;
     let child = cmd.spawn().map_err(spawn_err)?;
     drain_and_reap(child, spec.limits.out_cap_bytes, program)
 }
