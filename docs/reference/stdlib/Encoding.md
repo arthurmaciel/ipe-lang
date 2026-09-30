@@ -37,8 +37,9 @@ alphabet or has invalid padding.
 urlEncode : String -> String
 ```
 
-Form-encode a string for a query-string key or value
-(`application/x-www-form-urlencoded`): every byte except the ASCII
+Form-encode a string for a query-string key or value.
+
+The encoding is `application/x-www-form-urlencoded`: every byte except the ASCII
 alphanumerics and `-` `_` `.` `~` is percent-escaped, and a space becomes `+`.
 
 ## `urlDecode`
@@ -47,9 +48,10 @@ alphanumerics and `-` `_` `.` `~` is percent-escaped, and a space becomes `+`.
 urlDecode : String -> Result Error String
 ```
 
-Form-decode a query-string key or value
-(`application/x-www-form-urlencoded`), the inverse of `urlEncode`: a `+`
-becomes a space, then each `%XX` escape decodes.
+Form-decode a query-string key or value, the inverse of `urlEncode`.
+
+The decoding is `application/x-www-form-urlencoded`: a `+` becomes a space,
+then each `%XX` escape decodes.
 
 Use `percentDecode` for a URL path or a file location, where `+` is a
 literal `+`.
@@ -64,9 +66,10 @@ valid UTF-8.
 percentDecode : String -> Result Error String
 ```
 
-Percent-decode a URL path segment, a file location, or any other
-non-form URL component (RFC 3986): each `%XX` escape decodes and a `+`
-stays a literal `+`.
+Percent-decode a non-form URL component such as a path segment (RFC 3986).
+
+Each `%XX` escape decodes and a `+` stays a literal `+`, so it also fits a
+file location.
 
 Returns `Err` when the input contains a malformed percent-escape sequence
 (a `%` not followed by two hex digits) or when the decoded bytes are not
