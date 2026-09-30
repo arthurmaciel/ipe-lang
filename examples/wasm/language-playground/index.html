@@ -196,21 +196,27 @@
 
     const SAMPLE = `module Main exposing (main)
 
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.List as List
 import Ipe.String as String
+import Ipe.Task exposing (Task)
+
 
 -- Edit this program: it compiles in your browser as you type.
 -- The Ipê frontend (parse -> typecheck -> lower -> emit) runs as WebAssembly
 -- and shows the Rust it emits. Press Run to send that emitted Rust to the
 -- playground server, which builds and runs it (sandboxed) and shows the output.
-
 double : Int -> Int
-double n = n * 2
+double n =
+    n * 2
 
-greeting : String
-greeting = String.join " " [ "double 21 =", String.fromInt (double 21) ]
 
-main : String
-main = greeting
+main : Task Error ()
+main =
+    do
+        Io.println ("double 21 = " ++ String.fromInt (double 21))
+        [ 1, 2, 3 ] |> List.map (double >> String.fromInt) |> String.join ", " |> Io.println
 `;
 
     const statusBar = document.getElementById('status-bar');
@@ -286,11 +292,11 @@ main = greeting
       root.setProperty('--accent-fg', '#ffffff');
     }
 
+    // ACE loads a theme chunk lazily and calls back once its style is applied;
+    // the UI colours are read from the editor only then. The frame wait lets
+    // the injected style reach the computed style.
     function setTheme(theme) {
-      editor.setTheme(theme);
-      // ACE applies the theme asynchronously (injects a <style>); read colours
-      // after it lands.
-      setTimeout(applyUiFromEditor, 60);
+      editor.setTheme(theme, () => requestAnimationFrame(applyUiFromEditor));
     }
     themeSelect.addEventListener('change', () => setTheme(themeSelect.value));
 
@@ -305,6 +311,23 @@ main = greeting
     // emitted Rust, so the button mirrors `compile()`'s ok state.
     let compileOk = false;
     let lastEmittedRust = '';
+    // Whether a run server answered GET /health: 'probing' | 'up' | 'down'.
+    // Run is enabled only when the compile succeeded AND the server is up.
+    let serverState = 'probing';
+    const NO_SERVER = 'Run needs the local server — see README';
+
+    function syncRunButton() {
+      runBtn.disabled = running || !compileOk || serverState !== 'up';
+      runBtn.title = serverState === 'down'
+        ? NO_SERVER
+        : 'Build and run on the server, sandboxed (Ctrl/Cmd+Enter)';
+    }
+
+    function compiledStatus() {
+      if (serverState === 'up') return 'Compiled successfully — emitted Rust shown; Run is enabled.';
+      if (serverState === 'down') return 'Compiled successfully — emitted Rust shown. ' + NO_SERVER + '.';
+      return 'Compiled successfully — emitted Rust shown; looking for the run server…';
+    }
 
     function runCompile() {
       if (!wasmReady) return;
@@ -326,15 +349,15 @@ main = greeting
           output.className = '';
           outputTitle.textContent = 'Emitted Rust';
           output.textContent = res.emitted_rust;
-          runBtn.disabled = false;
+          syncRunButton();
           statusBar.className = 'ok';
-          statusBar.textContent = 'Compiled successfully — emitted Rust shown; Run is enabled.';
+          statusBar.textContent = compiledStatus();
         } else {
           compileOk = false;
           output.className = 'err';
           outputTitle.textContent = 'Diagnostics';
           output.textContent = res.diagnostics || '(no diagnostics)';
-          runBtn.disabled = true;
+          syncRunButton();
           statusBar.className = 'error';
           statusBar.textContent = 'Compile error — see diagnostics.';
         }
@@ -352,18 +375,49 @@ main = greeting
     // Turning that Rust into a running binary needs cargo, which cannot run in
     // the browser — so Run POSTs the emitted Rust (not the Ipê source) to the
     // playground server, which builds AND executes it inside a hardened sandbox
-    // (no network, jailed filesystem, memory/CPU/fork/time caps — the sandbox
-    // lands with the jail-runner milestone) and returns a {ok,unsandboxed,
-    // output} transcript.
+    // (no network, jailed filesystem, memory/CPU/fork/time caps) and returns a
+    // {ok, unsandboxed, output} transcript.
     //
-    // The run server is separate from this static site. Point RUN_SERVER at it
-    // (default: same origin — set when the static UI is served BY the run
-    // server). When it is unreachable, Run degrades gracefully to the live emit.
-    const RUN_SERVER =
-      (new URLSearchParams(location.search).get('server')) || location.origin;
-    const RUN_URL = RUN_SERVER.replace(/\/$/, '') + '/run';
+    // The run server is separate from a static host (e.g. GitHub Pages). By
+    // default the page talks to the directory it was served from, so the
+    // server's own copy works under any sub-path; `?server=<origin>` points it
+    // elsewhere. With no server answering /health, Run stays disabled and the
+    // page is a pure in-browser emit preview.
+    const params = new URLSearchParams(location.search);
+    const RUN_BASE = new URL(params.get('server') || '.', location.href);
+    const endpoint = (name) => new URL(name, RUN_BASE.href.replace(/\/?$/, '/')).href;
+    const HEALTH_URL = endpoint('health');
+    const RUN_URL = endpoint('run');
 
     let running = false;
+
+    function markServerDown() {
+      serverState = 'down';
+      runTitle.textContent = 'Program output';
+      runOutput.className = '';
+      runOutput.innerHTML = '';
+      const link = document.createElement('a');
+      link.href = 'https://github.com/ipe-lang/compiler/tree/main/examples/wasm/language-playground#readme';
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = 'README';
+      runOutput.append('Run needs the local server — see ', link,
+        '. The emitted Rust preview above works without it.');
+      syncRunButton();
+    }
+
+    async function probeServer() {
+      try {
+        const resp = await fetch(HEALTH_URL, { signal: AbortSignal.timeout(5000) });
+        const data = resp.ok ? await resp.json() : null;
+        serverState = data && data.ok === true ? 'up' : 'down';
+      } catch {
+        serverState = 'down';
+      }
+      if (serverState === 'down') markServerDown();
+      syncRunButton();
+      if (compileOk) statusBar.textContent = compiledStatus();
+    }
 
     function showRunResult(data) {
       // Wire shape: { ok, unsandboxed, output } — the only states the server
@@ -391,31 +445,44 @@ main = greeting
     }
 
     async function runNow() {
-      if (running || !compileOk) return;
+      if (running || !compileOk || serverState !== 'up') return;
       if (timer) { clearTimeout(timer); timer = null; }
       running = true;
-      runBtn.disabled = true;
+      syncRunButton();
       statusBar.className = 'compiling';
       statusBar.textContent = 'Building and running (sandboxed)…';
       try {
-        const resp = await fetch(RUN_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rust: lastEmittedRust }),
-        });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        const data = await resp.json();
-        showRunResult(data);
-      } catch (e) {
-        // No run server reachable: keep the client-side emitted-Rust preview and
-        // explain that running needs the server.
-        statusBar.className = 'error';
-        statusBar.textContent =
-          'Run server unreachable (' + e.message + ') — showing the emitted Rust preview only.';
-        runCompile();
+        let resp;
+        try {
+          resp = await fetch(RUN_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rust: lastEmittedRust }),
+          });
+        } catch {
+          // The server went away after the health probe.
+          markServerDown();
+          statusBar.className = 'error';
+          statusBar.textContent = NO_SERVER + '.';
+          return;
+        }
+        // Every /run answer, refusals (413/400/500) included, carries the same
+        // {ok, unsandboxed, output} JSON body.
+        let data = null;
+        try {
+          data = await resp.json();
+        } catch {
+          data = null;
+        }
+        if (data && typeof data.ok === 'boolean') {
+          showRunResult(data);
+        } else {
+          showRunResult({ ok: false, unsandboxed: false,
+            output: 'The run server answered HTTP ' + resp.status + ' without a transcript.' });
+        }
       } finally {
         running = false;
-        runBtn.disabled = !compileOk;
+        syncRunButton();
       }
     }
     runBtn.addEventListener('click', runNow);
@@ -427,7 +494,8 @@ main = greeting
     });
 
     // ---- Boot ----
-    runBtn.disabled = true;
+    syncRunButton();
+    probeServer();
     (async () => {
       try {
         await init();
@@ -435,7 +503,7 @@ main = greeting
         statusBar.className = 'ok';
         statusBar.textContent =
           'Ready — emitted Rust shown live; press Run to build & run it (sandboxed) on the server.';
-        runCompile(); // enables Run iff the sample compiles
+        runCompile(); // Run needs a clean compile and a live server
       } catch (e) {
         statusBar.className = 'error';
         statusBar.textContent = 'Failed to load the WASM compiler: ' + e;
