@@ -3036,8 +3036,8 @@ mod tests {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("ipe-strict-static-{}-{nanos}", std::process::id()));
+        let dir = crate::scratch_core::test_temp_root()
+            .join(format!("ipe-strict-static-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp static dir");
         std::fs::write(dir.join("hello.txt"), "hi").expect("static fixture file");
         let app = axum::Router::new().nest_service("/static", strict_serve_dir(dir.clone()));

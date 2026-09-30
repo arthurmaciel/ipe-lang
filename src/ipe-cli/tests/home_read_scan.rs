@@ -60,17 +60,29 @@ const RUNTIME_ROOT: &str = "src/runtime/rust/";
 /// sandbox home reader, the jail passthrough); the dev-only temp-root test
 /// reader; and in the runtime crate, which has its own `clippy.toml`, the build
 /// script, the recursion-limit trip, the temp-root owner and its test reader,
-/// the environment accessor's readers, and an integration test with no
-/// crate-private accessor.
+/// the environment accessor's readers, an integration test with no
+/// crate-private accessor, the lenient-decoder ban proofs, and the audited
+/// lossy-UTF-8 sites that render bytes already refused or never parsed.
 const ESCAPE_HATCH_SITES: &[(&str, usize)] = &[
     ("src/compiler/env/src/lib.rs", 3),
     ("src/compiler/sandbox/src/home.rs", 1),
     ("src/compiler/sandbox/src/host_env.rs", 1),
     ("tools/test-temp/src/lib.rs", 1),
     ("src/runtime/rust/build.rs", 1),
+    ("src/runtime/rust/src/clippy_paths_resolve.rs", 10),
     ("src/runtime/rust/src/core.rs", 1),
+    ("src/runtime/rust/src/csv.rs", 1),
+    ("src/runtime/rust/src/dom/form.rs", 1),
+    ("src/runtime/rust/src/email.rs", 1),
+    ("src/runtime/rust/src/http_client.rs", 2),
+    ("src/runtime/rust/src/http_stream.rs", 2),
     ("src/runtime/rust/src/scratch_core.rs", 2),
-    ("src/runtime/rust/src/system.rs", 5),
+    ("src/runtime/rust/src/server.rs", 2),
+    ("src/runtime/rust/src/ssrf.rs", 1),
+    ("src/runtime/rust/src/system.rs", 9),
+    ("src/runtime/rust/src/tui/key.rs", 1),
+    ("src/runtime/rust/src/url.rs", 1),
+    ("src/runtime/rust/src/web/mod.rs", 1),
     ("src/runtime/rust/tests/debug_behavior.rs", 1),
 ];
 
