@@ -2718,6 +2718,96 @@ mod tests {
         ));
     }
 
+    /// Serve `uri` through a real `method_router` routed on `/u/:id`.
+    ///
+    /// The handler answers `"{id}|{q}"` from its path parameter and query, and
+    /// counts its runs. Returns the status, the body and the run count.
+    async fn serve_counted(uri: &str) -> (axum::http::StatusCode, String, usize) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tower::ServiceExt;
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&runs);
+        let handler: ErasedHandler = Arc::new(move |req: ServerRequest| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let id = req.params.get("id").cloned().unwrap_or_default();
+            let q = req.query.get("q").cloned().unwrap_or_default();
+            let resp = server_text(format!("{id}|{q}"));
+            Box::pin(async move { Ok(resp) })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = Result<ServerResponse, String>> + Send>,
+                >
+        });
+        let app = axum::Router::new().route("/u/:id", method_router("GET", handler));
+        let wire = axum::http::Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(axum::body::Body::empty());
+        assert!(wire.is_ok(), "{uri:?} must be a buildable request URI");
+        let Ok(wire) = wire else {
+            return (
+                axum::http::StatusCode::IM_A_TEAPOT,
+                String::new(),
+                usize::MAX,
+            );
+        };
+        let resp = match app.oneshot(wire).await {
+            Ok(r) => r,
+            Err(e) => match e {},
+        };
+        let status = resp.status();
+        let body = axum_body_string(resp).await;
+        (status, body, runs.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn malformed_url_components_are_refused_before_the_handler() {
+        // Prove the refusals: each malformed path parameter or query answers
+        // 400 with the fixed reason, and the handler never runs.
+        let mut past_cap: Vec<String> = (0..crate::encoding::MAX_QUERY_PAIRS.get())
+            .map(|i| format!("k{i}=v"))
+            .collect();
+        past_cap.push("extra=1".to_string());
+        let too_many_pairs = format!("/u/x?{}", past_cap.join("&"));
+        for uri in [
+            "/u/%zz",
+            "/u/trailing%",
+            "/u/%C3",
+            "/u/%C0%AF",
+            "/u/x?q=%zz",
+            "/u/x?%C3=1",
+            too_many_pairs.as_str(),
+        ] {
+            let (status, body, runs) = serve_counted(uri).await;
+            assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{uri:?}");
+            assert_eq!(body, "Bad Request", "{uri:?} must not echo the request");
+            assert_eq!(runs, 0, "{uri:?} must never reach the handler");
+        }
+    }
+
+    #[tokio::test]
+    async fn well_formed_url_components_decode_once_by_grammar() {
+        // Happy path: `+` is literal in a path and a space in a query, every
+        // escape is decoded exactly once, and the handler runs once.
+        let mut at_cap: Vec<String> = (1..crate::encoding::MAX_QUERY_PAIRS.get())
+            .map(|i| format!("k{i}=v"))
+            .collect();
+        at_cap.push("q=last".to_string());
+        let pairs_at_cap = format!("/u/x?{}", at_cap.join("&"));
+        for (uri, want) in [
+            ("/u/a+b", "a+b|"),
+            ("/u/x?q=a+b", "x|a b"),
+            ("/u/%2541", "%41|"),
+            ("/u/caf%C3%A9", "café|"),
+            ("/u/x?q=1&q=2", "x|1"),
+            (pairs_at_cap.as_str(), "x|last"),
+        ] {
+            let (status, body, runs) = serve_counted(uri).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{uri:?}");
+            assert_eq!(body, want, "{uri:?}");
+            assert_eq!(runs, 1, "{uri:?}");
+        }
+    }
+
     #[tokio::test]
     async fn build_request_stores_canonical_header_keys() {
         let wire = axum::http::Request::builder()
