@@ -330,6 +330,11 @@ fn env_block_from_pairs(pairs: &[(OsString, OsString)]) -> Vec<u16> {
 // occurrence adds noise without clarity, and the Win32 argument-count is
 // intrinsic to the API surface. Scoped allows for exactly those doc/style lints;
 // every soundness lint stays enforced.
+//
+// `unsafe` stays denied module-wide: the Job Object lifecycle (create, assign,
+// close) goes through the safe `win32job` crate, and only the functions that
+// call a Win32 entry point no vetted safe crate wraps opt in, each with its own
+// `#[allow(unsafe_code)]` audit and a SAFETY argument per block.
 #[cfg(target_os = "windows")]
 #[allow(
     clippy::doc_markdown,
@@ -364,11 +369,10 @@ mod windows_jail {
         GetVolumePathNameW,
     };
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
-        JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOB_OBJECT_LIMIT_PROCESS_TIME, JOBOBJECT_BASIC_LIMIT_INFORMATION,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-        SetInformationJobObject,
+        JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_JOB_MEMORY,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_TIME,
+        JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, SetInformationJobObject,
     };
     use windows_sys::Win32::System::SystemServices::{FILE_PERSISTENT_ACLS, SE_GROUP_ENABLED};
     use windows_sys::Win32::System::Threading::{
@@ -376,7 +380,7 @@ mod windows_jail {
         DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
         GetExitCodeProcess, InitializeProcThreadAttributeList, OpenProcessToken,
         PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ResumeThread,
-        STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
+        STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute, WaitForSingleObject,
     };
 
     /// Access rights ACLed onto a granted path for the container SID (read+write).
@@ -401,6 +405,8 @@ mod windows_jail {
     }
 
     impl Drop for OwnedHandle {
+        #[allow(unsafe_code)]
+        // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
         fn drop(&mut self) {
             if !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE {
                 // SAFETY: `self.0` is a live handle this type owns; closing it once
@@ -417,6 +423,8 @@ mod windows_jail {
     struct OwnedSid(PSID);
 
     impl Drop for OwnedSid {
+        #[allow(unsafe_code)]
+        // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
         fn drop(&mut self) {
             if !self.0.is_null() {
                 // SAFETY: `self.0` was allocated by a SID-allocating Win32 call this
@@ -441,6 +449,8 @@ mod windows_jail {
         }
     }
 
+    #[allow(unsafe_code)]
+    // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
     fn last_error_spawn(context: &str) -> RunJailDefect {
         // SAFETY: `GetLastError` reads this thread's last-error slot; no memory
         // is accessed.
@@ -546,7 +556,7 @@ mod windows_jail {
         )?;
 
         // 7. Assign to the job BEFORE resuming, so no instruction runs un-jobbed.
-        assign_to_job(job.get(), child.process.get())?;
+        assign_to_job(&job, child.process.get())?;
 
         // 8. Resume the main thread.
         resume(child.thread.get())?;
@@ -583,6 +593,8 @@ mod windows_jail {
     }
 
     impl AppContainer {
+        #[allow(unsafe_code)]
+        // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
         fn create(name: &OsStr) -> Result<Self, RunJailDefect> {
             let wname = wide(name);
             // CreateAppContainerProfile registers the container so its SID is
@@ -655,6 +667,8 @@ mod windows_jail {
             self.sid.0
         }
 
+        #[allow(unsafe_code)]
+        // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
         fn delete(&self) {
             // SAFETY: `self.name` is the live NUL-terminated wide name used to
             // create the profile; deleting it releases the registered container.
@@ -734,6 +748,8 @@ mod windows_jail {
     }
 
     impl OwnedWellKnownSid {
+        #[allow(unsafe_code)]
+        // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
         fn create(kind: WELL_KNOWN_SID_TYPE) -> Result<Self, RunJailDefect> {
             use windows_sys::Win32::Security::CreateWellKnownSid;
             let mut buf: Vec<u8> = vec![0u8; SECURITY_MAX_SID_SIZE as usize];
@@ -773,13 +789,20 @@ mod windows_jail {
 
     /// Create the Job Object and set its extended limits: kill-on-close, no
     /// breakaway, active-process cap.
-    fn create_job(profile: &SandboxProfile) -> Result<OwnedHandle, RunJailDefect> {
-        // SAFETY: a nameless, default-security Job Object; returns a handle or null.
-        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if handle.is_null() {
-            return Err(last_error_spawn("CreateJobObjectW failed"));
-        }
-        let job = OwnedHandle(handle);
+    ///
+    /// The job is created, assigned, and closed on drop through the safe
+    /// `win32job` crate; its limit setters cover none of the active-process,
+    /// job-memory, or per-process CPU-time ceilings, so those are applied with a
+    /// raw `SetInformationJobObject` on the job's borrowed handle.
+    #[allow(unsafe_code)]
+    // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
+    fn create_job(profile: &SandboxProfile) -> Result<win32job::Job, RunJailDefect> {
+        let job = win32job::Job::create().map_err(|e| {
+            spawn(format!(
+                "CreateJobObjectW failed: {}",
+                std::io::Error::from(e)
+            ))
+        })?;
 
         let active_cap = active_process_cap(profile);
         // The address-space and CPU-second ceilings the profile mandates. On the
@@ -794,27 +817,30 @@ mod windows_jail {
         let mem_bytes = profile.limits.job_memory_limit_bytes();
         let cpu_100ns = profile.limits.cpu_time_100ns();
 
-        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        info.BasicLimitInformation = JOBOBJECT_BASIC_LIMIT_INFORMATION {
-            // KILL_ON_JOB_CLOSE: every process dies when the launcher's job handle
-            // closes. ACTIVE_PROCESS: the count cap. PROCESS_TIME: the per-process
-            // CPU-second ceiling. JOB_MEMORY: the job-wide committed-bytes ceiling.
-            // BREAKAWAY_OK is deliberately NOT set — a child cannot escape the job.
-            LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-                | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
-                | JOB_OBJECT_LIMIT_PROCESS_TIME
-                | JOB_OBJECT_LIMIT_JOB_MEMORY,
-            ActiveProcessLimit: active_cap,
-            PerProcessUserTimeLimit: cpu_100ns,
-            ..info.BasicLimitInformation
+        let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+            BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                // KILL_ON_JOB_CLOSE: every process dies when the launcher's job handle
+                // closes. ACTIVE_PROCESS: the count cap. PROCESS_TIME: the per-process
+                // CPU-second ceiling. JOB_MEMORY: the job-wide committed-bytes ceiling.
+                // BREAKAWAY_OK is deliberately NOT set — a child cannot escape the job.
+                LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                    | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                    | JOB_OBJECT_LIMIT_PROCESS_TIME
+                    | JOB_OBJECT_LIMIT_JOB_MEMORY,
+                ActiveProcessLimit: active_cap,
+                PerProcessUserTimeLimit: cpu_100ns,
+                ..JOBOBJECT_BASIC_LIMIT_INFORMATION::default()
+            },
+            JobMemoryLimit: mem_bytes,
+            ..JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default()
         };
-        info.JobMemoryLimit = mem_bytes;
 
         // SAFETY: `info` is a fully-initialized extended-limit struct; the call
-        // reads `size_of::<…>()` bytes from it and applies them to the owned job.
+        // reads `size_of::<…>()` bytes from it and applies them to the job, whose
+        // handle `job` owns and keeps open across the call.
         let ok = unsafe {
             SetInformationJobObject(
-                job.get(),
+                job_handle(&job),
                 JobObjectExtendedLimitInformation,
                 std::ptr::from_ref(&info).cast(),
                 size_u32::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>(),
@@ -824,6 +850,12 @@ mod windows_jail {
             return Err(last_error_spawn("SetInformationJobObject failed"));
         }
         Ok(job)
+    }
+
+    /// The raw Win32 handle of `job`, borrowed for a call `win32job` does not
+    /// wrap; `job` keeps ownership and closes it on drop.
+    fn job_handle(job: &win32job::Job) -> HANDLE {
+        std::ptr::with_exposed_provenance_mut(usize::from_ne_bytes(job.handle().to_ne_bytes()))
     }
 
     /// ACL a path's DACL to grant read+write to exactly two trustees — the
@@ -843,6 +875,8 @@ mod windows_jail {
     /// upstream rather than letting this establish a no-op boundary. That
     /// probe → refuse decision is unit-tested through the pure
     /// [`crate::run_jail::volume_flags_confine_filesystem`].
+    #[allow(unsafe_code)]
+    // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
     fn acl_path_for_container(path: &Path, container_sid: PSID) -> Result<(), RunJailDefect> {
         // The launcher's user SID, kept alive in an owned buffer for the whole
         // `SetEntriesInAclW` call (the EXPLICIT_ACCESS entry borrows the SID by
@@ -953,6 +987,8 @@ mod windows_jail {
     /// entry. This never removes or narrows any existing permission. Fail-closed:
     /// any failed Win32 call refuses so the caller never proceeds with an
     /// incompletely granted ancestor chain.
+    #[allow(unsafe_code)]
+    // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
     fn grant_traverse_to_ancestors(path: &Path, container_sid: PSID) -> Result<(), RunJailDefect> {
         use windows_sys::Win32::Security::Authorization::{GRANT_ACCESS, GetNamedSecurityInfoW};
 
@@ -1121,6 +1157,8 @@ mod windows_jail {
     /// the same allocation, so the buffer must outlive every use of that pointer.
     /// `u64` elements give the allocation 8-byte alignment, which `TOKEN_USER`
     /// (containing a pointer) requires. Fail-closed: any failed Win32 call refuses.
+    #[allow(unsafe_code)]
+    // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
     fn launcher_user_sid_buffer() -> Result<Vec<u64>, RunJailDefect> {
         let mut token: HANDLE = std::ptr::null_mut();
         // SAFETY: `GetCurrentProcess` is a pseudo-handle (never closed); we request
@@ -1187,6 +1225,8 @@ mod windows_jail {
     /// path already trusted it. Probe once with `GetVolumeInformationW`, parse the
     /// flags through the pure [`crate::run_jail::volume_flags_confine_filesystem`], and refuse
     /// (fail closed) when the bit is absent. Any probe failure also refuses.
+    #[allow(unsafe_code)]
+    // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
     fn probe_volume_persists_acls(path: &Path) -> Result<(), RunJailDefect> {
         const MAX_PATH_WCHARS: u32 = 260;
         // `GetVolumeInformationW` needs a volume root, not an arbitrary path;
@@ -1272,6 +1312,8 @@ mod windows_jail {
     /// The CWD is not a capability: the child can still reach only what is ACLed to
     /// the container SID, so pointing it at the scratch neither grants nor widens
     /// any axis.
+    #[allow(unsafe_code)]
+    // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
     fn create_suspended_appcontainer_process(
         app: &Path,
         app_args: &[OsString],
@@ -1327,16 +1369,20 @@ mod windows_jail {
             return Err(last_error_spawn("UpdateProcThreadAttribute failed"));
         }
 
-        let mut si: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
-        si.StartupInfo.cb = size_u32::<STARTUPINFOEXW>();
-        si.lpAttributeList = attr_list;
+        let mut si = STARTUPINFOEXW {
+            StartupInfo: STARTUPINFOW {
+                cb: size_u32::<STARTUPINFOEXW>(),
+                ..STARTUPINFOW::default()
+            },
+            lpAttributeList: attr_list,
+        };
 
         let mut cmdline = build_command_line(app, app_args);
         let mut wdir = wide(current_dir.as_os_str());
         // The env block is `*const c_void` (cast from the u16 slice).
         let env_ptr = env_block.as_ptr().cast::<std::ffi::c_void>().cast_mut();
 
-        let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        let mut pi = PROCESS_INFORMATION::default();
         // SAFETY: `cmdline` is a mutable NUL-terminated wide buffer (CreateProcessW
         // may write to it); `env_ptr` is the doubly-NUL wide env block;
         // `wdir` is a live wide path; `si` carries the initialised attribute list;
@@ -1369,6 +1415,8 @@ mod windows_jail {
     struct AttrListGuard(*mut std::ffi::c_void);
 
     impl Drop for AttrListGuard {
+        #[allow(unsafe_code)]
+        // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
         fn drop(&mut self) {
             if !self.0.is_null() {
                 // SAFETY: `self.0` is an initialised attribute list this guard owns.
@@ -1430,16 +1478,22 @@ mod windows_jail {
         out.push(OsStr::new("\""));
     }
 
-    fn assign_to_job(job: HANDLE, process: HANDLE) -> Result<(), RunJailDefect> {
-        // SAFETY: both are live handles owned by the caller; assigning the process
-        // to the job before resume is the documented no-un-jobbed-instruction order.
-        let ok = unsafe { AssignProcessToJobObject(job, process) };
-        if ok == 0 {
-            return Err(last_error_spawn("AssignProcessToJobObject failed"));
-        }
-        Ok(())
+    /// Assign the live suspended `process` to `job` before it resumes: the
+    /// documented no-un-jobbed-instruction order.
+    fn assign_to_job(job: &win32job::Job, process: HANDLE) -> Result<(), RunJailDefect> {
+        job.assign_process(isize::from_ne_bytes(
+            process.expose_provenance().to_ne_bytes(),
+        ))
+        .map_err(|e| {
+            spawn(format!(
+                "AssignProcessToJobObject failed: {}",
+                std::io::Error::from(e)
+            ))
+        })
     }
 
+    #[allow(unsafe_code)]
+    // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
     fn resume(thread: HANDLE) -> Result<(), RunJailDefect> {
         // SAFETY: `thread` is the live suspended main thread handle owned by the
         // caller; resuming it starts the (now jobbed, tokened) child.
@@ -1452,6 +1506,8 @@ mod windows_jail {
 
     /// Wait for the child and read its exit code. The job handle must stay open in
     /// the caller across this wait so KILL_ON_JOB_CLOSE holds for the child's life.
+    #[allow(unsafe_code)]
+    // IPE-RUST-AUDIT:ACCEPTED — Win32 FFI that no vetted safe crate wraps; SAFETY per block.
     fn wait_and_exit_code(process: HANDLE) -> Result<u32, RunJailDefect> {
         // SAFETY: `process` is a live handle owned by the caller; an infinite wait
         // blocks until the child exits.

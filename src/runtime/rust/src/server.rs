@@ -2889,8 +2889,7 @@ mod tests {
         // same-origin upgrade must be turned away with 503 BEFORE any id/channel
         // is minted — distinguished from the `400 no-upgrader` fall-through the
         // same-origin path would otherwise hit in a unit test.
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_WS_MAX_CONNECTIONS") };
+        crate::system::locked_remove_var("IPE_WS_MAX_CONNECTIONS");
         let ceiling = ws_max_connections();
         {
             let mut reg = ws_registry().lock().unwrap_or_else(|e| e.into_inner());
@@ -2923,63 +2922,50 @@ mod tests {
 
     #[test]
     fn ws_max_connections_default_is_1024() {
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_WS_MAX_CONNECTIONS") };
+        crate::system::locked_remove_var("IPE_WS_MAX_CONNECTIONS");
         assert_eq!(ws_max_connections(), DEFAULT_WS_MAX_CONNECTIONS);
     }
 
     #[test]
     fn ws_max_connections_env_override() {
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_WS_MAX_CONNECTIONS", "7") };
+        crate::system::locked_set_var("IPE_WS_MAX_CONNECTIONS", "7");
         assert_eq!(ws_max_connections(), 7);
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_WS_MAX_CONNECTIONS") };
+        crate::system::locked_remove_var("IPE_WS_MAX_CONNECTIONS");
     }
 
     #[test]
     fn ws_max_connections_zero_falls_back_to_default() {
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_WS_MAX_CONNECTIONS", "0") };
+        crate::system::locked_set_var("IPE_WS_MAX_CONNECTIONS", "0");
         assert_eq!(ws_max_connections(), DEFAULT_WS_MAX_CONNECTIONS);
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_WS_MAX_CONNECTIONS") };
+        crate::system::locked_remove_var("IPE_WS_MAX_CONNECTIONS");
     }
 
     #[test]
     fn http_request_timeout_default_is_30() {
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_HTTP_REQUEST_TIMEOUT") };
+        crate::system::locked_remove_var("IPE_HTTP_REQUEST_TIMEOUT");
         assert_eq!(
             http_request_timeout_secs(),
             DEFAULT_HTTP_REQUEST_TIMEOUT_SECS
         );
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_HTTP_REQUEST_TIMEOUT", "5") };
+        crate::system::locked_set_var("IPE_HTTP_REQUEST_TIMEOUT", "5");
         assert_eq!(http_request_timeout_secs(), 5);
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_HTTP_REQUEST_TIMEOUT", "0") }; // invalid → default
+        crate::system::locked_set_var("IPE_HTTP_REQUEST_TIMEOUT", "0"); // invalid → default
         assert_eq!(
             http_request_timeout_secs(),
             DEFAULT_HTTP_REQUEST_TIMEOUT_SECS
         );
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_HTTP_REQUEST_TIMEOUT") };
+        crate::system::locked_remove_var("IPE_HTTP_REQUEST_TIMEOUT");
     }
 
     #[test]
     fn http_max_inflight_default_is_1024() {
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_HTTP_MAX_INFLIGHT") };
+        crate::system::locked_remove_var("IPE_HTTP_MAX_INFLIGHT");
         assert_eq!(http_max_inflight(), DEFAULT_HTTP_MAX_INFLIGHT);
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_HTTP_MAX_INFLIGHT", "16") };
+        crate::system::locked_set_var("IPE_HTTP_MAX_INFLIGHT", "16");
         assert_eq!(http_max_inflight(), 16);
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_HTTP_MAX_INFLIGHT", "0") }; // invalid → default
+        crate::system::locked_set_var("IPE_HTTP_MAX_INFLIGHT", "0"); // invalid → default
         assert_eq!(http_max_inflight(), DEFAULT_HTTP_MAX_INFLIGHT);
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_HTTP_MAX_INFLIGHT") };
+        crate::system::locked_remove_var("IPE_HTTP_MAX_INFLIGHT");
     }
 
     #[tokio::test]
@@ -2988,8 +2974,7 @@ mod tests {
         // sleeps past the deadline into a timeout (408), proving the slowloris
         // ceiling is on the served path — not merely configured.
         use tower::ServiceExt;
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_HTTP_REQUEST_TIMEOUT", "1") };
+        crate::system::locked_set_var("IPE_HTTP_REQUEST_TIMEOUT", "1");
         let timeout = http_request_timeout_secs();
         let inflight = http_max_inflight();
         let app: axum::Router = axum::Router::new()
@@ -3008,14 +2993,12 @@ mod tests {
             .uri("/slow")
             .body(axum::body::Body::empty());
         let Ok(req) = req else {
-            // SAFETY: test-only env mutation.
-            unsafe { std::env::remove_var("IPE_HTTP_REQUEST_TIMEOUT") };
+            crate::system::locked_remove_var("IPE_HTTP_REQUEST_TIMEOUT");
             panic!("failed to build test request");
         };
         // `Router`'s `Service` error is `Infallible`, so the call is total.
         let served = app.oneshot(req).await;
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_HTTP_REQUEST_TIMEOUT") };
+        crate::system::locked_remove_var("IPE_HTTP_REQUEST_TIMEOUT");
         let resp = match served {
             Ok(r) => r,
             Err(e) => match e {},
@@ -3043,18 +3026,14 @@ mod tests {
 
     #[test]
     fn max_body_env_override() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_WEB_MAX_BODY_BYTES") };
+        crate::system::locked_remove_var("IPE_WEB_MAX_BODY_BYTES");
         assert_eq!(max_body(), DEFAULT_MAX_BODY);
         // New name takes effect.
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_WEB_MAX_BODY_BYTES", "1024") };
+        crate::system::locked_set_var("IPE_WEB_MAX_BODY_BYTES", "1024");
         assert_eq!(max_body(), 1024);
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_WEB_MAX_BODY_BYTES", "0") }; // invalid → default
+        crate::system::locked_set_var("IPE_WEB_MAX_BODY_BYTES", "0"); // invalid → default
         assert_eq!(max_body(), DEFAULT_MAX_BODY);
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_WEB_MAX_BODY_BYTES") };
+        crate::system::locked_remove_var("IPE_WEB_MAX_BODY_BYTES");
     }
 
     #[tokio::test]
@@ -3213,10 +3192,8 @@ mod tests {
         // (per-process under nextest, so mutating ENV here is safe).
         let tok = "a".repeat(64);
 
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("ENV") };
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_ENV") };
+        crate::system::locked_remove_var("ENV");
+        crate::system::locked_remove_var("IPE_ENV");
         // (a) not production, request IS https -> Secure.
         assert!(
             csrf_set_cookie_value(&tok, true).contains("; Secure"),
@@ -3239,12 +3216,10 @@ mod tests {
         // || request_is_https(headers)` — production forces Secure
         // unconditionally; the request-scoped signal only ADDS Secure in
         // the non-production case).
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("ENV", "production") };
+        crate::system::locked_set_var("ENV", "production");
         let tok = "b".repeat(64);
         let cookie = csrf_set_cookie_value(&tok, false);
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("ENV") };
+        crate::system::locked_remove_var("ENV");
         assert!(
             cookie.contains("; Secure"),
             "ENV=production must force Secure even when this request isn't TLS-detected: {cookie}"
@@ -3253,12 +3228,10 @@ mod tests {
 
     #[test]
     fn csrf_cookie_secure_production_and_tls_signal_both_true() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("ENV", "production") };
+        crate::system::locked_set_var("ENV", "production");
         let tok = "c".repeat(64);
         let cookie = csrf_set_cookie_value(&tok, true);
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("ENV") };
+        crate::system::locked_remove_var("ENV");
         assert!(cookie.contains("; Secure"));
     }
 
@@ -3535,10 +3508,8 @@ mod tests {
         /// a re-issued cookie must never be less-Secure than the initial one.
         #[test]
         fn reissue_set_cookie_secure_matches_initial_gate() {
-            // SAFETY: test-only env mutation.
-            unsafe { std::env::remove_var("ENV") };
-            // SAFETY: test-only env mutation.
-            unsafe { std::env::remove_var("IPE_ENV") };
+            crate::system::locked_remove_var("ENV");
+            crate::system::locked_remove_var("IPE_ENV");
 
             // is_https=true, cookies_secure()=false → Secure must fire.
             let c_https = reissue_set_cookie("ipe_sid", "tok", 1800, true);
@@ -3564,10 +3535,8 @@ mod tests {
         /// `OnceLock`-cached `trust_proxy_headers()` without mutating process env.
         #[test]
         fn reissue_set_cookie_https_proxy_sets_secure() {
-            // SAFETY: test-only env mutation.
-            unsafe { std::env::remove_var("ENV") };
-            // SAFETY: test-only env mutation.
-            unsafe { std::env::remove_var("IPE_ENV") };
+            crate::system::locked_remove_var("ENV");
+            crate::system::locked_remove_var("IPE_ENV");
 
             let mut headers = HashMap::new();
             headers.insert("x-forwarded-proto".to_string(), "https".to_string());
@@ -3584,10 +3553,8 @@ mod tests {
         /// Non-proxy default: no `X-Forwarded-Proto`, trust=false → no Secure on reissue.
         #[test]
         fn reissue_set_cookie_plain_http_no_secure() {
-            // SAFETY: test-only env mutation.
-            unsafe { std::env::remove_var("ENV") };
-            // SAFETY: test-only env mutation.
-            unsafe { std::env::remove_var("IPE_ENV") };
+            crate::system::locked_remove_var("ENV");
+            crate::system::locked_remove_var("IPE_ENV");
 
             let headers = HashMap::new();
             let is_https = request_is_https_with_trust(&headers, false);

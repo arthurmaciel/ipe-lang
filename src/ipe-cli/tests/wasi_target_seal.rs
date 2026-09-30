@@ -44,6 +44,39 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+/// Set only on a WASI seal test's re-exec of this binary, whose cargo
+/// environment was fixed at spawn.
+const SEAL_CHILD_MARKER: &str = "IPE_WASI_SEAL_CHILD";
+
+/// Run `test` in a re-exec of this binary whose environment pins
+/// `CARGO_TARGET_DIR` to `target_dir` and clears `RUSTFLAGS` and
+/// `CARGO_ENCODED_RUSTFLAGS`; `true` means the caller IS that child and runs the
+/// body, `false` means the parent, whose child has already passed.
+///
+/// The cargo `run_cli` spawns inherits this process's environment, and a global
+/// `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` outranks the emitter's own
+/// `[target.<triple>]` config, so a pass proves the end-user seal only when
+/// the build sees exactly the emitted config — set at spawn, never mutated
+/// in-process. The child must actually run and pass `test`: a name matching
+/// nothing is refused, never a vacuous green.
+fn in_seal_child(test: &str, target_dir: &Path) -> bool {
+    if ipe_env::var_os(SEAL_CHILD_MARKER).is_some() {
+        return true;
+    }
+    let rerun = e2e_support::rerun_this_test_exact(test, |cmd| {
+        cmd.arg("--nocapture")
+            .env(SEAL_CHILD_MARKER, "1")
+            .env("CARGO_TARGET_DIR", target_dir)
+            .env_remove("RUSTFLAGS")
+            .env_remove("CARGO_ENCODED_RUSTFLAGS");
+    });
+    assert!(
+        rerun.is_ok(),
+        "{test}: the cargo-env re-exec did not pass: {rerun:?}"
+    );
+    false
+}
+
 #[allow(clippy::expect_used)] // test helper: a failed scratch-dir setup IS the failure
 fn write_entry(dir: &Path, source: &str) -> PathBuf {
     std::fs::create_dir_all(dir).expect("mkdir scratch");
@@ -257,19 +290,14 @@ fn ipe_build_target_wasi_user_path_cargo_builds() {
 
     // Forward CI's warm shared target so the emitted crate's deps reuse
     // compiled artifacts; else isolate a per-slot target. The wasip1 link is
-    // governed by the emitter's own `.cargo/config.toml`, so a global
-    // `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` (which outranks a `[target.<triple>]`
-    // config) is cleared for this process so the child cargo `run_cli` spawns
-    // sees exactly the emitted config — a pass proves the end-user seal.
+    // governed by the emitter's own `.cargo/config.toml` (see `in_seal_child`).
     let target_dir = e2e_support::child_shared_target_from_env()
         .map_or_else(|| out.join("target"), PathBuf::from);
-    // SAFETY: nextest isolates each test in its own single-threaded-at-this-point
-    // process, so this env mutation does not leak to other tests and no other
-    // thread races these vars; the child cargo `run_cli` spawns inherits them.
-    unsafe {
-        std::env::set_var("CARGO_TARGET_DIR", &target_dir);
-        std::env::remove_var("RUSTFLAGS");
-        std::env::remove_var("CARGO_ENCODED_RUSTFLAGS");
+    if !in_seal_child("ipe_build_target_wasi_user_path_cargo_builds", &target_dir) {
+        if e2e_support::child_shared_target_from_env().is_none() {
+            let _ = std::fs::remove_dir_all(&target_dir);
+        }
+        return;
     }
 
     let args = vec![
@@ -292,10 +320,6 @@ fn ipe_build_target_wasi_user_path_cargo_builds() {
         "THE SEAL (user path): `ipe build --target wasi` on a sealed-floor Direct \
          program must succeed (ipe-accepts ⇒ cargo-builds for wasm32-wasip1); got {result:?}",
     );
-
-    if e2e_support::child_shared_target_from_env().is_none() {
-        let _ = std::fs::remove_dir_all(&target_dir);
-    }
 }
 
 /// The user-path refusal: `ipe build --target wasi` on a non-WASI-viable shape
@@ -357,15 +381,11 @@ fn ipe_run_target_wasi_executes_under_wasmtime() {
 
     let target_dir = e2e_support::child_shared_target_from_env()
         .map_or_else(|| out.join("target"), PathBuf::from);
-    // SAFETY: nextest isolates each test in its own process, so this env mutation
-    // does not leak to other tests and no other thread races these vars; the
-    // wasip1 cross-compile `run_cli` drives inherits them, and clearing
-    // RUSTFLAGS keeps the emitter's own `.cargo/config.toml` linker override the
-    // governing one (a global RUSTFLAGS outranks a `[target.<triple>]` config).
-    unsafe {
-        std::env::set_var("CARGO_TARGET_DIR", &target_dir);
-        std::env::remove_var("RUSTFLAGS");
-        std::env::remove_var("CARGO_ENCODED_RUSTFLAGS");
+    if !in_seal_child("ipe_run_target_wasi_executes_under_wasmtime", &target_dir) {
+        if e2e_support::child_shared_target_from_env().is_none() {
+            let _ = std::fs::remove_dir_all(&target_dir);
+        }
+        return;
     }
 
     let args = vec![
@@ -383,10 +403,6 @@ fn ipe_run_target_wasi_executes_under_wasmtime() {
          program must build the wasm32-wasip1 module and run it to a clean exit \
          under embedded wasmtime; got {result:?}",
     );
-
-    if e2e_support::child_shared_target_from_env().is_none() {
-        let _ = std::fs::remove_dir_all(&target_dir);
-    }
 }
 
 /// The run-path refusal (non-viable shape): `ipe run --target wasi` on a `Web`

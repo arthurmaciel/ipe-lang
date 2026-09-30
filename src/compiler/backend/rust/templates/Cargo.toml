@@ -103,12 +103,11 @@ getrandom = "0.2"
 uuid = { version = "1", features = ["v4", "v7"] }
 bcrypt = "0.17"
 
-# Unix-only: `Io.readSecret` toggles terminal echo via termios (tcgetattr /
-# tcsetattr / isatty) in the vendored runtime's `io` module; `Process.runInPty`
-# allocates + sizes a pseudo-terminal via rustix's safe pty/termios wrappers.
+# Unix-only: the vendored runtime reaches unix syscalls through rustix's safe
+# wrappers — `Io.readSecret` terminal echo (termios), `Process.runInPty`
+# (pty + termios), and the child parent-death floor (process).
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
-rustix = { version = "1", features = ["pty", "termios", "fs", "std"] }
+rustix = { version = "1", features = ["pty", "termios", "fs", "process", "std"] }
 
 [profile.dev]
 debug = 0

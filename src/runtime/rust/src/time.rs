@@ -625,18 +625,43 @@ pub fn time_zone_name<E: From<String>>(zone_name: String, ms: i64) -> IpeResult<
 mod time_string_tests {
     use super::time_time_string;
 
+    /// Set only on the re-exec of this test binary that carries a non-UTC `TZ`.
+    const TZ_CHILD_MARKER: &str = "IPE_TIME_STRING_TZ_CHILD";
+
     #[test]
     fn time_string_is_utc_regardless_of_tz() {
         // A fixed instant whose UTC wall-clock time is 15:30:45.
-        let ms: i64 = 1_615_735_845_000;
-        // SAFETY: single-threaded test; set a non-UTC zone to prove the output
-        // does not follow host-local time.
-        unsafe { std::env::set_var("TZ", "America/New_York") };
-        assert_eq!(time_time_string(ms), "15:30:45");
-        unsafe { std::env::set_var("TZ", "Asia/Tokyo") };
-        assert_eq!(time_time_string(ms), "15:30:45");
-        unsafe { std::env::remove_var("TZ") };
+        assert_eq!(time_time_string(1_615_735_845_000), "15:30:45");
+        if std::env::var_os(TZ_CHILD_MARKER).is_some() {
+            return;
+        }
+        rerun_under_non_utc_zones();
     }
+
+    /// `TZ` is read by the host time library from the real process
+    /// environment, so each non-UTC zone is set at spawn time on a re-exec of
+    /// this binary that must actually run and pass this one test.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn rerun_under_non_utc_zones() {
+        let module = module_path!();
+        let name = format!(
+            "{}::time_string_is_utc_regardless_of_tz",
+            module.split_once("::").map_or(module, |(_, rest)| rest)
+        );
+        for tz in ["America/New_York", "Asia/Tokyo"] {
+            let rerun = e2e_support::rerun_this_test_exact(&name, |cmd| {
+                cmd.arg("--test-threads=1")
+                    .env(TZ_CHILD_MARKER, "1")
+                    .env("TZ", tz);
+            });
+            assert!(rerun.is_ok(), "TZ={tz} re-exec did not pass: {rerun:?}");
+        }
+    }
+
+    /// A wasm32 test binary cannot re-exec itself; the fixed-instant assertion
+    /// above is its whole check.
+    #[cfg(target_arch = "wasm32")]
+    const fn rerun_under_non_utc_zones() {}
 
     #[test]
     fn time_string_epoch_is_midnight() {

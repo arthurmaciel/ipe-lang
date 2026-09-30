@@ -42,10 +42,10 @@ use ipe_sandbox::run_jail::{
 };
 use ipe_sandbox::{CanonicalPath, JailMounts};
 
-/// Serialize the jailed runs: each creates a `memfd` and clears its
-/// close-on-exec flag in a `pre_exec` hook, which is a process-global fd-table
-/// mutation — running two in parallel races on fd numbers. A single lock makes
-/// the whole harness deterministic regardless of `--test-threads`.
+/// Serialize the jailed runs: each creates an inheritable `memfd`, which is a
+/// process-global fd-table mutation — running two in parallel races on fd
+/// numbers. A single lock makes the whole harness deterministic regardless of
+/// `--test-threads`.
 static JAIL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Skip unless `IPE_E2E=1`, the jail tools are present, AND a jail can actually
@@ -157,9 +157,6 @@ fn run_jailed_inner(
     payload: &[OsString],
     capture_stderr: bool,
 ) -> Outcome {
-    use std::os::unix::io::FromRawFd as _;
-    use std::os::unix::process::CommandExt as _;
-
     // Hold the global lock across the whole spawn — the memfd + cloexec-clear is
     // a process-wide fd-table mutation.
     let _guard = JAIL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -168,16 +165,9 @@ fn run_jailed_inner(
         .expect("x86_64 seccomp program");
     let bytes = ipe_sandbox::seccomp::program_bytes(&program);
 
-    // memfd for the seccomp program.
-    let fd = unsafe { memfd_create(c"ipe-seccomp-test".as_ptr(), 0) };
-    assert!(fd >= 0, "memfd_create failed");
-    let mut written = 0usize;
-    while written < bytes.len() {
-        let n = unsafe { write(fd, bytes[written..].as_ptr().cast(), bytes.len() - written) };
-        assert!(n > 0, "write to memfd failed");
-        written += usize::try_from(n).unwrap_or(0);
-    }
-    unsafe { lseek(fd, 0, 0) };
+    // memfd for the seccomp program, through the launcher's own safe writer.
+    let seccomp = ipe_sandbox::run_jail::write_seccomp_memfd(&bytes).expect("seccomp memfd");
+    let fd = seccomp.make_inheritable().expect("seccomp fd inheritable");
 
     let scoped = std::env::temp_dir().join(format!("ipe-e2e-{}", std::process::id()));
     std::fs::create_dir_all(&scoped).expect("scoped tmp");
@@ -190,42 +180,20 @@ fn run_jailed_inner(
     // but a home variable, and no profile in this file grants one.
     let host_env = |k: &str| ipe_env::var_os(k);
     let argv = run_jail_argv(tools, profile, &mounts, Some(fd), &host_env, payload);
-    let (prog, rest) = argv.split_first().expect("non-empty argv");
+    let (prog, rest) = argv.args().split_first().expect("non-empty argv");
     let mut cmd = Command::new(prog);
     cmd.args(rest);
     if capture_stderr {
         cmd.stderr(std::process::Stdio::piped());
     }
-    let fd_copy = fd;
-    unsafe {
-        cmd.pre_exec(move || {
-            // Clear close-on-exec so bwrap inherits the seccomp fd.
-            let flags = fcntl(fd_copy, 1); // F_GETFD
-            if flags < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if fcntl(fd_copy, 2, flags & !1) < 0 {
-                // F_SETFD, clear FD_CLOEXEC
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
     let out = cmd.output().expect("spawn jailed process");
     // Reap the memfd.
-    drop(unsafe { std::fs::File::from_raw_fd(fd) });
+    drop(seccomp);
     let _ = std::fs::remove_dir_all(&scoped);
     Outcome {
         code: out.status.code(),
         stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
     }
-}
-
-unsafe extern "C" {
-    fn memfd_create(name: *const core::ffi::c_char, flags: core::ffi::c_uint) -> i32;
-    fn write(fd: i32, buf: *const core::ffi::c_void, n: usize) -> isize;
-    fn lseek(fd: i32, off: i64, whence: i32) -> i64;
-    fn fcntl(fd: i32, cmd: i32, ...) -> i32;
 }
 
 fn isolated() -> SandboxProfile {

@@ -126,7 +126,7 @@ pub enum WatchEvent {
     /// `generation`'s edit was classified appearance-only and hot-swapped into
     /// the running app via a `LiteralTable` patch — no cargo rebuild, no restart.
     /// `views` is the number of edited views patched. Only fires under
-    /// `IPE_WATCH_HOT_APPEARANCE`.
+    /// [`WatchOptions::hot_appearance`].
     AppearanceHotSwapped { generation: u64, views: usize },
 }
 
@@ -194,6 +194,11 @@ pub struct WatchOptions {
     /// debugger overlay. Exposed as `ipe watch --debugger`; off by default (the
     /// recorder adds runtime weight). Never compiled into a release binary.
     pub debugger: bool,
+    /// DEV-ONLY appearance hot-swap. When set, each rebuild emits with a
+    /// `LiteralTable` overlay and an appearance-only edit is patched into the
+    /// running app instead of rebuilt. [`WatchOptions::new`] reads the default
+    /// once from the environment (see [`crate::hot_appearance_enabled`]).
+    pub hot_appearance: bool,
     /// Optional cargo target directory the rebuild's `cargo build` is pinned to.
     /// `None` (the CLI default) leaves the build to honour an inherited
     /// `CARGO_TARGET_DIR`, exactly as before. An embedder sets it to pin the
@@ -224,6 +229,7 @@ impl WatchOptions {
             bluegreen: false,
             reset_state: false,
             debugger: false,
+            hot_appearance: crate::hot_appearance_enabled(),
             target_dir: None,
             out_target: None,
         }
@@ -1132,14 +1138,13 @@ fn run_inner(
     // build-status banner is on — the failure banner must reach the child even
     // with appearance hot-swap off (the two endpoints gate independently on the
     // server; the shared token arms only whichever route is actually mounted).
-    let hot_token: Option<String> =
-        if crate::hot_appearance_enabled() || crate::watch_banner_enabled() {
-            // `None` here (OS CSPRNG unavailable) leaves the control endpoint
-            // unarmed rather than falling back to a guessable token.
-            mint_hot_token()
-        } else {
-            None
-        };
+    let hot_token: Option<String> = if opts.hot_appearance || crate::watch_banner_enabled() {
+        // `None` here (OS CSPRNG unavailable) leaves the control endpoint
+        // unarmed rather than falling back to a guessable token.
+        mint_hot_token()
+    } else {
+        None
+    };
     // The loopback control-socket port for the tui/cli/worker control channel,
     // allocated once per session like the token above and injected into every
     // spawned child via `child_env` as `IPE_CONTROL_PORT`. Allocated only when a
@@ -1153,10 +1158,10 @@ fn run_inner(
     };
     // The appearance hot-swap classifier and its running-emit baseline are armed
     // ONLY by the appearance flag — never merely by the banner. The child's emit
-    // carries a `LiteralTable` overlay only under `hot_appearance_enabled()`
+    // carries a `LiteralTable` overlay only under `opts.hot_appearance`
     // (see the emit config), so a patch push against a banner-only build would
     // target a binary with no overlay to patch.
-    let appearance_active = crate::hot_appearance_enabled();
+    let appearance_active = opts.hot_appearance;
     // The current live cycle's per-phase timing (`IPE_WATCH_TIMING`). Reset at
     // each `FsBatch`; the resolve/compile/write/cargo phases fill it as their
     // events land, and it is reported at the terminal event (restart done, or
@@ -1320,7 +1325,7 @@ fn run_inner(
                         // overlay into the rebuilt runtime loop.
                         opts.debugger,
                         resolved.cargo_name.clone(),
-                        crate::hot_appearance_enabled(),
+                        opts.hot_appearance,
                         // `ipe watch` reloads the served-live web app; the
                         // webview-native desktop delivery is not a watch target.
                         false,

@@ -593,20 +593,16 @@ mod tests {
 
     #[test]
     fn gate_skips_in_subapp_context() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_WEB_BASE_PATH", "/billing") };
+        crate::system::locked_set_var("IPE_WEB_BASE_PATH", "/billing");
         assert!(!gate_allows());
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_WEB_BASE_PATH") };
+        crate::system::locked_remove_var("IPE_WEB_BASE_PATH");
     }
 
     #[test]
     fn gate_skips_on_explicit_off() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_CONSOLE_EMBED", "off") };
+        crate::system::locked_set_var("IPE_CONSOLE_EMBED", "off");
         assert!(!gate_allows());
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_CONSOLE_EMBED") };
+        crate::system::locked_remove_var("IPE_CONSOLE_EMBED");
     }
 
     fn auth_headers(value: Option<&'static str>) -> axum::http::HeaderMap {
@@ -1015,8 +1011,7 @@ mod tests {
     // would race other threads. Sets then clears the var within the test.
     #[test]
     fn ingest_token_gate() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_INGEST_TOKEN") };
+        crate::system::locked_remove_var("IPE_INGEST_TOKEN");
         // Unset → endpoint open regardless of header, when same-origin (or no
         // Origin at all — curl / non-browser caller).
         let h = axum::http::HeaderMap::new();
@@ -1042,8 +1037,7 @@ mod tests {
             "same-origin request still open in dev"
         );
 
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_INGEST_TOKEN", "secret123") };
+        crate::system::locked_set_var("IPE_INGEST_TOKEN", "secret123");
         // Missing header → blocked.
         let h = axum::http::HeaderMap::new();
         assert!(ingest_token_blocked(&h).is_some(), "missing header blocked");
@@ -1062,7 +1056,6 @@ mod tests {
             "correct token allowed even cross-origin"
         );
 
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_INGEST_TOKEN") };
+        crate::system::locked_remove_var("IPE_INGEST_TOKEN");
     }
 }
