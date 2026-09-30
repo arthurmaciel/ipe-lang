@@ -29,7 +29,7 @@
 use super::IpeResult;
 use crate::encoding::{UrlGrammar, decode_component};
 use crate::secret::{Secret, secret_from_string};
-use crate::ssrf::{ConfiguredHost, UnambiguousUrl};
+use crate::ssrf::{ConfiguredHost, DriverParityQuery, UnambiguousUrl};
 
 /// The closed set of drivers the runtime can describe. Exactly the two sqlx
 /// drivers the `db` feature links (`sqlite`, `postgres`); a driver the runtime
@@ -404,7 +404,7 @@ fn parse_sslmode(token: &str) -> Result<TlsMode, DsnReject> {
 /// the structured userinfo, never a re-parseable query segment.
 fn tls_from_query(url: &::url::Url) -> Result<TlsMode, DsnReject> {
     let mut chosen: Option<TlsMode> = None;
-    for (key, value) in url.query_pairs() {
+    for (key, value) in DriverParityQuery::of(url).pairs() {
         match key.as_ref() {
             "password" | "user" | "username" => {
                 // Credential smuggled into the query string — reject; credentials

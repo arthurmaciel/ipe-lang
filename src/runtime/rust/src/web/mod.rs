@@ -2661,7 +2661,7 @@ mod handlers {
     // ── GET /_ipe/sse ─────────────────────────────────────────────────
     pub(super) async fn sse_handler<Model, Msg, FInit, FUpdate, FView, FSubs>(
         State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
-        axum::extract::Query(qs): axum::extract::Query<std::collections::HashMap<String, String>>,
+        uri: axum::http::Uri,
         headers: axum::http::HeaderMap,
     ) -> Response
     where
@@ -2672,6 +2672,23 @@ mod handlers {
         FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
         FSubs: Send + Sync + 'static,
     {
+        // The query decodes once through the strict core; the router's URL
+        // gate already refused a malformed one, this is the second boundary.
+        let qs = match crate::server::strict_url_query(&uri) {
+            Ok(qs) => qs,
+            Err(rejection) => return rejection.status_and_reason().into_response(),
+        };
+        // `?path=` names a browser path the route matcher decodes segment by
+        // segment, so it must itself be a well-formed path: a malformed one is
+        // refused with the same fixed 400, before any session is touched.
+        let client_path = match qs.get("path").map(String::as_str).map(str::trim) {
+            Some(p) if crate::server::check_path(p).is_err() => {
+                return crate::server::RequestRejection::BadRequest
+                    .status_and_reason()
+                    .into_response();
+            }
+            other => other,
+        };
         let sid = sid_from_cookie(&headers);
         let entry = match &sid {
             Some(s) => match st.store.get(s).await {
@@ -2715,11 +2732,10 @@ mod handlers {
         // `location.pathname` which includes any reverse-proxy prefix; strip the
         // base before matching so mounted sub-apps reconcile against their
         // own route table, not the root path.
-        if let Some(raw_path) = qs.get("path") {
+        if let Some(client_path) = client_path {
             // Sanitise: accept only paths (must start with `/`), reject anything
             // with `?` or `#` to avoid confusing the route matcher with query
             // strings or fragments the client should not be sending here.
-            let client_path = raw_path.trim();
             let is_valid_path = client_path.starts_with('/')
                 && !client_path.contains('?')
                 && !client_path.contains('#');
@@ -4733,7 +4749,10 @@ where
         .ok()
         .filter(|d| !d.is_empty())
     {
-        router = router.nest_service("/static", tower_http::services::ServeDir::new(dir));
+        router = router.nest_service(
+            "/static",
+            crate::server::strict_serve_dir(std::path::PathBuf::from(dir)),
+        );
     }
 
     let app: Router = router
@@ -4749,6 +4768,13 @@ where
         // observability::track so a rejected CSRF POST still gets counted +
         // access-logged.
         .layer(axum::middleware::from_fn(csrf::csrf_middleware))
+        // Strict URL gate over every route here (page, SSE, event, port,
+        // assets, static): a malformed path or query is answered with the
+        // fixed 400 before CSRF or any handler runs. Inner of `track`, so a
+        // refusal is still counted and access-logged.
+        .layer(axum::middleware::from_fn(
+            crate::server::refuse_malformed_url,
+        ))
         // Per-request panic recovery: a handler or csrf-mw panic becomes a 500
         // instead of an unwound tokio task that drops the connection with no
         // response. Symmetric with Ipe.Http.Server (server.rs). The Rust thesis
@@ -4762,9 +4788,7 @@ where
         // post-`next.run` metering. The custom responder classifies + logs the
         // panic SERVER-SIDE (errId, via core::panic_500_body) and returns a 500
         // carrying ONLY the errId — never the panic message (no info leak).
-        // Symmetric with Ipe.Http.Server (the body shape is shared in `core`;
-        // the Web router can't reference `server.rs` — a Web-only generated
-        // project doesn't include it).
+        // Symmetric with Ipe.Http.Server (the body shape is shared in `core`).
         .layer(tower_http::catch_panic::CatchPanicLayer::custom(
             |err: Box<dyn std::any::Any + Send + 'static>| {
                 use axum::response::IntoResponse;
@@ -8240,6 +8264,106 @@ mod emitted_router_behavior_tests {
                 "re-render after submit must show the decoded username:\n{}",
                 &body2[..body2.len().min(1500)]
             );
+        });
+    }
+
+    /// The production router over a state whose route matcher counts its runs:
+    /// every page and SSE-reconcile request consults it first, so a zero count
+    /// proves no handler logic ran.
+    fn make_counting_router(store: Arc<Store>, runs: Arc<AtomicUsize>) -> axum::Router {
+        let mut state = make_state(store);
+        state.route_matched = Arc::new(move |p: &str| {
+            runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            route_matched(p)
+        });
+        build_web_router::<
+            Model,
+            Msg,
+            fn(WebReq) -> (Model, IpeCmd<Msg>),
+            fn(Msg, Model) -> (Model, IpeCmd<Msg>),
+            fn(Model) -> Html<Msg>,
+            fn(Model) -> IpeSub<Msg>,
+        >(state, false)
+    }
+
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
+    async fn status_and_body(
+        router: axum::Router,
+        uri: &str,
+        cookie: Option<&str>,
+    ) -> (StatusCode, String) {
+        let mut b = Request::builder().method("GET").uri(uri);
+        if let Some(c) = cookie {
+            b = b.header(header::COOKIE, format!("ipe_sid={c}"));
+        }
+        let resp = router
+            .oneshot(b.body(Body::empty()).expect("build GET"))
+            .await
+            .expect("router responds");
+        let status = resp.status();
+        if status != StatusCode::BAD_REQUEST {
+            // A live SSE stream never ends; only a refusal body is read.
+            return (status, String::new());
+        }
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .expect("read body");
+        (
+            status,
+            String::from_utf8(bytes.to_vec()).expect("a UTF-8 body"),
+        )
+    }
+
+    /// Prove the refusals: a malformed page path or query, and a malformed
+    /// SSE query or `?path=` value, answer the fixed 400 before any handler
+    /// logic runs.
+    #[test]
+    fn malformed_urls_are_refused_before_any_web_handler() {
+        with_csrf_off(|| async {
+            let store = Arc::new(Store::new(Duration::from_secs(60)));
+            let (sid, _) = get(make_router(store.clone()), "/", None).await;
+            assert!(!sid.is_empty(), "GET / must set an ipe_sid cookie");
+            for uri in [
+                "/%zz",
+                "/%C0%AF",
+                "/page%C3",
+                "/?q=%zz",
+                "/_ipe/sse?path=%zz",
+                "/_ipe/sse?%C3=1",
+                "/_ipe/sse?path=%2F%25zz",
+                "/_ipe/sse?path=%2F%25C0%25AF",
+            ] {
+                let runs = Arc::new(AtomicUsize::new(0));
+                let router = make_counting_router(store.clone(), runs.clone());
+                let (status, body) = status_and_body(router, uri, Some(&sid)).await;
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{uri:?}");
+                assert_eq!(body, "Bad Request", "{uri:?} must not echo the request");
+                assert_eq!(
+                    runs.load(std::sync::atomic::Ordering::SeqCst),
+                    0,
+                    "{uri:?} must never reach handler logic"
+                );
+            }
+        });
+    }
+
+    /// Happy path: a well-formed page GET and SSE reconnect reach the handler.
+    #[test]
+    fn well_formed_urls_reach_the_web_handlers() {
+        with_csrf_off(|| async {
+            let store = Arc::new(Store::new(Duration::from_secs(60)));
+            let (sid, _) = get(make_router(store.clone()), "/", None).await;
+            assert!(!sid.is_empty(), "GET / must set an ipe_sid cookie");
+            for uri in ["/", "/?q=a+b", "/_ipe/sse?path=%2F"] {
+                let runs = Arc::new(AtomicUsize::new(0));
+                let router = make_counting_router(store.clone(), runs.clone());
+                let (status, _) = status_and_body(router, uri, Some(&sid)).await;
+                assert_eq!(status, StatusCode::OK, "{uri:?}");
+                assert!(
+                    runs.load(std::sync::atomic::Ordering::SeqCst) > 0,
+                    "{uri:?} must reach the handler"
+                );
+            }
         });
     }
 }
