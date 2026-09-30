@@ -350,7 +350,8 @@ checks:
   # ── Nightly enforcement (per-change gate) ─────────────────────────────────
   # Red unless the latest nightly on main is green and fresh, or this change's
   # own commit passed a dispatched full gate — so a red `nightly-gate` job
-  # blocks the next merge (`.github/ci/nightly_green.py`).
+  # blocks the next merge — and unless the latest scheduled ruleset admin read
+  # on main is green and fresh (`.github/ci/nightly_green.py`).
   - context: nightly-green
     disposition: gate
     producer: nightly-green.yml
@@ -358,7 +359,8 @@ checks:
       ci-only: run-history
     guards: >-
       Soundness / SEAL — every `nightly-gate` proof (jail, sanitizers,
-      seal-modset, browser-e2e) holds on main before another change lands.
+      seal-modset, browser-e2e, the ruleset admin read) holds on main before
+      another change lands.
 
   # ── Editor tooling (per-change gate) ──────────────────────────────────────
   # The tree-sitter grammar must accept every reference `.ipe` file (stdlib +

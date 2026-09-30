@@ -6,7 +6,8 @@
 # `.github/ci/RECONCILIATION.md` lists (one-time setup, step 2), and fails
 # closed when the body lacks `bypass_actors`, carries a non-empty list, or
 # differs from the derived required set — and when the token is absent or
-# empty.
+# empty. `nightly-green` requires this workflow's latest scheduled run on main
+# to be green and fresh, so a red one holds every merge.
 #
 # The token is a secret of the `ruleset-admin-read` environment, whose
 # deployment-branch policy admits `main` alone: GitHub hands it to no run of

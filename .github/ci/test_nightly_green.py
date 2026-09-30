@@ -27,6 +27,7 @@ _spec.loader.exec_module(ng)
 NOW = datetime(2026, 9, 29, 12, 0, 0, tzinfo=timezone.utc)
 SHA = "a" * 40
 OTHER = "b" * 40
+ADMIN_SHA = "c" * 40
 REPO = "ipe-lang/compiler"
 
 
@@ -50,16 +51,27 @@ def _run(**over: object) -> dict:
     return run
 
 
+def _admin_run(**over: object) -> dict:
+    run = _run(event="schedule", path=".github/workflows/ruleset-admin-read.yml")
+    run.update(over)
+    return run
+
+
 def _listing(*runs: dict) -> dict:
     return {"total_count": len(runs), "workflow_runs": list(runs)}
 
 
 class FakeApi:
-    """Route `gh api` paths: a main-nightly listing, an own-commit listing, a PR."""
+    """Route `gh api` paths: a main-nightly listing, an own-commit listing, a PR,
+    the admin-read listing (green and fresh unless given)."""
 
-    def __init__(self, main: object, own: object = None, pr: object = None, compare: object = None) -> None:
+    def __init__(
+        self, main: object, own: object = None, pr: object = None, compare: object = None, admin: object = None
+    ) -> None:
         self.main, self.own, self.pr = main, own if own is not None else _listing(), pr
         self.compare = compare if compare is not None else {"status": "ahead"}
+        self.admin = admin if admin is not None else _listing(_admin_run())
+        self.admin_compare: object = None
         self.calls: list[str] = []
 
     def __call__(self, path: str) -> object:
@@ -69,7 +81,15 @@ class FakeApi:
                 raise ng.NightlyError("no such PR")
             return self.pr
         if "/compare/" in path:
+            if self.admin_compare is not None and path.startswith(f"repos/{REPO}/compare/{ADMIN_SHA}"):
+                return self.admin_compare
             return self.compare
+        if "/workflows/ruleset-admin-read.yml/runs" in path:
+            if "event=schedule" not in path or "branch=main" not in path:
+                raise AssertionError(f"unexpected admin-read listing {path}")
+            if isinstance(self.admin, Exception):
+                raise self.admin
+            return self.admin
         if "head_sha=" in path:
             return self.own
         if "branch=main" in path:
@@ -288,6 +308,114 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(ng.main([]), 2)
         for argv in (["verdict"], ["lint"], ["--verdict", "x"], ["-verdict"], ["--verdict", "--lint"]):
             self.assertEqual(ng.main(argv), 2, argv)
+
+
+class AdminReadTest(unittest.TestCase):
+    """The scheduled ruleset admin read is required on every verdict, and only
+    a fresh green `schedule` run of main's own history proves it."""
+
+    def reds(self, admin: object, **kw: object) -> list[str]:
+        api = FakeApi(_listing(_run()), admin=admin)
+        for k, v in kw.items():
+            setattr(api, k, v)
+        return [r for r in _verdict(api) if r.startswith("ruleset admin read:")]
+
+    def test_green_fresh_admin_read_passes(self) -> None:
+        self.assertEqual(self.reds(_listing(_admin_run())), [])
+        self.assertEqual(_verdict(FakeApi(_listing(_run()), admin=_listing(_admin_run()))), [])
+
+    def test_missing_admin_read_is_red(self) -> None:
+        self.assertTrue(self.reds(_listing()))
+        self.assertTrue(self.reds(_listing(_admin_run(status="in_progress", conclusion=None))))
+
+    def test_failed_admin_read_is_red(self) -> None:
+        for bad in ("failure", "cancelled", "timed_out", "skipped", "neutral", "action_required", None):
+            with self.subTest(bad):
+                self.assertTrue(self.reds(_listing(_admin_run(conclusion=bad))))
+
+    def test_stale_admin_read_is_red(self) -> None:
+        stale = _admin_run(created_at=_stamp(timedelta(hours=ng.MAX_AGE_H, seconds=1)))
+        self.assertTrue(any("older than" in r for r in self.reds(_listing(stale))))
+        self.assertEqual(self.reds(_listing(_admin_run(created_at=_stamp(timedelta(hours=ng.MAX_AGE_H))))), [])
+
+    def test_non_schedule_admin_read_is_red(self) -> None:
+        for event in ("workflow_dispatch", "push", "pull_request", "merge_group", None):
+            with self.subTest(event):
+                self.assertTrue(self.reds(_listing(_admin_run(event=event))))
+
+    def test_other_workflow_is_not_an_admin_read(self) -> None:
+        self.assertTrue(self.reds(_listing(_admin_run(path=".github/workflows/ci.yml"))))
+
+    def test_non_main_admin_read_is_red(self) -> None:
+        self.assertTrue(self.reds(_listing(_admin_run(head_branch="feature"))))
+        run = _admin_run(head_sha=ADMIN_SHA)
+        for compare in ({"status": "diverged"}, {"status": "behind"}, {}):
+            with self.subTest(compare):
+                self.assertTrue(self.reds(_listing(run), admin_compare=compare))
+        self.assertTrue(self.reds(_listing(_admin_run(head_repository={"full_name": "fork/compiler"}))))
+
+    def test_unreadable_admin_listing_is_red(self) -> None:
+        with self.assertRaises(ng.NightlyError):
+            self.reds(ng.NightlyError("gh api down"))
+        for bad in ({}, [], {"workflow_runs": {}}):
+            with self.subTest(bad), self.assertRaises(ng.NightlyError):
+                self.reds(bad)
+
+    def test_own_green_dispatch_does_not_stand_in_for_the_admin_read(self) -> None:
+        own = _listing(_run(head_branch="fix", head_sha=SHA))
+        api = FakeApi(_listing(_run(conclusion="failure")), own=own, admin=_listing(_admin_run(conclusion="failure")))
+        reasons = _verdict(api)
+        self.assertTrue(reasons)
+        self.assertTrue(all(r.startswith("ruleset admin read:") for r in reasons), reasons)
+
+    def test_admin_read_required_on_every_event(self) -> None:
+        ref = f"refs/heads/gh-readonly-queue/main/pr-7-{OTHER}"
+        red = _listing(_admin_run(conclusion="failure"))
+        for env in (
+            {},
+            {"EVENT_NAME": "merge_group", "HEAD_SHA": "", "GITHUB_REF": ref},
+            {"EVENT_NAME": "push", "HEAD_SHA": ""},
+            {"EVENT_NAME": "workflow_dispatch", "HEAD_SHA": ""},
+        ):
+            with self.subTest(env):
+                own = _listing(_run(head_branch="fix", head_sha=SHA))
+                api = FakeApi(_listing(_run()), own=own, pr={"head": {"sha": SHA}}, admin=red)
+                self.assertTrue(_verdict(api, **env))
+
+
+ADMIN_WORKFLOW = {"on": {"schedule": [{"cron": "30 4 * * *"}]}, "jobs": {}}
+ADMIN_MANIFEST = {
+    "checks": [{"context": "ruleset-admin-read", "disposition": "nightly-gate", "producer": "ruleset-admin-read.yml"}]
+}
+
+
+class AdminReadWiringTest(unittest.TestCase):
+    def test_schedule_only_nightly_gate_passes(self) -> None:
+        self.assertEqual(ng.admin_read_wiring_errors(ADMIN_WORKFLOW, ADMIN_MANIFEST), [])
+        self.assertEqual(ng.admin_read_wiring_errors({True: ADMIN_WORKFLOW["on"]}, ADMIN_MANIFEST), [])
+
+    def test_extra_or_other_trigger_refused(self) -> None:
+        for on in (
+            {"schedule": [], "workflow_dispatch": {}},
+            {"schedule": [], "push": {}},
+            {"workflow_dispatch": {}},
+            "schedule",
+            ["schedule"],
+            None,
+        ):
+            with self.subTest(on):
+                self.assertTrue(ng.admin_read_wiring_errors({"on": on}, ADMIN_MANIFEST))
+
+    def test_manifest_drift_refused(self) -> None:
+        for manifest in (
+            {"checks": []},
+            {"checks": [dict(ADMIN_MANIFEST["checks"][0], disposition="informational")]},
+            {"checks": [dict(ADMIN_MANIFEST["checks"][0], producer="ci.yml")]},
+            {"checks": ADMIN_MANIFEST["checks"] * 2},
+            None,
+        ):
+            with self.subTest(manifest):
+                self.assertTrue(ng.admin_read_wiring_errors(ADMIN_WORKFLOW, manifest))
 
 
 STEP = {

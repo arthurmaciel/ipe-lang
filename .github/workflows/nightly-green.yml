@@ -6,14 +6,17 @@ name: nightly-green
 # the latest completed nightly on main concluded `success` within 48h, or this
 # change's own commit passed a dispatched full gate (the recovery path for the
 # PR that fixes a red nightly: `gh workflow run 'Build & test' --ref <branch>`,
-# then re-run this check). Absence is not a pass. The rule lives in
-# `.github/ci/nightly_green.py`; its `--lint` (manifest-guard) pins this wiring.
+# then re-run this check). It also requires the latest scheduled ruleset admin
+# read (ruleset-admin-read.yml) on main to be green within 48h, on every
+# change; a red one is recovered with `gh run rerun`. Absence is not a pass.
+# The rule lives in `.github/ci/nightly_green.py`; its `--lint`
+# (manifest-guard) pins this wiring.
 on:
   pull_request:
   merge_group:
 
 permissions:
-  actions: read     # list the "Build & test" runs
+  actions: read     # list the "Build & test" and ruleset admin read runs
   contents: read
   pull-requests: read  # merge_group: resolve the queued PR's head commit
 

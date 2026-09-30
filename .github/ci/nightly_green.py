@@ -13,6 +13,14 @@ is a required context that passes only on proof the full gate is green:
      commit of main's own history in this repository (a tag or branch merely
      named `main` proves nothing).
 
+and, always, on proof the nightly ruleset admin read is green:
+
+  3. the latest completed `schedule` run of ruleset-admin-read.yml on main
+     concluded `success`, is at most MAX_AGE_H hours old, and ran on a commit
+     of main's own history. It proves the live ruleset has no bypass actor, a
+     property of the repository rather than of any change, so no change's own
+     run stands in for it; recover a red one with `gh run rerun`.
+
 Absence is not a pass: no run, an unreadable listing, an unexpected shape, a
 cancelled or stale nightly — each is a red.
 
@@ -20,8 +28,11 @@ Modes:
   --verdict  exit 0 iff the proof above holds for $EVENT_NAME / $HEAD_SHA in
              $REPO (a merge-group change is read from the runner's own
              $GITHUB_REF, the queue ref); exit 1 otherwise, naming why.
-  --lint     fail unless nightly-green.yml runs `--verdict` unconditionally and
-             the manifest declares `nightly-green` a gate. manifest-guard runs it.
+  --lint     fail unless nightly-green.yml runs `--verdict` unconditionally,
+             the manifest declares `nightly-green` a gate and
+             `ruleset-admin-read` a nightly-gate of ruleset-admin-read.yml,
+             and that workflow triggers on `schedule` alone. manifest-guard
+             runs it.
 """
 
 from __future__ import annotations
@@ -31,15 +42,32 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 CONTEXT = "nightly-green"
 WORKFLOW_FILE = "nightly-green.yml"
-NIGHTLY_WORKFLOW_PATH = ".github/workflows/ci.yml"
-NIGHTLY_EVENT = "workflow_dispatch"
 MAIN = "main"
+
+
+@dataclass(frozen=True)
+class Proof:
+    """A workflow whose run on main is evidence: its file, and the one event
+    whose runs count."""
+
+    workflow: str
+    event: str
+    what: str
+
+    @property
+    def path(self) -> str:
+        return f".github/workflows/{self.workflow}"
+
+
+FULL_GATE = Proof("ci.yml", "workflow_dispatch", "dispatched full gate")
+ADMIN_READ = Proof("ruleset-admin-read.yml", "schedule", "scheduled ruleset admin read")
 MAX_AGE_H = 48
 # Runs fetched per listing; the newest of them is judged, whatever their order.
 LISTING_PAGE = 20
@@ -90,18 +118,20 @@ def latest_run(listing: object) -> dict | None:
     return None if newest is None else newest[1]
 
 
-def run_errors(run: dict | None, *, branch: str | None, sha: str | None, now: datetime | None) -> list[str]:
-    """Return why `run` is not a green dispatched full gate, or [] when it is.
+def run_errors(
+    run: dict | None, *, branch: str | None, sha: str | None, now: datetime | None, proof: Proof = FULL_GATE
+) -> list[str]:
+    """Return why `run` is not a green run of `proof`, or [] when it is.
 
     `branch`/`sha` pin where it must have run; `now` (when given) bounds its age.
     """
     if run is None:
-        return ["no completed dispatched full gate exists"]
+        return [f"no completed {proof.what} exists"]
     errors: list[str] = []
-    if run.get("event") != NIGHTLY_EVENT:
-        errors.append(f"run event is {run.get('event')!r}, not {NIGHTLY_EVENT!r}")
-    if run.get("path") != NIGHTLY_WORKFLOW_PATH:
-        errors.append(f"run workflow is {run.get('path')!r}, not {NIGHTLY_WORKFLOW_PATH!r}")
+    if run.get("event") != proof.event:
+        errors.append(f"run event is {run.get('event')!r}, not {proof.event!r}")
+    if run.get("path") != proof.path:
+        errors.append(f"run workflow is {run.get('path')!r}, not {proof.path!r}")
     if run.get("status") != "completed":
         errors.append(f"run status is {run.get('status')!r}, not 'completed'")
     if run.get("conclusion") != "success":
@@ -178,11 +208,23 @@ def _gh_json(path: str) -> object:
         raise NightlyError(f"`gh api {path}` returned non-JSON: {exc}") from exc
 
 
-def _runs_path(repo: str, query: str) -> str:
+def _runs_path(repo: str, query: str, proof: Proof = FULL_GATE) -> str:
     return (
-        f"repos/{repo}/actions/workflows/ci.yml/runs"
-        f"?event={NIGHTLY_EVENT}&per_page={LISTING_PAGE}&{query}"
+        f"repos/{repo}/actions/workflows/{proof.workflow}/runs"
+        f"?event={proof.event}&per_page={LISTING_PAGE}&{query}"
     )
+
+
+def main_run_errors(repo: str, proof: Proof, now: datetime) -> list[str]:
+    """Return why the latest completed run of `proof` on main is not a fresh
+    green run of main's own history, or []."""
+    run = latest_run(_gh_json(_runs_path(repo, f"branch={MAIN}", proof)))
+    errors = run_errors(run, branch=MAIN, sha=None, now=now, proof=proof)
+    if not errors and run is not None:
+        # `head_branch` is only a name: a tag or a fork branch called `main`
+        # carries it too. The run proves main only if its commit is on main.
+        errors = on_main_errors(repo, run)
+    return errors
 
 
 def verdict(env: dict[str, str], now: datetime) -> list[str]:
@@ -191,6 +233,13 @@ def verdict(env: dict[str, str], now: datetime) -> list[str]:
     if not _REPO.fullmatch(repo):
         raise NightlyError(f"REPO {repo!r} is not owner/name")
     source = change_sha_source(env.get("EVENT_NAME", ""), env.get("HEAD_SHA", ""), env.get("GITHUB_REF", ""))
+    admin = [f"ruleset admin read: {e}" for e in main_run_errors(repo, ADMIN_READ, now)]
+    return full_gate_reasons(repo, source, now) + admin
+
+
+def full_gate_reasons(repo: str, source: tuple[str, str] | None, now: datetime) -> list[str]:
+    """Return [] when the change's own dispatch or main's nightly proves the
+    full gate green, else every reason neither does."""
     reasons: list[str] = []
     if source is not None:
         kind, value = source
@@ -206,12 +255,7 @@ def verdict(env: dict[str, str], now: datetime) -> list[str]:
         if not own_errors:
             return []
         reasons += [f"change commit {sha[:12]}: {e}" for e in own_errors]
-    main_run = latest_run(_gh_json(_runs_path(repo, f"branch={MAIN}")))
-    main_errors = run_errors(main_run, branch=MAIN, sha=None, now=now)
-    if not main_errors and main_run is not None:
-        # `head_branch` is only a name: a tag or a fork branch called `main`
-        # carries it too. The run proves main only if its commit is on main.
-        main_errors = on_main_errors(repo, main_run)
+    main_errors = main_run_errors(repo, FULL_GATE, now)
     if not main_errors:
         return []
     return reasons + [f"main nightly: {e}" for e in main_errors]
@@ -258,6 +302,27 @@ def wiring_errors(workflow: object, manifest: object) -> list[str]:
     return errors
 
 
+ADMIN_READ_CONTEXT = "ruleset-admin-read"
+
+
+def admin_read_wiring_errors(workflow: object, manifest: object) -> list[str]:
+    """Return why a green `ADMIN_READ` run could fail to be the manifest's
+    ruleset admin read, or []: the workflow must trigger on `ADMIN_READ.event`
+    alone, and the manifest must declare the context a `nightly-gate` it
+    produces."""
+    errors: list[str] = []
+    on = workflow.get(True, workflow.get("on")) if isinstance(workflow, dict) else None
+    if not isinstance(on, dict) or set(on) != {ADMIN_READ.event}:
+        errors.append(f"{ADMIN_READ.workflow} must trigger on `{ADMIN_READ.event}` alone")
+    entries = manifest.get("checks") if isinstance(manifest, dict) else None
+    mine = [e for e in entries or [] if isinstance(e, dict) and e.get("context") == ADMIN_READ_CONTEXT]
+    if len(mine) != 1 or mine[0].get("disposition") != "nightly-gate" or mine[0].get("producer") != ADMIN_READ.workflow:
+        errors.append(
+            f"check-manifest.yml must declare {ADMIN_READ_CONTEXT!r} once as a `nightly-gate` produced by {ADMIN_READ.workflow}"
+        )
+    return errors
+
+
 def lint(root: str = REPO_ROOT) -> int:
     sys.path.insert(0, HERE)
     import strict_yaml  # noqa: PLC0415  # PyYAML-backed; only `lint` needs it
@@ -267,15 +332,20 @@ def lint(root: str = REPO_ROOT) -> int:
             workflow = strict_yaml.safe_load(fh)
         with open(os.path.join(root, ".github", "ci", "check-manifest.yml"), encoding="utf-8") as fh:
             manifest = strict_yaml.safe_load(fh)
+        with open(os.path.join(root, ADMIN_READ.path), encoding="utf-8") as fh:
+            admin_workflow = strict_yaml.safe_load(fh)
     except Exception as exc:  # noqa: BLE001  # any read or parse failure is a refusal
         print(f"nightly-green lint: unreadable input: {exc}", file=sys.stderr)
         return 1
-    errors = wiring_errors(workflow, manifest)
+    errors = wiring_errors(workflow, manifest) + admin_read_wiring_errors(admin_workflow, manifest)
     for err in errors:
         print(f"nightly-green lint: {err}", file=sys.stderr)
     if errors:
         return 1
-    print(f"nightly-green lint: {WORKFLOW_FILE} runs the verdict unconditionally; the manifest gates it.")
+    print(
+        f"nightly-green lint: {WORKFLOW_FILE} runs the verdict unconditionally; the manifest gates it; "
+        f"{ADMIN_READ.workflow} is {ADMIN_READ.event}-only."
+    )
     return 0
 
 
@@ -290,7 +360,9 @@ def main(argv: list[str]) -> int:
         if reasons:
             print(
                 "nightly-green: RED — fix main's nightly, or prove this commit with "
-                "`gh workflow run 'Build & test' --ref <branch>` and re-run this check.",
+                "`gh workflow run 'Build & test' --ref <branch>`; a red ruleset admin read "
+                "is fixed on the ruleset (or its token) and re-run with `gh run rerun`. "
+                "Then re-run this check.",
                 file=sys.stderr,
             )
             return 1
