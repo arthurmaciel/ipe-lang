@@ -66,7 +66,7 @@ use super::{IpeResult, IpeTask, ok_res, str_err};
 // module (not an extern crate) so it resolves both in the workspace AND when the
 // runtime is vendored as `mod ipe_runtime` into an emitted app.
 use super::path_core::{
-    clean_with, escapes_root, has_disguised_dotdot, has_nul, is_sep, volume_name_len,
+    Volume, clean_with, escapes_root, has_disguised_dotdot, has_nul, is_sep, volume_name_len,
 };
 use std::path::PathBuf;
 
@@ -280,8 +280,10 @@ const fn sep_of(windows: bool) -> u8 {
 /// raw `/x` is rooted on both. A bare Windows drive (`C:x`) is drive-relative,
 /// not rooted; a lone UNC or verbatim prefix is rooted.
 fn is_rooted(p: &str, windows: bool) -> bool {
-    let vol = volume_name_len(p, windows);
-    p.as_bytes().get(vol).is_some_and(|&c| is_sep(c, windows)) || (vol > 2 && vol == p.len())
+    let vol = Volume::parse(p, windows);
+    let len = vol.byte_len();
+    p.as_bytes().get(len).is_some_and(|&c| is_sep(c, windows))
+        || (!vol.is_drive() && len > 2 && len == p.len())
 }
 
 /// Does `p` end in any separator the regime honours?
@@ -298,6 +300,7 @@ fn is_within(root: &str, candidate: &str, windows: bool) -> bool {
     if root == "." {
         return !is_rooted(candidate, windows)
             && volume_name_len(candidate, windows) == 0
+            && !(windows && first_element_has_colon(candidate))
             && !escapes_root(candidate, windows);
     }
     if candidate == root {
@@ -313,7 +316,96 @@ fn is_within(root: &str, candidate: &str, windows: bool) -> bool {
 /// The independent post-join check: a join that names the root itself, or
 /// anything outside it, is refused whatever the pre-join scans concluded.
 fn strictly_beneath(root: &str, joined: &str, windows: bool) -> bool {
-    joined != root && is_within(root, joined, windows)
+    joined != root
+        && is_within(root, joined, windows)
+        && !(windows && has_stripped_element(root, joined))
+}
+
+/// Does `p`'s first Windows element (up to a `\` or `/`) carry a `:`?
+///
+/// A raw byte scan that neither cleans nor parses a [`Volume`], so the root-`.`
+/// containment check refuses a drive-designated join (`é:\x`, `1:x`) even if
+/// the volume grammar ever misses a drive form Win32 honours.
+fn first_element_has_colon(p: &str) -> bool {
+    p.as_bytes()
+        .split(|&b| is_sep(b, true))
+        .next()
+        .is_some_and(|e| e.contains(&b':'))
+}
+
+/// Does the part of the Windows `joined` below `root` hold an element made only
+/// of dots and spaces?
+///
+/// Windows strips trailing dots and spaces from every element, so such an
+/// element names `.` or `..` rather than a child of its own — a join ending in
+/// `\ ` resolves to the root itself. A raw byte scan, independent of the
+/// child-element parser that runs before the join.
+fn has_stripped_element(root: &str, joined: &str) -> bool {
+    let below = if root == "." {
+        joined
+    } else {
+        joined.strip_prefix(root).unwrap_or(joined)
+    };
+    below
+        .as_bytes()
+        .split(|&b| is_sep(b, true))
+        .any(|e| !e.is_empty() && e.iter().all(|&c| c == b'.' || c == b' '))
+}
+
+/// Why a Windows child element can never be joined beneath a root.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ElementRefusal {
+    /// The `..` parent token.
+    Parent,
+    /// A `:` — a drive designator (`é:`, `1:`) or an alternate data stream
+    /// (`a:b`), either of which re-anchors or aliases the element.
+    Colon,
+    /// Only dots and spaces, other than the exact `.`/`..`: Windows strips
+    /// trailing dots and spaces, so it names `.` or `..` (`" "`, `". "`,
+    /// `".. "`, `"..."`).
+    DotSpaceRun,
+}
+
+impl ElementRefusal {
+    /// The refusal reason [`under_with`] reports.
+    const fn reason(self) -> &'static str {
+        match self {
+            Self::Parent => "contains a `..` element",
+            Self::Colon => "contains a `:` (a drive designator or an alternate data stream)",
+            Self::DotSpaceRun => {
+                "contains an element made only of dots and spaces (Windows strips it to `.` or `..`)"
+            }
+        }
+    }
+}
+
+/// One element of a Windows child path, parsed once by [`ChildElement::parse`].
+///
+/// The child side of [`under_with`] reads every element through this parse, so
+/// an element that Windows would resolve to anything but a plain name beneath
+/// the root has no accepted form.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ChildElement {
+    /// An empty element (a doubled separator), dropped by cleaning.
+    Empty,
+    /// The exact `.` token, dropped by cleaning.
+    Current,
+    /// A plain name that stays a name after Windows canonicalisation.
+    Name,
+}
+
+impl ChildElement {
+    /// Classify one raw element, or say why it may never be joined.
+    fn parse(e: &[u8]) -> Result<Self, ElementRefusal> {
+        match e {
+            b"" => Ok(Self::Empty),
+            b"." => Ok(Self::Current),
+            b".." => Err(ElementRefusal::Parent),
+            _ if e.contains(&b':') => Err(ElementRefusal::Colon),
+            _ if e.iter().all(|&c| c == b'.' || c == b' ') => Err(ElementRefusal::DotSpaceRun),
+            _ => Ok(Self::Name),
+        }
+    }
 }
 
 /// Why `child` may not be joined beneath any root, judged on its RAW text.
@@ -321,17 +413,18 @@ fn strictly_beneath(root: &str, joined: &str, windows: bool) -> bool {
 /// Runs before any cleaning, so a `..` element or a Windows dot/space disguise
 /// is refused even when cleaning would have folded it into an in-bounds form.
 fn raw_child_refusal(c: &str, windows: bool) -> Option<&'static str> {
-    if c.as_bytes()
-        .split(|&b| is_sep(b, windows))
-        .any(|e| e == b"..")
-        || (windows && has_disguised_dotdot(c))
-    {
-        Some("contains a `..` element")
-    } else if is_rooted(c, windows) || volume_name_len(c, windows) > 0 {
-        Some("is absolute or volume-prefixed (it would replace the root)")
+    let mut elements = c.as_bytes().split(|&b| is_sep(b, windows));
+    let element_refusal = if windows {
+        elements.find_map(|e| ChildElement::parse(e).err())
     } else {
-        None
-    }
+        elements
+            .any(|e| e == b"..")
+            .then_some(ElementRefusal::Parent)
+    };
+    element_refusal.map(ElementRefusal::reason).or_else(|| {
+        (is_rooted(c, windows) || volume_name_len(c, windows) > 0)
+            .then_some("is absolute or volume-prefixed (it would replace the root)")
+    })
 }
 
 /// Why the CLEANED `child` may not be joined, re-checking the raw verdict.
@@ -437,13 +530,15 @@ fn absolute_from(cwd: PathBuf, p: &str, windows: bool) -> Result<String, String>
         // Windows root-relative (`\x`): rooted on the CURRENT drive, so anchor
         // it on the working directory's volume instead of returning it
         // drive-ambiguous.
-        let vol = cwd.get(..volume_name_len(&cwd, windows)).unwrap_or("");
-        if vol.is_empty() {
+        let vol = Volume::parse(&cwd, windows);
+        if !vol.anchors() {
             return Err(format!(
-                "Ipe.Path.absolute: the working directory {cwd:?} has no volume to anchor {p:?}"
+                "Ipe.Path.absolute: the working directory {cwd:?} names no complete volume to \
+                 anchor {p:?}"
             ));
         }
-        return seal_with(&format!("{vol}{p}"), windows);
+        let prefix = cwd.get(..vol.byte_len()).unwrap_or("");
+        return seal_with(&format!("{prefix}{p}"), windows);
     }
     if clean_with(p, windows) == "." {
         return Ok(cwd);
@@ -1144,5 +1239,47 @@ mod tests {
     fn absolute_refuses_an_escaping_unsealed_child() {
         let r = run_now(path_absolute::<String>(Path("../x".to_string())));
         assert!(matches!(r, Some(IpeResult::Err(_))), "{r:?}");
+    }
+
+    #[test]
+    fn win_under_refuses_a_colon_or_dot_space_run_child() {
+        for child in [
+            "é:\\x", "1:x", "a:b", "x\\a:b", " ", ". ", "a\\. ", ".. ", "...",
+        ] {
+            assert_eq!(win_raw(".", child), None, "root `.` joined {child:?}");
+            assert_eq!(
+                win_raw("C:\\repo", child),
+                None,
+                "`C:\\repo` joined {child:?}"
+            );
+        }
+        // A plain name with an inner dot or space is still a child.
+        assert_eq!(
+            win_raw("C:\\repo", "a b\\c.d").as_deref(),
+            Some("C:\\repo\\a b\\c.d")
+        );
+    }
+
+    #[test]
+    fn win_containment_post_checks_hold_without_the_child_parse() {
+        // The root-`.` check refuses a drive-designated candidate on its own.
+        assert!(!is_within(".", "é:\\x", true));
+        assert!(!is_within(".", "1:x", true));
+        // A trailing dot/space-only element names the root, never beneath it.
+        assert!(!strictly_beneath("C:\\repo", "C:\\repo\\ ", true));
+        assert!(!strictly_beneath(".", ". ", true));
+        // A lone non-ASCII drive is drive-relative, never a rooted root.
+        assert!(!is_rooted("é:", true));
+    }
+
+    #[test]
+    fn absolute_anchors_on_a_verbatim_unc_share_and_refuses_a_device_unc() {
+        let at = |cwd: &str, p: &str| absolute_from(PathBuf::from(cwd), p, true);
+        assert_eq!(
+            at("\\\\?\\UNC\\srv\\shr\\work", "\\x"),
+            Ok("\\\\?\\UNC\\srv\\shr\\x".to_string())
+        );
+        assert!(at("\\\\.\\UNC\\srv\\shr\\work", "\\x").is_err());
+        assert!(at("\\\\srv", "\\x").is_err(), "UNC with no share");
     }
 }
