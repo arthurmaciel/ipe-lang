@@ -805,7 +805,7 @@ fn http_max_inflight() -> usize {
 
 /// Why a request is turned away before its handler runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RequestRejection {
+pub(crate) enum RequestRejection {
     /// The body exceeds the request-body ceiling.
     PayloadTooLarge,
     /// The path or query is not a well-formed URL (a malformed escape, decoded
@@ -817,7 +817,7 @@ impl RequestRejection {
     /// The status and fixed reason text answered for this rejection.
     ///
     /// The text never echoes the request, so a refusal reflects nothing back.
-    const fn status_and_reason(self) -> (axum::http::StatusCode, &'static str) {
+    pub(crate) const fn status_and_reason(self) -> (axum::http::StatusCode, &'static str) {
         match self {
             Self::PayloadTooLarge => (
                 axum::http::StatusCode::PAYLOAD_TOO_LARGE,
@@ -841,8 +841,54 @@ fn parse_query(q: Option<&str>) -> Result<HashMap<String, String>, crate::encodi
 /// path that passes this check that decoding is byte-for-byte the strict one.
 /// The parameters are therefore used as handed back and never decoded again (a
 /// second decode would turn `%2541` into `A`).
-fn check_path(path: &str) -> Result<(), crate::encoding::DecodeRefusal> {
+pub(crate) fn check_path(path: &str) -> Result<(), crate::encoding::DecodeRefusal> {
     crate::encoding::decode_component(path, crate::encoding::UrlGrammar::Path).map(drop)
+}
+
+/// Refuse a request URI whose path or query is not well-formed, and hand back
+/// the query decoded once by the strict core.
+///
+/// This is the one gate every HTTP entry point (Ipe.Server handlers, every
+/// Ipe.Web route, the static file mounts) passes before any handler or file
+/// service sees the URI.
+pub(crate) fn strict_url_query(
+    uri: &axum::http::Uri,
+) -> Result<HashMap<String, String>, RequestRejection> {
+    check_path(uri.path()).map_err(|_| RequestRejection::BadRequest)?;
+    parse_query(uri.query()).map_err(|_| RequestRejection::BadRequest)
+}
+
+/// Middleware answering the fixed 400 `Bad Request` for a malformed request
+/// URI before the inner service runs.
+pub(crate) async fn refuse_malformed_url(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match strict_url_query(req.uri()) {
+        Ok(_) => next.run(req).await,
+        Err(rejection) => rejection.status_and_reason().into_response(),
+    }
+}
+
+/// A static file service behind the strict URL gate.
+///
+/// `ServeDir` percent-decodes the path itself; the gate makes that decode run
+/// only on a path the strict core already accepted.
+pub(crate) fn strict_serve_dir(
+    dir: std::path::PathBuf,
+) -> impl tower::Service<
+    axum::extract::Request,
+    Response = axum::response::Response,
+    Error = std::convert::Infallible,
+    Future: Send + 'static,
+> + Clone
++ Send
++ 'static {
+    tower::Layer::layer(
+        &axum::middleware::from_fn(refuse_malformed_url),
+        tower_http::services::ServeDir::new(dir),
+    )
 }
 
 fn parse_cookies(header: &str, out: &mut HashMap<String, String>) {
@@ -867,8 +913,7 @@ async fn build_request(
     let method = req.method().as_str().to_string();
     let uri = req.uri().clone();
     let path = uri.path().to_string();
-    check_path(&path).map_err(|_| RequestRejection::BadRequest)?;
-    let query = parse_query(uri.query()).map_err(|_| RequestRejection::BadRequest)?;
+    let query = strict_url_query(&uri)?;
     let mut headers = HashMap::new();
     let mut cookies = HashMap::new();
     for (k, v) in req.headers() {
@@ -1205,7 +1250,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
             match r.target {
                 RouteTarget::Static(dir) => {
                     let path = strip_trailing_slash(&rpath);
-                    let svc = tower_http::services::ServeDir::new(dir);
+                    let svc = strict_serve_dir(std::path::PathBuf::from(dir));
                     app = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                         app.nest_service(&path, svc)
                     })) {
@@ -1257,6 +1302,11 @@ pub fn server_listen<E: From<String> + Send + 'static>(
                 }
             }
         }
+        // Listener-wide strict URL gate: no route, mount or fallback on this
+        // listener sees a malformed path or query. Each entry point also gates
+        // itself (`build_request`, the Web router, `strict_serve_dir`), so this
+        // is the independent second boundary.
+        let app = app.layer(axum::middleware::from_fn(refuse_malformed_url));
         // Ipê doctrine: a panicking handler returns 500, never crashes the
         // process. The custom
         // responder classifies + logs the panic SERVER-SIDE (errId) and returns a
@@ -2803,12 +2853,63 @@ mod tests {
             ("/u/caf%C3%A9", "café|"),
             ("/u/x?q=1&q=2", "x|1"),
             (pairs_at_cap.as_str(), "x|last"),
+            // An encoded slash stays inside its one segment: the router matches
+            // the raw path (one segment, so `/u/:id` and never `/u/:a/:b`), and
+            // the parameter is its single strict decode. Nothing joins a path
+            // parameter into a file path, so no traversal opens.
+            ("/u/a%2Fb", "a/b|"),
         ] {
             let (status, body, runs) = serve_counted(uri).await;
             assert_eq!(status, axum::http::StatusCode::OK, "{uri:?}");
             assert_eq!(body, want, "{uri:?}");
             assert_eq!(runs, 1, "{uri:?}");
         }
+    }
+
+    /// Serve `uri` through `strict_serve_dir` mounted at `/static` over a
+    /// fresh directory holding `hello.txt`. Returns the status and body.
+    async fn serve_static(uri: &str) -> (axum::http::StatusCode, String) {
+        use tower::ServiceExt;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let dir =
+            std::env::temp_dir().join(format!("ipe-strict-static-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp static dir");
+        std::fs::write(dir.join("hello.txt"), "hi").expect("static fixture file");
+        let app = axum::Router::new().nest_service("/static", strict_serve_dir(dir.clone()));
+        let wire = axum::http::Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .expect("test request builds");
+        let resp = match app.oneshot(wire).await {
+            Ok(r) => r,
+            Err(e) => match e {},
+        };
+        let status = resp.status();
+        let body = axum_body_string(resp).await;
+        let _ = std::fs::remove_dir_all(&dir);
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn static_mount_refuses_a_malformed_url_before_the_file_service() {
+        // Prove the refusals: the file service never decodes a path or query
+        // the strict core refused.
+        for uri in [
+            "/static/%zz",
+            "/static/%C0%AF",
+            "/static/hello%C3.txt",
+            "/static/hello.txt?q=%zz",
+        ] {
+            let (status, body) = serve_static(uri).await;
+            assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{uri:?}");
+            assert_eq!(body, "Bad Request", "{uri:?} must not echo the request");
+        }
+        let (status, body) = serve_static("/static/hello.txt").await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(body, "hi");
     }
 
     #[tokio::test]
