@@ -308,9 +308,7 @@ fn end_to_end_builds_and_prints_seven() -> DResult<()> {
     if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return Ok(());
     }
-    let Some(runtime) = seal_e2e::resolve_runtime() else {
-        return Ok(());
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let mut interner = Interner::new();
     let prog = getx_program(&mut interner)?;

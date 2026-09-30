@@ -119,9 +119,7 @@ fn sanitized_name_project_cargo_builds() -> DResult<()> {
         );
 
         // Full build gate: the renamed crate must cargo build without error.
-        let Some(runtime) = seal_e2e::resolve_runtime() else {
-            return Ok(());
-        };
+        let runtime = e2e_support::require_runtime().into_path_buf();
         let slot = format!("ipe_cargo_name_seal_{expected_cargo_name}");
         let status = seal_e2e::vendor_and_run(&emitted, &runtime, &slot, "build")?;
         assert!(
