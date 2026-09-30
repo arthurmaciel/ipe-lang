@@ -803,9 +803,7 @@ mod tests {
 
     #[tokio::test]
     async fn dry_run_returns_synthetic_id() {
-        // SAFETY: test-only env mutation; unsafe in Rust 2024 due to reader/mutator
-        // environ race.
-        unsafe { std::env::set_var("IPE_EMAIL_DRY_RUN", "1") };
+        crate::system::locked_set_var("IPE_EMAIL_DRY_RUN", "1");
         let from_addr = EmailAddress("a@example.com".to_owned());
         let to_addr = EmailAddress("b@example.com".to_owned());
         let msg = EmailMessage {
@@ -828,8 +826,7 @@ mod tests {
             IpeResult::Ok(id) => assert!(id.starts_with("dry-run-")),
             IpeResult::Err(e) => panic!("dry-run failed: {}", e),
         }
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_EMAIL_DRY_RUN") };
+        crate::system::locked_remove_var("IPE_EMAIL_DRY_RUN");
     }
 
     // ── Provider credential secrecy (leak-proof) tests ──────────────────────
@@ -1015,31 +1012,31 @@ mod tests {
 
     #[tokio::test]
     async fn smtp_ssrf_blocks_loopback_when_deny_private_on() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        crate::system::locked_set_var("IPE_HTTP_DENY_PRIVATE", "1");
         let r = smtp_ssrf_result("127.0.0.1").await;
         assert!(
             matches!(r, IpeResult::Err(ref e) if e.contains("blocked")),
             "loopback SMTP host must be blocked: {r:?}"
         );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+        crate::system::locked_remove_var("IPE_HTTP_DENY_PRIVATE");
     }
 
     #[tokio::test]
     async fn smtp_ssrf_blocks_link_local_when_deny_private_on() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        crate::system::locked_set_var("IPE_HTTP_DENY_PRIVATE", "1");
         let r = smtp_ssrf_result("169.254.169.254").await;
         assert!(
             matches!(r, IpeResult::Err(ref e) if e.contains("blocked")),
             "link-local SMTP host must be blocked: {r:?}"
         );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+        crate::system::locked_remove_var("IPE_HTTP_DENY_PRIVATE");
     }
 
     #[tokio::test]
     async fn smtp_ssrf_error_class_matches_http_path_for_same_private_host() {
         // The SMTP and HTTP (reqwest) paths must return the same error CLASS
         // (both contain "blocked") for the same private host, proving parity.
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        crate::system::locked_set_var("IPE_HTTP_DENY_PRIVATE", "1");
         let smtp_err = match smtp_ssrf_result("10.0.0.1").await {
             IpeResult::Err(e) => e,
             IpeResult::Ok(_) => panic!("expected SSRF block for 10.0.0.1"),
@@ -1063,17 +1060,17 @@ mod tests {
             http_err.contains("blocked"),
             "HTTP error must contain 'blocked': {http_err}"
         );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+        crate::system::locked_remove_var("IPE_HTTP_DENY_PRIVATE");
     }
 
     #[tokio::test]
     async fn smtp_ssrf_passes_private_when_deny_private_off() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "0") };
+        crate::system::locked_set_var("IPE_HTTP_DENY_PRIVATE", "0");
         // Guard off: loopback is a pass (dev/relay workflow).
         assert!(
             matches!(smtp_ssrf_result("127.0.0.1").await, IpeResult::Ok(_)),
             "guard off must not block private host"
         );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+        crate::system::locked_remove_var("IPE_HTTP_DENY_PRIVATE");
     }
 }

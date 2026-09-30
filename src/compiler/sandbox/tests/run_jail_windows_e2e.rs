@@ -187,7 +187,7 @@ fn a_non_allowlisted_env_var_is_absent_from_the_jailed_child_but_present_under_c
     // secret must be in THIS process's environment so it would be inherited if
     // the scrub were bypassed. The environment is set at spawn time on a re-exec
     // of this test binary (running only this test), never mutated in-process.
-    if std::env::var_os(ENV_CHILD_MARKER).is_none() {
+    if ipe_env::var_os(ENV_CHILD_MARKER).is_none() {
         let exe = std::env::current_exe().expect("test binary path");
         let status = Command::new(exe)
             .args([

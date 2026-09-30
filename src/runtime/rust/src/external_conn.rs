@@ -200,27 +200,27 @@ mod tests {
 
     #[tokio::test]
     async fn open_external_ssrf_blocks_loopback_postgres_when_deny_private_on() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        crate::system::locked_set_var("IPE_HTTP_DENY_PRIVATE", "1");
         assert!(
             pg_ssrf_blocked("postgres://127.0.0.1:5432/db").await,
             "loopback Postgres DSN must be blocked by the SSRF gate"
         );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+        crate::system::locked_remove_var("IPE_HTTP_DENY_PRIVATE");
     }
 
     #[tokio::test]
     async fn open_external_ssrf_blocks_link_local_postgres_when_deny_private_on() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        crate::system::locked_set_var("IPE_HTTP_DENY_PRIVATE", "1");
         assert!(
             pg_ssrf_blocked("postgres://169.254.169.254:5432/db").await,
             "link-local Postgres DSN must be blocked by the SSRF gate"
         );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+        crate::system::locked_remove_var("IPE_HTTP_DENY_PRIVATE");
     }
 
     #[tokio::test]
     async fn open_external_ssrf_error_is_not_a_connect_or_timeout_error_for_loopback() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        crate::system::locked_set_var("IPE_HTTP_DENY_PRIVATE", "1");
         let dsn = match dsn_parse::<String>("postgres://127.0.0.1:5432/db".to_string()) {
             IpeResult::Ok(d) => d,
             IpeResult::Err(e) => panic!("DSN parse failed: {e}"),
@@ -232,7 +232,7 @@ mod tests {
             matches!(err, crate::ssrf::SsrfRefusal::Blocked { .. }),
             "SSRF block must identify as 'blocked', not a connect/TLS error: {err}"
         );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+        crate::system::locked_remove_var("IPE_HTTP_DENY_PRIVATE");
     }
 
     /// A clean DSN's refusal names its proven host and no credential.
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn open_external_sqlite_dsn_bypasses_ssrf_gate() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        crate::system::locked_set_var("IPE_HTTP_DENY_PRIVATE", "1");
         // A SQLite DSN has no host — the gate is not applied in `open_external`.
         // Verify the driver discriminant correctly skips the gate path.
         let dsn = match dsn_parse::<String>("sqlite://data/app.db".to_string()) {
@@ -276,16 +276,16 @@ mod tests {
             dsn.host().as_str().is_empty(),
             "sqlite DSN must have empty host"
         );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+        crate::system::locked_remove_var("IPE_HTTP_DENY_PRIVATE");
     }
 
     #[tokio::test]
     async fn open_external_ssrf_passes_private_when_deny_private_off() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "0") };
+        crate::system::locked_set_var("IPE_HTTP_DENY_PRIVATE", "0");
         assert!(
             !pg_ssrf_blocked("postgres://127.0.0.1:5432/db").await,
             "guard off must not block private host (dev workflow)"
         );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+        crate::system::locked_remove_var("IPE_HTTP_DENY_PRIVATE");
     }
 }
