@@ -302,6 +302,11 @@ fn scratch_base_verdict_refuses_every_untrusted_component_with_its_reason() -> i
 #[test]
 fn scratch_base_verdict_refuses_empty_or_unexpected_reason_output() -> io::Result<()> {
     let trusted = ["drwx------", ME, MY_GID, ME, MY_GID];
+    assert_eq!(
+        helper_stdout("scratch_base_verdict \"$@\" && echo accepted", &trusted)?,
+        b"accepted\n",
+        "the unstubbed verdict must accept the trusted facts"
+    );
     for (stub, why) in [
         ("scratch_base_reason() { :; }", "empty output"),
         ("scratch_base_reason() { return 1; }", "a failed reason"),
