@@ -16,7 +16,7 @@
 //! standalone `extern crate ipe_path_core` would not survive that copy. This
 //! crate `include!`s that same file, so `ipe_diagnostics` still consumes the
 //! ONE source of truth: there is a single definition of `validate` / `clean_with`
-//! / `escapes_root` / `volume_name_len` / `has_disguised_dotdot` / `has_nul`,
+//! / `escapes_root` / `volume_name_len` / `ElementClass` / `has_nul`,
 //! and the runtime seal and the compile-time gate cannot drift.
 //!
 //! # Two entry points, one algorithm
@@ -27,10 +27,13 @@
 //!   the runtime's target-specific check: a compile-time reject can only ever be
 //!   a superset of what the runtime rejects, so nothing the runtime would refuse
 //!   is ever emitted as a validated literal.
-//! * [`clean_with`] / [`escapes_root`] / [`has_disguised_dotdot`] / [`has_nul`]
+//! * [`clean_with`] / [`escapes_root`] / [`has_nul`]
 //!   — the target-specific primitives the runtime seal drives with its own
 //!   host separator regime (`clean_with(s, cfg!(windows))`), keeping the runtime
 //!   behaviour byte-identical per platform.
+//! * [`ElementClass`] — the one per-element classifier under Windows filename
+//!   canonicalisation ([`ElementClass::of`], [`ElementClass::windows_elements`]),
+//!   read by the seal, the compile-time gate and the runtime child-join parse.
 
 // Splice in the ONE source of truth, which physically lives in the runtime's
 // source tree so it vendors with `mod ipe_runtime` into every emitted app.
