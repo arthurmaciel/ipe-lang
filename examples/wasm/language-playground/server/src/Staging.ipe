@@ -1,4 +1,4 @@
-module Staging exposing (StagedFile, maxFiles, maxSegments, plan)
+module Staging exposing (Plan, StagedFile, files, maxFiles, maxSegments, plan)
 
 import Ipe.List as List
 import Ipe.Result as Result
@@ -17,6 +17,21 @@ type alias StagedFile =
     { path : String
     , content : String
     }
+
+
+{-| A staging plan that passed the allowlist. Only `plan` builds one, so a
+crate that was never checked cannot reach the runner.
+-}
+type Plan
+    = Plan (List StagedFile)
+
+
+{-| The files of an accepted plan, in banner order. -}
+files : Plan -> List StagedFile
+files plan_ =
+    case plan_ of
+        Plan staged ->
+            staged
 
 
 type alias SplitState =
@@ -55,7 +70,7 @@ segmentChars =
 
 
 {-| Parse the emitted Rust into the files to stage, or the reason it is refused. -}
-plan : String -> Result String (List StagedFile)
+plan : String -> Result String Plan
 plan emittedRust =
     let
         split =
@@ -65,7 +80,7 @@ plan emittedRust =
         Err "refused: text before the first file banner"
 
     else
-        checkFiles split.files
+        split.files |> checkFiles |> Result.map Plan
 
 
 checkFiles : List StagedFile -> Result String (List StagedFile)

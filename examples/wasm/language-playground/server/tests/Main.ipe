@@ -4,6 +4,7 @@ import Ipe.List as List
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Test as Test exposing (Test)
+import Runner
 import Staging
 
 
@@ -23,7 +24,7 @@ crate extra =
 
 stagedPaths : String -> Result String (List String)
 stagedPaths emitted =
-    Result.map (List.map (\ipe_accessor_arg -> ipe_accessor_arg.path)) (Staging.plan emitted)
+    Result.map (\p -> List.map (\ipe_accessor_arg -> ipe_accessor_arg.path) (Staging.files p)) (Staging.plan emitted)
 
 
 refuses : String -> String -> Test
@@ -42,7 +43,7 @@ accepted =
             (\_ -> Test.ok (Staging.plan (crate [ "src/ipe_mods/app_2.rs" ])))
         , Test.test
             "file bodies survive the split"
-            (\_ -> Test.equal (Ok [ "fn main() {}\n", "[package]\n" ]) (Result.map (List.map (\ipe_accessor_arg -> ipe_accessor_arg.content)) (Staging.plan (crate []))))
+            (\_ -> Test.equal (Ok [ "fn main() {}\n", "[package]\n" ]) (Result.map (\p -> List.map (\ipe_accessor_arg -> ipe_accessor_arg.content) (Staging.files p)) (Staging.plan (crate []))))
         ]
 
 
@@ -72,5 +73,16 @@ refused =
         ]
 
 
+-- The jail runner is executed only by an absolute path, never looked up on PATH.
+runnerPath : Test
+runnerPath =
+    Test.suite "runner path"
+        [ Test.test "an absolute runner is used as given" (\_ -> Test.ok (Runner.absoluteRunner "/opt/pg/bin/jail-runner"))
+        , Test.test "a bare name is refused" (\_ -> Test.err (Runner.absoluteRunner "jail-runner"))
+        , Test.test "a relative path is refused" (\_ -> Test.err (Runner.absoluteRunner "bin/jail-runner"))
+        , Test.test "an empty name is refused" (\_ -> Test.err (Runner.absoluteRunner ""))
+        ]
+
+
 main =
-    Test.runMain [ accepted, refused ]
+    Test.runMain [ accepted, refused, runnerPath ]

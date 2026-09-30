@@ -7,13 +7,16 @@ import Ipe.Server.Http as Server
 import Ipe.String as String
 import Ipe.Task as Task exposing (Task)
 import Runner
+import Staging
 
 
 -- The playground's run server, started from this directory (`ipe run`). The
 -- static roots resolve against the process cwd: ".." is the playground root
 -- (index.html) and "../pkg" the wasm bundle. GET /health tells the page a run
 -- server is present. POST /run takes `{"rust": <emitted crate>}` — the page's
--- own ipe-wasm emit, never Ipê source — and answers with the jailed transcript.
+-- own ipe-wasm emit, never Ipê source — and answers with the jailed transcript:
+-- 413 for a body over the bound, 400 for a malformed one, 422 for a crate the
+-- staging allowlist refuses, 500 when the jail itself fails.
 main : Task Error ()
 main =
     Server.listen 8000
@@ -52,9 +55,14 @@ handleRun req =
                 refuse 400 "Malformed request: expected {\"rust\": String}."
 
             Ok rust ->
-                Runner.runEmittedRust rust
-                    |> Task.map (\r -> Server.json (runResponse r.ok r.unsandboxed r.output))
-                    |> Task.onError (\e -> refuse 500 ("Server error: " ++ Error.message e))
+                case Staging.plan rust of
+                    Err reason ->
+                        refuse 422 ("Program refused: " ++ reason)
+
+                    Ok plan ->
+                        Runner.runPlan plan
+                            |> Task.map (\r -> Server.json (runResponse r.ok r.unsandboxed r.output))
+                            |> Task.onError (\e -> refuse 500 ("Server error: " ++ Error.message e))
 
 
 refuse : Int -> String -> Task Error Server.Response

@@ -1,4 +1,4 @@
-module Runner exposing (RunResult, runEmittedRust)
+module Runner exposing (RunResult, absoluteRunner, runPlan)
 
 import Ipe.Crypto as Crypto
 import Ipe.Error as Error exposing (Error)
@@ -7,15 +7,13 @@ import Ipe.Json.Decode as Json
 import Ipe.Maybe as Maybe
 import Ipe.Path as Path exposing (Path)
 import Ipe.Process as Process
-import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
 import Staging exposing (StagedFile)
 
 
--- Run one emitted crate: plan the staged files (refusing any path outside the
--- allowlist before a byte is written), write them under a fresh
+-- Run one staging plan (a crate the allowlist accepted): write its files under a fresh
 -- `~/.cache/ipe/playground-runs/<token>` directory, and hand that directory to
 -- the jail runner by direct argv. The runner re-checks the layout, builds and
 -- runs inside the jail, and removes the directory.
@@ -44,18 +42,17 @@ type alias RawOutcome =
     }
 
 
-runEmittedRust : String -> Task Error RunResult
-runEmittedRust emittedRust =
+runPlan : Staging.Plan -> Task Error RunResult
+runPlan plan =
     let
         home =
             System.getenvOr "HOME" "."
     in
     do
-        files <- emittedRust |> Staging.plan |> Result.mapError Error.unexpected |> Task.fromResult
         token <- Crypto.randomToken 8
         runDir <- toPath (home ++ "/.cache/ipe/playground-runs/" ++ token)
         File.mkdirAll runDir
-        writeAll (Path.toString runDir) files
+        writeAll (Path.toString runDir) (Staging.files plan)
         raw <- runJail home (Path.toString runDir)
         Task.succeed (formatOutcome raw)
 
@@ -63,9 +60,6 @@ runEmittedRust emittedRust =
 runJail : String -> String -> Task Error RawOutcome
 runJail home runDir =
     let
-        runner =
-            System.getenvOr "IPE_PLAYGROUND_JAIL_RUNNER" "jail-runner"
-
         warmDir =
             System.getenvOr "IPE_PLAYGROUND_WARM_DIR" (home ++ "/.cache/ipe/playground-warm")
 
@@ -73,8 +67,28 @@ runJail home runDir =
             [ "run", runDir, "--wall", String.fromInt jailWallSecs, "--warm", warmDir ]
     in
     do
+        runner <- home |> runnerPath |> Task.fromResult
         done <- Process.runWith { command = runner, args = args, cwd = Nothing, env = [] }
         Task.fromResult (decodeOutcome done)
+
+
+{-| The jail runner, executed only by an absolute path: the one setup installs
+(`$HOME/.cache/ipe/playground/bin/jail-runner`) unless
+`IPE_PLAYGROUND_JAIL_RUNNER` names another. A relative name is refused rather
+than resolved through `PATH`.
+-}
+runnerPath : String -> Result Error String
+runnerPath home =
+    home ++ "/.cache/ipe/playground/bin/jail-runner" |> System.getenvOr "IPE_PLAYGROUND_JAIL_RUNNER" |> absoluteRunner
+
+
+absoluteRunner : String -> Result Error String
+absoluteRunner runner =
+    if String.startsWith "/" runner then
+        Ok runner
+
+    else
+        "IPE_PLAYGROUND_JAIL_RUNNER must be an absolute path, got: " ++ String.left 200 runner |> Error.unexpected |> Err
 
 
 {-| The jail's wall-clock budget: inside the server's per-request deadline
