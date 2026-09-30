@@ -1686,7 +1686,9 @@ name = "e2e-support"
 version = "0.3.4"
 dependencies = [
  "ipe_env",
+ "proc-macro2",
  "serde_json",
+ "syn 3.0.6",
 ]
 
 [[package]]
