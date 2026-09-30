@@ -242,15 +242,24 @@ mod tests {
     }
 
     /// The production code roots of every workspace member: its `src` tree
-    /// (which must exist), and its build script and `templates` tree (the
-    /// backend's emitted-project sources) when present.
+    /// (which must exist), its build script when present, and its `templates`
+    /// tree when that holds Rust (the backend's emitted-project sources; a tree
+    /// of `.ipe` scaffolds is not Rust code). A `templates` tree that cannot be
+    /// walked stays a root, so the audit fails on it rather than skipping it.
     fn workspace_src_roots(workspace: &std::path::Path) -> Vec<std::path::PathBuf> {
         let mut roots = Vec::new();
         for member in workspace_members(workspace) {
             roots.push(member.join("src"));
-            for optional in [member.join("build.rs"), member.join("templates")] {
-                if optional.exists() {
-                    roots.push(optional);
+            let build_script = member.join("build.rs");
+            if build_script.exists() {
+                roots.push(build_script);
+            }
+            let templates = member.join("templates");
+            if templates.exists() {
+                let mut rs_files = Vec::new();
+                let walked = collect_rs_files(&templates, &mut rs_files);
+                if walked.is_err() || !rs_files.is_empty() {
+                    roots.push(templates);
                 }
             }
         }
@@ -1007,6 +1016,10 @@ mod tests {
                 "{extra} must be audited"
             );
         }
+        assert!(
+            !roots.contains(&workspace.join("src/ipe-cli/templates")),
+            "a tree of `.ipe` scaffolds is not a Rust root"
+        );
     }
 
     /// An emitted-project template is audited like any production source: a
