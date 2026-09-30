@@ -20,7 +20,6 @@ module Ipe.Ui.Tui exposing
     , alignLeft, alignRight, center
     , bold, underline, dim, reverse
     , color, bg
-    , Color, rgb, rgba, white, black
     )
 
 
@@ -113,23 +112,3 @@ color = Kernel.kernel "TuiUi_color"
 -- | `bg c` — the background colour, from the terminal palette.
 bg : AnsiColor -> Attribute msg
 bg = Kernel.kernel "TuiUi_bg"
-
-
--- | `rgb r g b` — a terminal colour from red/green/blue channels (0-255).
-rgb : Int -> Int -> Int -> Color
-rgb = Kernel.kernel "Ui_rgb"
-
-
--- | `rgba r g b a` — a terminal colour with an alpha channel (0..1).
-rgba : Int -> Int -> Int -> Float -> Color
-rgba = Kernel.kernel "Ui_rgba"
-
-
--- | Opaque white.
-white : Color
-white = Kernel.kernel "Ui_white"
-
-
--- | Opaque black.
-black : Color
-black = Kernel.kernel "Ui_black"
