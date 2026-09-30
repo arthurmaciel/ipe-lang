@@ -116,10 +116,11 @@ pub use windows::windows_scrubbed_env;
 /// non-inherited descriptor.
 ///
 /// It borrows the owner's descriptor, is neither `Copy` nor `Clone`, and renders
-/// only into a [`JailArgv`] carrying that same borrow: no lifetime-free
-/// string of the number exists. Every spawn and exec consumes a [`JailArgv`], so
-/// the owner is held open through the hand-off to `bwrap` and a
-/// closed-then-reused fd number cannot reach a jail. Both rejections — a number
+/// only into a [`JailArgv`] carrying that same borrow. Every spawn and exec
+/// builds its `Command` from a borrowed [`JailArgv`], so the owner is held open
+/// through the hand-off to `bwrap` and a closed-then-reused fd number cannot
+/// reach a jail. A copy of the rendered strings (`args().to_vec()`, `Debug`)
+/// carries no borrow; the guarantee covers the spawn paths, which never take one. Both rejections — a number
 /// outliving its owner, an owner dropped before its argv is consumed — are
 /// pinned as `compile_fail` doctests on `SealedSeccompFd`.
 #[cfg(unix)]
@@ -153,10 +154,10 @@ impl SealedFdNumber<'_> {
 /// A rendered jail argv whose sealed fd numbers stay borrowed from their owners.
 ///
 /// Every `--seccomp <fd>` / `--file <fd>` it names was rendered from a
-/// [`SealedFdNumber`] and its `'fd` is carried here, so while the argv, or any
-/// string read from it through [`Self::args`], is live, every owner is live.
-/// The spawn and exec paths take `&JailArgv`, so no owner can be dropped before
-/// `bwrap` receives its descriptor.
+/// [`SealedFdNumber`] and its `'fd` is carried here, so while the argv, or the
+/// slice [`Self::args`] borrows from it, is live, every owner is live. The spawn
+/// and exec paths take `&JailArgv` and build their `Command` inside that borrow,
+/// so no owner can be dropped before `bwrap` receives its descriptor.
 #[derive(Debug)]
 pub struct JailArgv<'fd> {
     argv: Vec<OsString>,
@@ -850,6 +851,28 @@ pub fn exec_embedded_in_run_jail(
 mod tests {
     use super::*;
     use crate::{CanonicalPath, HomeMasks};
+
+    /// An absent anchor token attaches nothing and leaves the argv byte-identical.
+    #[cfg(unix)]
+    #[test]
+    fn attach_fd_after_refuses_a_missing_token_and_keeps_the_argv() {
+        use std::os::fd::AsFd as _;
+        let stdin = std::io::stdin();
+        let number = SealedFdNumber(stdin.as_fd());
+        let before: Vec<OsString> = ["bwrap", "--ro-bind", "/a", "/a", "--", "prog"]
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+        let mut argv = JailArgv::fd_free(before.clone());
+        assert!(!argv.attach_fd_after(std::ffi::OsStr::new("--absent"), "--seccomp", &number));
+        assert_eq!(argv.args(), before.as_slice());
+        assert!(argv.attach_fd_after(std::ffi::OsStr::new("bwrap"), "--seccomp", &number));
+        assert_eq!(
+            argv.args().get(1).map(OsString::as_os_str),
+            Some(std::ffi::OsStr::new("--seccomp"))
+        );
+        assert_eq!(argv.args().len(), before.len().saturating_add(2));
+    }
 
     /// A newline or escape in a run-jail defect's OS error or mount target stays on its owning line.
     #[test]
