@@ -122,6 +122,35 @@ pub fn decode_component(raw: &str, grammar: UrlGrammar) -> Result<String, Decode
     decode_component_within(raw, grammar, MAX_URL_COMPONENT_LEN)
 }
 
+/// Split a URL path on its raw `/` separators and decode each segment under
+/// the path grammar.
+///
+/// Surrounding `/` are trimmed first, so `/a/b/` and `/a/b` yield the same
+/// segments and `/` yields none. Splitting precedes decoding, so an encoded
+/// `%2F` stays inside its segment. This is the one definition of a
+/// well-formed request path: the route matcher reads its segments from here and
+/// the request gate refuses exactly what this refuses.
+///
+/// # Errors
+///
+/// `DecodeRefusal::TooLong` for a path over `MAX_URL_COMPONENT_LEN` bytes, else
+/// the refusal of the first segment that does not decode.
+pub fn decode_path_segments(path: &str) -> Result<Vec<String>, DecodeRefusal> {
+    if path.len() > MAX_URL_COMPONENT_LEN.get() {
+        return Err(DecodeRefusal::TooLong {
+            cap: MAX_URL_COMPONENT_LEN,
+        });
+    }
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    trimmed
+        .split('/')
+        .map(|seg| decode_component(seg, UrlGrammar::Path))
+        .collect()
+}
+
 /// `decode_component` under an explicit length cap.
 fn decode_component_within(
     raw: &str,

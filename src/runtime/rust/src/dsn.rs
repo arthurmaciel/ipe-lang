@@ -402,7 +402,7 @@ fn parse_sslmode(token: &str) -> Result<TlsMode, DsnReject> {
 /// duplicated `sslmode` with differing values, or any of the credential-smuggling
 /// shapes is a `ConflictingParameter` rejection: the password must arrive through
 /// the structured userinfo, never a re-parseable query segment.
-fn tls_from_query(url: &::url::Url) -> Result<TlsMode, DsnReject> {
+fn tls_from_query(url: &UnambiguousUrl) -> Result<TlsMode, DsnReject> {
     let mut chosen: Option<TlsMode> = None;
     for (key, value) in DriverParityQuery::of(url).pairs() {
         match key.as_ref() {
@@ -464,19 +464,18 @@ pub fn dsn_parse<E: From<String>>(s: String) -> IpeResult<E, Dsn> {
         return reject(DsnReject::UnknownDriver);
     };
 
-    let tls = match tls_from_query(&parsed) {
-        Ok(t) => t,
-        Err(r) => return reject(r),
-    };
-
     // Sqlite is a local file driver: the "host" is empty and the database is the
     // file path. Postgres is a network driver: a host is mandatory.
-    let (host, port, target) = match driver {
+    let (host, port, target, tls) = match driver {
         DsnDriver::Postgres => {
             // A credential holding an unencoded `/`, `?`, `#` or `\` ends the
             // authority early, so the parser would read part of it as the host.
             let Some(url) = UnambiguousUrl::of_parsed(&s, parsed.clone()) else {
                 return reject(DsnReject::AmbiguousUserinfo);
+            };
+            let tls = match tls_from_query(&url) {
+                Ok(t) => t,
+                Err(r) => return reject(r),
             };
             let Some(host) = DsnHost::of_url(&url) else {
                 return reject(DsnReject::MissingHost);
@@ -489,7 +488,7 @@ pub fn dsn_parse<E: From<String>>(s: String) -> IpeResult<E, Dsn> {
             let Some(database) = DsnPart::of_encoded(parsed.path().trim_start_matches('/')) else {
                 return reject(DsnReject::InvalidComponent);
             };
-            (host, port, DsnTarget::Postgres(database))
+            (host, port, DsnTarget::Postgres(database), tls)
         }
         DsnDriver::Sqlite => {
             // A file-backed sqlite DSN has no network host, port, or
@@ -497,9 +496,11 @@ pub fn dsn_parse<E: From<String>>(s: String) -> IpeResult<E, Dsn> {
             if !parsed.username().is_empty() || parsed.password().is_some() {
                 return reject(DsnReject::ConflictingParameter);
             }
+            // The query admits only `mode=rwc` (`SqliteDb::of_dsn_rest`), so
+            // no `sslmode` can be present and the posture is the secure default.
             let rest = s.split_once(':').map_or("", |(_, rest)| rest);
             match SqliteDb::of_dsn_rest(rest) {
-                Ok(db) => (DsnHost::none(), 0, DsnTarget::Sqlite(db)),
+                Ok(db) => (DsnHost::none(), 0, DsnTarget::Sqlite(db), TlsMode::Require),
                 Err(r) => return reject(r),
             }
         }
