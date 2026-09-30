@@ -10,11 +10,16 @@
 //!   `#[wasm_bindgen_test]` functions, and that count is above zero;
 //! - (c) the wasm32 library test binary admits test-only code from
 //!   `src/wasm/` alone, so it never needs a native-only dev-dependency;
-//! - (d) every target that can hold a `#[wasm_bindgen_test]` is claimed.
+//! - (d) every `#[wasm_bindgen_test]` a wasm32 build of any feature set could
+//!   compile runs in some claimed cell of its target.
 //!
-//! An unknown `cfg` predicate, a `#[path]` module, a `mod` with no file, an
-//! item `syn` cannot parse, and a macro that could expand to a test are
-//! refusals: the scan never drops code it cannot read.
+//! An unknown `cfg` predicate, a `#[path]` module it cannot follow, a `mod`
+//! with no file, an item `syn` cannot parse, and a module tree past its file or
+//! depth limit are refusals. A macro invocation is refused when its literal
+//! tokens name `wasm_bindgen_test` or hold a test-harness attribute; the scan
+//! does not expand macros, so a test a macro assembles from other tokens is
+//! seen only through a claimed cell's count, which the runner's executed count
+//! must match.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::{BTreeMap, BTreeSet};
