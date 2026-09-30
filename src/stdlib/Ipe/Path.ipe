@@ -67,8 +67,9 @@ isAbsolute = Kernel.kernel "Path_isAbsolute"
 -- `Err` when `child` is empty, absolute, contains a `..` element, or the
 -- join would not lie below `root`; otherwise `Ok` the cleaned joined `Path`.
 -- On Windows, a `child` element containing `:` (a drive or an alternate data
--- stream) or made only of dots and spaces (which Windows strips to `.` or
--- `..`) is refused too.
+-- stream), made only of dots and spaces (which Windows strips to `.` or
+-- `..`), or naming a reserved device (`CON`, `NUL`, `COM1`, `nul.txt`, ...)
+-- is refused too.
 under : Path -> Path -> Result Error Path
 under = Kernel.kernel "Path_under"
 

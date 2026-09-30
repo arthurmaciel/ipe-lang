@@ -26,6 +26,9 @@
 //   — the target-specific primitives the runtime seal drives with its own
 //   host separator regime (`clean_with(s, cfg!(windows))`), keeping the runtime
 //   behaviour byte-identical per platform.
+// * `ElementClass` — the one per-element classifier under Windows filename
+//   canonicalisation, read by the seal, the compile-time gate and the runtime
+//   child-join parse alike.
 
 /// Why a `path "…"` literal was rejected by [`validate`].
 ///
@@ -270,32 +273,106 @@ pub fn volume_name_len(path: &str, windows: bool) -> usize {
     Volume::parse(path, windows).byte_len()
 }
 
+/// How Windows filename canonicalisation reads one raw path element (the bytes
+/// between two separators).
+///
+/// THE element classifier: the runtime seal, the compile-time [`validate`] gate
+/// and the runtime child-join parse all read an element through
+/// [`ElementClass::of`], so the dot-and-space rule is stated once. Each consumer
+/// decides which classes it refuses; the classes themselves never differ.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ElementClass {
+    /// An empty element (a doubled or trailing separator).
+    Empty,
+    /// The exact `.` token.
+    Current,
+    /// The exact `..` token.
+    Parent,
+    /// Only dots and spaces with at least two dots, other than the exact `..`
+    /// (`.. `, `. .`, `...`, ` .. `): Windows strips trailing dots and spaces,
+    /// so it can name the parent directory.
+    DisguisedParent,
+    /// Only dots and spaces with at most one dot, other than the exact `.`
+    /// (` `, `. `, ` . `): Windows strips it to the directory itself.
+    DisguisedCurrent,
+    /// Holds a `:` — a drive designator (`é:`, `1:`) or an alternate data
+    /// stream (`a:b`).
+    Colon,
+    /// A reserved Win32 DOS device name (see [`is_dos_device`]).
+    DosDevice,
+    /// Any other element.
+    Name,
+}
+
+impl ElementClass {
+    /// Classify one raw element.
+    #[must_use]
+    pub fn of(e: &[u8]) -> Self {
+        match e {
+            b"" => Self::Empty,
+            b"." => Self::Current,
+            b".." => Self::Parent,
+            _ if e.iter().all(|&c| c == b'.' || c == b' ') => {
+                // "at least two dots" without a full count (dodges the
+                // naive-bytecount lint).
+                if e.iter().filter(|&&c| c == b'.').nth(1).is_some() {
+                    Self::DisguisedParent
+                } else {
+                    Self::DisguisedCurrent
+                }
+            }
+            _ if e.contains(&b':') => Self::Colon,
+            _ if is_dos_device(e) => Self::DosDevice,
+            _ => Self::Name,
+        }
+    }
+}
+
+/// Does the raw element `e` name a reserved Win32 DOS device?
+///
+/// Win32 opens a device, not a file, for `CON`, `PRN`, `AUX`, `NUL`,
+/// `COM0`–`COM9`, `LPT0`–`LPT9`, the superscript-digit `COM¹²³` / `LPT¹²³`, and
+/// `CONIN$` / `CONOUT$`, matched case-insensitively on the element's stem: the
+/// text before its first `.` or `:`, with trailing spaces dropped. An extension
+/// does not escape the device (`nul.txt`, `aux.tar.gz`) on older Windows
+/// versions, so the check fails closed on every version.
+#[must_use]
+pub fn is_dos_device(e: &[u8]) -> bool {
+    let stem_end = e
+        .iter()
+        .position(|&c| c == b'.' || c == b':')
+        .unwrap_or(e.len());
+    let mut stem = e.get(..stem_end).unwrap_or(e);
+    while let [rest @ .., b' '] = stem {
+        stem = rest;
+    }
+    let named = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
+        .iter()
+        .any(|n| stem.eq_ignore_ascii_case(n.as_bytes()));
+    let numbered = stem.split_at_checked(3).is_some_and(|(head, digit)| {
+        (head.eq_ignore_ascii_case(b"COM") || head.eq_ignore_ascii_case(b"LPT"))
+            // An ASCII digit, or the UTF-8 encoding of `¹` / `²` / `³`.
+            && matches!(digit, [b'0'..=b'9'] | [0xC2, 0xB9 | 0xB2 | 0xB3])
+    });
+    named || numbered
+}
+
 /// Could a path element alias to the `..` parent token once Windows applies its
 /// filename canonicalisation?
 ///
-/// Windows strips trailing dots and spaces, so `".. "`
-/// and `".. . "` name the parent directory — yet the lexical `..` scan, which
-/// matches only the exact `..` token, would treat them as ordinary filenames and
-/// miss the climb. Fail closed on any element that is made up SOLELY of dots and
-/// spaces and carries at least two dots (`..`, `.. `, `. .`, `...`, ` .. `, …):
-/// none is a legitimate filename, and each can canonicalise to `..`. Scanned
-/// over the Windows separator set (`\` and `/`).
+/// True when any element, split over the Windows separator set (`\` and `/`),
+/// is an [`ElementClass::DisguisedParent`] (`.. `, `...`, `. .`): the lexical
+/// `..` scan matches only the exact `..` token and would miss the climb. None
+/// is a legitimate filename.
 ///
 /// The exact `..` token is deliberately EXCLUDED here — the lexical scan already
 /// counts it and [`escapes_root`] rejects any that climb out — so an in-bounds
 /// `a\..\b` still resolves instead of being false-rejected.
 #[must_use]
 pub fn has_disguised_dotdot(path: &str) -> bool {
-    let windows = true;
-    path.as_bytes().split(|&c| is_sep(c, windows)).any(|elem| {
-        if elem == b".." {
-            return false;
-        }
-        let only_dots_and_spaces = elem.iter().all(|&c| c == b'.' || c == b' ');
-        // "at least two dots" without a full count (dodges the naive-bytecount lint).
-        let has_two_dots = elem.iter().filter(|&&c| c == b'.').nth(1).is_some();
-        only_dots_and_spaces && has_two_dots
-    })
+    path.as_bytes()
+        .split(|&c| is_sep(c, true))
+        .any(|e| ElementClass::of(e) == ElementClass::DisguisedParent)
 }
 
 /// Does a CLEANED path climb above its root?
@@ -590,6 +667,82 @@ mod tests {
         assert!(!Volume::parse("\\\\.\\UNC\\srv\\shr\\x", true).anchors());
         assert!(!Volume::parse("\\\\srv", true).anchors());
         assert!(!Volume::parse("\\x", true).anchors());
+    }
+
+    // ── ElementClass: the one element classifier ──────────────────────────────
+
+    #[test]
+    fn element_class_names_the_dot_space_aliases() {
+        for (e, want) in [
+            ("", ElementClass::Empty),
+            (".", ElementClass::Current),
+            ("..", ElementClass::Parent),
+            (".. ", ElementClass::DisguisedParent),
+            ("...", ElementClass::DisguisedParent),
+            (". .", ElementClass::DisguisedParent),
+            (" ", ElementClass::DisguisedCurrent),
+            (". ", ElementClass::DisguisedCurrent),
+            (" . ", ElementClass::DisguisedCurrent),
+            ("a:b", ElementClass::Colon),
+            ("CON", ElementClass::DosDevice),
+            ("a.b", ElementClass::Name),
+            ("..foo", ElementClass::Name),
+        ] {
+            assert_eq!(ElementClass::of(e.as_bytes()), want, "{e:?}");
+        }
+    }
+
+    #[test]
+    fn dos_device_names_are_recognised_on_their_stem() {
+        for e in [
+            "CON",
+            "con",
+            "con.txt",
+            "NUL ",
+            "nul.txt",
+            "COM1",
+            "lpt9",
+            "COM0",
+            "COM\u{b9}",
+            "LPT\u{b3}",
+            "CONOUT$",
+            "conin$",
+            "aux.tar.gz",
+            "PRN:",
+            "AUX :x",
+        ] {
+            assert!(is_dos_device(e.as_bytes()), "{e:?} is a device");
+        }
+        for e in [
+            "CONSOLE",
+            "COM10",
+            "nulx",
+            "xCON",
+            "COM",
+            "LPT",
+            "COM\u{b4}",
+            "CO",
+            "",
+            "COMa",
+        ] {
+            assert!(!is_dos_device(e.as_bytes()), "{e:?} is a plain name");
+        }
+    }
+
+    #[test]
+    fn disguised_dotdot_is_exactly_the_disguised_parent_class() {
+        // The seal and gate rule, stated independently of the classifier: an
+        // all-dots-and-spaces element with at least two dots, other than `..`.
+        let rule = |e: &[u8]| {
+            e != b".."
+                && e.iter().all(|&c| c == b'.' || c == b' ')
+                && e.iter().filter(|&&c| c == b'.').nth(1).is_some()
+        };
+        for e in [
+            "", ".", "..", "...", ".. ", " ", ". ", " .. ", "a", "a.", ". . .",
+        ] {
+            assert_eq!(has_disguised_dotdot(e), rule(e.as_bytes()), "{e:?}");
+        }
     }
 
     // ── escapes_root: two-layer defence against a leading all-dots element ─────
