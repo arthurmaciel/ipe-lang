@@ -1774,15 +1774,18 @@ mod tests {
 
         let other_sha = "b".repeat(40);
         let requested = PinnedRev::from_full_sha(&pn("p"), &other_sha).unwrap();
-        match check_served(&RequestedRev::FullSha(requested.clone()), &served) {
-            Some(RevMismatch::Different {
-                requested: r,
-                served: s,
-            }) => {
-                assert_eq!(r.as_str(), other_sha);
-                assert_eq!(s.as_str(), FIXTURE_REV);
-            }
-            other => panic!("expected Different, got {other:?}"),
+        let mismatch = check_served(&RequestedRev::FullSha(requested), &served);
+        assert!(
+            matches!(mismatch, Some(RevMismatch::Different { .. })),
+            "expected Different, got {mismatch:?}"
+        );
+        if let Some(RevMismatch::Different {
+            requested: r,
+            served: s,
+        }) = mismatch
+        {
+            assert_eq!(r.as_str(), other_sha);
+            assert_eq!(s.as_str(), FIXTURE_REV);
         }
     }
 
@@ -1796,15 +1799,18 @@ mod tests {
         );
 
         let non_prefix = "deadbe".to_owned();
-        match check_served(&RequestedRev::AbbrevHex(non_prefix.clone()), &served) {
-            Some(RevMismatch::ShadowedAbbrev {
-                requested,
-                served: s,
-            }) => {
-                assert_eq!(requested, non_prefix);
-                assert_eq!(s.as_str(), FIXTURE_REV);
-            }
-            other => panic!("expected ShadowedAbbrev, got {other:?}"),
+        let mismatch = check_served(&RequestedRev::AbbrevHex(non_prefix.clone()), &served);
+        assert!(
+            matches!(mismatch, Some(RevMismatch::ShadowedAbbrev { .. })),
+            "expected ShadowedAbbrev, got {mismatch:?}"
+        );
+        if let Some(RevMismatch::ShadowedAbbrev {
+            requested,
+            served: s,
+        }) = mismatch
+        {
+            assert_eq!(requested, non_prefix);
+            assert_eq!(s.as_str(), FIXTURE_REV);
         }
     }
 

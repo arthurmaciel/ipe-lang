@@ -1279,7 +1279,7 @@ mod tests {
         scaffold_project(&proj);
         let dep = IpeDep::Git {
             url: src.display().to_string(),
-            rev: Some(c1.clone()),
+            rev: Some(c1),
         };
         let err = resolve_escape(&proj, "shadowed", &dep)
             .expect_err("a full-SHA request shadowed by a differing tag must refuse");
