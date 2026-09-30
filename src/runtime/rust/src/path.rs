@@ -1371,7 +1371,7 @@ mod tests {
     fn under_refusal_arrives_on_the_error_channel() {
         let r = path_under::<IpeError>(Path("/repo".to_string()), Path("/etc".to_string()));
         assert!(
-            matches!(&r, IpeResult::Err(e) if e.contains("absolute")),
+            matches!(&r, IpeResult::Err(e) if e.to_string().contains("absolute")),
             "{r:?}"
         );
     }
