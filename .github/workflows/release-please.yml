@@ -89,7 +89,7 @@ jobs:
 
       - name: Commit updated Cargo.lock if changed
         run: |
-          if git diff --quiet Cargo.lock; then
+          if tools/scripts/generated-unchanged.sh Cargo.lock; then
             echo "Cargo.lock already up to date — nothing to commit."
             exit 0
           fi

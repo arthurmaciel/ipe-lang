@@ -60,7 +60,6 @@ class ScanTest(unittest.TestCase):
         samples = {
             "lost-runner": "The runner has received a shutdown signal. This can happen when the runner service is stopped",
             "enospc": "Error: ENOSPC: no space left on device, write",
-            "sccache-5xx": "sccache: error: Server startup failed: cache storage failed to read: Unexpected, response: Parts { status: 503 }",
             "cache-5xx": "Warning: Failed to save: Cache service responded with 502",
             "download-5xx": "curl: (22) The requested URL returned error: 503",
             "download-network": "curl: (6) Could not resolve host: github.com",

@@ -38,7 +38,7 @@ const TEST_DIR: &str = "tests";
 const TEST_MODULE_FILE: &str = "tests.rs";
 
 /// Directory name of the emitted-program Rust copied into generated binaries.
-pub(crate) const TEMPLATE_DIR: &str = "templates";
+pub const TEMPLATE_DIR: &str = "templates";
 
 /// File name of a crate manifest.
 const MANIFEST_FILE: &str = "Cargo.toml";

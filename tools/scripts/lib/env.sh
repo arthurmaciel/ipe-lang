@@ -32,14 +32,13 @@ mkdir -p "$CARGO_TARGET_DIR" || {
 
 # sccache (RUSTC_WRAPPER) caches each rustc by content hash — the big LOCAL win,
 # coupled to CARGO_INCREMENTAL=0 (sccache caches NOTHING with incremental=true).
-# IPE_NO_SCCACHE=1 force-disables this wrapper. Most CI jobs never reach this
-# branch at all: they wire sccache themselves via the `./.github/actions/sccache`
-# composite (mozilla-actions/sccache-action, GitHub Actions cache backend),
-# independently of this script. The static/cross-compile build jobs
-# (.github/workflows/static.yml) are the ones that set IPE_NO_SCCACHE=1 here —
-# they persist CARGO_TARGET_DIR + ~/.cargo via actions/cache instead, leaving
-# CARGO_INCREMENTAL at cargo's default so the persisted target dir does
-# incremental rebuilds.
+# IPE_NO_SCCACHE=1 force-disables this wrapper. CI runners carry no sccache, so
+# CI jobs never take this branch: they cache compiled dependencies with
+# `Swatinem/rust-cache` and `verify-manifest.py` refuses any job that wraps
+# rustc. The static/cross-compile build jobs (.github/workflows/static.yml)
+# also set IPE_NO_SCCACHE=1 — they persist CARGO_TARGET_DIR + ~/.cargo via
+# actions/cache, leaving CARGO_INCREMENTAL at cargo's default so the persisted
+# target dir does incremental rebuilds.
 if [ -z "${IPE_NO_SCCACHE:-}" ] && command -v sccache >/dev/null 2>&1; then
     export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
     export CARGO_INCREMENTAL=0

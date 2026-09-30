@@ -148,13 +148,43 @@ class Matcher(unittest.TestCase):
         self.assertFalse(r.is_trust_root("src/compiler/parse/src/lib.rs"))
 
 
-def _pr(*, outside: bool = True, changed: int = 1, head: str = HEAD, state: str = "open") -> dict:
+def _pr(
+    *,
+    outside: bool = True,
+    changed: int = 1,
+    head: str = HEAD,
+    state: str = "open",
+    login: str = "someone",
+    kind: str = "User",
+) -> dict:
     return {
         "state": state,
+        "user": {"login": login, "type": kind},
+        "commits": 1,
         "changed_files": changed,
         "head": {"sha": head, "repo": {"id": 2 if outside else 1}},
         "base": {"repo": {"id": 1}},
     }
+
+
+_SAME = "<author>"
+
+
+def _commit(author: str | None, committer: str | None = _SAME, sha: str = HEAD) -> dict:
+    committer = author if committer == _SAME else committer
+    return {
+        "sha": sha,
+        "author": None if author is None else {"login": author},
+        "committer": None if committer is None else {"login": committer},
+    }
+
+
+def _decide(roots: tr.TrustRoots, pr: dict, files: list, reviews: list, commits: list | None = None) -> str:
+    """`decide` with, by default, one commit the PR's own author made."""
+    if commits is None:
+        user = pr.get("user")
+        commits = [_commit(user.get("login") if isinstance(user, dict) else None)]
+    return tr.decide(roots, pr, files, reviews, commits)
 
 
 def _review(login: str, state: str, commit: str = HEAD) -> dict:
@@ -170,7 +200,7 @@ class Decision(unittest.TestCase):
 
     def refused(self, pr: dict, files: list, reviews: list, needle: str) -> None:
         with self.assertRaises(tr.Refused) as cm:
-            tr.decide(self.roots, pr, files, reviews)
+            _decide(self.roots, pr, files, reviews)
         self.assertIn(needle, str(cm.exception))
 
     def test_fork_touching_trust_root_without_review_fails(self) -> None:
@@ -218,7 +248,7 @@ class Decision(unittest.TestCase):
 
     def test_deleted_account_review_is_skipped(self) -> None:
         reviews = [{"user": None, "state": "CHANGES_REQUESTED", "commit_id": HEAD}, _review("owner", "APPROVED")]
-        self.assertIn("approved", tr.decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
+        self.assertIn("approved", _decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
 
     def test_deleted_account_approval_does_not_count(self) -> None:
         reviews = [{"user": None, "state": "APPROVED", "commit_id": HEAD}]
@@ -226,18 +256,93 @@ class Decision(unittest.TestCase):
 
     def test_fork_with_owner_approval_at_head_passes(self) -> None:
         reviews = [_review("OWNER", "CHANGES_REQUESTED", OTHER), _review("owner", "COMMENTED"), _review("owner", "APPROVED")]
-        self.assertIn("approved", tr.decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
+        self.assertIn("approved", _decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
 
     def test_later_comment_keeps_approval(self) -> None:
         reviews = [_review("owner", "APPROVED"), _review("owner", "COMMENTED", OTHER)]
-        self.assertIn("approved", tr.decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
+        self.assertIn("approved", _decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
 
     def test_fork_not_touching_trust_root_passes(self) -> None:
-        self.assertIn("no trust root", tr.decide(self.roots, _pr(), [{"filename": "src/x.rs"}], []))
+        self.assertIn("no trust root", _decide(self.roots, _pr(), [{"filename": "src/x.rs"}], []))
 
-    def test_same_repo_branch_passes(self) -> None:
-        out = tr.decide(self.roots, _pr(outside=False), [{"filename": "Cargo.toml"}], [])
-        self.assertIn("branch of this repository", out)
+    def test_same_repo_branch_of_non_owner_fails(self) -> None:
+        self.refused(_pr(outside=False), [{"filename": "Cargo.toml"}], [], "without a code owner")
+
+    def test_same_repo_branch_of_owner_passes(self) -> None:
+        out = _decide(self.roots, _pr(outside=False, login="Owner"), [{"filename": "Cargo.toml"}], [])
+        self.assertIn("code owner Owner", out)
+
+    def test_owner_from_fork_still_needs_approval(self) -> None:
+        self.refused(_pr(login="owner"), [{"filename": "Cargo.toml"}], [], "without a code owner")
+
+    def test_bot_named_like_owner_is_not_owner(self) -> None:
+        self.refused(_pr(outside=False, login="owner", kind="Bot"), [{"filename": "Cargo.toml"}], [], "without")
+
+    def test_missing_author_fails_closed(self) -> None:
+        pr = _pr(outside=False)
+        del pr["user"]
+        self.refused(pr, [{"filename": "Cargo.toml"}], [], "user.login")
+
+    def test_malformed_author_fails_closed(self) -> None:
+        for login, kind in [("", "User"), ("a b", "User"), (None, "User"), ("owner", None)]:
+            pr = _pr(outside=False, login="x")
+            pr["user"] = {"login": login, "type": kind}
+            self.refused(pr, [{"filename": "Cargo.toml"}], [], "malformed")
+
+    def test_owner_pr_carrying_another_accounts_commit_fails(self) -> None:
+        pr = _pr(outside=False, login="Owner")
+        pr["commits"] = 2
+        for other in [
+            _commit("someone"),
+            _commit("owner", "someone"),
+            _commit("web-flow"),
+            _commit("renovate[bot]"),
+            _commit(None, "owner"),
+            _commit("owner", None),
+        ]:
+            self.refused_with(pr, [_commit("owner"), other])
+
+    def test_owner_pr_with_partial_commit_list_fails(self) -> None:
+        pr = _pr(outside=False, login="Owner")
+        pr["commits"] = 2
+        self.refused_with(pr, [_commit("owner")])
+        pr["commits"] = tr.MAX_PR_COMMITS + 1
+        self.refused_with(pr, [_commit("owner")] * (tr.MAX_PR_COMMITS + 1))
+
+    def test_owner_pr_with_github_side_committers_passes(self) -> None:
+        pr = _pr(outside=False, login="Owner")
+        pr["commits"] = 2
+        commits = [_commit("owner", "web-flow"), _commit("github-actions[bot]")]
+        self.assertIn("code owner", _decide(self.roots, pr, [{"filename": "Cargo.toml"}], [], commits))
+
+    def test_owner_pr_whose_last_commit_is_not_head_fails(self) -> None:
+        pr = _pr(outside=False, login="Owner")
+        pr["commits"] = 2
+        self.refused_with(pr, [_commit("owner"), _commit("owner", sha=OTHER)])
+        self.refused_with(pr, [_commit("owner"), "not a commit"])
+
+    def test_owner_pr_with_no_commits_fails(self) -> None:
+        pr = _pr(outside=False, login="Owner")
+        pr["commits"] = 0
+        self.refused_with(pr, [])
+
+    def test_owner_pr_with_deleted_head_repo_fails(self) -> None:
+        pr = _pr(outside=False, login="Owner")
+        pr["head"]["repo"] = None
+        self.refused_with(pr, [_commit("owner")])
+
+    def test_non_owner_pr_of_owner_commits_fails(self) -> None:
+        self.refused_with(_pr(outside=False, login="someone"), [_commit("owner")])
+
+    def refused_with(self, pr: dict, commits: list) -> None:
+        with self.assertRaises(tr.Refused) as cm:
+            _decide(self.roots, pr, [{"filename": "Cargo.toml"}], [], commits)
+        self.assertIn("without a code owner", str(cm.exception))
+
+    def test_untouched_trust_roots_ignore_author(self) -> None:
+        pr = _pr(outside=False)
+        pr["user"] = None
+        self.assertIn("no trust root", _decide(self.roots, pr, [{"filename": "src/x.rs"}], []))
 
 
 class EventRouting(unittest.TestCase):
@@ -292,6 +397,22 @@ class EventRouting(unittest.TestCase):
         with self.assertRaises(tr.Refused) as cm:
             tr.run_check(_roots(ROOTS), "pull_request_target", ev, FakeApi())  # type: ignore[arg-type]
         self.assertIn("while it was read", str(cm.exception))
+
+    def test_owner_pass_reads_the_commits_endpoint(self) -> None:
+        def run(commits: list) -> str:
+            class FakeApi:
+                def get(self, path: str) -> dict:
+                    return _pr(outside=False, login="Owner")
+
+                def get_all(self, path: str) -> list:
+                    return {"files": [{"filename": "Cargo.toml"}], "reviews": [], "commits": commits}[path.rsplit("/", 1)[1]]
+
+            ev = {"pull_request": {"number": 7, "head": {"sha": HEAD}}}
+            return tr.run_check(_roots(ROOTS), "pull_request_target", ev, FakeApi())  # type: ignore[arg-type]
+
+        self.assertIn("code owner Owner", run([_commit("owner")]))
+        with self.assertRaises(tr.Refused):
+            run([_commit("someone")])
 
 
 class ApiGuards(unittest.TestCase):

@@ -7,7 +7,7 @@
 # against. The snapshot is therefore produced by an actual `ipe` run — never
 # hand-authored — so `Ipe.Markdown` stays the single source of truth and any
 # drift reddens CI (see the `markdown-parity` job: regenerate then
-# `git diff --exit-code`).
+# `tools/scripts/generated-unchanged.sh`).
 #
 # Usage:
 #   tools/scripts/regen-markdown-parity.sh [path-to-ipe-binary]
@@ -28,8 +28,16 @@ else
     | grep -o '"target_directory":"[^"]*"' | head -1 | cut -d'"' -f4)/debug/ipe"
 fi
 
+# Build output goes to a private scratch dir, so the regen leaves the source
+# tree untouched. The snapshot is renamed into place only once the run
+# succeeds, so a failed run never leaves it truncated.
+scratch="$(mktemp -d)"
+staged="$(mktemp "$snapshot.XXXXXX")"
+trap 'rm -rf "$scratch" "$staged"' EXIT
+
 echo "regen-markdown-parity: running the serializer via $ipe_bin…" >&2
 # `ipe run` emits + builds + runs the serializer; its stdout is the snapshot.
-( cd "$serializer_dir" && "$ipe_bin" run ) > "$snapshot"
+( cd "$serializer_dir" && "$ipe_bin" run --out "$scratch/out" ) > "$staged"
+mv "$staged" "$snapshot"
 
 echo "regen-markdown-parity: wrote $snapshot" >&2

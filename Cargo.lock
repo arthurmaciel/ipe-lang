@@ -4598,6 +4598,7 @@ dependencies = [
 name = "panic-scan"
 version = "0.0.0"
 dependencies = [
+ "ipe_env",
  "proc-macro2",
  "syn 3.0.4",
 ]

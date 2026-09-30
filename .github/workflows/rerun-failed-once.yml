@@ -3,7 +3,7 @@ name: rerun-failed-once
 # Infrastructure-only retry for the heavy gate: when a "Build & test" run
 # finishes FAILED on its FIRST attempt, re-run its failed jobs ONCE — but only
 # when `.github/ci/rerun_policy.py` proves every failed job died of
-# infrastructure (a lost runner, ENOSPC, an sccache/cache HTTP 5xx, a tool or
+# infrastructure (a lost runner, ENOSPC, a cache HTTP 5xx, a tool or
 # crate download failure) and none shows a test failure. A test failure, a lint
 # red, or any failure the policy cannot classify stays red: a retry that turns
 # a flaky test green hides nondeterminism, so no evidence means no rerun.
