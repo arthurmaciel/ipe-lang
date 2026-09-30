@@ -1,4 +1,4 @@
-module Runner exposing (RunResult, absoluteHome, absoluteRunner, jailWallFor, maxJailWallSecs, minJailWallSecs, runPlan)
+module Runner exposing (DeadlineRefusal(..), JailWall, RunResult, absoluteHome, absoluteRunner, deadlineMessage, defaultDeadlineSecs, jailWallFor, maxJailWallSecs, minJailWallSecs, runPlan, wallSecs)
 
 import Ipe.Crypto as Crypto
 import Ipe.Error as Error exposing (Error)
@@ -42,26 +42,26 @@ type alias RawOutcome =
     }
 
 
-runPlan : Staging.Plan -> Task Error RunResult
-runPlan plan =
+runPlan : JailWall -> Staging.Plan -> Task Error RunResult
+runPlan wall plan =
     do
         home <- System.getenvOr "HOME" "" |> absoluteHome |> Task.fromResult
         token <- Crypto.randomToken 8
         runDir <- toPath (home ++ "/.cache/ipe/playground-runs/" ++ token)
         File.mkdirAll runDir
         writeAll (Path.toString runDir) (Staging.files plan)
-        raw <- runJail home (Path.toString runDir)
+        raw <- runJail wall home (Path.toString runDir)
         Task.succeed (formatOutcome raw)
 
 
-runJail : String -> String -> Task Error RawOutcome
-runJail home runDir =
+runJail : JailWall -> String -> String -> Task Error RawOutcome
+runJail wall home runDir =
     let
         warmDir =
             System.getenvOr "IPE_PLAYGROUND_WARM_DIR" (home ++ "/.cache/ipe/playground-warm")
 
         args =
-            [ "run", runDir, "--wall", String.fromInt jailWallSecs, "--warm", warmDir ]
+            [ "run", runDir, "--wall", String.fromInt (wallSecs wall), "--warm", warmDir ]
     in
     do
         runner <- home |> runnerPath |> Task.fromResult
@@ -112,25 +112,98 @@ maxJailWallSecs =
     600
 
 
-{-| The jail's wall-clock budget for the server's per-request deadline.
-
-Five seconds under `IPE_HTTP_REQUEST_TIMEOUT` (30 unless set), so a jail never
-outlives the request that started it, clamped to the range the jail runner
-accepts, so no deadline makes it refuse every run.
+{-| The jail's wall-clock budget, proven to end before the request that
+started it: the jail is not killed when its request times out, so a wall at or
+past the deadline would let a jail outlive its request and its concurrency
+permit.
 -}
-jailWallFor : String -> Int
+type JailWall
+    = JailWall Int
+
+
+{-| Why the server refuses to start on its `IPE_HTTP_REQUEST_TIMEOUT`. -}
+type DeadlineRefusal
+    = MalformedDeadline String
+    | DeadlineBelowFloor Int
+
+
+{-| The runtime's per-request deadline when `IPE_HTTP_REQUEST_TIMEOUT` is unset. -}
+defaultDeadlineSecs : Int
+defaultDeadlineSecs =
+    30
+
+
+{-| The wall, in seconds, for the jail runner's `--wall`. -}
+wallSecs : JailWall -> Int
+wallSecs wall =
+    case wall of
+        JailWall secs ->
+            secs
+
+
+{-| The jail wall for the server's per-request deadline, `IPE_HTTP_REQUEST_TIMEOUT`.
+
+The deadline is read as the runtime reads it (trimmed; unset or blank is 30)
+but only in the form both read alike: ASCII digits, above zero. Any other value,
+which the runtime would silently replace, is refused. The wall is five seconds
+under the deadline, capped at the jail runner's ceiling; a deadline too short
+for the jail runner's floor is refused, never raised past the request.
+-}
+jailWallFor : String -> Result DeadlineRefusal JailWall
 jailWallFor raw =
-    raw
-        |> String.trim
-        |> String.toInt
-        |> Maybe.withDefault 30
-        |> clamp (minJailWallSecs + 5) (maxJailWallSecs + 5)
-        |> (\deadline -> deadline - 5)
+    let
+        trimmed =
+            String.trim raw
+    in
+    if trimmed == "" then
+        Ok (JailWall (defaultDeadlineSecs - 5))
+
+    else
+        case digitsToInt trimmed of
+            Nothing ->
+                Err (MalformedDeadline trimmed)
+
+            Just deadline ->
+                if deadline < minJailWallSecs + 5 then
+                    Err (DeadlineBelowFloor deadline)
+
+                else
+                    Ok (JailWall (min maxJailWallSecs (deadline - 5)))
 
 
-jailWallSecs : Int
-jailWallSecs =
-    jailWallFor (System.getenvOr "IPE_HTTP_REQUEST_TIMEOUT" "30")
+{-| A positive decimal made of ASCII digits only. -}
+digitsToInt : String -> Maybe Int
+digitsToInt text =
+    if String.all (\c -> String.contains (String.fromChar c) "0123456789") text then
+        String.toInt text
+            |> Maybe.andThen
+                (\n ->
+                    if n > 0 then
+                        Just n
+
+                    else
+                        Nothing
+                )
+
+    else
+        Nothing
+
+
+{-| The startup refusal message. -}
+deadlineMessage : DeadlineRefusal -> String
+deadlineMessage refusal =
+    case refusal of
+        MalformedDeadline raw ->
+            "IPE_HTTP_REQUEST_TIMEOUT must be a whole number of seconds above zero (got "
+                ++ String.left 80 raw
+                ++ ")"
+
+        DeadlineBelowFloor deadline ->
+            "IPE_HTTP_REQUEST_TIMEOUT must be at least "
+                ++ String.fromInt (minJailWallSecs + 5)
+                ++ " seconds, so the jail ends before the request (got "
+                ++ String.fromInt deadline
+                ++ ")"
 
 
 decodeOutcome : { exitCode : Int, stderr : String, stdout : String } -> Result Error RawOutcome

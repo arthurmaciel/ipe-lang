@@ -6,7 +6,7 @@ import Ipe.Maybe as Maybe
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Test as Test exposing (Test, TestResult)
-import Runner
+import Runner exposing (DeadlineRefusal(..))
 import Staging exposing (StagingError(..))
 
 
@@ -98,19 +98,54 @@ home =
         ]
 
 
--- The jail wall sits five seconds under the request deadline, inside the range
--- the jail runner accepts whatever the deadline says.
+-- The jail wall sits five seconds under the request deadline, so a jail always
+-- ends before its request; a deadline too short for that, or one the runtime
+-- would read differently, keeps the server from starting.
+wallOf : String -> Result DeadlineRefusal Int
+wallOf raw =
+    Result.map Runner.wallSecs (Runner.jailWallFor raw)
+
+
+{-| The wall for `deadline` is accepted, inside the jail runner's range, and
+at least five seconds short of the deadline.
+-}
+wallEndsInTime : Int -> Bool
+wallEndsInTime deadline =
+    case wallOf (String.fromInt deadline) of
+        Ok secs ->
+            secs <= deadline - 5 && secs >= Runner.minJailWallSecs && secs <= Runner.maxJailWallSecs
+
+        Err _ ->
+            False
+
+
+deadlineRefused : String -> DeadlineRefusal -> String -> Test
+deadlineRefused name expected raw =
+    Test.test name (\_ -> Test.equal (Err expected) (wallOf raw))
+
+
 wall : Test
 wall =
     Test.suite "jail wall"
-        [ Test.test "the default deadline" (\_ -> Test.equal 25 (Runner.jailWallFor "30"))
-        , Test.test "a padded deadline" (\_ -> Test.equal 55 (Runner.jailWallFor " 60 "))
-        , Test.test "an unparsable deadline uses the default" (\_ -> Test.equal 25 (Runner.jailWallFor "soon"))
-        , Test.test "the lowest deadline above the floor" (\_ -> Test.equal 11 (Runner.jailWallFor "16"))
-        , Test.test "a short deadline is raised to the floor" (\_ -> Test.equal Runner.minJailWallSecs (Runner.jailWallFor "5"))
-        , Test.test "a negative deadline is raised to the floor" (\_ -> Test.equal Runner.minJailWallSecs (Runner.jailWallFor "-9223372036854775808"))
-        , Test.test "the highest deadline under the ceiling" (\_ -> Test.equal Runner.maxJailWallSecs (Runner.jailWallFor "605"))
-        , Test.test "a long deadline is capped at the ceiling" (\_ -> Test.equal Runner.maxJailWallSecs (Runner.jailWallFor "9223372036854775807"))
+        [ Test.test "an unset deadline is the runtime default" (\_ -> Test.equal (Ok (Runner.defaultDeadlineSecs - 5)) (wallOf ""))
+        , Test.test "a blank deadline is the runtime default" (\_ -> Test.equal (Ok 25) (wallOf "  "))
+        , Test.test "the default deadline" (\_ -> Test.equal (Ok 25) (wallOf "30"))
+        , Test.test "a padded deadline" (\_ -> Test.equal (Ok 55) (wallOf " 60 "))
+        , Test.test "the floor deadline yields the jail runner's floor" (\_ -> Test.equal (Ok Runner.minJailWallSecs) (wallOf "15"))
+        , Test.test "the highest deadline under the ceiling" (\_ -> Test.equal (Ok Runner.maxJailWallSecs) (wallOf "605"))
+        , Test.test "a long deadline is capped at the ceiling" (\_ -> Test.equal (Ok Runner.maxJailWallSecs) (wallOf "9223372036854775807"))
+        , Test.test "every accepted wall ends five seconds before its deadline" (\_ -> Test.equal [] (List.filter (\d -> not (wallEndsInTime d)) (List.range 15 700)))
+        , deadlineRefused "one second below the floor" (DeadlineBelowFloor 14) "14"
+        , deadlineRefused "a one-second deadline" (DeadlineBelowFloor 1) "1"
+        , deadlineRefused "a zero deadline" (MalformedDeadline "0") "0"
+        , deadlineRefused "a zero-padded zero" (MalformedDeadline "000") "000"
+        , deadlineRefused "a non-numeric deadline" (MalformedDeadline "soon") "soon"
+        , deadlineRefused "a unit suffix" (MalformedDeadline "30s") "30s"
+        , deadlineRefused "a signed deadline" (MalformedDeadline "+30") "+30"
+        , deadlineRefused "a negative deadline" (MalformedDeadline "-9223372036854775808") "-9223372036854775808"
+        , deadlineRefused "a fractional deadline" (MalformedDeadline "30.5") "30.5"
+        , deadlineRefused "a deadline past the integer range" (MalformedDeadline "9223372036854775808") "9223372036854775808"
+        , Test.test "every deadline below the floor is refused" (\_ -> Test.equal [] (List.filter (\d -> wallOf (String.fromInt d) /= Err (DeadlineBelowFloor d)) (List.range 1 14)))
         ]
 
 
@@ -214,6 +249,34 @@ gateHealth =
         ]
 
 
+-- /health tells the page a server is present and nothing more: the token is
+-- never served, so another local user who can reach the port cannot learn it.
+healthBody : Test
+healthBody =
+    Test.suite "health answer"
+        [ Test.test
+            "a browser's same-origin probe gets no token"
+            (\_ -> Test.equal (Ok "{\"ok\":true}") (Gate.healthAnswer (headers [ ( "host", "127.0.0.1:8000" ), ( "sec-fetch-site", "same-origin" ) ])))
+        , Test.test
+            "a non-browser client without Origin gets no token"
+            (\_ -> Test.equal (Ok "{\"ok\":true}") (Gate.healthAnswer (headers [ ( "host", "127.0.0.1:8000" ) ])))
+        , Test.test
+            "a refused probe gets the refusal"
+            (\_ -> Test.equal (Err BadHost) (Gate.healthAnswer (headers [ ( "host", "attacker.example:8000" ) ])))
+        ]
+
+
+-- The token reaches the page only in the launch URL's fragment, which the
+-- browser never sends back to the server.
+launch : Test
+launch =
+    Test.suite "launch url"
+        [ Test.test
+            "the launch URL carries the token in the fragment"
+            (\_ -> Test.equal (Just ("http://127.0.0.1:8000/#t=" ++ validToken)) (Maybe.map Gate.launchUrl (Gate.parseToken validToken)))
+        ]
+
+
 tokenShape : Test
 tokenShape =
     Test.suite "token shape"
@@ -247,4 +310,4 @@ loopback =
 
 
 main =
-    Test.runMain [ accepted, refused, runnerPath, home, wall, gateRun, gateHealth, tokenShape, loopback ]
+    Test.runMain [ accepted, refused, runnerPath, home, wall, gateRun, gateHealth, healthBody, launch, tokenShape, loopback ]

@@ -14,7 +14,7 @@ program output back.
 | `index.html` | the three-pane UI (Ipê source \| emitted Rust \| program output) |
 | `pkg/` | git-ignored wasm-bindgen output the page loads |
 | `setup/` | the setup program: wasm bundle, jail-runner install, offline cache warm |
-| `server/` | an `Ipe.Server.Http` app: static files, `GET /health`, `POST /run` |
+| `server/` | an `Ipe.Server.Http` app: `GET /`, `/pkg`, `GET /health`, `POST /run` |
 | `jail-runner/` | a Rust workspace member: the sandboxed build+run harness |
 
 ## Prerequisites
@@ -55,14 +55,27 @@ cd examples/wasm/language-playground/server
 IPE_HTTP_BIND=127.0.0.1 ipe run
 ```
 
-The server listens on `127.0.0.1:8000` and serves the playground root and
-`/pkg` statically. Open http://localhost:8000. It refuses to start unless
-`IPE_HTTP_BIND` is exactly `127.0.0.1` and `IPE_SERVER_PORT` is unset or `8000`
-(so a relocated port, as under `ipe watch`, is refused rather than guessed).
+The server listens on `127.0.0.1:8000` and prints its launch URL on stdout:
+
+```text
+Ipê playground: open http://127.0.0.1:8000/#t=<launch token>
+```
+
+Open that exact URL. The page takes the token from the fragment, removes it
+from the address bar, and keeps it in memory only, so reloading needs the
+printed URL again. Without the token the page still compiles, but Run stays
+disabled. The server refuses to start unless `IPE_HTTP_BIND` is exactly
+`127.0.0.1` and `IPE_SERVER_PORT` is unset or `8000` (so a relocated port, as
+under `ipe watch`, is refused rather than guessed).
+
+`GET /` serves `index.html` with `X-Frame-Options: DENY` and
+`Content-Security-Policy: frame-ancestors 'none'`, so no other page can frame
+it. `/pkg` is served statically. Nothing else under the playground root is
+served.
 
 | Route | Answers |
 |---|---|
-| `GET /health` | `{"ok":true,"token":<launch token>}`, `Cache-Control: no-store`: the page enables Run only after this |
+| `GET /health` | `{"ok":true}`, `Cache-Control: no-store`: the page enables Run only after this |
 | `POST /run` | `{"rust": <emitted crate>}` → `{"ok", "unsandboxed", "output"}` |
 
 Run executes code, so `POST /run` admits only the playground page served by
@@ -73,10 +86,12 @@ this server. `server/src/Gate.ipe` requires, before the body is read:
 - `Sec-Fetch-Site` is absent or `same-origin`;
 - `Content-Type` is `application/json` (a form post cannot send it);
 - `X-Ipe-Playground-Token` equals the random token minted at startup, compared
-  in constant time. Only a same-origin page can read it from `/health`.
+  in constant time. No route serves the token: it exists only on the server's
+  stdout and in the launch URL's fragment, which the browser never sends. A
+  framed page refuses the token.
 
 `GET /health` applies the same `Host` rule, and an `Origin`, when sent, must
-match it. A restarted server mints a new token: reload the page.
+match it. A restarted server mints a new token: open the new launch URL.
 
 `POST /run` fails with one of these statuses:
 
@@ -95,7 +110,7 @@ Environment:
 |---|---|
 | `IPE_PLAYGROUND_JAIL_RUNNER` | absolute path of another jail runner. A relative name is refused, never looked up on `PATH`. |
 | `IPE_PLAYGROUND_WARM_DIR` | the warm cache directory |
-| `IPE_HTTP_REQUEST_TIMEOUT` | the per-request deadline (default 30 s). The jail's wall-clock limit is 5 s under it, clamped to the jail runner's 10–600 s range. Keep it at 15 s or more, so the jail ends before the request. |
+| `IPE_HTTP_REQUEST_TIMEOUT` | the per-request deadline in whole seconds above zero (default 30 s when unset or blank). The jail's wall-clock limit is 5 s under it, capped at the jail runner's 600 s. The server refuses to start on a value that is not digits, or on one below 15 s, since the jail must end before the request. |
 
 `HOME` must be an absolute path: runs are staged under it.
 
@@ -124,8 +139,8 @@ Environment:
    `ipe_sandbox` crate the compiler SEAL uses.
 5. The page shows the `── Build ──` / `── Run ──` / `── Error ──` transcript.
 
-The security proofs live in `jail-runner/tests/sandbox_security.rs` and the
-staging refusals in `server/tests/Main.ipe`.
+The security proofs live in `jail-runner/tests/sandbox_security.rs`. The
+staging, gate, deadline, and `/health` refusals live in `server/tests/Main.ipe`.
 
 ## Static hosting (GitHub Pages)
 

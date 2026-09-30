@@ -1,27 +1,34 @@
 module Main exposing (main)
 
 import Gate exposing (Token)
+import Ipe.ByteSize as ByteSize
 import Ipe.Error as Error exposing (Error)
+import Ipe.File as File
+import Ipe.Io as Io
 import Ipe.Json.Decode as Json
 import Ipe.Json.Encode as Encode
+import Ipe.Path as Path
 import Ipe.Result as Result
 import Ipe.Server.Http as Server
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task exposing (Task)
-import Runner
+import Runner exposing (JailWall)
 import Staging
 
 
 -- The playground's run server, started from this directory
--- (`IPE_HTTP_BIND=127.0.0.1 ipe run`); it refuses to start on any other bind.
--- The static roots resolve against the process cwd: ".." is the playground
--- root (index.html) and "../pkg" the wasm bundle. GET /health tells the page a
--- run server is present and hands it this launch's token. POST /run takes
--- `{"rust": <emitted crate>}` (the page's own ipe-wasm emit, never Ipê source)
--- and answers with the jailed transcript: 403 or 415 for a request `Gate`
--- refuses, 413 for a body over the bound, 400 for a malformed one, 422 for a
--- crate the staging allowlist refuses, 500 when the jail itself fails.
+-- (`IPE_HTTP_BIND=127.0.0.1 ipe run`); it refuses to start on any other bind,
+-- or on a request deadline too short for the jail to end inside it. At startup
+-- it prints the launch URL, which carries this launch's token in its fragment,
+-- to the operator's terminal; no route serves the token. GET / serves the page
+-- (never framed), "/pkg" the wasm bundle (resolved against the process cwd,
+-- "../pkg"). GET /health answers `{"ok":true}` so the page knows a run server
+-- is present. POST /run takes `{"rust": <emitted crate>}` (the page's own
+-- ipe-wasm emit, never Ipê source) and answers with the jailed transcript: 403
+-- or 415 for a request `Gate` refuses, 413 for a body over the bound, 400 for a
+-- malformed one, 422 for a crate the staging allowlist refuses, 500 when the
+-- jail itself fails.
 main : Task Error ()
 main =
     do
@@ -31,13 +38,29 @@ main =
             }
             |> Result.mapError (\refusal -> Error.unexpected (Gate.bindMessage refusal))
             |> Task.fromResult
+        wall <- Task.fromResult (Result.mapError (\refusal -> Error.unexpected (Runner.deadlineMessage refusal)) (Runner.jailWallFor (System.getenvOr "IPE_HTTP_REQUEST_TIMEOUT" "")))
         token <- Gate.mintToken
+        Io.println ("Ipê playground: open " ++ Gate.launchUrl token)
         Server.listen Gate.port
-            [ Server.get "/health" (health token)
-            , Server.post "/run" (handleRun token)
+            [ Server.get "/" page
+            , Server.get "/health" health
+            , Server.post "/run" (handleRun wall token)
             , Server.static "/pkg" "../pkg"
-            , Server.static "/" ".."
             ]
+
+
+{-| The page, served so that no other site can frame it. -}
+page : Server.Request -> Task Error Server.Response
+page _ =
+    do
+        path <- Task.fromResult (Path.fromString "../index.html")
+        html <- File.readFileLimit path (ByteSize.kib 256)
+        html
+            |> Server.html
+            |> Server.withHeader "X-Frame-Options" "DENY"
+            |> Server.withHeader "Content-Security-Policy" "frame-ancestors 'none'"
+            |> Server.withHeader "Cache-Control" "no-store"
+            |> Task.succeed
 
 
 {-| The largest request body `/run` decodes, in code points: the emitted crate
@@ -48,32 +71,31 @@ maxRequestChars =
     1048576
 
 
-health : Token -> Server.Request -> Task Error Server.Response
-health token req =
-    case Gate.trustHealth (\name -> Server.header name req) of
+health : Server.Request -> Task Error Server.Response
+health req =
+    case Gate.healthAnswer (\name -> Server.header name req) of
         Err refusal ->
             refuse (Gate.refusalStatus refusal) (Gate.refusalMessage refusal)
 
-        Ok () ->
-            Encode.object [ ( "ok", Encode.bool True ), ( "token", Encode.string (Gate.tokenText token) ) ]
-                |> Encode.encode 0
+        Ok body ->
+            body
                 |> Server.json
                 |> Server.withHeader "Cache-Control" "no-store"
                 |> Task.succeed
 
 
-handleRun : Token -> Server.Request -> Task Error Server.Response
-handleRun token req =
+handleRun : JailWall -> Token -> Server.Request -> Task Error Server.Response
+handleRun wall token req =
     case Gate.trustRun token (\name -> Server.header name req) (Server.body req) of
         Err refusal ->
             refuse (Gate.refusalStatus refusal) (Gate.refusalMessage refusal)
 
         Ok trusted ->
-            runTrusted (Gate.trustedBody trusted)
+            runTrusted wall (Gate.trustedBody trusted)
 
 
-runTrusted : String -> Task Error Server.Response
-runTrusted raw =
+runTrusted : JailWall -> String -> Task Error Server.Response
+runTrusted wall raw =
     if String.length raw > maxRequestChars then
         refuse 413 "Program too large (over 1 MiB of emitted Rust)."
 
@@ -88,7 +110,7 @@ runTrusted raw =
                         refuse 422 ("Program refused: " ++ Staging.errorMessage error)
 
                     Ok plan ->
-                        Runner.runPlan plan
+                        Runner.runPlan wall plan
                             |> Task.map (\r -> Server.json (runResponse r.ok r.unsandboxed r.output))
                             |> Task.onError (\e -> refuse 500 ("Server error: " ++ Error.message e))
 

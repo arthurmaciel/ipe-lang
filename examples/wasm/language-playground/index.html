@@ -311,7 +311,8 @@ main =
     // emitted Rust, so the button mirrors `compile()`'s ok state.
     let compileOk = false;
     let lastEmittedRust = '';
-    // Whether a run server answered GET /health: 'probing' | 'up' | 'down'.
+    // Whether a run server answered GET /health: 'probing' | 'up' | 'down', or
+    // 'notoken' when it did but the page holds no launch token.
     // Run is enabled only when the compile succeeded AND the server is up.
     let serverState = 'probing';
     const NO_SERVER = 'Run needs the local server — see README';
@@ -320,12 +321,15 @@ main =
       runBtn.disabled = running || !compileOk || serverState !== 'up';
       runBtn.title = serverState === 'down'
         ? NO_SERVER
-        : 'Build and run on the server, sandboxed (Ctrl/Cmd+Enter)';
+        : serverState === 'notoken'
+          ? NO_TOKEN
+          : 'Build and run on the server, sandboxed (Ctrl/Cmd+Enter)';
     }
 
     function compiledStatus() {
       if (serverState === 'up') return 'Compiled successfully — emitted Rust shown; Run is enabled.';
       if (serverState === 'down') return 'Compiled successfully — emitted Rust shown. ' + NO_SERVER + '.';
+      if (serverState === 'notoken') return 'Compiled successfully — emitted Rust shown. ' + NO_TOKEN + '.';
       return 'Compiled successfully — emitted Rust shown; looking for the run server…';
     }
 
@@ -380,17 +384,28 @@ main =
     //
     // The run server is separate from a static host (e.g. GitHub Pages). The
     // page talks only to the directory it was served from: the server admits
-    // /run from its own origin alone, with the launch token /health hands to
-    // that origin. With no server answering /health, Run stays disabled and
-    // the page is a pure in-browser emit preview.
+    // /run from its own origin alone, with this launch's token. With no server
+    // answering /health, Run stays disabled and the page is a pure in-browser
+    // emit preview.
     const RUN_BASE = new URL('.', location.href);
     const endpoint = (name) => new URL(name, RUN_BASE.href).href;
     const HEALTH_URL = endpoint('health');
     const RUN_URL = endpoint('run');
 
     let running = false;
-    // The server's launch token from GET /health; POST /run carries it.
-    let runToken = null;
+    // The launch token POST /run carries. The server never serves it: it
+    // prints the launch URL `.../#t=<token>` to its operator's terminal, and
+    // the token arrives only in that fragment. It is taken once, removed from
+    // the address bar and the history entry, and kept in memory only. A framed
+    // page never takes one, so a framing site cannot drive Run.
+    const TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/;
+    const NO_TOKEN = 'Run needs the launch URL the server printed (…/#t=…); open it to enable Run';
+    const runToken = (() => {
+      const match = /^#t=([A-Za-z0-9_-]*)$/.exec(location.hash);
+      if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+      if (window.top !== window.self) return null;
+      return match && TOKEN_SHAPE.test(match[1]) ? match[1] : null;
+    })();
 
     function markServerDown() {
       serverState = 'down';
@@ -407,17 +422,23 @@ main =
       syncRunButton();
     }
 
+    function markNoToken() {
+      serverState = 'notoken';
+      runTitle.textContent = 'Program output';
+      runOutput.className = '';
+      runOutput.textContent = NO_TOKEN + '. The emitted Rust preview above works without it.';
+      syncRunButton();
+    }
+
     async function probeServer() {
       try {
         const resp = await fetch(HEALTH_URL, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
         const data = resp.ok ? await resp.json() : null;
-        const up = Boolean(data) && data.ok === true && typeof data.token === 'string';
-        runToken = up ? data.token : null;
-        serverState = up ? 'up' : 'down';
+        serverState = Boolean(data) && data.ok === true ? 'up' : 'down';
       } catch {
-        runToken = null;
         serverState = 'down';
       }
+      if (serverState === 'up' && runToken === null) markNoToken();
       if (serverState === 'down') markServerDown();
       syncRunButton();
       if (compileOk) statusBar.textContent = compiledStatus();

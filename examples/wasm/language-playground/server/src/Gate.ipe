@@ -1,9 +1,11 @@
-module Gate exposing (BindRefusal(..), Refusal(..), Token, TrustedRun, bindMessage, mintToken, parseToken, port, refusalMessage, refusalStatus, requireLoopback, tokenText, trustHealth, trustRun, trustedBody)
+module Gate exposing (BindRefusal(..), Refusal(..), Token, TrustedRun, bindMessage, healthAnswer, launchUrl, mintToken, parseToken, port, refusalMessage, refusalStatus, requireLoopback, tokenText, trustHealth, trustRun, trustedBody)
 
 import Ipe.Crypto as Crypto
 import Ipe.Error as Error exposing (Error)
+import Ipe.Json.Encode as Encode
 import Ipe.List as List
 import Ipe.Maybe as Maybe
+import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.Task as Task exposing (Task)
 
@@ -15,10 +17,10 @@ import Ipe.Task as Task exposing (Task)
 -- loopback authority (so a DNS-rebound name is refused), Origin and
 -- Sec-Fetch-Site pin the page's own origin (so a cross-site form or fetch is
 -- refused), Content-Type pins the JSON body (so no CORS-simple request can
--- carry one), and a per-launch random token, readable only by a same-origin
--- page through `/health`, must accompany every run.
-
-
+-- carry one), and a per-launch random token must accompany every run. The
+-- token is never served over HTTP: it reaches the page only through the launch
+-- URL's fragment (`launchUrl`), which the server prints to the operator's
+-- terminal, so no other client of the port can learn it.
 {-| The port the server listens on; the Host and Origin allowlists derive from it. -}
 port : Int
 port =
@@ -89,12 +91,30 @@ mintToken =
                 Task.fail (Error.unexpected "the entropy source produced a malformed token")
 
 
-{-| The token's text, for the `/health` answer. -}
+{-| The token's text, compared against the one a run presents. -}
 tokenText : Token -> String
 tokenText token =
     case token of
         Token raw ->
             raw
+
+
+{-| The URL the operator opens to use the playground: the page, with this
+launch's token in the fragment. A fragment never leaves the browser, so the
+token is not sent back in a request line, a log, or a Referer.
+-}
+launchUrl : Token -> String
+launchUrl token =
+    "http://127.0.0.1:" ++ String.fromInt port ++ "/#t=" ++ tokenText token
+
+
+{-| Answer a `/health` request: `{"ok":true}` for an admitted one. It takes no
+`Token`, so no answer can carry the token.
+-}
+healthAnswer : (String -> Maybe String) -> Result Refusal String
+healthAnswer header =
+    trustHealth header
+        |> Result.map (\_ -> Encode.encode 0 (Encode.object [ ( "ok", Encode.bool True ) ]))
 
 
 {-| The body of a trusted run. -}
@@ -231,7 +251,7 @@ refusalMessage refusal =
             "Refused: expected Content-Type application/json."
 
         BadToken ->
-            "Refused: missing or wrong playground token; reload the page."
+            "Refused: missing or wrong playground token; open the launch URL the server printed."
 
 
 {-| Prove the listener binds loopback on `port`, from `IPE_HTTP_BIND` and `IPE_SERVER_PORT`. -}

@@ -7,11 +7,12 @@
 // (never a raw fetch error), the ACE theme re-themes the UI, a type error
 // surfaces as a diagnostic, and the GitHub link target.
 //
-// Live mode (`--live <url>`): opens the page the playground server serves at
-// <url>, presses Run, and waits for the sample's jailed program output.
+// Live mode (`--live <url>`): opens the launch URL the playground server
+// printed (with its `#t=<token>` fragment), presses Run, and waits for the
+// sample's jailed program output.
 //
 // Usage: node playground-verify.mjs <playground-dir> [port]
-//        node playground-verify.mjs --live http://localhost:8000/
+//        node playground-verify.mjs --live 'http://127.0.0.1:8000/#t=<token>'
 // Exit 0 on pass, non-zero on any failure.
 
 import { chromium } from 'playwright';

@@ -151,4 +151,4 @@ done root =
         Io.println ""
         Io.println "Setup complete. Start the playground server:"
         Io.println ("  cd " ++ playgroundDir root ++ "/server && ipe run")
-        Io.println "Then open http://localhost:8000"
+        Io.println "Then open the launch URL it prints (http://127.0.0.1:8000/#t=...)"
