@@ -1186,6 +1186,11 @@ ipe doc: no `{kind}` entry for key `{key}`
 Nearby keys:
 {nearby}
 
+## doc-ambiguous-module
+
+ipe doc: `{query}` matches more than one stdlib module
+{candidates}
+
 ## doc-type-no-match
 
 ipe doc --type: no symbols match `{query}`

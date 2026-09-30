@@ -812,9 +812,15 @@ fn run_doc_lookup_with_fuzzy(key: &str, format: OutputFormat) -> Result<(), CliE
     }
 
     // A member of a module the index does not carry (a project module).
-    if let Some((module, member)) = resolve_member(key) {
-        render_member(&module, &member, format);
-        return Ok(());
+    match resolve_member(key) {
+        MemberResolution::Found(module, member) => {
+            render_member(&module, &member, format);
+            return Ok(());
+        }
+        MemberResolution::Ambiguous(candidates) => {
+            return Err(ambiguous_module_error(key, &candidates, format));
+        }
+        MemberResolution::Miss => {}
     }
 
     // No exact match: a unique exact key of a kind the index does not carry (a
@@ -850,25 +856,77 @@ fn doc_miss(query: &str, bundle: &DocBundle, format: OutputFormat) -> CliError {
     }
 }
 
+/// One `Module.member` resolution's outcome.
+enum MemberResolution {
+    Found(ModuleDoc, String),
+    /// The module part's short name matched more than one dotted stdlib
+    /// module; every match, sorted.
+    Ambiguous(Vec<String>),
+    Miss,
+}
+
+/// The error for a query whose short name matches more than one stdlib
+/// module: a typed miss listing every candidate, never a silent pick of the
+/// first.
+///
+/// Under a machine format it is written as the machine error envelope instead of the human frame.
+fn ambiguous_module_error(query: &str, candidates: &[String], format: OutputFormat) -> CliError {
+    let block = text::TerminalBlock::lines(candidates.iter().map(|c| format!("  {c}")));
+    let err = CliError::Usage(text::msg::doc_ambiguous_module(&query, &block));
+    match format {
+        OutputFormat::Human => err,
+        OutputFormat::Plain | OutputFormat::Json => {
+            crate::driver::emit_machine_error(format, "doc", &err)
+        }
+    }
+}
+
 /// Resolve `Module.member` to the module's doc and the member's name.
 ///
 /// Matches (`Ipe.Time.unixMillis`, `Main.helper`) when the module exists and
 /// exposes a value or type of that name.
-fn resolve_member(key: &str) -> Option<(ModuleDoc, String)> {
-    let (module_name, member) = key.rsplit_once('.')?;
-    let module = find_module_doc(module_name)?;
-    let exposed = module.values.iter().any(|v| v.name == member)
-        || module.unions.iter().any(|u| u.name == member);
-    exposed.then(|| (module, member.to_owned()))
+fn resolve_member(key: &str) -> MemberResolution {
+    let Some((module_name, member)) = key.rsplit_once('.') else {
+        return MemberResolution::Miss;
+    };
+    match find_module_doc(module_name) {
+        ModuleLookup::Found(module) => {
+            let exposed = module.values.iter().any(|v| v.name == member)
+                || module.unions.iter().any(|u| u.name == member);
+            if exposed {
+                MemberResolution::Found(module, member.to_owned())
+            } else {
+                MemberResolution::Miss
+            }
+        }
+        ModuleLookup::Ambiguous(candidates) => MemberResolution::Ambiguous(candidates),
+        ModuleLookup::Miss => MemberResolution::Miss,
+    }
+}
+
+/// One module-name resolution's outcome, across project and stdlib.
+enum ModuleLookup {
+    Found(ModuleDoc),
+    /// The stdlib short name matched more than one dotted module; every
+    /// match, sorted.
+    Ambiguous(Vec<String>),
+    Miss,
 }
 
 /// Find a module's doc by name: a project module first (it shadows the
 /// standard library), then the standard library.
-fn find_module_doc(module_name: &str) -> Option<ModuleDoc> {
-    query_project_modules()
+fn find_module_doc(module_name: &str) -> ModuleLookup {
+    if let Some(module) = query_project_modules()
         .into_iter()
         .find(|m| m.name == module_name)
-        .or_else(|| query_single_stdlib_module(module_name))
+    {
+        return ModuleLookup::Found(module);
+    }
+    match query_single_stdlib_module(module_name) {
+        StdlibModuleLookup::Found(module) => ModuleLookup::Found(module),
+        StdlibModuleLookup::Ambiguous(candidates) => ModuleLookup::Ambiguous(candidates),
+        StdlibModuleLookup::Miss => ModuleLookup::Miss,
+    }
 }
 
 /// Render one member of `module` per `format`: its signature (or type
@@ -1440,11 +1498,53 @@ fn build_stdlib_docs() -> Vec<ModuleDoc> {
     modules.into_values().collect()
 }
 
+/// One stdlib module-name query's outcome, against a candidate set.
+///
+/// A query matches zero, one, or more than one dotted name under the
+/// short/full-name rule — never silently the first of several.
+enum StdlibCandidate {
+    None,
+    One(String),
+    Ambiguous(Vec<String>),
+}
+
+/// Resolve `query` against `candidates` under the stdlib short/full-name rule
+/// ([`ipe_docs::stdlib_module_matches`]).
+///
+/// The single place a stdlib module *name* query is turned into zero, one, or
+/// more than one dotted match — every caller (member lookup, direct module
+/// query) goes through this, so a key form that resolves for one never
+/// silently misses, or silently picks among several, for another.
+fn resolve_stdlib_candidate(query: &str, candidates: &[String]) -> StdlibCandidate {
+    let matches: Vec<String> = candidates
+        .iter()
+        .filter(|dotted| ipe_docs::stdlib_module_matches(query, dotted))
+        .cloned()
+        .collect();
+    match matches.as_slice() {
+        [] => StdlibCandidate::None,
+        [one] => StdlibCandidate::One(one.clone()),
+        _ => StdlibCandidate::Ambiguous(matches),
+    }
+}
+
+/// One `ipe doc <Module>` stdlib lookup's outcome.
+enum StdlibModuleLookup {
+    Found(ModuleDoc),
+    /// `module_name`'s short name matched more than one dotted module; every
+    /// match, sorted.
+    Ambiguous(Vec<String>),
+    Miss,
+}
+
 /// Resolve and build the [`ModuleDoc`] for a single stdlib module by name,
 /// type-checking only that module rather than the whole compiled-source set.
 ///
-/// The three-way resolution mirrors [`build_stdlib_docs`] but stops at the first
-/// match, so `ipe doc <Module>` costs one type-check instead of ~130:
+/// `module_name` is resolved to a dotted name via [`resolve_stdlib_candidate`]
+/// (the short/full-name rule applied over every stdlib module,
+/// [`stdlib_module_names`]) first; a unique match then goes through the same
+/// three-way bucket as [`build_stdlib_docs`], stopping at the first match so
+/// `ipe doc <Module>` costs one type-check instead of ~130:
 ///
 /// 1. A compiled-source module (`COMPILED_STD_MODULES`) — build only that one
 ///    (the single expensive per-module type-check), matching what the full pass
@@ -1453,31 +1553,32 @@ fn build_stdlib_docs() -> Vec<ModuleDoc> {
 ///    the full kernel-doc pass already costs one check; take this name's entry.
 /// 3. A listed-but-otherwise-undocumentable name — the signature-less fallback,
 ///    preserving the `--list` == queryable SSOT invariant.
-///
-/// Returns `None` only for a name that is not a stdlib module at all (the query
-/// path then reports the unknown-module error).
-fn query_single_stdlib_module(module_name: &str) -> Option<ModuleDoc> {
+fn query_single_stdlib_module(module_name: &str) -> StdlibModuleLookup {
+    let names = stdlib_module_names();
+    let dotted = match resolve_stdlib_candidate(module_name, &names) {
+        StdlibCandidate::None => return StdlibModuleLookup::Miss,
+        StdlibCandidate::Ambiguous(candidates) => return StdlibModuleLookup::Ambiguous(candidates),
+        StdlibCandidate::One(dotted) => dotted,
+    };
+
     // 1. Compiled-source: type-check only the matching module.
     for csm in ipe_stdlib::COMPILED_STD_MODULES {
-        if csm.dotted == module_name {
+        if csm.dotted == dotted {
             let segments: Vec<String> = csm.dotted.split('.').map(str::to_owned).collect();
-            return Some(build_compiled_std_module_doc(&segments, csm.source));
+            return StdlibModuleLookup::Found(build_compiled_std_module_doc(&segments, csm.source));
         }
     }
 
     // 2. Kernel-qualifier: the type table is one shared db; take this entry.
     if let Ok(mut kernel_docs) = build_kernel_module_docs()
-        && let Some(doc) = kernel_docs.remove(module_name)
+        && let Some(doc) = kernel_docs.remove(&dotted)
     {
-        return Some(doc);
+        return StdlibModuleLookup::Found(doc);
     }
 
-    // 3. Listed-name SSOT fallback: a queryable, signature-less entry.
-    if stdlib_module_names().iter().any(|n| n == module_name) {
-        return Some(empty_stdlib_module_doc(module_name));
-    }
-
-    None
+    // 3. Listed-name SSOT fallback: a queryable, signature-less entry. `dotted`
+    // came from `stdlib_module_names()` itself, so this is always reachable.
+    StdlibModuleLookup::Found(empty_stdlib_module_doc(&dotted))
 }
 
 /// A signature-less [`ModuleDoc`] carrying only the module name — the last-resort
@@ -1782,23 +1883,35 @@ fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError>
     // single resolved pass; the stdlib side is resolved lazily so a single-name
     // query type-checks one module, not all ~130 compiled-source modules.
     let project = query_project_modules();
-    let found: Option<ModuleDoc> = project
-        .iter()
-        .find(|m| m.name == module_name)
-        .cloned()
-        .or_else(|| query_single_stdlib_module(module_name));
+    if let Some(module) = project.into_iter().find(|m| m.name == module_name) {
+        return render_query_module(module, format);
+    }
 
-    let Some(module) = found else {
+    match query_single_stdlib_module(module_name) {
+        StdlibModuleLookup::Found(module) => render_query_module(module, format),
+        StdlibModuleLookup::Ambiguous(candidates) => {
+            Err(ambiguous_module_error(module_name, &candidates, format))
+        }
         // `Module.member` (a type or an uppercase-led value path) or a miss:
         // resolve the member, else suggest the closest entries of any kind.
-        if let Some((owner, member)) = resolve_member(module_name) {
-            render_member(&owner, &member, format);
-            return Ok(());
-        }
-        let bundle = build_doc_bundle(&locate_docs_root())?;
-        return Err(doc_miss(module_name, &bundle, format));
-    };
+        StdlibModuleLookup::Miss => match resolve_member(module_name) {
+            MemberResolution::Found(owner, member) => {
+                render_member(&owner, &member, format);
+                Ok(())
+            }
+            MemberResolution::Ambiguous(candidates) => {
+                Err(ambiguous_module_error(module_name, &candidates, format))
+            }
+            MemberResolution::Miss => {
+                let bundle = build_doc_bundle(&locate_docs_root())?;
+                Err(doc_miss(module_name, &bundle, format))
+            }
+        },
+    }
+}
 
+/// Render a resolved module's API per `format`.
+fn render_query_module(module: ModuleDoc, format: OutputFormat) -> Result<(), CliError> {
     // Build a single-module DocsJson for the anchor index (cross-reference
     // resolution within this module's own types).
     let docs = DocsJson {

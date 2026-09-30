@@ -1147,6 +1147,8 @@ messages! {
     doc_unknown_kind(prefix) = "doc-unknown-kind";
     /// An `ipe doc <kind>:<key>` query named no entry of that kind.
     doc_no_entry_for_key(kind, key, nearby: &crate::text::TerminalBlock) = "doc-no-entry-for-key";
+    /// An `ipe doc <query>` short name matched more than one stdlib module.
+    doc_ambiguous_module(query, candidates: &crate::text::TerminalBlock) = "doc-ambiguous-module";
     /// `ipe doc --type` matched no symbol.
     doc_type_no_match(query) = "doc-type-no-match";
     /// The kernel type table could not be read for `ipe doc`.

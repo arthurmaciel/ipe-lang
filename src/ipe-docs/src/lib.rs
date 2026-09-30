@@ -244,7 +244,7 @@ impl IndexBuilder {
             let module = parse_module(std_mod.source, &mut interner)
                 .map_err(|d| format!("parse error in {}: {d:?}", std_mod.name))?;
 
-            let short = strip_ipe_prefix(std_mod.name);
+            let short = stdlib_short_name(std_mod.name);
 
             // Module entry — text is empty when no module-level `{-|` exists.
             let mod_entry = Entry {
@@ -308,7 +308,7 @@ impl IndexBuilder {
             let module = parse_module(std_mod.source, &mut interner)
                 .map_err(|d| format!("parse error in {}: {d:?}", std_mod.dotted))?;
 
-            let short = strip_ipe_prefix(std_mod.dotted);
+            let short = stdlib_short_name(std_mod.dotted);
 
             let mod_entry = Entry {
                 kind: EntryKind::Module,
@@ -595,12 +595,27 @@ fn index_line_docs(
     }
 }
 
-/// Strip the leading `Ipe.` prefix from a module name.
+/// The short query name for a dotted stdlib module.
 ///
 /// `Ipe.List` → `List`; `Ipe.Html.Attributes` → `Html.Attributes`;
-/// `Main` → `Main` (no prefix).
-fn strip_ipe_prefix(name: &str) -> &str {
-    name.strip_prefix("Ipe.").unwrap_or(name)
+/// `Main` → `Main` (no prefix). The single definition of the stdlib
+/// short-name rule: index construction and every `ipe doc` module lookup
+/// call this (directly, or through [`stdlib_module_matches`]), so a key form
+/// that resolves for one never silently misses for the other.
+pub fn stdlib_short_name(dotted: &str) -> &str {
+    dotted.strip_prefix("Ipe.").unwrap_or(dotted)
+}
+
+/// Does `query` name the stdlib module `dotted`, under the short/full-name
+/// rule?
+///
+/// True for `dotted` itself or for [`stdlib_short_name(dotted)`](stdlib_short_name).
+/// A query may match more than one `dotted` across a candidate set — this fn
+/// only answers for one pair; the caller owns collecting candidates and
+/// detecting a collision.
+#[must_use]
+pub fn stdlib_module_matches(query: &str, dotted: &str) -> bool {
+    query == dotted || query == stdlib_short_name(dotted)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
