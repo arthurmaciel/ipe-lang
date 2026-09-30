@@ -724,19 +724,32 @@ fn an_unknown_module_key_misses_with_a_suggestion() -> io::Result<()> {
 /// The text between `label` and the next `)` — the worked example named after
 /// a key kind in `help/doc.md`'s Arguments paragraph, e.g.
 /// `extract_paren_example(text, "module (")` on `…module (List), member
-/// (…)…` returns `"List"`.
-fn extract_paren_example(text: &str, label: &str) -> String {
-    let after = &text[text.find(label).expect("label present in help text") + label.len()..];
-    let end = after.find(')').expect("a closing paren after the label");
-    after[..end].to_owned()
+/// (…)…` returns `"List"`. An `Err` names the missing landmark rather than
+/// panicking, so a drifted `help/doc.md` fails the test with a clear cause
+/// (helpers reached only through a `#[test]` fn are still workspace-denied
+/// `unwrap`/`expect`, same as the file's own tests).
+fn extract_paren_example(text: &str, label: &str) -> io::Result<String> {
+    let start = text
+        .find(label)
+        .ok_or_else(|| io::Error::other(format!("`help/doc.md` has no `{label}` example")))?;
+    let after = &text[start + label.len()..];
+    let end = after.find(')').ok_or_else(|| {
+        io::Error::other(format!("no closing `)` after `{label}` in help/doc.md"))
+    })?;
+    Ok(after[..end].to_owned())
 }
 
 /// The key inside the worked `` `ipe doc <key>` `` backtick example.
-fn extract_backtick_example(text: &str) -> String {
+fn extract_backtick_example(text: &str) -> io::Result<String> {
     let marker = "`ipe doc ";
-    let after = &text[text.find(marker).expect("a worked `ipe doc` example") + marker.len()..];
-    let end = after.find('`').expect("a closing backtick");
-    after[..end].to_owned()
+    let start = text
+        .find(marker)
+        .ok_or_else(|| io::Error::other("`help/doc.md` has no worked `ipe doc` example"))?;
+    let after = &text[start + marker.len()..];
+    let end = after
+        .find('`')
+        .ok_or_else(|| io::Error::other("no closing backtick after the `ipe doc` example"))?;
+    Ok(after[..end].to_owned())
 }
 
 /// Every worked example `help/doc.md`'s Arguments paragraph names — one per
@@ -748,13 +761,13 @@ fn help_doc_examples_all_resolve() -> io::Result<()> {
     let help = fs::read_to_string(&help_path)?;
 
     let examples = [
-        extract_paren_example(&help, "diagnostic code ("),
-        extract_paren_example(&help, "symbol ("),
-        extract_paren_example(&help, "module ("),
-        extract_paren_example(&help, "member ("),
-        extract_paren_example(&help, "language construct ("),
-        extract_paren_example(&help, "CLI command ("),
-        extract_backtick_example(&help),
+        extract_paren_example(&help, "diagnostic code (")?,
+        extract_paren_example(&help, "symbol (")?,
+        extract_paren_example(&help, "module (")?,
+        extract_paren_example(&help, "member (")?,
+        extract_paren_example(&help, "language construct (")?,
+        extract_paren_example(&help, "CLI command (")?,
+        extract_backtick_example(&help)?,
     ];
 
     let dir = fresh_dir("help_examples");
