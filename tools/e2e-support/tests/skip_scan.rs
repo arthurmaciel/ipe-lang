@@ -683,7 +683,7 @@ impl ModWalk {
                 self.items(file, inner, dir, &nested, true);
                 continue;
             }
-            let candidates = path_attr.map_or_else(
+            let candidates = path_attr.as_deref().map_or_else(
                 || {
                     let name = m.ident.to_string();
                     vec![
