@@ -1820,7 +1820,8 @@ Ipe.Encoding — text encoding helpers.
 | `base64Encode` | Base64-encode a string (RFC 4648 standard alphabet, with padding). |
 | `base64Decode` | Base64-decode a string. |
 | `urlEncode` | Percent-encode a string for use in a URL component (RFC 3986). |
-| `urlDecode` | Percent-decode a URL-encoded string. |
+| `urlDecode` | Percent-decode a form-encoded string (a query key or value). |
+| `pathDecode` | Percent-decode a URL path segment (RFC 3986). |
 | `hexEncode` | Hex-encode a string (lowercase output, two hex digits per byte). |
 | `hexDecode` | Hex-decode a string. |
 
@@ -2126,7 +2127,7 @@ Ipe.Http — outbound HTTP client.
 | `get` | `get url` — outbound GET. Takes an already-sealed typed `Url` (parsed once |
 | `methodFromString` | `methodFromString s` — the single typed parse boundary for inbound method |
 | `methodToString` | `methodToString m` — the canonical uppercase string for `m` |
-| `parseQuery` | (no summary) |
+| `parseQuery` | Decode a form-encoded query string into its key/value pairs. |
 | `post` | `post url body` — outbound POST. Takes an already-sealed typed `Url` (see |
 | `request` | (no summary) |
 | `withBody` | (no summary) |

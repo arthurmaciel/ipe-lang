@@ -45,11 +45,24 @@ Percent-encode a string for use in a URL component (RFC 3986).
 urlDecode : String -> Result Error String
 ```
 
-Percent-decode a URL-encoded string.
+Percent-decode a form-encoded string (a query key or value).
 
-Returns `Err` when the input contains a malformed percent-escape sequence
-(a `%` not followed by two hex digits) or when the decoded bytes are not
-valid UTF-8.
+A `+` decodes to a space. Returns `Err` when the input contains a malformed
+percent-escape sequence (a `%` not followed by two hex digits), when the
+decoded bytes are not valid UTF-8, or when the input exceeds the URL
+component length cap. Use `pathDecode` for a path segment.
+
+## `pathDecode`
+
+```ipe
+pathDecode : String -> Result Error String
+```
+
+Percent-decode a URL path segment (RFC 3986).
+
+A `+` stays a literal `+`. Returns `Err` on the same malformed input as
+`urlDecode`: a bad percent-escape, decoded bytes that are not valid UTF-8,
+or an over-cap input.
 
 ## `hexEncode`
 
