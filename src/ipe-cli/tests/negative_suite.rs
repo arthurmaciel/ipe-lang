@@ -60,7 +60,7 @@ enum Outcome {
 }
 
 fn compile(name: &str, source: &str, target: Target) -> Outcome {
-    let entry = crate::support::expect_scratch_entry(name, write_entry(name, source));
+    let entry = write_entry(name, source);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("negsuite-out")
         .join(name);
@@ -80,7 +80,7 @@ fn compile(name: &str, source: &str, target: Target) -> Outcome {
 /// Like [`compile`] but with the production flag set — simulates `ipe release`
 /// so the `Debug.*` gate (IPE-L0140) fires without spawning a real release build.
 fn compile_production(name: &str, source: &str) -> Outcome {
-    let entry = crate::support::expect_scratch_entry(name, write_entry(name, source));
+    let entry = write_entry(name, source);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("negsuite-prod-out")
         .join(name);

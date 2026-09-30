@@ -72,6 +72,7 @@ fn run_unknown_flag_returns_usage_error() {
 /// This test exercises the full `run_run` path from CLI dispatch through the
 /// Unix `exec` replacement.  It is skipped unless `IPE_E2E=1` is set.
 #[test]
+#[allow(clippy::panic)] // a refused precondition is the test failure
 fn run_subcommand_builds_and_executes_hello_program() {
     const SRC: &str =
         "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"hello from run\"\n";
@@ -122,8 +123,7 @@ fn run_subcommand_builds_and_executes_hello_program() {
     let bin: PathBuf = target_dir.join("debug").join("ipe-app");
     let run = std::process::Command::new(&bin).output();
     let Ok(run) = run else {
-        assert!(false_marker(), "failed to run emitted binary: {run:?}");
-        return;
+        panic!("failed to run emitted binary: {run:?}")
     };
     assert!(run.status.success(), "binary must exit 0");
     assert_eq!(
@@ -277,6 +277,7 @@ fn emitted_cargo_toml_name_matches_binary_ipe_run_will_exec() {
 /// replaces the child, not the test runner) and requires no cargo, so it runs
 /// unconditionally.
 #[test]
+#[allow(clippy::panic)] // a refused precondition is the test failure
 fn run_without_cargo_reports_the_missing_toolchain() {
     const SRC: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"hi\"\n";
 
@@ -305,8 +306,7 @@ fn run_without_cargo_reports_the_missing_toolchain() {
         .env("NO_COLOR", "1")
         .output();
     let Ok(out) = out else {
-        assert!(false_marker(), "failed to spawn ipe: {out:?}");
-        return;
+        panic!("failed to spawn ipe: {out:?}")
     };
 
     assert!(

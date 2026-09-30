@@ -46,6 +46,7 @@ fn write_offline_cargo(dir: &Path) -> std::io::Result<std::path::PathBuf> {
 /// `cargo` and PATH scrubbing to guarantee the fake is the one resolved.
 #[cfg(unix)]
 #[test]
+#[allow(clippy::panic)] // a refused precondition is the test failure
 fn build_registry_unreachable_renders_ipe_e0001_not_ice() {
     const SRC: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"hi\"\n";
 
@@ -73,8 +74,7 @@ fn build_registry_unreachable_renders_ipe_e0001_not_ice() {
         .env("NO_COLOR", "1")
         .output();
     let Ok(out) = out else {
-        assert!(false_marker(), "failed to spawn ipe build: {out:?}");
-        return;
+        panic!("failed to spawn ipe build: {out:?}")
     };
 
     let stderr = String::from_utf8_lossy(&out.stderr);

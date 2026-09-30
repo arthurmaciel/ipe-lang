@@ -59,6 +59,7 @@ fn out_dir(name: &str) -> PathBuf {
 /// Assert `ipe` rejects the build of `entry` with the typed `expected` code.
 #[track_caller]
 #[allow(clippy::expect_used)] // a missing runtime must fail the refusal test, never skip it
+#[allow(clippy::panic)] // a refused precondition is the test failure
 fn assert_rejected(name: &str, entry: &Path, expected: ipe_diagnostics::Code) {
     // Unlike an accepted-build test, a refusal test proves nothing if it skips
     // silently here — a missing runtime would let the fail-closed assertion
@@ -71,8 +72,7 @@ fn assert_rejected(name: &str, entry: &Path, expected: ipe_diagnostics::Code) {
             expected,
             "{name}: expected a fail-closed {expected:?}, got a different diagnostic"
         ),
-        Ok(()) => assert!(
-            false_marker(),
+        Ok(()) => panic!(
             "{name}: ipe ACCEPTED a non-Clone enum-payload reuse (exit 0) — the \
              emitted crate would fail cargo, a SEAL break"
         ),
@@ -328,8 +328,7 @@ fn ffi_handle_enum_linear_builds() {
         assert!(
             false_marker(),
             "emitted app Rust must declare `enum MainHolder`; got:\n{emitted}"
-        );
-        return;
+        )
     };
     assert!(
         attrs

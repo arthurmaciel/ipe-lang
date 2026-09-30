@@ -22,11 +22,6 @@ use std::path::{Path, PathBuf};
 
 use ipe_ffi::driver::{FfiCache, install_from_inspection};
 
-/// A runtime `false` the optimiser cannot fold — a deliberate failure marker.
-const fn false_marker() -> bool {
-    std::hint::black_box(false)
-}
-
 /// Seed the project's FFI cache with an inspection document for a crate
 /// `demo` that DEFINES one all-identity-carrier struct (`Counter`) and one
 /// enum (`Message` — a unit and a payload variant): both must surface
@@ -139,11 +134,7 @@ fn define_transparency_emits_the_conversion_seam() {
     let _ = fs::remove_dir_all(&out);
 
     if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
-        assert!(
-            false_marker(),
-            "define-transparency fixture must build, got: {err}"
-        );
-        return;
+        panic!("define-transparency fixture must build, got: {err}")
     }
 
     // The forwarder module carries the app enum for the transparent union and
@@ -199,11 +190,7 @@ fn define_transparency_emitted_crate_builds_and_runs() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_define_transparency_e2e_out");
     let _ = fs::remove_dir_all(&out);
     if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
-        assert!(
-            false_marker(),
-            "define-transparency fixture must build, got: {err}"
-        );
-        return;
+        panic!("define-transparency fixture must build, got: {err}")
     }
 
     // The manifest pins the bound crate (the define surface rides `ipe rust

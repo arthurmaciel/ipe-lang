@@ -23,11 +23,6 @@ use std::path::{Path, PathBuf};
 
 use ipe_ffi::driver::{FfiCache, install_from_inspection};
 
-/// A runtime `false` the optimiser cannot fold — a deliberate failure marker.
-const fn false_marker() -> bool {
-    std::hint::black_box(false)
-}
-
 /// Seed the project's FFI cache with an inspection for a crate `tm` whose
 /// surface exercises both checker arms: `shift` is inspected with exact `i64`
 /// carriers (compile-time check passes), `clamped` is inspected with `u32`
@@ -151,11 +146,7 @@ fn asserted_call_emits_the_exact_carrier_shim() {
     let _ = fs::remove_dir_all(&out);
 
     if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
-        assert!(
-            false_marker(),
-            "asserted-call fixture must build, got: {err}"
-        );
-        return;
+        panic!("asserted-call fixture must build, got: {err}")
     }
 
     // The shim region: exact declared carriers, the panic boundary, no
@@ -362,11 +353,7 @@ fn asserted_call_emitted_crate_builds_and_runs() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_asserted_call_e2e_out");
     let _ = fs::remove_dir_all(&out);
     if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
-        assert!(
-            false_marker(),
-            "asserted-call fixture must build, got: {err}"
-        );
-        return;
+        panic!("asserted-call fixture must build, got: {err}")
     }
 
     // The real foreign crate: `hidden_double` and `boom` exist here but were
@@ -464,8 +451,7 @@ fn const_read_emits_a_bare_infallible_shim() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_const_read_out");
     let _ = fs::remove_dir_all(&out);
     if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
-        assert!(false_marker(), "const fixture must build, got: {err}");
-        return;
+        panic!("const fixture must build, got: {err}")
     }
 
     let ffi_rs = read_emitted(&out, "src/ffi.rs");
@@ -537,8 +523,7 @@ fn const_read_emitted_crate_builds_and_runs() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_const_read_e2e_out");
     let _ = fs::remove_dir_all(&out);
     if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
-        assert!(false_marker(), "const fixture must build, got: {err}");
-        return;
+        panic!("const fixture must build, got: {err}")
     }
 
     let tm_dir = tmp.join("tm");

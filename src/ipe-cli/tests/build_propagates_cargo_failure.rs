@@ -47,6 +47,7 @@ fn write_failing_cargo(dir: &Path) -> std::io::Result<std::path::PathBuf> {
 /// `cargo` and on `PATH` scrubbing to guarantee the fake is the one resolved.
 #[cfg(unix)]
 #[test]
+#[allow(clippy::panic)] // a refused precondition is the test failure
 fn build_propagates_a_failed_emitted_cargo_build() {
     const SRC: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"hi\"\n";
 
@@ -78,8 +79,7 @@ fn build_propagates_a_failed_emitted_cargo_build() {
         .env("NO_COLOR", "1")
         .output();
     let Ok(out) = out else {
-        assert!(false_marker(), "failed to spawn ipe build: {out:?}");
-        return;
+        panic!("failed to spawn ipe build: {out:?}")
     };
 
     // The core assertion: a failed emitted-crate cargo build must NOT be a

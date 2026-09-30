@@ -22,11 +22,6 @@ use ipe_ffi::driver::{FfiCache, install_from_inspection};
 
 use crate::support;
 
-/// A runtime `false` the optimiser cannot fold — a deliberate failure marker.
-const fn false_marker() -> bool {
-    std::hint::black_box(false)
-}
-
 /// Seed the project's FFI cache with a hand-crafted inspection document for a
 /// non-`Clone` foreign crate published as `handle-demo` (its Rust extern ident
 /// is the dash-normalised `handle_demo`): an opaque `Widget` handle, a `new`
@@ -92,6 +87,7 @@ pub fn write_project(dir: &Path, main: &str) -> bool {
 /// lowerer must reject it with IPE-L0130 instead of emitting a `.clone()` the
 /// foreign type does not support.
 #[test]
+#[allow(clippy::panic)] // a refused precondition is the test failure
 fn nonclone_handle_reused_fails_closed_before_cargo() {
     let runtime = e2e_support::require_runtime().into_path_buf();
 
@@ -130,16 +126,13 @@ fn nonclone_handle_reused_fails_closed_before_cargo() {
 
     let built = ipe::build_loose_file(&entry, &out, &runtime);
     let Err(err) = built else {
-        assert!(
-            false_marker(),
+        panic!(
             "expected IPE-L0130 rejection for reusing a non-`Clone` FFI handle, \
              but ipe build SUCCEEDED — an exit-0-then-cargo-fail SEAL hole"
-        );
-        return;
+        )
     };
     let ipe::CliError::Pipeline { diag, .. } = &err else {
-        assert!(false_marker(), "expected a Pipeline diagnostic, got: {err}");
-        return;
+        panic!("expected a Pipeline diagnostic, got: {err}")
     };
     let code = diag.code();
     assert_eq!(
@@ -156,6 +149,7 @@ fn nonclone_handle_reused_fails_closed_before_cargo() {
 /// Routed through `support::assert_seal_builds` so the cargo build step runs
 /// under `IPE_E2E=1`.
 #[test]
+#[allow(clippy::panic)] // a refused precondition is the test failure
 fn nonclone_handle_threaded_linearly_builds() {
     let runtime = e2e_support::require_runtime().into_path_buf();
 
@@ -194,11 +188,7 @@ fn nonclone_handle_threaded_linearly_builds() {
     match ipe::build_loose_file(&entry, &out, &runtime) {
         Ok(()) => {}
         Err(err) => {
-            assert!(
-                false_marker(),
-                "linear borrow-threaded handle use must ipe-accept, got: {err}"
-            );
-            return;
+            panic!("linear borrow-threaded handle use must ipe-accept, got: {err}")
         }
     }
 

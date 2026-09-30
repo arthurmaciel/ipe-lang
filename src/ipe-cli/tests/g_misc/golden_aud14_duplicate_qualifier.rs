@@ -35,6 +35,7 @@ fn write_project(dir: &std::path::Path, files: &[(&str, &str)]) -> bool {
 /// to whichever import is LAST in source order (`B`'s), with no diagnostic — a
 /// well-typed program producing a wrong-module resolution.
 #[test]
+#[allow(clippy::panic)] // a refused precondition is the test failure
 fn distinct_modules_sharing_an_explicit_alias_is_rejected() {
     let runtime = e2e_support::require_runtime().into_path_buf();
 
@@ -62,27 +63,20 @@ import Ipe.Io
 
     let built = ipe::build_loose_file(&entry, &out, &runtime);
     let Err(err) = built else {
-        assert!(
-            false_marker(),
+        panic!(
             "expected DuplicateQualifier rejection for two modules sharing alias `Utils`, \
              but ipe build SUCCEEDED — the last import silently won"
-        );
-        return;
+        )
     };
     let ipe::CliError::Pipeline { diag, .. } = &err else {
-        assert!(false_marker(), "expected a Pipeline diagnostic, got: {err}");
-        return;
+        panic!("expected a Pipeline diagnostic, got: {err}")
     };
     let ipe_diagnostics::Diagnostic::Name {
         msg: ipe_diagnostics::NameError::DuplicateQualifier { qualifier, .. },
         ..
     } = &**diag
     else {
-        assert!(
-            false_marker(),
-            "expected NameError::DuplicateQualifier, got: {err}"
-        );
-        return;
+        panic!("expected NameError::DuplicateQualifier, got: {err}")
     };
     assert_eq!(&**qualifier, "Utils");
 }
