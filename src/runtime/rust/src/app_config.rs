@@ -692,7 +692,7 @@ pub fn resolve_console_token(kind: ConsoleTokenKind) -> Option<String> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

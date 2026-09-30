@@ -621,7 +621,7 @@ pub fn time_zone_name<E: From<String>>(zone_name: String, ms: i64) -> IpeResult<
 // `time_time_string` is unconditional (no `time` feature), so its regression
 // test lives in an always-compiled module. It asserts a fixed instant formats
 // to a constant UTC `HH:MM:SS` regardless of the process `TZ`.
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod time_string_tests {
     use super::time_time_string;
 
@@ -669,7 +669,7 @@ mod time_string_tests {
 // the `time` feature gates. The chrono-core calendar math (add/diff/isLeapYear)
 // is covered here too; running the whole module under `--features time` keeps a
 // single fixture set rather than splitting core from zone tests.
-#[cfg(all(test, feature = "time"))]
+#[cfg(all(test, feature = "time", not(target_arch = "wasm32")))]
 mod time_advanced_tests {
     use super::*;
 

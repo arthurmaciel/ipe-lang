@@ -51,7 +51,7 @@ pub fn bitwise_shift_right_zf_by(offset: i64, a: i64) -> i64 {
     ((a as u64).wrapping_shr((offset & 63) as u32)) as i64
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

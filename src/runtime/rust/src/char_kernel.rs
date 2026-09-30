@@ -54,7 +54,7 @@ pub fn char_from_code(n: i64) -> char {
     char::from_u32(n as u32).unwrap_or('\u{FFFD}')
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

@@ -441,7 +441,7 @@ fn sanitise_animation_name(s: &str) -> String {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

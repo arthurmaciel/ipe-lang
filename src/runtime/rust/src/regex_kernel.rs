@@ -176,7 +176,7 @@ pub fn string_is_url(s: String) -> bool {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

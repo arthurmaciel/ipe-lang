@@ -331,7 +331,7 @@ pub fn clean_with(path: &str, windows: bool) -> String {
     String::from_utf8(out).unwrap_or_else(|_| ".".to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

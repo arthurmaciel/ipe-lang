@@ -891,7 +891,7 @@ pub fn http_request<E: From<String> + 'static>(req: HttpRequest) -> IpeTask<E, H
     Box::pin(do_fetch(req))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

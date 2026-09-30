@@ -50,7 +50,7 @@ pub fn debug_todo<A>(location: String, note: String) -> A {
     crate::system::system_exit(1)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::debug_log_line;
 

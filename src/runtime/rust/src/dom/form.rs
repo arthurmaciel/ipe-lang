@@ -53,7 +53,7 @@ pub fn decode_form_or_warn<T: serde::de::DeserializeOwned>(fd: FormData) -> Opti
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

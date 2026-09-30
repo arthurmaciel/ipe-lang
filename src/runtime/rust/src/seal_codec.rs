@@ -302,7 +302,7 @@ pub fn seal_encode(value: &JsonVal) -> String {
     crate::json::json_enc_canonical(value)
 }
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(all(test, feature = "json", not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use crate::IpeError;

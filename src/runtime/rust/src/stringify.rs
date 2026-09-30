@@ -362,7 +362,7 @@ impl IpeStringify for serde_json::Value {
 // blanket `ipe_show` above (`self.to_string()`) already renders its message —
 // no separate `Stringify` impl is needed.
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

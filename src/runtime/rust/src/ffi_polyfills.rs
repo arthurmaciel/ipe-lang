@@ -23,7 +23,7 @@ pub fn ffi_to_any_polyfill<T>(x: T) -> T {
 // `Kernel.kernel` direct dispatch; the static `Ffi.callPure "<Kernel>" [lit]` shape
 // is peephole-resolved to a direct kernel call before emit.
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

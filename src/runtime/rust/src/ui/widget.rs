@@ -149,7 +149,7 @@ pub fn ui_widget_<M, Down, Up, F>(ce: IpeCustomElement, _state: Down, _on_up: F)
     Element::TaggedNode(ce.tag, Description::NoDescription, Vec::new(), Vec::new())
 }
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(all(test, feature = "json", not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use crate::ui::element::{Attribute, Element};

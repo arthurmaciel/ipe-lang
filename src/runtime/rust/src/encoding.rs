@@ -278,7 +278,7 @@ pub fn ipe_encoding_hex_decode(s: String) -> IpeResult<crate::error::IpeError, S
 // helpers below serve the Latin-1 byte-pipeline needs of `encoding.rs`,
 // `compression.rs`, `ws_client.rs`, `server.rs`, and `email.rs`.
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use proptest::prelude::*;

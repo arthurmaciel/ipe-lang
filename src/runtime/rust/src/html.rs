@@ -1068,7 +1068,7 @@ impl<M> crate::stringify::IpeStringify for Event<M> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     #[derive(Clone, Debug, PartialEq)]

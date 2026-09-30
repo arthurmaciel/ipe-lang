@@ -259,7 +259,7 @@ fn template_of_at<M>(node: &Html<M>, depth: usize) -> Option<Template> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::{
         MAX_TEMPLATE_DEPTH, Template, TemplateAttr, TemplateError, materialize_template,

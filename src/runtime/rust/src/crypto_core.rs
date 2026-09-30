@@ -493,7 +493,7 @@ pub fn ipe_crypto_rsa_sha256_sign(
     crypto_rsa_sha256_sign(key_pem, msg)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_core {
     use super::*;
 

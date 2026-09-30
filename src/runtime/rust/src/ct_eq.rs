@@ -38,7 +38,7 @@ macro_rules! impl_ct_eq {
 
 pub(crate) use impl_ct_eq;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::ct_bytes_eq;
 

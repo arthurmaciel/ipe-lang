@@ -141,7 +141,7 @@ pub fn bytes_slice(start: i64, end: i64, b: Vec<u8>) -> Vec<u8> {
     b.get(s..e).map(<[u8]>::to_vec).unwrap_or_default()
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 
