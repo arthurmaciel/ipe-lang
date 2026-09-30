@@ -1502,6 +1502,7 @@ fn build_stdlib_docs() -> Vec<ModuleDoc> {
 ///
 /// A query matches zero, one, or more than one dotted name under the
 /// short/full-name rule — never silently the first of several.
+#[derive(Debug)]
 enum StdlibCandidate {
     None,
     One(String),
@@ -7244,5 +7245,69 @@ withBaseMs = something
                 "serve and write-format html must produce identical content for `{key}`"
             );
         }
+    }
+
+    // ── #3198: one rule resolves module and member doc keys ──────────────────
+
+    /// A short name shared by two dotted candidates is a typed `Ambiguous` miss
+    /// naming every candidate — never a silent pick of the first. No such
+    /// collision exists in real stdlib data today, so the collision is
+    /// constructed: a bare `List` alongside `Ipe.List` both carry the short
+    /// name `List`.
+    #[test]
+    fn resolve_stdlib_candidate_reports_ambiguous_short_names() {
+        let candidates = vec!["Ipe.List".to_owned(), "List".to_owned()];
+
+        assert!(matches!(
+            resolve_stdlib_candidate("List", &candidates),
+            StdlibCandidate::Ambiguous(ref cs) if cs.len() == 2
+        ));
+        // The full dotted form is never ambiguous, even when its short form is.
+        assert!(matches!(
+            resolve_stdlib_candidate("Ipe.List", &candidates),
+            StdlibCandidate::One(ref d) if d == "Ipe.List"
+        ));
+        assert!(matches!(
+            resolve_stdlib_candidate("Nope", &candidates),
+            StdlibCandidate::None
+        ));
+    }
+
+    /// The class-closing property, exhaustively: every stdlib module
+    /// `stdlib_module_names` advertises resolves under both its full and short
+    /// form — the same table `ipe doc --list` and every module lookup share.
+    #[test]
+    fn every_stdlib_module_resolves_by_full_and_short_name() {
+        let names = stdlib_module_names();
+        assert!(!names.is_empty(), "the stdlib module table is non-empty");
+        for dotted in &names {
+            assert!(
+                matches!(
+                    &resolve_stdlib_candidate(dotted, &names),
+                    StdlibCandidate::One(d) if d == dotted
+                ),
+                "full name `{dotted}` must resolve to itself"
+            );
+
+            let short = ipe_docs::stdlib_short_name(dotted);
+            let resolved = resolve_stdlib_candidate(short, &names);
+            let matches_dotted = match &resolved {
+                StdlibCandidate::One(d) => d == dotted,
+                StdlibCandidate::Ambiguous(cs) => cs.contains(dotted),
+                StdlibCandidate::None => false,
+            };
+            assert!(
+                matches_dotted,
+                "short name `{short}` (from `{dotted}`) must resolve to `{dotted}`, got {resolved:?}"
+            );
+        }
+    }
+
+    /// An unknown module-shaped key misses cleanly, at no type-check cost (the
+    /// candidate table rules it out before any module is built).
+    #[test]
+    fn find_module_doc_misses_an_unknown_module() {
+        assert!(matches!(find_module_doc("NotAModule"), ModuleLookup::Miss));
+        assert!(matches!(find_module_doc("Ipe.Nope"), ModuleLookup::Miss));
     }
 }
