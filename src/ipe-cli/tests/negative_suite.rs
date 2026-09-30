@@ -1104,6 +1104,27 @@ fn custom_element_ctor_path_traversal_rejected() {
     assert_rejected("custom_element_traversal", &src, "IPE-P0063");
 }
 
+/// A `CustomElement.fromFile` path carrying a NUL byte is refused at build
+/// (IPE-P0063) before it can reach a syscall.
+#[test]
+fn custom_element_ctor_nul_path_rejected() {
+    let src = format!(
+        "{HEAD}import Ipe.Ffi.Js.CustomElement as CustomElement\n\
+         editor : CustomElement Int String\n\
+         editor = CustomElement.fromFile \"js/a\\0b.js\"\n\
+         main = 1\n"
+    );
+    assert_rejected("custom_element_nul", &src, "IPE-P0063");
+}
+
+/// Refusal: `path "…"` is no literal form, so with no `path` in scope it is an
+/// unresolved name (IPE-N0001).
+#[test]
+fn path_before_a_string_with_no_path_binder_is_unresolved() {
+    let src = format!("{HEAD}main = path \"src/Main.ipe\"\n");
+    assert_rejected("path_is_an_ordinary_name", &src, "IPE-N0001");
+}
+
 /// (e) A well-formed `customElement "js/x.js"` with the file PRESENT type-checks
 /// (the shape + path + existence gates all pass) and — with the WP4 transport
 /// shipped — now LOWERS to the opaque widget handle rather than being refused at

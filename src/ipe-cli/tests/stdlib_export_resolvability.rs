@@ -1492,26 +1492,6 @@ fn a_binder_named_path_applied_to_a_string_is_an_ordinary_call() {
     );
 }
 
-/// Refusal: `path "…"` is no literal form, so with no `path` in scope it is an
-/// unresolved name.
-#[test]
-fn path_before_a_string_with_no_path_binder_is_unresolved() {
-    let main = concat!(
-        "module Main exposing (main)\n",
-        "import Ipe.Io as Io\n",
-        "import Ipe.Path as Path\n",
-        "import Ipe.Task as Task\n\n",
-        "main : Task Error ()\n",
-        "main =\n",
-        "    Io.println (Path.toString (path \"src/Main.ipe\"))\n",
-    );
-    let outcome = compile_main(main);
-    assert!(
-        outcome.as_ref().is_err_and(|e| e.contains("path")),
-        "`path \"…\"` with no `path` binder must be a name error: {outcome:?}",
-    );
-}
-
 /// A `Main` that imports the `Styles` helper, so the helper is type-checked.
 const STYLES_MAIN: &str = "module Main exposing (main)\nimport Ipe.Io as Io\nimport Styles\n\n\
                            main : Task Error ()\nmain =\n    Io.println \"ok\"\n";
