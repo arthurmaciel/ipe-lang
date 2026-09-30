@@ -9474,9 +9474,7 @@ impl StdlibKernel {
         const STRING_TO_A_TO_A: TyShape = TyShape::Fun(&STRING, &A_TO_A);
         // System.exit : Int -> a
         const INT_TO_A: TyShape = TyShape::Fun(&INT, &A);
-        // Http.parseQuery : String -> Dict String String
         const DICT_STRING_STRING: TyShape = TyShape::Con(BuiltinTag::Dict, &[STRING, STRING]);
-        const STRING_TO_DICT_STRING_STRING: TyShape = TyShape::Fun(&STRING, &DICT_STRING_STRING);
         // Db.getString / getField : String -> Dict String String -> String
         const DICT_TO_STRING: TyShape = TyShape::Fun(&DICT_STRING_STRING, &STRING);
         const DB_GET_STRING: TyShape = TyShape::Fun(&STRING, &DICT_TO_STRING);
@@ -12012,7 +12010,7 @@ impl StdlibKernel {
             Self::DebugExplain => Some(&UI_ATTR_A),
             Self::ErrorToString => Some(&A_TO_STRING),
             Self::SystemExit => Some(&INT_TO_A),
-            Self::HttpParseQuery => Some(&STRING_TO_DICT_STRING_STRING),
+            Self::HttpParseQuery => Some(&STRING_TO_RESULT_ERR_DICT_SS),
             Self::DbGetString | Self::DbGetField => Some(&DB_GET_STRING),
             Self::DbGetInt => Some(&DB_GET_INT),
             Self::DbGetBool => Some(&DB_GET_BOOL),

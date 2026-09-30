@@ -183,9 +183,9 @@ pub fn call_has_kernel_special_case(
 /// closure that converts `ipe_runtime::HttpResponse` into the synthesised
 /// Ipê record struct for `{body, headers, status}`.
 ///
-/// `HttpParseQuery` returns `HashMap<String,String>` which is exactly
-/// `Dict String String` — the standard `Expr::Call` emitter is correct
-/// and this function returns `None` for it.
+/// `HttpParseQuery` returns `IpeResult<IpeError, HashMap<String,String>>`,
+/// which is exactly `Result Error (Dict String String)` — the standard
+/// `Expr::Call` emitter is correct and this function returns `None` for it.
 ///
 /// The conversion is a PURE FIELD-FOR-FIELD MOVE — no validation, no
 /// second parse boundary. All guards (SSRF, body cap, timeout, error

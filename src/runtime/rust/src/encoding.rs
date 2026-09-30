@@ -29,85 +29,6 @@ const QUERY: &AsciiSet = &NON_ALPHANUMERIC
 // path and the JWT path (jwt.rs, which owns its own raw-byte base64/hex) are
 // unaffected.
 
-/// Decode one `application/x-www-form-urlencoded` field (key or value):
-/// `+` → space, `%XX` → byte.
-///
-/// # Contract: deliberately lenient
-///
-/// This decoder is **intentionally permissive** about malformed input:
-///
-/// - A `%` not followed by exactly two hex digits (stray `%`, truncated `%A`,
-///   non-hex `%ZZ`) is copied through as a literal `%` byte rather than
-///   producing an error.
-/// - Decoded bytes that are not valid UTF-8 are replaced with U+FFFD via
-///   [`String::from_utf8_lossy`] rather than returning an error.
-///
-/// # Why this differs from the `urlDecode` / `percentDecode` kernels
-///
-/// `url_decode` (`Encoding.urlDecode`, the strict form decode) and
-/// `percent_decode` (`Encoding.percentDecode`, the strict RFC 3986 decode,
-/// `+` literal — the one for path components) are **strict**: they reject
-/// malformed percent-escapes with `Err` at the boundary, as required for
-/// user-supplied strings that will be re-encoded, used as path components, or
-/// passed to security-sensitive sinks. That strictness is appropriate for
-/// *application* data whose well-formedness must be guaranteed before use.
-///
-/// HTTP servers and clients are conventionally permissive about query strings
-/// on *incoming requests*: real-world browsers and libraries emit malformed
-/// escapes, and a 400 on every such request is not the right tradeoff.
-/// Leniency here is correct — the decoded values feed **application logic
-/// only** (a `Dict String String` handed to the route handler, or the
-/// `Http.parseQuery` result in the client), never a security-sensitive
-/// re-encode, path join, SQL string, or outgoing header.
-///
-/// # Safety boundary (invariant that makes leniency safe)
-///
-/// This function is called **only** at the query-string splitting layer, where
-/// its output becomes a plain key/value dictionary for the application to
-/// inspect. It is NOT used anywhere a malformed escape could escape the value
-/// boundary: the decoded string never flows into a file path, a SQL query, an
-/// outgoing HTTP header, or any re-encoding path. Callers that need a strict
-/// contract must use `url_decode` or `percent_decode` instead.
-///
-/// Shared by `server::parse_query` (incoming request query strings) and
-/// `http_client::http_parse_query` (`Http.parseQuery`) so both stay consistent.
-//
-// NOT cfg-gated: generated projects compile the runtime WITHOUT cargo features
-// (their server.rs is always included), so a `#[cfg(feature=…)]` gate would drop
-// this from generated server builds and break them. In the standalone crate it
-// only looks dead under a feature subset, hence `allow(dead_code)`.
-#[allow(dead_code)]
-pub(crate) fn form_url_decode(s: &str) -> String {
-    // A percent-escape is "%XX": a '%' marker followed by two hex digits, e.g.
-    // "%20" → 0x20 (space). RFC 3986 §2.1.
-    const PCT: u8 = b'%';
-    const HEX: u32 = 16;
-    const HEX_DIGITS: usize = 2;
-    const ESCAPE_LEN: usize = 1 + HEX_DIGITS; // '%' + two hex digits
-
-    let s = s.replace('+', " ");
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while let Some(&c) = b.get(i) {
-        if c == PCT {
-            // The two hex digits sit at [i+1, i+1+HEX_DIGITS). `str::get(range)`
-            // is total — None when out of bounds OR not on a char boundary (e.g.
-            // a stray '%' before a multi-byte char) — so we fall through and copy
-            // the literal '%' rather than panicking.
-            let hex = s.get(i + 1..i + 1 + HEX_DIGITS);
-            if let Some(byte) = hex.and_then(|h| u8::from_str_radix(h, HEX).ok()) {
-                out.push(byte);
-                i += ESCAPE_LEN;
-                continue;
-            }
-        }
-        out.push(c);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 /// The RFC grammar a URL component is decoded under.
 ///
 /// The two grammars differ in exactly one byte: under `Form`
@@ -681,28 +602,6 @@ mod tests {
         assert!(matches!(bad, IpeResult::Err(_)));
         let odd: IpeResult<String, String> = encoding_hex_decode("a".to_string());
         assert!(matches!(odd, IpeResult::Err(_)));
-    }
-
-    // Pin the lenient contract of `form_url_decode`: malformed percent-escapes
-    // pass through as literal bytes (contrast: `url_decode` rejects them with
-    // `Err`). Stray `%`, truncated `%A`, non-hex `%ZZ` all survive unchanged.
-    // This test guards against a future "fix" that accidentally routes
-    // form_url_decode through the strict url_decode path and breaks query parsing.
-    #[test]
-    fn form_url_decode_lenient_contract() {
-        // Normal well-formed input still decodes correctly.
-        assert_eq!(form_url_decode("hello+world"), "hello world");
-        assert_eq!(form_url_decode("a%20b"), "a b");
-        assert_eq!(form_url_decode("foo%3Dbar"), "foo=bar");
-
-        // Malformed percent-escapes pass through as literal bytes — lenient.
-        assert_eq!(form_url_decode("100%done"), "100%done");
-        assert_eq!(form_url_decode("trailing%"), "trailing%");
-        assert_eq!(form_url_decode("%A"), "%A");
-        assert_eq!(form_url_decode("a%ZZb"), "a%ZZb");
-
-        // Mixed: well-formed escapes decode; malformed ones pass through.
-        assert_eq!(form_url_decode("ok%20and%ZZbad"), "ok and%ZZbad");
     }
 
     // ── decode_component: the single strict core ──────────────────────────
