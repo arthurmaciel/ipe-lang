@@ -2119,6 +2119,8 @@ def _claimed_cell(
     if src[:1] != ["cargo"]:
         return "its runner command is not a bare `cargo` (no env assignment, wrapper, or path)"
     args = src[1:]
+    if "--" in args:
+        return "it passes arguments after `--`, which this check does not read"
     redirecting = next((w for w in args if cargo_invocation._option(w, _CLAIM_REDIRECTING, frozenset()) is not None), None)
     if redirecting is not None:
         return f"its {redirecting!r} changes what cargo reads, which this check does not follow"

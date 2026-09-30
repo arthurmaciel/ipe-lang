@@ -5201,6 +5201,8 @@ class TestTestClaims(unittest.TestCase):
             ("env assignment", _TC_PIN + _TC_CLAIM % ("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=x " + _TC_RUN), "not a bare `cargo`"),
             ("env wrapper", _TC_PIN + _TC_CLAIM % ("env " + _TC_RUN), "not a bare `cargo`"),
             ("cargo path", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("cargo test", "/usr/bin/cargo test"), "not a bare `cargo`"),
+            ("args after dashes", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--lib", "--lib -- only_this"), "after `--`"),
+            ("bare dashes", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--lib", "--lib --"), "after `--`"),
             ("config", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("cargo test", "cargo --config x test"), "'--config' changes what cargo reads"),
             ("config joined", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--lib", "--lib --config=x"), "'--config=x' changes what cargo reads"),
             ("directory", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("cargo test", "cargo -C sub test"), "'-C' changes what cargo reads"),
