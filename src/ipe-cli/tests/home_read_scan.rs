@@ -443,6 +443,20 @@ fn allows_disallowed_methods(src: &str) -> bool {
     disallowed_methods_allows(src) > 0
 }
 
+/// Whether `src`'s code names the `disallowed_methods` escape hatch inside an
+/// inner (`#![...]`) attribute, which covers a whole module or crate: one such
+/// attribute keeps a file's pinned count while widening it past a single item.
+fn inner_disallowed_methods_allow(src: &str) -> bool {
+    let code = code_only(src);
+    code.match_indices("clippy::disallowed_methods")
+        .any(|(at, _)| {
+            code.get(..at)
+                .and_then(|before| before.rfind('#'))
+                .and_then(|hash| code.get(hash + 1..))
+                .is_some_and(|rest| rest.starts_with('!'))
+        })
+}
+
 /// The pinned allow count for workspace-relative `rel` (0 when unlisted).
 fn pinned_allows(rel: &str) -> usize {
     ESCAPE_HATCH_SITES
@@ -714,6 +728,16 @@ fn the_env_escape_hatch_is_pinned_to_the_audited_readers() {
         "`clippy::disallowed_methods` allows differ from the pinned sites \
          (file, found, pinned): {offenders:?}"
     );
+    let inner: Vec<_> = files
+        .iter()
+        .filter(|(_, text)| inner_disallowed_methods_allow(text))
+        .map(|(rel, _)| rel)
+        .collect();
+    assert!(
+        inner.is_empty(),
+        "a module- or crate-wide `#![allow(clippy::disallowed_methods)]`; allow it on \
+         the one audited item instead: {inner:?}"
+    );
     for (file, pinned) in ESCAPE_HATCH_SITES {
         assert!(
             files.iter().any(|(rel, _)| rel == file),
@@ -911,6 +935,19 @@ fn a_planted_environment_bypass_is_detected() {
         "a second allow in a pinned file changes its count"
     );
     assert_eq!(pinned_allows("src/ipe-cli/src/main.rs"), 0);
+    for src in [
+        "#![allow(clippy::disallowed_methods)]\nfn f() {}",
+        "#![cfg_attr(test, allow(clippy::disallowed_methods))]",
+        "#![expect(clippy::disallowed_methods)]",
+    ] {
+        assert!(
+            inner_disallowed_methods_allow(src),
+            "the scan missed an inner escape hatch: {src:?}"
+        );
+    }
+    assert!(!inner_disallowed_methods_allow(
+        "#![forbid(unsafe_code)]\n#[allow(clippy::disallowed_methods)]\nfn f() {}"
+    ));
 }
 
 #[test]
