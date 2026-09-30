@@ -16,8 +16,25 @@ use ipe_wasm::RUNTIME_DEP_DIR;
 /// The program prewarm compiles and builds to fill the warm cache.
 pub const PREWARM_PROGRAM: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hello\"\n";
 
-/// Deepest directory nesting walked in a staged project or a warm tree.
+/// Deepest directory nesting walked in a warm tree.
 pub const MAX_TREE_DEPTH: usize = 32;
+
+/// The most files one staged project may hold, `Cargo.toml` included.
+///
+/// The server's staging allowlist (`maxFiles` in `server/src/Staging.ipe`)
+/// admits the same number; a test pins the two together.
+pub const MAX_STAGED_FILES: usize = 64;
+
+/// The most path segments under `src/` one staged file may have.
+///
+/// The server's staging allowlist (`maxSegments` in `server/src/Staging.ipe`)
+/// admits the same number; a test pins the two together.
+pub const MAX_SOURCE_SEGMENTS: usize = 8;
+
+/// The most entries one staged project may hold, directories included.
+///
+/// Every directory must hold a file, so no legal project needs more.
+const MAX_STAGED_ENTRIES: usize = MAX_STAGED_FILES * MAX_SOURCE_SEGMENTS;
 
 /// Seconds after the Unix epoch stamped as the modification time of every
 /// materialised runtime file.
@@ -45,8 +62,14 @@ pub enum LayoutError {
     MissingEntryPoint,
     /// A symbolic link, or an entry that is neither a file nor a directory.
     NotPlain(PathBuf),
-    /// Directories nested deeper than [`MAX_TREE_DEPTH`].
+    /// A source path with more than [`MAX_SOURCE_SEGMENTS`] segments under `src/`.
     TooDeep(PathBuf),
+    /// More than [`MAX_STAGED_FILES`] files, or more entries than they can need.
+    TooManyFiles,
+    /// A name under `src/` other than a `[A-Za-z0-9_]` directory or `<name>.rs` file.
+    BadSourceName(PathBuf),
+    /// A directory under `src/` that holds nothing; the server never stages one.
+    EmptyDir(PathBuf),
     /// The project tree could not be read.
     Unreadable {
         /// The entry that failed.
@@ -78,9 +101,20 @@ impl std::fmt::Display for LayoutError {
             ),
             Self::TooDeep(path) => write!(
                 f,
-                "staged project nests deeper than {MAX_TREE_DEPTH} directories at `{}`",
+                "staged source `{}` has more than {MAX_SOURCE_SEGMENTS} segments under `{SOURCE_DIR}/`",
                 path.display()
             ),
+            Self::TooManyFiles => {
+                write!(f, "staged project holds more than {MAX_STAGED_FILES} files")
+            }
+            Self::BadSourceName(path) => write!(
+                f,
+                "staged source `{}` is not a `[A-Za-z0-9_]` directory or `<name>.rs` file",
+                path.display()
+            ),
+            Self::EmptyDir(path) => {
+                write!(f, "staged source directory `{}` is empty", path.display())
+            }
             Self::Unreadable { path, detail } => {
                 write!(
                     f,
@@ -94,22 +128,28 @@ impl std::fmt::Display for LayoutError {
 
 /// Accept a staged project only when it is exactly the client's emitted crate.
 ///
-/// The top level holds a regular `Cargo.toml` and a `src/` directory and
-/// nothing else; `src/` holds only regular files and directories, at most
-/// [`MAX_TREE_DEPTH`] deep, including a regular `src/main.rs`. Symbolic links
-/// are refused everywhere.
+/// The same rule the server's staging allowlist applies: the top level holds a
+/// regular `Cargo.toml` and a `src/` directory and nothing else; under `src/`
+/// every directory is a non-empty `[A-Za-z0-9_]` name holding something, every
+/// file a regular `<name>.rs` at most [`MAX_SOURCE_SEGMENTS`] segments deep, a
+/// regular `src/main.rs` among them, and at most [`MAX_STAGED_FILES`] files in
+/// all. Symbolic links are refused everywhere.
 ///
 /// # Errors
 ///
 /// The [`LayoutError`] naming the first offending entry.
 pub fn check_project_layout(project: &Path) -> Result<(), LayoutError> {
     let mut manifest = false;
-    for entry in read_entries(project)? {
+    let mut walk = SourceWalk::default();
+    for entry in read_entries(project, &mut walk)? {
         let (path, kind) = entry;
         let name = path.file_name().map(PathBuf::from).unwrap_or_default();
         match (name.to_str(), kind) {
-            (Some(MANIFEST), EntryKind::File) => manifest = true,
-            (Some(SOURCE_DIR), EntryKind::Dir) => check_plain_tree(&path, 1)?,
+            (Some(MANIFEST), EntryKind::File) => {
+                manifest = true;
+                walk.count_file()?;
+            }
+            (Some(SOURCE_DIR), EntryKind::Dir) => check_source_tree(&path, 0, &mut walk)?,
             (Some(MANIFEST | SOURCE_DIR), EntryKind::Other) => {
                 return Err(LayoutError::NotPlain(name));
             }
@@ -134,8 +174,90 @@ enum EntryKind {
     Other,
 }
 
-/// The entries of `dir`, classified without following symbolic links.
-fn read_entries(dir: &Path) -> Result<Vec<(PathBuf, EntryKind)>, LayoutError> {
+/// What a walk of one staged project has counted so far.
+#[derive(Default)]
+struct SourceWalk {
+    files: usize,
+    entries: usize,
+}
+
+impl SourceWalk {
+    /// Count one more file, refusing past [`MAX_STAGED_FILES`].
+    fn count_file(&mut self) -> Result<(), LayoutError> {
+        self.files = self.files.saturating_add(1);
+        if self.files > MAX_STAGED_FILES {
+            return Err(LayoutError::TooManyFiles);
+        }
+        Ok(())
+    }
+
+    /// Count one more entry read, refusing past [`MAX_STAGED_ENTRIES`].
+    fn count_entry(&mut self) -> Result<(), LayoutError> {
+        self.entries = self.entries.saturating_add(1);
+        if self.entries > MAX_STAGED_ENTRIES {
+            return Err(LayoutError::TooManyFiles);
+        }
+        Ok(())
+    }
+}
+
+/// Whether `name` is one allowlisted path segment: non-empty ASCII `[A-Za-z0-9_]`.
+fn is_source_segment(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// Check the tree under `src/`, where `dir` sits `segments` segments below it.
+fn check_source_tree(
+    dir: &Path,
+    segments: usize,
+    walk: &mut SourceWalk,
+) -> Result<(), LayoutError> {
+    let entries = read_entries(dir, walk)?;
+    if entries.is_empty() && segments > 0 {
+        return Err(LayoutError::EmptyDir(dir.to_path_buf()));
+    }
+    let depth = segments.saturating_add(1);
+    for (path, kind) in entries {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        match kind {
+            EntryKind::File => {
+                let stem = name.strip_suffix(".rs").unwrap_or_default();
+                if !is_source_segment(stem) {
+                    return Err(LayoutError::BadSourceName(path));
+                }
+                if depth > MAX_SOURCE_SEGMENTS {
+                    return Err(LayoutError::TooDeep(path));
+                }
+                walk.count_file()?;
+            }
+            EntryKind::Dir => {
+                if !is_source_segment(name) {
+                    return Err(LayoutError::BadSourceName(path));
+                }
+                // A file inside sits one segment deeper still.
+                if depth >= MAX_SOURCE_SEGMENTS {
+                    return Err(LayoutError::TooDeep(path));
+                }
+                check_source_tree(&path, depth, walk)?;
+            }
+            EntryKind::Other => return Err(LayoutError::NotPlain(path)),
+        }
+    }
+    Ok(())
+}
+
+/// The entries of `dir`, classified without following symbolic links, each
+/// counted against the walk's entry ceiling as it is read.
+fn read_entries(
+    dir: &Path,
+    walk: &mut SourceWalk,
+) -> Result<Vec<(PathBuf, EntryKind)>, LayoutError> {
     let unreadable = |path: &Path, error: &std::io::Error| LayoutError::Unreadable {
         path: path.to_path_buf(),
         detail: error.to_string(),
@@ -143,6 +265,7 @@ fn read_entries(dir: &Path) -> Result<Vec<(PathBuf, EntryKind)>, LayoutError> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(|e| unreadable(dir, &e))? {
         let entry = entry.map_err(|e| unreadable(dir, &e))?;
+        walk.count_entry()?;
         let path = entry.path();
         let file_type = entry.file_type().map_err(|e| unreadable(&path, &e))?;
         let kind = if file_type.is_file() {
@@ -155,20 +278,6 @@ fn read_entries(dir: &Path) -> Result<Vec<(PathBuf, EntryKind)>, LayoutError> {
         out.push((path, kind));
     }
     Ok(out)
-}
-
-fn check_plain_tree(dir: &Path, depth: usize) -> Result<(), LayoutError> {
-    if depth > MAX_TREE_DEPTH {
-        return Err(LayoutError::TooDeep(dir.to_path_buf()));
-    }
-    for (path, kind) in read_entries(dir)? {
-        match kind {
-            EntryKind::File => {}
-            EntryKind::Dir => check_plain_tree(&path, depth.saturating_add(1))?,
-            EntryKind::Other => return Err(LayoutError::NotPlain(path)),
-        }
-    }
-    Ok(())
 }
 
 /// Why trusted files could not be written into a project.
@@ -266,8 +375,8 @@ fn write_new_file(
 #[cfg(test)]
 mod tests {
     use super::{
-        LayoutError, MAX_TREE_DEPTH, RUNTIME_SOURCE_MTIME_SECS, RuntimeFiles, StageError,
-        check_project_layout, write_emitted, write_runtime,
+        LayoutError, MAX_SOURCE_SEGMENTS, MAX_STAGED_FILES, RUNTIME_SOURCE_MTIME_SECS,
+        RuntimeFiles, StageError, check_project_layout, write_emitted, write_runtime,
     };
     use ipe_wasm::RUNTIME_DEP_DIR;
     use std::collections::BTreeMap;
@@ -352,20 +461,109 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn nesting_past_the_ceiling_is_refused() -> std::io::Result<()> {
+    /// A project holding the emitted crate plus a source at `rel` under `src/`.
+    fn crate_with(rel: &str) -> std::io::Result<tempfile::TempDir> {
         let dir = tempfile::tempdir()?;
         emitted_crate(dir.path())?;
-        let mut deep = dir.path().join("src");
-        for _ in 0..MAX_TREE_DEPTH {
-            deep.push("d");
+        let path = dir.path().join("src").join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
-        std::fs::create_dir_all(&deep)?;
+        std::fs::write(path, "")?;
+        Ok(dir)
+    }
+
+    #[test]
+    fn nesting_past_the_ceiling_is_refused() -> std::io::Result<()> {
+        let at_ceiling = vec!["d"; MAX_SOURCE_SEGMENTS - 1].join("/") + "/m.rs";
+        assert_eq!(
+            check_project_layout(crate_with(&at_ceiling)?.path()),
+            Ok(())
+        );
+        let past = vec!["d"; MAX_SOURCE_SEGMENTS].join("/") + "/m.rs";
         assert!(matches!(
-            check_project_layout(dir.path()),
+            check_project_layout(crate_with(&past)?.path()),
             Err(LayoutError::TooDeep(_))
         ));
         Ok(())
+    }
+
+    #[test]
+    fn a_name_outside_the_source_allowlist_is_refused() -> std::io::Result<()> {
+        for rel in [
+            "data.json",
+            ".x.rs",
+            ".rs",
+            "a-b.rs",
+            "\u{e9}.rs",
+            "a b/m.rs",
+            ".hidden/m.rs",
+            "build",
+        ] {
+            assert!(
+                matches!(
+                    check_project_layout(crate_with(rel)?.path()),
+                    Err(LayoutError::BadSourceName(_))
+                ),
+                "{rel:?} must be refused"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn an_empty_source_directory_is_refused() -> std::io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        emitted_crate(dir.path())?;
+        std::fs::create_dir_all(dir.path().join("src").join("empty"))?;
+        assert!(matches!(
+            check_project_layout(dir.path()),
+            Err(LayoutError::EmptyDir(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn more_files_than_the_server_stages_are_refused() -> std::io::Result<()> {
+        // `Cargo.toml` and `src/main.rs` count: this is exactly the ceiling.
+        let dir = tempfile::tempdir()?;
+        emitted_crate(dir.path())?;
+        for n in 0..MAX_STAGED_FILES - 2 {
+            std::fs::write(dir.path().join("src").join(format!("m{n}.rs")), "")?;
+        }
+        assert_eq!(check_project_layout(dir.path()), Ok(()));
+        std::fs::write(dir.path().join("src").join("one_more.rs"), "")?;
+        assert_eq!(
+            check_project_layout(dir.path()),
+            Err(LayoutError::TooManyFiles)
+        );
+        Ok(())
+    }
+
+    /// The integer `name` is bound to in the server's `Staging.ipe`.
+    fn staging_constant(source: &str, name: &str) -> Option<usize> {
+        let header = format!("\n{name} =\n");
+        let (_, rest) = source.split_once(&header)?;
+        rest.lines().next()?.trim().parse().ok()
+    }
+
+    #[test]
+    fn the_layout_ceilings_match_the_server_allowlist() {
+        let source = include_str!("../../server/src/Staging.ipe");
+        assert_eq!(staging_constant(source, "maxFiles"), Some(MAX_STAGED_FILES));
+        assert_eq!(
+            staging_constant(source, "maxSegments"),
+            Some(MAX_SOURCE_SEGMENTS)
+        );
+        let chars: String = ('a'..='z')
+            .chain('A'..='Z')
+            .chain('0'..='9')
+            .chain(['_'])
+            .collect();
+        assert!(
+            source.contains(&format!("segmentChars =\n    \"{chars}\"\n")),
+            "the server's segment charset drifted from `[A-Za-z0-9_]`"
+        );
     }
 
     #[test]
