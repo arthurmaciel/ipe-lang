@@ -39,10 +39,6 @@ fn write_project(dir: &Path, main: &str) -> bool {
     fs::write(src.join("Main.ipe"), main).is_ok()
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// Compile `main` (a full `Main.ipe` program) through the ipe frontend into an
 /// emitted Rust project rooted at a per-`slug` temp dir. Asserts ipe exit 0 —
 /// a resolution/seal regression fails loudly. Returns the emitted-project dir.
@@ -89,7 +85,7 @@ fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
 /// Full end-to-end seal for one module: ipe emits, then the emitted crate
 /// `cargo build`s + runs, and stdout matches `expected`.
 fn seal_module(slug: &str, main: &str, expected: &str) {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let Some(dir) = compile_module_probe(slug, main) else {
@@ -516,7 +512,7 @@ fn pubsub_typed_shared_topic_resolves_and_emits() {
 /// Positive with E2E build: compiles and links.
 #[test]
 fn pubsub_typed_shared_topic_builds() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let _ = compile_module_probe("pubsub_typed_shared_e2e", PUBSUB_TYPED_SHARED_TOPIC)
@@ -713,7 +709,7 @@ fn markdown_parser_resolves_and_emits() {
 
 #[test]
 fn markdown_builds_and_runs() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let Some(dir) = compile_module_probe("markdown_e2e", MARKDOWN_MAIN) else {
@@ -755,7 +751,7 @@ fn markdown_builds_and_runs() {
 
 #[test]
 fn markdown_parser_builds_and_runs() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let Some(dir) = compile_module_probe("markdown_parser_e2e", MARKDOWN_PARSER_MAIN) else {
@@ -820,7 +816,7 @@ fn markdown_features_resolves_and_emits() {
 
 #[test]
 fn markdown_features_builds_and_runs() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let Some(dir) = compile_module_probe("markdown_features_e2e", MARKDOWN_FEATURES_MAIN) else {

@@ -46,10 +46,6 @@ fn compile_golden(name: &str) -> PathBuf {
     out
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// The `DoS` containment proof. An unbounded non-tail recursion on the normalized
 /// 8 MiB stack trips the depth budget and unwinds into the classifier: the
 /// process exits with a CODE (not signal-killed) and stderr carries the
@@ -57,7 +53,7 @@ fn e2e_enabled() -> bool {
 /// stack and SIGABRT here (`exit_code == None`, no classified line).
 #[test]
 fn recursion_limit_trip_survives_as_classified_exit_not_abort() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("recursion_limit_trip");
@@ -101,7 +97,7 @@ fn recursion_limit_trip_survives_as_classified_exit_not_abort() {
 /// legitimate deep recursion.
 #[test]
 fn recursion_normal_depth_runs_clean_and_returns_value() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("recursion_normal_depth");

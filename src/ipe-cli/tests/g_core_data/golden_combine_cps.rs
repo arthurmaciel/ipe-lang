@@ -42,10 +42,6 @@ fn compile_golden(name: &str) -> PathBuf {
     out
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// The soundness proof — `Result.combine` / `Maybe.combine` over `500_000`
 /// elements run to a clean exit under a 512 KiB main-thread stack; a
 /// one-frame-per-element recursion would SIGABRT (`exit_code == None`) first.
@@ -53,7 +49,7 @@ fn e2e_enabled() -> bool {
 /// merely non-crashing.
 #[test]
 fn combine_large_input_runs_to_completion_constant_stack() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("combine_cps_stack");

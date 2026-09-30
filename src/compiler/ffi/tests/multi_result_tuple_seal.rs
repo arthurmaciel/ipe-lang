@@ -87,9 +87,7 @@ fn assembled_tuple_wrapper_builds_and_runs() {
     if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
-    let Ok(cargo) = ipe_env::var("CARGO") else {
-        return; // no cargo on PATH in this environment — skip like the goldens
-    };
+    let cargo = ipe_env::var("CARGO").expect("cargo sets CARGO for every test it runs");
 
     // Emit against a package with ONLY the admitted `extent` binding — the
     // emitted wrapper names `::geom::extent`, so `geom` must be a REAL external

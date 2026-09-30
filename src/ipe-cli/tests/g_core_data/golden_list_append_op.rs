@@ -38,16 +38,12 @@ fn compile_golden(name: &str) -> PathBuf {
     out
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// (a/b/c) `++` on `List Int`, `List (Int, Bool)`, and `String` all compile
 /// and produce correct output. The three assertions are combined in one
 /// source file / one binary to keep the E2E overhead minimal.
 #[test]
 fn list_append_op_runs_with_parity() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("m_list_append_op");

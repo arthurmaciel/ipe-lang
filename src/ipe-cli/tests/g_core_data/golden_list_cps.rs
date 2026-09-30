@@ -60,10 +60,6 @@ fn compile_golden(name: &str) -> PathBuf {
     out
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// The soundness proof — constant stack over the reachable List surface. A
 /// `range → map → foldr` pipeline over `500_000` elements runs to a clean exit
 /// under a 512 KiB main-thread stack; a one-frame-per-element recursion would
@@ -72,7 +68,7 @@ fn e2e_enabled() -> bool {
 /// non-crashing.
 #[test]
 fn list_large_pipeline_runs_to_completion_constant_stack() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("list_cps_stack");

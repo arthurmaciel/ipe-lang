@@ -50,10 +50,6 @@ fn try_build(entry: &Path) -> Result<PathBuf, ipe::CliError> {
     Ok(out)
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 // ─── positive gate ────────────────────────────────────────────────────────────
 
 /// `showAny : a -> String` and `eqOrShow : a -> a -> String` (Eq ∧ Stringify)
@@ -77,7 +73,7 @@ fn errortostring_polymorphic_compiles() {
 /// Under `IPE_E2E=1`: the emitted project builds with cargo and runs correctly.
 #[test]
 fn errortostring_polymorphic_e2e() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let root = repo_root();
@@ -111,7 +107,7 @@ fn eqshow_eq_plus_stringify_compiles() {
 /// Under `IPE_E2E=1`: the eqShow emitted project builds and runs.
 #[test]
 fn eqshow_e2e() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let root = repo_root();

@@ -31,13 +31,9 @@ fn compile_golden(name: &str) -> PathBuf {
     out
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 #[test]
 fn dict_fills_run_with_parity() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("dict_fills");

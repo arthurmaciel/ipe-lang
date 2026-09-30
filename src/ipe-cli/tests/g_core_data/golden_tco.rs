@@ -46,16 +46,12 @@ fn compile_golden(name: &str, scratch: &str) -> PathBuf {
     out
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// The soundness proof — constant stack. 2,000,000 self-tail-recursive iterations
 /// run to a clean exit under a 512 KiB main-thread stack; a non-TCO recursion
 /// would SIGABRT (`exit_code == None`) long before completing.
 #[test]
 fn tco_count_runs_to_completion_constant_stack() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("tco_count", "tco_count_stack");
@@ -75,7 +71,7 @@ fn tco_count_runs_to_completion_constant_stack() {
 /// clobber and print `1,1` (or `2,2`).
 #[test]
 fn tco_arg_swap_uses_temporaries_first() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("tco_swap", "tco_swap_temporaries");
@@ -89,7 +85,7 @@ fn tco_arg_swap_uses_temporaries_first() {
 /// `go 5 1 0` ⇒ 13 (see the fixture trace).
 #[test]
 fn tco_value_param_double_use_compiles_and_computes() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("tco_double_use", "tco_double_use_compute");
@@ -105,7 +101,7 @@ fn tco_value_param_double_use_compiles_and_computes() {
 /// keeps the golden oracle fast.
 #[test]
 fn tco_count_small_matches_go_oracle() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let root = repo_root();
@@ -122,7 +118,7 @@ fn tco_count_small_matches_go_oracle() {
 /// `tco_swap` matches the cached golden oracle.
 #[test]
 fn tco_swap_matches_go_oracle() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let root = repo_root();
@@ -135,7 +131,7 @@ fn tco_swap_matches_go_oracle() {
 /// `tco_double_use` matches the cached golden oracle.
 #[test]
 fn tco_double_use_matches_go_oracle() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let root = repo_root();

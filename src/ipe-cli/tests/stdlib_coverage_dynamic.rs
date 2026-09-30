@@ -18,11 +18,6 @@ use ipe::coverage::contract::{AspectCheck, Cell, StdlibSymbol, Surface};
 use ipe::coverage::matrix::run;
 use ipe::coverage::surface::StdlibSurface;
 
-/// Whether the heavy end-to-end path is enabled.
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// The bounded worker count for the parallel build+run sweep.
 ///
 /// Each probe shells out to `ipe run`, which cargo-builds the emitted crate; the
@@ -125,7 +120,7 @@ fn dotted(sym: &StdlibSymbol) -> String {
 #[test]
 fn composes_column_passes_over_every_higher_order_symbol() {
     use std::fmt::Write as _;
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 
@@ -153,7 +148,7 @@ fn composes_column_passes_over_every_higher_order_symbol() {
 #[test]
 fn lowers_column_passes_over_the_surface() {
     use std::fmt::Write as _;
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 
@@ -177,7 +172,7 @@ fn lowers_column_passes_over_the_surface() {
 #[test]
 fn runtime_fn_and_wasm_columns_report_no_holes() {
     use std::fmt::Write as _;
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 
@@ -218,7 +213,7 @@ fn runtime_fn_and_wasm_columns_report_no_holes() {
 #[test]
 fn build_run_column_over_a_representative_slice() {
     use std::fmt::Write as _;
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 
@@ -269,7 +264,7 @@ fn build_run_column_over_a_representative_slice() {
 #[test]
 fn dynamic_columns_pass_over_the_whole_surface() {
     use std::fmt::Write as _;
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 

@@ -28,10 +28,6 @@ fn golden_entry(name: &str) -> PathBuf {
         .join("Main.ipe")
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// Compile, build, and run the named golden fixture; return the captured
 /// output. Fails the test on any build or runtime error.
 fn compile_build_run(name: &str) -> support::RunOutcome {
@@ -72,7 +68,7 @@ fn assert_compile_error(fixture: &str, out_suffix: &str, expected: ipe_diagnosti
 /// type `Path`. `Path.toString` on it must print the cleaned form.
 #[test]
 fn valid_path_literal_builds_and_prints() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = compile_build_run("path_literal_valid");
@@ -121,7 +117,7 @@ fn nul_path_literal_is_rejected() {
 /// string literal. As a plain binding name it must compile and run normally.
 #[test]
 fn path_as_identifier_still_compiles() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = compile_build_run("path_as_ident");

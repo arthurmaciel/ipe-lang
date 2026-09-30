@@ -112,9 +112,7 @@ fn assembled_module_tree_builds_and_runs() {
     if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
-    let Ok(cargo) = ipe_env::var("CARGO") else {
-        return; // no cargo on PATH in this environment — skip like the goldens
-    };
+    let cargo = ipe_env::var("CARGO").expect("cargo sets CARGO for every test it runs");
 
     let pkg = counter_pkg();
     let bindings = emit_bindings(&pkg);

@@ -34,15 +34,11 @@ fn compile_golden(name: &str) -> PathBuf {
     out
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// A `Test.runMain` program with three passing tests prints the summary line
 /// and exits 0.
 #[test]
 fn test_runmain_prints_summary_line() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("test_summary_line_219");

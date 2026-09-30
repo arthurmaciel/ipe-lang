@@ -32,15 +32,11 @@ fn compile_golden(name: &str) -> PathBuf {
     out
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// Interpolating scalars compiles + runs (`Bool` renders lowercase, the
 /// `String.fromBool` form).
 #[test]
 fn tostring_scalars_run() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("m_tostring");

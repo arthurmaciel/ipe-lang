@@ -34,15 +34,11 @@ fn compile_golden(name: &str) -> PathBuf {
     out
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// The inspector-driven `Test.runMain` program compiles, runs, prints the
 /// pass/fail summary for three passing tests, and exits 0.
 #[test]
 fn error_inspectors_drive_expect_err() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("error_expect_err_288");

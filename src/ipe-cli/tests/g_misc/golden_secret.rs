@@ -24,10 +24,6 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// Compile `tests/golden/<name>/Main.ipe`, build the emitted Cargo project,
 /// run it, and return the captured stdout. Fails the test on any build or
 /// runtime error — a broken golden cannot pass silently.
@@ -53,7 +49,7 @@ fn compile_build_run(name: &str) -> crate::support::RunOutcome {
 /// `Secret.use` scoped-println line) — `redacted` never echoes it.
 #[test]
 fn seal_reveal_round_trips_and_redacted_never_leaks() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = compile_build_run("m_secret_seal_reveal");
@@ -81,7 +77,7 @@ fn seal_reveal_round_trips_and_redacted_never_leaks() {
 /// construction). Exercises match / content-mismatch / length-mismatch.
 #[test]
 fn equality_is_constant_time_and_structural() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = compile_build_run("m_secret_eq");
@@ -100,7 +96,7 @@ fn equality_is_constant_time_and_structural() {
 /// `Clone` on every field including the `Secret` one.
 #[test]
 fn record_containing_secret_stays_clone_debug_eq() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = compile_build_run("m_secret_record");
@@ -118,7 +114,7 @@ fn record_containing_secret_stays_clone_debug_eq() {
 /// marker must NEVER appear anywhere in stdout.
 #[test]
 fn logging_a_redacted_secret_never_leaks() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = compile_build_run("m_secret_log_redact");
@@ -145,7 +141,7 @@ fn logging_a_redacted_secret_never_leaks() {
 /// immediately before delegating to the runtime.
 #[test]
 fn auth_sign_verify_round_trip_with_secret_key() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = compile_build_run("m_secret_auth_roundtrip");
@@ -163,7 +159,7 @@ fn auth_sign_verify_round_trip_with_secret_key() {
 /// to the fixed placeholder — the plaintext markers must NEVER appear in stdout.
 #[test]
 fn map_seal_over_runtime_strings_builds_and_redacts() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = compile_build_run("m_secret_map_runtime");
@@ -189,7 +185,7 @@ fn map_seal_over_runtime_strings_builds_and_redacts() {
 /// proves the plaintext (the default marker) never echoes.
 #[test]
 fn direct_seal_over_env_string_builds_and_redacts() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = compile_build_run("m_secret_env_direct");
@@ -216,7 +212,7 @@ fn direct_seal_over_env_string_builds_and_redacts() {
 /// (the markers must NEVER echo).
 #[test]
 fn runtime_derived_seals_are_accepted_and_redact() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = compile_build_run("m_secret_runtime_derived");

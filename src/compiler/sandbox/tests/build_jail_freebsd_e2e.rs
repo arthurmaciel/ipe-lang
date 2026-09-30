@@ -25,23 +25,6 @@ use ipe_sandbox::build_jail::{CapabilityAxis, JailOutcome, build_in_jail};
 use ipe_sandbox::run_jail::{FilesystemScope, RunJailTools, SandboxProfile};
 use ipe_sandbox::{CanonicalPath, JailMounts};
 
-/// Skip unless `IPE_E2E=1` AND `jail` is present (jail creation needs root inside
-/// the VM; absent it, these tests do nothing — the CI job proves the primitive
-/// separately as a hard failure).
-fn e2e_enabled() -> bool {
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return false;
-    }
-    which("jail").is_some()
-}
-
-fn which(bin: &str) -> Option<PathBuf> {
-    let path = ipe_env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|d| d.join(bin))
-        .find(|c| c.is_file())
-}
-
 fn fixture_path() -> PathBuf {
     e2e_support::manifest_dir!().join("../../../tests/fixtures/admission/untrusted-build.sh")
 }
@@ -110,7 +93,7 @@ fn run_fixture(
 
 #[test]
 fn a_socket_under_a_network_withholding_jail_is_denied_naming_network() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let scoped = scratch_dir("net-denied");
@@ -132,7 +115,7 @@ fn a_socket_under_a_network_withholding_jail_is_denied_naming_network() {
 
 #[test]
 fn an_out_of_scratch_write_under_a_filesystem_withholding_jail_is_denied_naming_filesystem() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let scoped = scratch_dir("fs-denied");
@@ -157,7 +140,7 @@ fn an_out_of_scratch_write_under_a_filesystem_withholding_jail_is_denied_naming_
 
 #[test]
 fn a_benign_in_scratch_write_is_clean() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let scoped = scratch_dir("clean");

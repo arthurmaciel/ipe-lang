@@ -53,14 +53,10 @@ fn compile_golden(name: &str) -> PathBuf {
     out
 }
 
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// The six newly-wired core-stdlib kernels compile and produce correct output.
 #[test]
 fn core_stdlib_wiring_runs_with_parity() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = compile_golden("m_core_stdlib");

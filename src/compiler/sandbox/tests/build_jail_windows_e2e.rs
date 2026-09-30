@@ -26,12 +26,6 @@ use ipe_sandbox::build_jail::{CapabilityAxis, JailOutcome, build_in_jail};
 use ipe_sandbox::run_jail::{FilesystemScope, RunJailTools, SandboxProfile};
 use ipe_sandbox::{CanonicalPath, JailMounts};
 
-/// Skip unless `IPE_E2E=1`. Absent, these tests do nothing (the CI job asserts
-/// the primitives separately as a hard, refuse-to-certify failure).
-fn e2e_enabled() -> bool {
-    e2e_support::e2e_tier() == e2e_support::Tier::E2e
-}
-
 /// A per-test scratch under the process temp dir (NTFS on the hosted image, so
 /// the container-SID ACL — and thus the filesystem boundary — is meaningful).
 fn scratch_dir(tag: &str) -> PathBuf {
@@ -98,7 +92,7 @@ fn run(profile: &SandboxProfile, scratch: &Path, script: &str) -> JailOutcome {
 
 #[test]
 fn a_socket_under_a_network_withholding_jail_decodes_to_denied_network() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let scratch = scratch_dir("net-denied");
@@ -125,7 +119,7 @@ fn a_socket_under_a_network_withholding_jail_decodes_to_denied_network() {
 
 #[test]
 fn an_out_of_scratch_write_under_a_filesystem_withholding_jail_decodes_to_denied_filesystem() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let scratch = scratch_dir("fs-denied");
@@ -158,7 +152,7 @@ fn an_out_of_scratch_write_under_a_filesystem_withholding_jail_decodes_to_denied
 
 #[test]
 fn a_benign_in_scratch_write_is_clean() {
-    if !e2e_enabled() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let scratch = scratch_dir("clean");
