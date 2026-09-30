@@ -804,6 +804,7 @@ storedPathRefusals =
                 , resolvesTo (base ++ "/src/Main.ipe") (RepoPath.resolve root "ipe:./src//Main.ipe/")
                 , resolvesTo (base ++ "/a:b") (RepoPath.resolve root "ipe:a:b")
                 , resolvesTo (base ++ "/b") (RepoPath.resolve root "ipe:a/../b")
+                , resolvesTo (base ++ "/..\\x") (RepoPath.resolve root "ipe:..\\x")
                 ]
             )
 
