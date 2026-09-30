@@ -47,9 +47,11 @@ fn write_single(name: &str, source: &str) -> Option<PathBuf> {
     Some(entry)
 }
 
-/// The scratch output dir for `name`, cleared, with no parent shared by another test.
+/// The scratch output dir for `name`, cleared.
 fn out_dir(name: &str) -> PathBuf {
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("seal-out-{name}"));
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("seal-out")
+        .join(name);
     let _ = std::fs::remove_dir_all(&out);
     out
 }
