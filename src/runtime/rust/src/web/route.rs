@@ -16,7 +16,10 @@
 //! pattern and an `A` (or `%41`) in a request path name the same segment. A
 //! literal that does not decode can never equal any request segment; it is
 //! refused at registration (the route table fails to start, see
-//! [`check_route_table`]) instead of silently never matching.
+//! [`check_route_table`]) instead of silently never matching. A parameter
+//! name is admitted through the runtime's one parameter-name grammar
+//! ([`ParamNames`]): an empty, non-identifier or repeated name is refused the
+//! same way, so no route captures a value under an ambiguous name.
 //!
 //! The builder returns `Option<Page>` so that a `:param` segment that fails to
 //! decode into the expected payload type (e.g. `"abc"` for an `Int` param)
@@ -26,7 +29,9 @@
 use std::sync::Arc;
 
 pub use crate::encoding::DecodedPath;
-use crate::encoding::{DecodeRefusal, decode_path_segment, raw_path_segments};
+use crate::encoding::{
+    DecodeRefusal, ParamName, ParamNameRefusal, ParamNames, decode_path_segment, raw_path_segments,
+};
 
 /// One segment of a parsed route pattern.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,7 +40,7 @@ pub enum PatternSeg {
     /// segment.
     Literal(String),
     /// A `:name` segment: captures the decoded request segment as `name`.
-    Param(String),
+    Param(ParamName),
 }
 
 /// A route pattern parsed once, at registration.
@@ -44,19 +49,28 @@ pub struct RoutePattern(Vec<PatternSeg>);
 
 impl RoutePattern {
     /// Split `pattern` by the request-path split rule and classify each raw
-    /// segment: a leading `:` makes a parameter (its name taken verbatim);
-    /// anything else is a literal decoded by the strict path-segment decoder.
+    /// segment: a leading `:` makes a parameter whose name is admitted by
+    /// [`ParamNames::admit`]; anything else is a literal decoded by the strict
+    /// path-segment decoder.
     ///
     /// # Errors
     ///
-    /// The `DecodeRefusal` of the first literal segment that does not decode,
+    /// The refusal of the first malformed segment: a literal that does not
+    /// decode, a parameter name that is empty, not an identifier or a repeat,
     /// or `TooLong` for an oversized pattern.
-    pub fn parse(pattern: &str) -> Result<Self, DecodeRefusal> {
-        raw_path_segments(pattern)?
+    pub fn parse(pattern: &str) -> Result<Self, RouteSegmentRefusal> {
+        let mut names = ParamNames::default();
+        raw_path_segments(pattern)
+            .map_err(RouteSegmentRefusal::Decode)?
             .into_iter()
             .map(|raw| match raw.strip_prefix(':') {
-                Some(name) => Ok(PatternSeg::Param(name.to_owned())),
-                None => decode_path_segment(raw).map(PatternSeg::Literal),
+                Some(name) => names
+                    .admit(name)
+                    .map(PatternSeg::Param)
+                    .map_err(RouteSegmentRefusal::ParamName),
+                None => decode_path_segment(raw)
+                    .map(PatternSeg::Literal)
+                    .map_err(RouteSegmentRefusal::Decode),
             })
             .collect::<Result<Vec<_>, _>>()
             .map(Self)
@@ -77,14 +91,32 @@ impl RoutePattern {
     }
 }
 
+/// Why one segment of a route pattern was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RouteSegmentRefusal {
+    /// A literal segment (or the whole pattern) does not decode.
+    Decode(DecodeRefusal),
+    /// A `:name` segment's name is empty, not an identifier, or a repeat.
+    ParamName(ParamNameRefusal),
+}
+
+impl std::fmt::Display for RouteSegmentRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Decode(refusal) => write!(f, "{refusal}"),
+            Self::ParamName(refusal) => write!(f, "{refusal}"),
+        }
+    }
+}
+
 /// A route pattern refused at registration: the raw pattern text and why it
 /// did not parse.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoutePatternRefusal {
     /// The pattern text as registered.
     pub pattern: String,
-    /// Why its first malformed segment did not decode.
-    pub refusal: DecodeRefusal,
+    /// Why its first malformed segment was refused.
+    pub refusal: RouteSegmentRefusal,
 }
 
 impl std::fmt::Display for RoutePatternRefusal {
@@ -144,7 +176,8 @@ impl<Page> Route<Page> {
 /// Refuse a route table holding any malformed pattern.
 ///
 /// Every routed app runs this before it serves, so a pattern whose literal
-/// can never match is a loud startup failure, never a silently dead route.
+/// can never match, or whose parameter names are ambiguous, is a loud startup
+/// failure, never a silently dead or ambiguous route.
 ///
 /// # Errors
 ///
@@ -427,6 +460,62 @@ mod tests {
         assert!(match_params(&rs, &dp("/u/:id")).is_empty());
     }
 
+    #[test]
+    fn identifier_param_names_are_admitted() {
+        for ok in ["/:a_Z9", "/:_x", "/:A/:b", "/users/:id/posts/:post_id"] {
+            assert!(RoutePattern::parse(ok).is_ok(), "{ok} must be admitted");
+        }
+    }
+
+    /// Prove the refusals: an empty, non-identifier, or repeated name is
+    /// refused with its typed cause.
+    #[test]
+    fn malformed_param_names_are_refused() {
+        use crate::encoding::ParamNameRefusal as R;
+        assert!(matches!(
+            RoutePattern::parse("/:"),
+            Err(RouteSegmentRefusal::ParamName(R::Empty))
+        ));
+        for (bad, at) in [
+            ("/:1a", 0),
+            ("/:9", 0),
+            ("/:\u{e9}", 0),
+            ("/:a-b", 1),
+            ("/:a_Z9-", 5),
+            ("/:a%41", 1),
+        ] {
+            let refused = RoutePattern::parse(bad);
+            assert!(
+                matches!(
+                    &refused,
+                    Err(RouteSegmentRefusal::ParamName(R::NotIdentifier { at: off }))
+                        if off.get() == at
+                ),
+                "{bad} must break at byte {at}, got {refused:?}"
+            );
+        }
+        for dup in ["/:id/:id", "/x/:a/y/:a"] {
+            assert!(
+                matches!(
+                    RoutePattern::parse(dup),
+                    Err(RouteSegmentRefusal::ParamName(R::Duplicate { .. }))
+                ),
+                "{dup} must be refused as a repeat"
+            );
+        }
+        let rs: Vec<Route<Page>> = vec![
+            Route::new("/ok", |_| Some(Page::Home)),
+            Route::new("/u/:id/:id", |_| Some(Page::App("dead".into()))),
+        ];
+        let refusal = check_route_table(&rs).err();
+        assert!(refusal.is_some_and(|r| {
+            let msg = r.to_string();
+            r.pattern == "/u/:id/:id"
+                && msg.contains("route pattern `/u/:id/:id` is malformed")
+                && msg.contains("parameter `id` appears twice")
+        }));
+    }
+
     /// A literal that does not decode is refused at registration: the route
     /// matches nothing and the route table as a whole is refused, naming the
     /// pattern and the reason.
@@ -442,8 +531,10 @@ mod tests {
         let refusal = check_route_table(&rs).err();
         assert_eq!(refusal.as_ref().map(|r| r.pattern.as_str()), Some("/%zz"));
         assert!(matches!(
-            refusal.as_ref().map(|r| r.refusal),
-            Some(DecodeRefusal::MalformedEscape { .. })
+            refusal.as_ref().map(|r| &r.refusal),
+            Some(RouteSegmentRefusal::Decode(
+                DecodeRefusal::MalformedEscape { .. }
+            ))
         ));
         assert!(
             refusal

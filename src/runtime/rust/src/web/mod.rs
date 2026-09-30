@@ -2224,7 +2224,7 @@ where
 #[cfg(feature = "server")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StartupRefusal {
-    /// The route table holds a literal pattern that does not decode.
+    /// The route table holds a malformed pattern.
     RouteTable(route::RoutePatternRefusal),
     /// The session store config cannot be honoured.
     SessionStore(store::StoreConfigError),
