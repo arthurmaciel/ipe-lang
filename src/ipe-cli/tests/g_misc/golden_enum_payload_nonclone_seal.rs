@@ -300,6 +300,7 @@ fn ffi_handle_enum_reuse_fails_closed() {
 }
 
 #[test]
+#[allow(clippy::panic)] // a missing emitted enum is the test failure
 fn ffi_handle_enum_linear_builds() {
     let name = "ffi_handle_enum_linear";
     let project = crate::support::scratch_root().join("ipec_ffi_handle_enum_linear");
@@ -315,10 +316,7 @@ fn ffi_handle_enum_linear_builds() {
     // `src/compiler/backend/rust/src/naming.rs`): `Holder` in `Main` emits as
     // `MainHolder`.
     let Some(attrs) = attributes_above_enum(&emitted, "MainHolder") else {
-        assert!(
-            false_marker(),
-            "emitted app Rust must declare `enum MainHolder`; got:\n{emitted}"
-        )
+        panic!("emitted app Rust must declare `enum MainHolder`; got:\n{emitted}");
     };
     assert!(
         attrs
