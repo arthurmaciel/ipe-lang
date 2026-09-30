@@ -5,7 +5,10 @@
 //! the held level above it without following a link, and every create, rename,
 //! and unlink names a single entry of a held handle — a link planted at any
 //! level is refused, never traversed, and a level swapped after it was opened
-//! no longer matters because the held handle still names the real one.
+//! no longer matters because the held handle still names the real one. This
+//! holds from the first held level (the anchor) down: the levels above it are
+//! not ipe's and are opened following links ([`HeldDir::open_following`]), so a
+//! caller proves what the anchor is on its canonical path.
 //!
 //! A subdirectory is removed only through [`Released`], a proof that its name
 //! still named the held directory the instant its handles were let go, and only
@@ -45,6 +48,17 @@ pub const MAX_REMOVE_DEPTH: usize = 128;
 pub struct DirId {
     dev: u64,
     ino: u64,
+}
+
+/// Who owns a held directory, as [`HeldDir::ownership`] reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ownership {
+    /// It carries a genuine ownership marker.
+    Marked,
+    /// It holds nothing but the marker or an in-flight marker temp file.
+    Empty,
+    /// It holds something else and carries no marker: user territory.
+    User,
 }
 
 /// What an entry of a held directory is, read without following a link.
@@ -312,20 +326,42 @@ impl HeldDir {
         Ok(true)
     }
 
+    /// Who owns this directory, read without writing.
+    ///
+    /// A directory found non-empty has its marker read again: a concurrent
+    /// claim renames its marker in before it fills the directory, so only a
+    /// directory still unmarked on the second read is user territory.
+    ///
+    /// # Errors
+    /// [`CliError::Io`] on a filesystem failure.
+    pub fn ownership(&self) -> Result<Ownership, CliError> {
+        if self.has_marker()? {
+            return Ok(Ownership::Marked);
+        }
+        if self.is_empty()? {
+            return Ok(Ownership::Empty);
+        }
+        let marked_since = self.has_marker()?;
+        Ok(if marked_since {
+            Ownership::Marked
+        } else {
+            Ownership::User
+        })
+    }
+
     /// Mark this directory ipe-owned, or refuse it as user territory.
     ///
-    /// Already marked: nothing to do. Empty: the marker is written. Anything
-    /// else is refused with [`OutputRefusal::NotIpeOwned`] and left untouched.
+    /// Already marked: nothing to do. Empty: the marker is written. User
+    /// territory is refused with [`OutputRefusal::NotIpeOwned`] and left
+    /// untouched.
     ///
     /// # Errors
     /// [`OutputRefusal::NotIpeOwned`]; [`CliError::Io`] on a filesystem failure.
     pub fn adopt(&self) -> Result<(), CliError> {
-        if self.has_marker()? {
-            Ok(())
-        } else if self.is_empty()? {
-            self.write_marker()
-        } else {
-            Err(OutputRefusal::NotIpeOwned(self.path.clone()).into())
+        match self.ownership()? {
+            Ownership::Marked => Ok(()),
+            Ownership::Empty => self.write_marker(),
+            Ownership::User => Err(OutputRefusal::NotIpeOwned(self.path.clone()).into()),
         }
     }
 
