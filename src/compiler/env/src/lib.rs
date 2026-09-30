@@ -13,6 +13,8 @@
 //! value. There is no whole-environment iterator: an iteration would hand the
 //! home value out under its own name.
 
+pub mod artifact;
+
 use std::env::VarError;
 use std::ffi::{OsStr, OsString};
 
