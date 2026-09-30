@@ -179,7 +179,7 @@ fn run_jailed_inner(
     }
     unsafe { lseek(fd, 0, 0) };
 
-    let scoped = std::env::temp_dir().join(format!("ipe-e2e-{}", std::process::id()));
+    let scoped = ipe_test_temp::temp_root().join(format!("ipe-e2e-{}", std::process::id()));
     std::fs::create_dir_all(&scoped).expect("scoped tmp");
     let scoped = CanonicalPath::resolve(&scoped).expect("scoped tmp resolves");
     let system_bins = [Path::new("/usr/bin"), Path::new("/bin")]

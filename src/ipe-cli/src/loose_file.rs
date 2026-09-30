@@ -939,7 +939,8 @@ mod tests {
     /// A fresh, canonical scratch directory unique to `name` and this process.
     #[allow(clippy::expect_used)] // test fixture: an unwritable temp dir IS the failure
     fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ipe-loose-{name}-{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipe-loose-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create scratch dir");
         fs::canonicalize(&dir).expect("canonical scratch dir")

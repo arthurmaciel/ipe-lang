@@ -4018,7 +4018,7 @@ mod held_crate_tests {
     /// A fresh scratch base for `tag`, holding a claimed `crate/`.
     fn scratch(tag: &str) -> (PathBuf, OwnedDir) {
         let base =
-            std::env::temp_dir().join(format!("ipe-held-crate-{tag}-{}", std::process::id()));
+            ipe_test_temp::temp_root().join(format!("ipe-held-crate-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("scratch base");
         let crate_dir = OwnedDir::claim(&base.join("crate")).expect("claim crate");

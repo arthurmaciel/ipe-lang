@@ -354,17 +354,17 @@ pub fn file_is_dir<E: Send + 'static>(path: Path) -> IpeTask<E, bool> {
 // ─── Temp paths ────────────────────────────────────────────────────────────
 
 /// `Ipe.File.tempFile : String -> Task Error String`
-/// Create a uniquely-named empty file in the system temp directory, using
-/// `prefix` as the filename prefix. Returns the absolute path.
+/// Create a private, unguessably named empty file in the system temp directory,
+/// tagged with `prefix`. Returns the absolute path.
 /// The caller is responsible for removing the file when done.
 ///
-/// Implementation: retry loop with a monotonic-time + process-ID suffix until
-/// exclusive creation succeeds (`O_CREAT|O_EXCL` semantics via
-/// `OpenOptions::create_new`). No `tempfile` crate needed (pure `std`).
+/// The file is created through the shared scratch primitive: under a verified
+/// temp base, exclusively, never through a symlink, mode 0600, with a name
+/// carrying 128 bits of OS CSPRNG entropy.
 #[must_use]
 pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
-        match run_blocking(move || make_temp_path(&prefix, false)).await {
+        match run_blocking(move || temp_file_sync(&prefix).map_err(|e| e.to_string())).await {
             Ok(p) => ok_res(p),
             Err(e) => IpeResult::Err(str_err(&e)),
         }
@@ -372,78 +372,33 @@ pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTa
 }
 
 /// `Ipe.File.tempDir : String -> Task Error String`
-/// Create a uniquely-named directory in the system temp directory, using
-/// `prefix` as the directory name prefix. Returns the absolute path.
+/// Create a private, unguessably named directory in the system temp directory,
+/// tagged with `prefix`. Returns the absolute path.
 /// The caller is responsible for removing the directory when done.
+///
+/// The directory is created through the shared scratch primitive: under a
+/// verified temp base, exclusively, mode 0700, re-verified as the effective
+/// user's, with a name carrying 128 bits of OS CSPRNG entropy.
 #[must_use]
 pub fn file_temp_dir<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
-        match run_blocking(move || make_temp_path(&prefix, true)).await {
+        match run_blocking(move || temp_dir_sync(&prefix).map_err(|e| e.to_string())).await {
             Ok(p) => ok_res(p),
             Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
 
-/// Shared helper: create a uniquely-named file (`is_dir=false`) or directory
-/// (`is_dir=true`) in the system temp directory, returning its absolute path.
-///
-/// Uses a monotonic-time nanos + process-ID suffix and retries up to 32 times
-/// to get an exclusive slot (the same approach libc `tempfile()` uses).  No
-/// external crate needed.
-fn make_temp_path(prefix: &str, is_dir: bool) -> Result<String, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    // Sanitise the caller-controlled prefix: keep only filename-safe chars so it
-    // cannot contain a path separator ('/'/'\\' — would escape temp_dir) or be
-    // absolute. Without this, prefix="../../etc/" or "/tmp/evil" is a
-    // write-arbitrary-path primitive (Path::join honours absolute/.. components).
-    let prefix: String = prefix
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        .collect();
-    let prefix = prefix.as_str();
-    let base = std::env::temp_dir();
-    let pid = std::process::id();
-    // Retry loop: collision is extremely rare but theoretically possible.
-    for attempt in 0u32..32 {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(attempt, |d| d.subsec_nanos());
-        let name = format!("{prefix}{pid}{nanos:08x}{attempt:04x}");
-        let path = base.join(&name);
-        if is_dir {
-            // Owner-only (0700) on Unix — a temp dir created with the default
-            // umask can be world-readable/traversable, exposing whatever the
-            // caller writes into it .
-            #[cfg_attr(not(unix), allow(unused_mut))] // mutated only under cfg(unix)
-            let mut builder = std::fs::DirBuilder::new();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            match builder.create(&path) {
-                Ok(()) => return Ok(path.to_string_lossy().into_owned()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(format!("{e}")),
-            }
-        } else {
-            // Owner-only (0600) on Unix — same rationale;  CreateTemp is 0600.
-            let mut opts = std::fs::OpenOptions::new();
-            opts.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            match opts.open(&path) {
-                Ok(_) => return Ok(path.to_string_lossy().into_owned()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(format!("{e}")),
-            }
-        }
-    }
-    Err("could not create a unique temporary path after 32 attempts".to_string())
+/// A private temp file tagged with `prefix`, kept past this call.
+fn temp_file_sync(prefix: &str) -> std::io::Result<String> {
+    super::scratch_core::private_temp_file(prefix)
+        .map(|(path, _file)| path.to_string_lossy().into_owned())
+}
+
+/// A private temp directory tagged with `prefix`, kept past this call.
+fn temp_dir_sync(prefix: &str) -> std::io::Result<String> {
+    super::scratch_core::ScratchDir::new(prefix)
+        .map(|dir| dir.into_path().to_string_lossy().into_owned())
 }
 
 // ─── Copy / rename ─────────────────────────────────────────────────────────
@@ -654,7 +609,8 @@ mod read_ceiling_tests {
     // ceiling instead of allocating it unbounded.
     #[test]
     fn read_file_rejects_over_ceiling() {
-        let p = std::env::temp_dir().join(format!("ipe_rc_over_{}.txt", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rc_over_{}.txt", std::process::id()));
         std::fs::write(&p, vec![b'x'; 8192]).unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_FILE_READ_MAX", "1024") };
@@ -670,7 +626,8 @@ mod read_ceiling_tests {
 
     #[test]
     fn read_file_under_ceiling_ok() {
-        let p = std::env::temp_dir().join(format!("ipe_rc_ok_{}.txt", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rc_ok_{}.txt", std::process::id()));
         std::fs::write(&p, b"hello").unwrap();
         let res: IpeResult<String, String> = block(file_read_file(tp(&p)));
         let _ = std::fs::remove_file(&p);
@@ -695,7 +652,8 @@ mod read_file_limit_tests {
 
     #[test]
     fn under_limit_reads_full_content() {
-        let p = std::env::temp_dir().join(format!("ipe_rfl_under_{}.txt", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfl_under_{}.txt", std::process::id()));
         std::fs::write(&p, b"hello world").unwrap();
         let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 1024));
         let _ = std::fs::remove_file(&p);
@@ -710,7 +668,8 @@ mod read_file_limit_tests {
     /// `>= cap`).
     #[test]
     fn exactly_at_limit_is_ok() {
-        let p = std::env::temp_dir().join(format!("ipe_rfl_exact_{}.txt", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfl_exact_{}.txt", std::process::id()));
         let content = vec![b'a'; 16];
         std::fs::write(&p, &content).unwrap();
         let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 16));
@@ -728,7 +687,8 @@ mod read_file_limit_tests {
     /// would otherwise hit.
     #[test]
     fn over_limit_by_one_byte_errs() {
-        let p = std::env::temp_dir().join(format!("ipe_rfl_over_{}.txt", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfl_over_{}.txt", std::process::id()));
         std::fs::write(&p, vec![b'a'; 17]).unwrap();
         let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 16));
         let _ = std::fs::remove_file(&p);
@@ -741,7 +701,8 @@ mod read_file_limit_tests {
     /// Non-positive limit falls back to the documented 10 MiB default.
     #[test]
     fn non_positive_limit_uses_default_cap() {
-        let p = std::env::temp_dir().join(format!("ipe_rfl_default_{}.txt", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfl_default_{}.txt", std::process::id()));
         std::fs::write(&p, b"small").unwrap();
         let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 0));
         let _ = std::fs::remove_file(&p);
@@ -772,7 +733,8 @@ mod read_file_bytes_tests {
 
     #[test]
     fn under_cap_reads_full_content() {
-        let p = std::env::temp_dir().join(format!("ipe_rfb_under_{}.bin", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfb_under_{}.bin", std::process::id()));
         std::fs::write(&p, [1u8, 2, 3, 255, 0]).unwrap();
         let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
@@ -787,7 +749,8 @@ mod read_file_bytes_tests {
     /// not `>= cap`).
     #[test]
     fn exactly_at_cap_is_ok() {
-        let p = std::env::temp_dir().join(format!("ipe_rfb_exact_{}.bin", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfb_exact_{}.bin", std::process::id()));
         std::fs::write(&p, vec![7u8; DEFAULT_CAP]).unwrap();
         let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
@@ -805,7 +768,8 @@ mod read_file_bytes_tests {
     /// (silently dropping the last byte) instead of erroring.
     #[test]
     fn over_cap_by_one_byte_errs() {
-        let p = std::env::temp_dir().join(format!("ipe_rfb_over_{}.bin", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfb_over_{}.bin", std::process::id()));
         std::fs::write(&p, vec![7u8; DEFAULT_CAP + 1]).unwrap();
         let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
@@ -839,7 +803,7 @@ mod spawn_blocking_tests {
             .enable_all()
             .build()
             .unwrap();
-        let p = std::env::temp_dir().join(format!(
+        let p = crate::scratch_core::test_temp_root().join(format!(
             "ipe_spawn_blocking_probe_{}.txt",
             std::process::id()
         ));
@@ -885,7 +849,7 @@ mod spawn_blocking_tests {
             .enable_all()
             .build()
             .unwrap();
-        let p = std::env::temp_dir().join(format!(
+        let p = crate::scratch_core::test_temp_root().join(format!(
             "ipe_spawn_blocking_write_probe_{}.txt",
             std::process::id()
         ));
@@ -939,7 +903,7 @@ mod walk_tests {
     ///     empty/          (dir, no files)
     /// Returns the root path.
     fn make_tree() -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!(
+        let root = crate::scratch_core::test_temp_root().join(format!(
             "ipe_walk_test_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -1017,7 +981,7 @@ mod walk_tests {
 
     #[test]
     fn walk_on_nonexistent_root_errs() {
-        let root = std::env::temp_dir().join("ipe_walk_nonexistent_38291");
+        let root = crate::scratch_core::test_temp_root().join("ipe_walk_nonexistent_38291");
         let res: IpeResult<String, Vec<Path>> = block(file_walk(tp(&root)));
         assert!(
             matches!(res, IpeResult::Err(_)),
@@ -1031,7 +995,7 @@ mod walk_tests {
     #[test]
     fn walk_symlink_cycle_does_not_hang() {
         use std::os::unix::fs::symlink;
-        let root = std::env::temp_dir().join(format!(
+        let root = crate::scratch_core::test_temp_root().join(format!(
             "ipe_walk_cycle_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()

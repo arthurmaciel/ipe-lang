@@ -262,6 +262,8 @@ pub mod log;
 pub mod math;
 pub mod money;
 pub mod home_core;
+pub mod scratch_core;
+pub mod scratch_host;
 pub mod path_core;
 pub mod path;
 pub mod random;
@@ -918,9 +920,8 @@ const RUNTIME_MOD_RS_UUID_APPEND: &str = "pub mod uuid_kernel;\npub use uuid_ker
 /// `random.rs` (the LCG / seeded-generator surface) is declared only on demand —
 /// behind the `random` feature, which [`runtime_features`] selects under the same
 /// condition. A standalone leaf: no surface implies it. The `random` feature gates
-/// this MODULE declaration only; the `getrandom` crate is enabled by
-/// `random || crypto-core` (shared with the crypto floor for entropy), so a bare
-/// Program that reaches neither drops it.
+/// this MODULE declaration only; the `getrandom` crate is always present (the
+/// scratch primitive's entropy source, shared with the crypto floor).
 const RUNTIME_MOD_RS_RANDOM_APPEND: &str = "pub mod random;\npub use random::*;\n";
 
 // ── Ipe.Crypto — heavy cryptography (SHA-1/MD5, AEAD, PBKDF2) ────────────────
@@ -1605,7 +1606,7 @@ fn native_runtime_bindings(reach: PreludeReach) -> DResult<String> {
     // the program reaches no crypto floor (`reaches_crypto_core`), so the emitted
     // prelude does not name the `crypto_core` module once it is dropped from the
     // runtime feature set — the removal that lets a bare Program drop
-    // `sha2`/`hmac`/`subtle`/`getrandom`.
+    // `sha2`/`hmac`/`subtle`.
     if !reach.crypto_core {
         filtered = drop_prelude_section(
             &filtered,

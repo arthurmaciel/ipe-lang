@@ -43,6 +43,10 @@ const READY_TIMEOUT: Duration = Duration::from_secs(8);
 /// to avoid an orphan child process.
 static CHILD: Mutex<Option<Child>> = Mutex::new(None);
 
+/// The zero-config console store's private directory, held for the life of the
+/// process (the child writes into it) and removed by [`shutdown_console`].
+static CONSOLE_SCRATCH: Mutex<Option<crate::scratch_core::ScratchDir>> = Mutex::new(None);
+
 /// Resolve the pre-built console binary path: `IPE_CONSOLE_BIN`, else the
 /// version-keyed cache path the build step populates. `None` when neither
 /// exists (→ the caller falls back to the in-process console; first build
@@ -137,13 +141,17 @@ pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Opti
     }
 }
 
-/// Kill the tracked console child (parent shutdown). Idempotent; never panics.
+/// Kill the tracked console child (parent shutdown), then remove the
+/// zero-config store directory. Idempotent; never panics.
 pub fn shutdown_console() {
     if let Ok(mut g) = CHILD.lock() {
         if let Some(child) = g.as_mut() {
             let _ = child.start_kill();
         }
         *g = None;
+    }
+    if let Ok(mut dir) = CONSOLE_SCRATCH.lock() {
+        drop(dir.take());
     }
 }
 
@@ -344,31 +352,24 @@ fn pick_free_port() -> Option<u16> {
 /// the parent recorded. Decided BEFORE the router is built so both the proxy and
 /// the in-process fallback sit under the same observability middleware.
 /// The console child's data store path. The user's `IPE_CONSOLE_DB_PATH` when
-/// set (durable history at their chosen location), else an internal per-process
-/// temp file so the console works zero-config (a lean app gets a live console
-/// without configuring durability).
-fn console_store_path() -> String {
+/// set (durable history at their chosen location), else `console.db` inside a
+/// private per-process scratch directory so the console works zero-config (a
+/// lean app gets a live console without configuring durability).
+///
+/// `None` when no private scratch directory can be created; the caller then
+/// serves the in-process console rather than a store another local user could
+/// predict, pre-create, or redirect.
+fn console_store_path() -> Option<String> {
     match crate::system::read_env_var("IPE_CONSOLE_DB_PATH") {
-        Ok(p) if !p.is_empty() => p,
-        // Default to a per-process file in the temp dir, but add an UNGUESSABLE
-        // suffix: a bare `ipe-console-<pid>.db` is predictable, so a local
-        // attacker on the shared temp dir could pre-create that path (or a
-        // symlink) and hijack/redirect the console store (TOCTOU). The nonce is
-        // OS-seeded via RandomState (std-only — no new crate in this shared
-        // module). Computed once per process and passed to the child via env.
+        Ok(p) if !p.is_empty() => Some(p),
         _ => {
-            use std::hash::{BuildHasher, Hasher};
-            let nonce = std::collections::hash_map::RandomState::new()
-                .build_hasher()
-                .finish();
-            std::env::temp_dir()
-                .join(format!(
-                    "ipe-console-{}-{:016x}.db",
-                    std::process::id(),
-                    nonce
-                ))
-                .to_string_lossy()
-                .into_owned()
+            let leaf = crate::scratch_core::LeafName::new("console.db").ok()?;
+            let mut slot = CONSOLE_SCRATCH.lock().ok()?;
+            if slot.is_none() {
+                *slot = Some(crate::scratch_core::ScratchDir::new("ipe-console").ok()?);
+            }
+            slot.as_ref()
+                .map(|dir| dir.child(&leaf).to_string_lossy().into_owned())
         }
     }
 }
@@ -402,7 +403,9 @@ pub async fn ensure_console_proxy() -> bool {
     //     directly; the child only reads it. No push.
     //   - lean/memory parent → the child collects: the parent PUSHES its in-RAM
     //     telemetry to the child, which writes + reads the store.
-    let store = console_store_path();
+    let Some(store) = console_store_path() else {
+        return false;
+    };
     let parent_writes = parent_spill_active();
     let port = match pick_free_port() {
         Some(p) => p,

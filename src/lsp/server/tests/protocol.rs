@@ -79,7 +79,7 @@ fn lint_ipe_workspace_config_is_respected() {
 
     // ── Round 1: deny severity → lint must appear as ERROR ────────────────
     // Use a deterministic subdir under the OS temp dir (no external crate needed).
-    let ws_root = std::env::temp_dir().join("ipe-lsp-lint-test-workspace");
+    let ws_root = ipe_test_temp::temp_root().join("ipe-lsp-lint-test-workspace");
     std::fs::create_dir_all(&ws_root).expect("create ws_root");
     // A real `lint.ipe`: an Ipê module with a single `lint` binding threading
     // the `Lint.*` vocabulary (parsed by `read_lint_config`, not a key=value

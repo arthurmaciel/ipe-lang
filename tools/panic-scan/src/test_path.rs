@@ -678,16 +678,28 @@ mod tests {
         ));
     }
 
-    /// A fresh directory under the system temp dir holding `files`.
+    /// A fresh private directory holding `files`, under the build's own target
+    /// directory (the one holding this test binary), never the shared OS temp
+    /// root: created exclusively, owner-only on Unix.
     fn scratch_crate(name: &str, files: &[(&str, &[u8])]) -> std::io::Result<PathBuf> {
-        let root = std::env::temp_dir().join(format!(
-            "panic-scan-test-path-{}-{name}",
-            std::process::id()
-        ));
-        if root.exists() {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let exe = std::env::current_exe()?;
+        let target = exe
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .ok_or_else(|| std::io::Error::other("test binary has no target directory"))?;
+        let base = target.join("panic-scan-test-scratch");
+        std::fs::create_dir_all(&base)?;
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = base.join(format!("test-path-{}-{n}-{name}", std::process::id()));
+        if std::fs::symlink_metadata(&root).is_ok() {
             std::fs::remove_dir_all(&root)?;
         }
-        std::fs::create_dir_all(&root)?;
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(&root)?;
         for (rel, contents) in files {
             let path = root.join(rel);
             if let Some(parent) = path.parent() {

@@ -576,7 +576,7 @@ fn end_to_end_builds_and_prints_five() -> DResult<()> {
     let prog = record_trio(&mut interner)?;
     let emitted = RustBackend::new(&interner).emit(&prog)?;
 
-    let out = std::env::temp_dir().join("ipe_backend_records_e2e");
+    let out = ipe_test_temp::temp_root().join("ipe_backend_records_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let src = out.join("src");
     std::fs::create_dir_all(&src).map_err(|e| seal_e2e::io_bug(&src, &e))?;

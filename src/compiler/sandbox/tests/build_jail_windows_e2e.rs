@@ -35,8 +35,11 @@ fn e2e_enabled() -> bool {
 /// A per-test scratch under the process temp dir (NTFS on the hosted image, so
 /// the container-SID ACL — and thus the filesystem boundary — is meaningful).
 fn scratch_dir(tag: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("ipe-build-win-e2e-{}-{}", tag, std::process::id()));
+    let dir = ipe_test_temp::temp_root().join(format!(
+        "ipe-build-win-e2e-{}-{}",
+        tag,
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).expect("scratch");
     dir
 }
@@ -131,7 +134,7 @@ fn an_out_of_scratch_write_under_a_filesystem_withholding_jail_decodes_to_denied
     let scratch = scratch_dir("fs-denied");
     // A target OUTSIDE the ACLed scratch: the process temp dir root.
     let outside =
-        std::env::temp_dir().join(format!("ipe-build-fs-outside-{}.txt", std::process::id()));
+        ipe_test_temp::temp_root().join(format!("ipe-build-fs-outside-{}.txt", std::process::id()));
     let outside_str = outside.to_string_lossy().replace('\'', "''");
     // On a denied write emit the wrapper-owned filesystem-denial code 11.
     let probe = format!(

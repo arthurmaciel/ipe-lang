@@ -6606,7 +6606,7 @@ mod tests {
     // with `max_connections > 1` and WAL. Returns (pool, tempdir-guard); the
     // guard must outlive the pool so the file isn't deleted early.
     async fn fresh_file_db(max_conns: u32) -> (Db, std::path::PathBuf) {
-        let mut path = std::env::temp_dir();
+        let mut path = crate::scratch_core::test_temp_root();
         // Unique per test run to avoid cross-test contamination.
         let unique = format!(
             "ipe_txn_test_{}_{}.db",

@@ -1098,7 +1098,8 @@ mod tests {
     /// An empty source root unique to this test process.
     #[allow(clippy::expect_used)] // test fixture: an unwritable temp dir IS the failure
     fn device_walk_root(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("ipe_device_{name}_{}", std::process::id()));
+        let root =
+            ipe_test_temp::temp_root().join(format!("ipe_device_{name}_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("create source root");
         root
@@ -1614,7 +1615,7 @@ import String
         package_ipe: Option<&str>,
         ipe_toml: Option<&str>,
     ) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("ipe_discovery_{test_name}"));
+        let root = ipe_test_temp::temp_root().join(format!("ipe_discovery_{test_name}"));
         let _ = fs::remove_dir_all(&root);
         let src = root.join("src");
         fs::create_dir_all(&src).expect("create src/");
@@ -1755,7 +1756,8 @@ import String
     /// An empty source root unique to this test process.
     #[allow(clippy::expect_used)] // test fixture: an unwritable temp dir IS the failure
     fn walk_root(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("ipe_walk_{name}_{}", std::process::id()));
+        let root =
+            ipe_test_temp::temp_root().join(format!("ipe_walk_{name}_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("create source root");
         root
@@ -1885,8 +1887,8 @@ import String
     #[cfg(unix)]
     #[test]
     fn discover_modules_does_not_descend_a_symlinked_directory() {
-        let root =
-            std::env::temp_dir().join(format!("ipe_discover_symlink_skip_{}", std::process::id()));
+        let root = ipe_test_temp::temp_root()
+            .join(format!("ipe_discover_symlink_skip_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let src = root.join("src");
         fs::create_dir_all(&src).expect("create src/");

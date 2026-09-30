@@ -60,6 +60,10 @@ pub enum CliError {
         path: PathBuf,
         source: std::io::Error,
     },
+    /// A private scratch directory could not be created under the OS temp
+    /// root. The root itself is never named: only the scratch primitive holds
+    /// it, and it may carry bytes unsafe for a terminal.
+    ScratchUnavailable { source: std::io::Error },
     /// The compiler rejected the program. Carries the entry path and full
     /// source text alongside the diagnostic so [`fmt::Display`] can render a
     /// rustc/Elm-style report (caret snippet + help + `ipe explain` pointer)
@@ -546,6 +550,7 @@ impl CliError {
             Self::Usage(_) => "usage",
             Self::UnknownCommand { .. } => "unknown-command",
             Self::Io { .. } => "io",
+            Self::ScratchUnavailable { .. } => "scratch-unavailable",
             Self::Pipeline { .. } => "pipeline",
             Self::RuntimeNotFound => "runtime-not-found",
             Self::RuntimeDirInvalid { .. } => "runtime-dir-invalid",
@@ -623,6 +628,7 @@ impl CliError {
             Self::Usage(_)
             | Self::UnknownCommand { .. }
             | Self::Io { .. }
+            | Self::ScratchUnavailable { .. }
             | Self::Pipeline { .. }
             | Self::RuntimeNotFound
             | Self::RuntimeDirInvalid { .. }
@@ -727,6 +733,9 @@ impl std::fmt::Display for CliError {
             Self::Usage(hint) => f.write_str(hint),
             Self::UnknownCommand { attempted } => fmt_unknown_command(attempted, f),
             Self::Io { path, source } => fmt_io_error(path, source, f),
+            Self::ScratchUnavailable { source } => {
+                f.write_str(&text::cli_scratch_unavailable(&source.kind()))
+            }
             Self::Pipeline { file, src, diag } => {
                 f.write_str(&render(diag, &file.to_string_lossy(), src))
             }
@@ -1299,5 +1308,23 @@ mod tests {
             "capability-mismatch"
         );
         assert_eq!(CliError::HealthCritical.machine_kind(), "health-critical");
+    }
+
+    /// A scratch failure renders only the error kind: neither the temp root
+    /// nor the source error's payload (which may carry a path with terminal
+    /// control bytes) reaches the message.
+    #[test]
+    fn a_scratch_failure_names_no_path() {
+        let err = CliError::ScratchUnavailable {
+            source: std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "/planted/root\u{1b}[31m",
+            ),
+        };
+        let shown = err.to_string();
+        assert!(shown.contains("permission denied"), "{shown:?}");
+        assert!(!shown.contains("/planted/root"), "{shown:?}");
+        assert!(!shown.contains('\u{1b}'), "{shown:?}");
+        assert_eq!(err.machine_kind(), "scratch-unavailable");
     }
 }

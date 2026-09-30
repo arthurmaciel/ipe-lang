@@ -26,7 +26,7 @@ jsonwebtoken = { version = "9", optional = true }
 # Key/Mac + entropy pair + constant-time compare) is behind the `crypto-core`
 # feature: a program that reaches no crypto-floor kernel — and no crypto / jwt /
 # db / web / webview / email / server surface that reaches the floor — drops the
-# module and this whole subtree (`sha2` / `hmac` / `subtle` / `getrandom` +
+# module and this whole subtree (`sha2` / `hmac` / `subtle` +
 # `digest` / `block-buffer` / `crypto-common` / `generic-array` / `typenum` /
 # `cpufeatures`). The heavy RSA arms inside `crypto_core.rs` stay behind the
 # `crypto` feature (which implies `crypto-core`).
@@ -92,14 +92,14 @@ serde_urlencoded = { version = "0.7", optional = true }
 # program that reaches neither the crypto floor nor a `Secret` drops it.
 subtle = { version = "2", optional = true }
 # OS CSPRNG for the `crypto_core` entropy pair (`Crypto.randomBytes` /
-# `randomToken`) on native targets, and `random.rs`'s wasm seed arm. The wasm32
-# target block below adds the `js` feature (backing `getrandom` with
-# `crypto.getRandomValues`); cargo unions the two, so native uses the OS source
-# and the browser uses its substitute — neither pulls `aes-gcm` for entropy.
-# Optional, enabled by `random || crypto-core`: now that the crypto floor is
-# gated, a bare synchronous Program (no crypto/jwt/db/web/email/server/random)
-# reaches neither and finally drops `getrandom`.
-getrandom = { version = "0.2", optional = true }
+# `randomToken`), `random.rs`'s seed, and every scratch name the always-present
+# `scratch_core` primitive creates (the `File.tempFile`/`tempDir` kernels, the
+# console store, atomic-replace siblings). The wasm32 target block below adds
+# the `js` feature (backing `getrandom` with `crypto.getRandomValues`); cargo
+# unions the two, so native uses the OS source and the browser uses its
+# substitute — neither pulls `aes-gcm` for entropy. Non-optional: an
+# unguessable temp name is a security floor every program carries.
+getrandom = { version = "0.2" }
 # `Ipe.Secret`: zeroizes the backing buffer on `Drop` so a revealed/discarded
 # secret does not linger in freed heap memory. Optional, behind the `secret`
 # feature: a program that reaches no `Secret` drops `secret.rs` and `zeroize`.
@@ -189,16 +189,18 @@ tao = { version = "0.35", optional = true }
 
 # Unix-only: the Ipe.Web console reverse-proxy (live/console_proxy.rs) uses
 # libc::prctl(PR_SET_PDEATHSIG) on Linux so the spawned console child dies with
-# the parent even on SIGKILL. Tiny, ubiquitous; referenced only under
-# cfg(target_os = "linux").
+# the parent even on SIGKILL, and `scratch_core` opens scratch files with
+# `libc::O_NOFOLLOW`. Tiny, ubiquitous.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 # `Ipe.Process.runInPty` allocates a pseudo-terminal (openpt / grantpt / unlockpt
 # / ptsname) and sizes it (tcsetwinsize) through rustix's safe `pty` + `termios`
 # wrappers — no hand-written `unsafe` FFI. Unix-only: the pty surface has no
 # meaning on non-unix targets, where the kernel returns an honest unsupported
-# `Err`. `fs` backs `open`ing the replica side; `std` re-exports `OwnedFd`.
-rustix = { version = "1", features = ["pty", "termios", "fs", "std"] }
+# `Err`. `fs` backs `open`ing the replica side and `scratch_core`'s entry
+# ownership facts; `process` supplies the effective uid/gid those facts are
+# checked against; `std` re-exports `OwnedFd`.
+rustix = { version = "1", features = ["pty", "termios", "fs", "process", "std"] }
 
 # tokio is native-only. Every tokio code path in this crate is already
 # `not(target_arch = "wasm32")`-gated at the use site (the wasm target drives
@@ -347,20 +349,18 @@ regex = ["dep:regex"]
 # `server` / `web` surfaces mint session/CSRF ids via `uuid::new_v4`, so both
 # imply `uuid`; a bare Program that reaches no `Ipe.Uuid` kernel drops the crate.
 uuid = ["dep:uuid"]
-# `Ipe.Random` non-cryptographic PRNG: gates the `random.rs` module. `getrandom`
-# is enabled by `random || crypto-core` (either); `random.rs`'s wasm seed arm
-# draws from it, and on native it seeds the LCG. A bare synchronous Program
-# reaches neither `random` nor `crypto-core` and drops `getrandom`.
-random = ["dep:getrandom"]
+# `Ipe.Random` non-cryptographic PRNG: gates the `random.rs` module, whose
+# seed draws from the always-present `getrandom`.
+random = []
 # The cryptographic floor: `crypto_core.rs` (SHA-2 hash + HMAC + RSA-gated arm +
 # constant-time compare + entropy pair + typed Key/Mac). Pulls `sha2` / `hmac` /
-# `subtle` / `getrandom` and their subtrees, plus `encoding` (the floor's inline
+# `subtle` and their subtrees (`getrandom` is always present), plus `encoding` (the floor's inline
 # base64url encoder is crate-free, but the heavy `crypto`/`jwt` consumers that
 # imply `crypto-core` also need the codec crates, so folding `encoding` here keeps
 # the graph closed at `--no-default-features`). Every heavier crypto surface
 # (`crypto`/`jwt`) and every floor-reaching surface (`db`/`web`/`email`/`server`)
 # implies this.
-crypto-core = ["dep:sha2", "dep:hmac", "dep:subtle", "dep:getrandom", "encoding"]
+crypto-core = ["dep:sha2", "dep:hmac", "dep:subtle", "encoding"]
 # `Ipe.Secret` opaque secret-string module (`secret.rs` + `zeroize`). Implies
 # `crypto-core` for the shared `subtle` constant-time compare. A program that
 # reaches no `Secret` drops `secret.rs` + `zeroize`.
@@ -583,8 +583,8 @@ wasm-client = [
     "web-core",
     # The static wasm module set (`WASM_RUNTIME_MOD_RS`) declares `crypto_core`
     # and `secret` unconditionally, so `wasm-client` implies both features to
-    # satisfy the source `#[cfg]` gates and pull `sha2`/`hmac`/`subtle`/`getrandom`
-    # (the wasm32 hash family + entropy shim) and `zeroize`. `secret` implies
+    # satisfy the source `#[cfg]` gates and pull `sha2`/`hmac`/`subtle`
+    # (the wasm32 hash family) and `zeroize`. `secret` implies
     # `crypto-core`; naming both is explicit, not redundant selection.
     "crypto-core",
     "secret",

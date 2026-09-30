@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn a_refused_discovery_is_not_an_empty_tree() {
         let root =
-            std::env::temp_dir().join(format!("ipe-api-surface-deep-{}", std::process::id()));
+            ipe_test_temp::temp_root().join(format!("ipe-api-surface-deep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let deep = (0..70).fold(root.join("src"), |dir, _| dir.join("d"));
         std::fs::create_dir_all(&deep).expect("mk deep tree");

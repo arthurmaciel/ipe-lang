@@ -78,7 +78,7 @@ fn load_error(err: &CliError, lifted_by: LimitSource) -> LoadError {
     use crate::owner_trust::TrustSubject;
     let detail = err.to_string();
     match err {
-        CliError::Io { .. } => LoadError::Io(detail),
+        CliError::Io { .. } | CliError::ScratchUnavailable { .. } => LoadError::Io(detail),
         CliError::SourceRefused { .. } | CliError::DeviceNamedModule { .. } => {
             LoadError::Refused(detail)
         }
@@ -210,7 +210,8 @@ mod tests {
     /// A fresh scratch directory for one test.
     #[allow(clippy::expect_used)] // test fixture: a failed mkdir IS the failure
     fn scratch_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ipe-lsp-load-{tag}-{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipe-lsp-load-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create scratch dir");
         dir

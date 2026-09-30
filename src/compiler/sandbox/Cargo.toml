@@ -45,5 +45,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
 ] }
 
+[dev-dependencies]
+ipe-test-temp = { path = "../../../tools/test-temp" }
+
 [lints]
 workspace = true

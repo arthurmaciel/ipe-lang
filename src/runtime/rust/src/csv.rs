@@ -389,7 +389,8 @@ mod tests {
     /// both paths must return the same rows).
     #[test]
     fn parse_stream_from_file_reads_all_rows() {
-        let p = std::env::temp_dir().join(format!("ipe_csv_stream_{}.csv", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_csv_stream_{}.csv", std::process::id()));
         std::fs::write(&p, "a,b\n1,2\n3,4\n").unwrap();
         let res: IpeResult<String, Vec<Vec<String>>> =
             block(csv_parse_stream_from_file(make_path(&p.to_string_lossy())));
@@ -419,7 +420,8 @@ mod tests {
 
     #[test]
     fn parse_stream_from_file_respects_row_cap() {
-        let p = std::env::temp_dir().join(format!("ipe_csv_stream_cap_{}.csv", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_csv_stream_cap_{}.csv", std::process::id()));
         std::fs::write(&p, "a\n1\n2\n3\n4\n5\n").unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_CSV_MAX_ROWS", "2") };
@@ -439,8 +441,8 @@ mod tests {
     /// cap still cannot exhaust the heap — it `Err`s at the byte bound.
     #[test]
     fn parse_stream_from_file_respects_byte_cap() {
-        let p =
-            std::env::temp_dir().join(format!("ipe_csv_stream_bytes_{}.csv", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_csv_stream_bytes_{}.csv", std::process::id()));
         // 3 rows, each field 1000 bytes — well under any row cap, over a tiny byte cap.
         let big = "y".repeat(1000);
         std::fs::write(&p, format!("{big}\n{big}\n{big}\n")).unwrap();
@@ -482,7 +484,7 @@ mod stream_from_file_spawn_blocking_tests {
             .enable_all()
             .build()
             .unwrap();
-        let p = std::env::temp_dir().join(format!(
+        let p = crate::scratch_core::test_temp_root().join(format!(
             "ipe_csv_spawn_blocking_probe_{}.csv",
             std::process::id()
         ));

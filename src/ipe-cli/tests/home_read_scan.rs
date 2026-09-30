@@ -45,6 +45,29 @@ const ENV_ALLOW_FILES: &[&str] = &[
 /// accessor, so the compiler-side env rules do not apply beneath it.
 const RUNTIME_ROOT: &str = "src/runtime/rust/";
 
+/// Every `clippy::disallowed_methods` escape hatch in the workspace, as
+/// `(workspace-relative file, code-level allow count)`.
+///
+/// Pinned per site, not per file: a new allow in a listed file changes its
+/// count and fails the scan like an allow anywhere else. The sites are the
+/// [`ENV_ALLOW_FILES`] readers (`ipe_env`'s `var`/`var_os`/`vars_os`, the
+/// sandbox home reader, the jail passthrough); the dev-only temp-root test
+/// reader; and in the runtime crate, which has its own `clippy.toml`, the build
+/// script, the recursion-limit trip, the temp-root owner and its test reader,
+/// the environment accessor's readers, and an integration test with no
+/// crate-private accessor.
+const ESCAPE_HATCH_SITES: &[(&str, usize)] = &[
+    ("src/compiler/env/src/lib.rs", 3),
+    ("src/compiler/sandbox/src/home.rs", 1),
+    ("src/compiler/sandbox/src/host_env.rs", 1),
+    ("tools/test-temp/src/lib.rs", 1),
+    ("src/runtime/rust/build.rs", 1),
+    ("src/runtime/rust/src/core.rs", 1),
+    ("src/runtime/rust/src/scratch_core.rs", 2),
+    ("src/runtime/rust/src/system.rs", 5),
+    ("src/runtime/rust/tests/debug_behavior.rs", 1),
+];
+
 /// The sandbox crate's sources: the only callers of the crate-private raw
 /// passthrough `host_env::granted`.
 const SANDBOX_SRC: &str = "src/compiler/sandbox/src/";
@@ -61,12 +84,14 @@ const JAIL_ENV_FN: &str = "granted_env";
 const RAW_PASSTHROUGH_PATHS: &[&str] = &["host_env::granted", "host_env::{", "host_env::*"];
 
 /// The files that may name the shared home-name constants: their one source
-/// (`home_core`), the two home accessors, and the Windows scratch-root check.
+/// (`home_core`), the two home accessors, and the two hosts of the shared
+/// scratch core's Windows scratch-root check.
 const HOME_VAR_FILES: &[&str] = &[
     "src/runtime/rust/src/home_core.rs",
     "src/compiler/sandbox/src/home.rs",
     "src/runtime/rust/src/system.rs",
     "src/compiler/sandbox/src/scratch.rs",
+    "src/runtime/rust/src/scratch_host.rs",
 ];
 
 /// The shared home-name constants, defined once in `home_core`.
@@ -407,9 +432,37 @@ fn reads_proc_environ(src: &str) -> bool {
         .any(|line| line.contains("environ\""))
 }
 
+/// How many times `src`'s code (comments and literals aside) names the
+/// `disallowed_methods` escape hatch.
+fn disallowed_methods_allows(src: &str) -> usize {
+    code_only(src).matches("clippy::disallowed_methods").count()
+}
+
 /// Whether `src`'s code carries the `disallowed_methods` escape hatch.
 fn allows_disallowed_methods(src: &str) -> bool {
-    code_only(src).contains("clippy::disallowed_methods")
+    disallowed_methods_allows(src) > 0
+}
+
+/// Whether `src`'s code names the `disallowed_methods` escape hatch inside an
+/// inner (`#![...]`) attribute, which covers a whole module or crate: one such
+/// attribute keeps a file's pinned count while widening it past a single item.
+fn inner_disallowed_methods_allow(src: &str) -> bool {
+    let code = code_only(src);
+    code.match_indices("clippy::disallowed_methods")
+        .any(|(at, _)| {
+            code.get(..at)
+                .and_then(|before| before.rfind('#'))
+                .and_then(|hash| code.get(hash + 1..))
+                .is_some_and(|rest| rest.starts_with('!'))
+        })
+}
+
+/// The pinned allow count for workspace-relative `rel` (0 when unlisted).
+fn pinned_allows(rel: &str) -> usize {
+    ESCAPE_HATCH_SITES
+        .iter()
+        .find(|(file, _)| *file == rel)
+        .map_or(0, |(_, count)| *count)
 }
 
 /// The workspace root.
@@ -667,17 +720,30 @@ fn the_env_escape_hatch_is_pinned_to_the_audited_readers() {
     let files = workspace_sources(true);
     let offenders: Vec<_> = files
         .iter()
-        .filter(|(rel, text)| {
-            !rel.starts_with(RUNTIME_ROOT)
-                && !ENV_ALLOW_FILES.contains(&rel.as_str())
-                && allows_disallowed_methods(text)
-        })
-        .map(|(rel, _)| rel)
+        .map(|(rel, text)| (rel, disallowed_methods_allows(text), pinned_allows(rel)))
+        .filter(|(_, found, pinned)| found != pinned)
         .collect();
     assert!(
         offenders.is_empty(),
-        "`clippy::disallowed_methods` allowed outside the audited readers: {offenders:?}"
+        "`clippy::disallowed_methods` allows differ from the pinned sites \
+         (file, found, pinned): {offenders:?}"
     );
+    let inner: Vec<_> = files
+        .iter()
+        .filter(|(_, text)| inner_disallowed_methods_allow(text))
+        .map(|(rel, _)| rel)
+        .collect();
+    assert!(
+        inner.is_empty(),
+        "a module- or crate-wide `#![allow(clippy::disallowed_methods)]`; allow it on \
+         the one audited item instead: {inner:?}"
+    );
+    for (file, pinned) in ESCAPE_HATCH_SITES {
+        assert!(
+            files.iter().any(|(rel, _)| rel == file),
+            "pinned escape-hatch file `{file}` ({pinned}) is not scanned"
+        );
+    }
 }
 
 #[test]
@@ -764,6 +830,7 @@ fn every_pinned_file_exists() {
     for rel in ACCESSOR_FILES
         .iter()
         .chain(ENV_ALLOW_FILES)
+        .chain(ESCAPE_HATCH_SITES.iter().map(|(file, _)| file))
         .chain(JAIL_ENV_CALLERS)
         .chain(HOME_VAR_FILES)
     {
@@ -857,6 +924,29 @@ fn a_planted_environment_bypass_is_detected() {
     assert!(names_home_var("let h = home::WINDOWS_HOME_VAR;"));
     assert!(allows_disallowed_methods(
         "#[allow(clippy::disallowed_methods)]\nfn f() {}"
+    ));
+    assert_eq!(
+        disallowed_methods_allows(
+            "#[allow(clippy::disallowed_methods)]\nfn f() {}\n\
+             // clippy::disallowed_methods in a comment\n\
+             #[allow(clippy::disallowed_methods)]\nfn g() {}"
+        ),
+        2,
+        "a second allow in a pinned file changes its count"
+    );
+    assert_eq!(pinned_allows("src/ipe-cli/src/main.rs"), 0);
+    for src in [
+        "#![allow(clippy::disallowed_methods)]\nfn f() {}",
+        "#![cfg_attr(test, allow(clippy::disallowed_methods))]",
+        "#![expect(clippy::disallowed_methods)]",
+    ] {
+        assert!(
+            inner_disallowed_methods_allow(src),
+            "the scan missed an inner escape hatch: {src:?}"
+        );
+    }
+    assert!(!inner_disallowed_methods_allow(
+        "#![forbid(unsafe_code)]\n#[allow(clippy::disallowed_methods)]\nfn f() {}"
     ));
 }
 

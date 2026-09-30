@@ -944,6 +944,8 @@ messages! {
     cli_io_not_found(path) = "cli-io-not-found";
     /// A non-missing-file `Io` error.
     cli_io_other(path, kind) = "cli-io-other";
+    /// No private scratch directory could be created under the OS temp root.
+    cli_scratch_unavailable(kind) = "cli-scratch-unavailable";
     /// Publish from a dirty working tree.
     publish_dirty_tree(source_root) = "publish-dirty-tree";
     /// Publish of an unpushed HEAD.

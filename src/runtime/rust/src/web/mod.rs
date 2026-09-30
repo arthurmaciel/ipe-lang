@@ -4862,8 +4862,8 @@ mod reload_push_tests {
     #[tokio::test]
     async fn web_shutdown_signal_skips_the_reload_push_in_production() {
         use crate::system::{locked_remove_var, locked_set_var};
-        let prior_env = std::env::var("ENV").ok();
-        let prior_ipe_env = std::env::var("IPE_ENV").ok();
+        let prior_env = crate::system::read_env_var("ENV").ok();
+        let prior_ipe_env = crate::system::read_env_var("IPE_ENV").ok();
 
         let store_impl: MemoryStore<(), ()> = MemoryStore::new(Duration::from_secs(60));
         let (sse_tx, mut sse_rx) = sse::channel();
@@ -7784,7 +7784,7 @@ mod reset_state_tests {
         // by cargo nextest for unit tests). If it IS set, the test would wrongly
         // pass regardless of our logic — that is acceptable: the gate's behaviour
         // when set is correct by construction and the env is not unit-test-owned.
-        if std::env::var("IPE_WEB_RESET_STATE").is_ok() {
+        if crate::system::read_env_var("IPE_WEB_RESET_STATE").is_ok() {
             return; // env is present — skip this particular assertion
         }
         assert!(
