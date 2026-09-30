@@ -57,7 +57,9 @@ fn proc_state(pid: u32) -> Option<char> {
 
 #[test]
 fn a_hardened_child_dies_with_its_killed_parent() {
-    if let Some(pid_file) = std::env::var_os(PROBE_PID_FILE_ENV) {
+    #[allow(clippy::disallowed_methods)] // an integration test has no crate-private env accessor
+    let probe_pid_file = std::env::var_os(PROBE_PID_FILE_ENV);
+    if let Some(pid_file) = probe_pid_file {
         // Probe mode: spawn the hardened grandchild, publish its pid, then block
         // on it until the outer test SIGKILLs this probe.
         let mut child = spawn_hardened(sleep_30()).expect("probe hardened spawn");
@@ -68,6 +70,8 @@ fn a_hardened_child_dies_with_its_killed_parent() {
         return;
     }
 
+    #[allow(clippy::disallowed_methods)]
+    // an integration test has no crate-private temp-root accessor
     let pid_file =
         std::env::temp_dir().join(format!("ipe-pdeath-probe-{}.pid", std::process::id()));
     let _ = std::fs::remove_file(&pid_file);
@@ -154,6 +158,27 @@ mod tokio_entry {
             running
         });
         assert!(running, "the child must outlive the reaped blocking thread");
+    }
+
+    /// Called straight from a task on a current-thread runtime (the web
+    /// console-proxy shape), the spawn completes: the spawner registers the
+    /// child with the runtime while its only thread waits for the reply.
+    #[test]
+    fn a_current_thread_runtime_spawns_without_deadlock() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let status = rt.block_on(async {
+            let mut cmd = tokio::process::Command::new("/bin/true");
+            cmd.kill_on_drop(true);
+            let mut child = spawn_hardened_tokio(cmd).expect("hardened tokio spawn");
+            tokio::time::timeout(Duration::from_secs(10), child.wait()).await
+        });
+        let status = status
+            .expect("the child must be reaped in time")
+            .expect("wait");
+        assert!(status.success(), "hardened /bin/true must exit 0");
     }
 
     #[test]

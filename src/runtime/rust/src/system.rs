@@ -578,6 +578,11 @@ type SpawnerSlot = Result<std::sync::mpsc::SyncSender<SpawnJob>, std::io::ErrorK
 /// `PR_SET_PDEATHSIG` fires when the FORKING THREAD exits, so forking only here
 /// makes the signal mean "the process died", never "some worker thread was
 /// reaped".
+///
+/// Jobs run one at a time, so a spawn stuck in the kernel (an `exec` in
+/// uninterruptible sleep) delays every later request. The delay is bounded: a
+/// queued requester gives up at `SPAWN_REPLY_CEILING` with `ReplyTimedOut`, and
+/// the child forked for it afterwards is reclaimed, never handed out unhardened.
 fn spawner() -> Result<&'static std::sync::mpsc::SyncSender<SpawnJob>, SpawnRefusal> {
     static SPAWNER: std::sync::OnceLock<SpawnerSlot> = std::sync::OnceLock::new();
     SPAWNER
@@ -585,16 +590,22 @@ fn spawner() -> Result<&'static std::sync::mpsc::SyncSender<SpawnJob>, SpawnRefu
             let (jobs, queue) = std::sync::mpsc::sync_channel::<SpawnJob>(SPAWN_QUEUE_BOUND);
             std::thread::Builder::new()
                 .name("ipe-spawner".to_owned())
-                .spawn(move || {
-                    while let Ok(job) = queue.recv() {
-                        job();
-                    }
-                })
+                .spawn(move || run_spawn_jobs(&queue))
                 .map(|_| jobs)
                 .map_err(|e| e.kind())
         })
         .as_ref()
         .map_err(|kind| SpawnRefusal::SpawnerUnavailable(*kind))
+}
+
+/// Run every job `queue` yields, until it disconnects.
+///
+/// A panicking job is contained so the spawner outlives it: the unwind drops
+/// that job's reply sender, and its requester sees `SpawnerGone`.
+fn run_spawn_jobs(queue: &std::sync::mpsc::Receiver<SpawnJob>) {
+    while let Ok(job) = queue.recv() {
+        let _unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+    }
 }
 
 /// Run `spawn` on the spawner behind `jobs` and hand its child back.
@@ -610,7 +621,12 @@ fn request_spawn<T: Send + 'static>(
     use std::sync::mpsc::{RecvTimeoutError, SendError, TrySendError};
 
     let start = std::time::Instant::now();
-    let (reply, answer) = std::sync::mpsc::sync_channel::<std::io::Result<T>>(1);
+    // Capacity 0 makes the reply a rendezvous: a child is handed over only to a
+    // requester still inside `recv_timeout`. A buffered slot would accept a
+    // child sent just after the requester timed out, and dropping the receiver
+    // would then drop that child unkilled; with no slot the late `send` fails
+    // and `discard` reclaims the child on the spawner thread.
+    let (reply, answer) = std::sync::mpsc::sync_channel::<std::io::Result<T>>(0);
     let mut job: SpawnJob = Box::new(move || {
         if let Err(SendError(Ok(child))) = reply.send(spawn()) {
             discard(child);
@@ -641,6 +657,13 @@ fn request_spawn<T: Send + 'static>(
 /// On Linux the child is SIGTERMed when this process dies by ANY means, and
 /// never earlier: the forking thread is the process-lifetime spawner, not the
 /// caller's (possibly short-lived) thread.
+///
+/// # Thread attributes
+///
+/// The child inherits the per-thread kernel attributes of the spawner thread,
+/// not of the requesting thread: its seccomp filter, Landlock domain,
+/// `no_new_privs` bit, CPU affinity and namespaces. A restriction a caller
+/// applies only to its own thread does not reach the child.
 ///
 /// # Errors
 ///
@@ -1797,7 +1820,7 @@ mod home_dir_tests {
 
 #[cfg(test)]
 mod parent_death_floor_tests {
-    use super::{SpawnJob, SpawnRefusal, spawn_hardened, spawn_hardened_on};
+    use super::{SpawnJob, SpawnRefusal, run_spawn_jobs, spawn_hardened, spawn_hardened_on};
     use std::time::Duration;
 
     /// The floor installs a fork-time `pre_exec` (Linux `PR_SET_PDEATHSIG`); a
@@ -1836,7 +1859,8 @@ mod parent_death_floor_tests {
     fn a_gone_spawner_refuses_and_never_spawns() {
         let (jobs, queue) = std::sync::mpsc::sync_channel::<SpawnJob>(1);
         drop(queue);
-        let marker = std::env::temp_dir().join(format!("ipe-spawner-gone-{}", std::process::id()));
+        let marker = crate::scratch_core::test_temp_root()
+            .join(format!("ipe-spawner-gone-{}", std::process::id()));
         let _ = std::fs::remove_file(&marker);
         let mut cmd = std::process::Command::new("/bin/sh");
         cmd.arg("-c").arg(": > \"$1\"").arg("sh").arg(&marker);
@@ -1849,6 +1873,51 @@ mod parent_death_floor_tests {
             !marker.exists(),
             "a refused spawn must never run the command"
         );
+    }
+
+    /// A request that finds the spawner queue still full at its ceiling is
+    /// refused and forks nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_full_queue_past_the_ceiling_refuses_and_never_spawns() {
+        let (jobs, _queue) = std::sync::mpsc::sync_channel::<SpawnJob>(0);
+        let marker = crate::scratch_core::test_temp_root()
+            .join(format!("ipe-spawner-full-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.arg("-c").arg(": > \"$1\"").arg("sh").arg(&marker);
+        let refused = spawn_hardened_on(&jobs, Duration::ZERO, cmd);
+        assert!(
+            matches!(refused, Err(SpawnRefusal::ReplyTimedOut)),
+            "{refused:?}"
+        );
+        assert!(
+            !marker.exists(),
+            "a refused spawn must never run the command"
+        );
+    }
+
+    /// Unwinds out of a spawn job, the way a panicking job would.
+    fn unwinding_job() {
+        std::panic::resume_unwind(Box::new(()));
+    }
+
+    /// A job that panics leaves the spawner running the jobs after it.
+    #[test]
+    fn a_panicking_job_does_not_stop_the_spawner() {
+        let (jobs, queue) = std::sync::mpsc::sync_channel::<SpawnJob>(2);
+        let (ran, seen) = std::sync::mpsc::channel::<()>();
+        jobs.send(Box::new(unwinding_job))
+            .expect("queue the unwinding job");
+        jobs.send(Box::new(move || {
+            let _ = ran.send(());
+        }))
+        .expect("queue the next job");
+        drop(jobs);
+        let runner = std::thread::spawn(move || run_spawn_jobs(&queue));
+        let next = seen.recv_timeout(Duration::from_secs(10));
+        runner.join().expect("the spawner loop must not unwind");
+        assert_eq!(next, Ok(()), "the job after an unwind must still run");
     }
 
     /// A spawner that drops a request without answering it is reported gone.
