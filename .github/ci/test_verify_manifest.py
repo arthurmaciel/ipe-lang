@@ -2653,8 +2653,8 @@ class TestSsotOutputTools(unittest.TestCase):
                   refuse: tuple[str, ...] = ()) -> dict[str, str]:
         """Replace `trust_roots` with an `Api` whose GET returns `env` for the
         admin-read environment, `policies` for its branch policies, and `rs`
-        for the ruleset; any other path, and every path in `refuse`, is
-        refused."""
+        for the ruleset; any other path is refused, and every path in
+        `refuse` answers HTTP 403."""
         self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
         self.put("required-set.json", _RS_A)
         bodies = {
@@ -2663,16 +2663,23 @@ class TestSsotOutputTools(unittest.TestCase):
             "rulesets/22326541": rs,
         }
         bodies = {path: body for path, body in bodies.items() if path not in refuse}
-        self.put("bodies.json", json.dumps(bodies).encode())
+        self.put("bodies.json", json.dumps({"bodies": bodies, "refuse": list(refuse)}).encode())
         self.put(
             "trust_roots.py",
             b"import json, os\n"
             b"class Refused(Exception):\n    pass\n"
+            b"class HttpStatus(Refused):\n"
+            b"    def __init__(self, url, status):\n"
+            b"        super().__init__(f'GET {url} failed: HTTP {status}')\n"
+            b"        self.status = status\n"
             b"class Api:\n"
             b"    def __init__(self, base, repo, token):\n        pass\n"
             b"    def get(self, path):\n"
             b"        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bodies.json')) as f:\n"
-            b"            bodies = json.load(f)\n"
+            b"            stub = json.load(f)\n"
+            b"        bodies = stub['bodies']\n"
+            b"        if path in stub['refuse']:\n"
+            b"            raise HttpStatus(path, 403)\n"
             b"        if path not in bodies:\n"
             b"            raise Refused('unexpected path ' + path)\n"
             b"        return bodies[path]\n",
@@ -2812,6 +2819,119 @@ class TestSsotOutputTools(unittest.TestCase):
                 crs.parse_ruleset(_ruleset(bypass_actors=actor), admin_read=admin_read)
             with self.subTest(admin_read=admin_read, viewer="always"), self.assertRaises(crs.Refused):
                 crs.parse_ruleset(_ruleset(current_user_can_bypass="always"), admin_read=admin_read)
+
+    def _crs(self) -> object:
+        spec = importlib.util.spec_from_file_location("check_required_set", os.path.join(HERE, "check_required_set.py"))
+        crs = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = crs
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        spec.loader.exec_module(crs)
+        return crs
+
+    def test_an_env_read_names_the_permission_only_for_a_token_refusal(self) -> None:
+        import trust_roots as tr
+
+        crs = self._crs()
+        sentinel = "sentinel-token-9a41"
+        url = "https://api.github.com/repos/o/r/environments/ruleset-admin-read"
+        hinted = [tr.HttpStatus(url, code) for code in (401, 403, 404)]
+        unhinted = [
+            tr.HttpStatus(url, 500),
+            tr.HttpStatus(url, 502),
+            tr.HttpStatus(url, 422),
+            tr.OffOrigin("https://evil.example/x"),
+            tr.TooLarge(url, "16 bytes"),
+            tr.Transport(url, ConnectionResetError("reset")),
+            tr.Malformed(f"GET {url}: response is not JSON"),
+        ]
+
+        class FakeApi:
+            def __init__(self, base: str, repo: str, token: str, *, fail: Exception) -> None:
+                self.fail = fail
+
+            def get(self, path: str) -> object:
+                raise self.fail
+
+        env = {"REPO": "o/r", "GH_TOKEN": sentinel}
+        for fail in hinted + unhinted:
+            with self.subTest(fail=fail), mock.patch.dict(os.environ, env), mock.patch.object(
+                tr, "Api", lambda b, r, t, fail=fail: FakeApi(b, r, t, fail=fail)
+            ):
+                with self.assertRaises(crs.Refused) as cm:
+                    crs.fetch_live(admin=True)
+                msg = str(cm.exception)
+                self.assertIn("cannot read environment 'ruleset-admin-read'", msg)
+                self.assertNotIn(sentinel, msg)
+                if fail in hinted:
+                    self.assertIn(crs.ENV_READ_PERMISSION, msg)
+                    self.assertIn(f"HTTP {fail.status}", msg)
+                    self.assertIn("RECONCILIATION.md", msg)
+                else:
+                    self.assertNotIn(crs.ENV_READ_PERMISSION, msg)
+                    self.assertNotIn("RULESET_READ_TOKEN", msg)
+                    self.assertIn(str(fail), msg)
+
+    def test_the_admin_ruleset_read_needs_the_parsed_policy(self) -> None:
+        crs = self._crs()
+        reads: list[str] = []
+
+        class FakeApi:
+            def get(self, path: str) -> object:
+                reads.append(path)
+                return _ruleset()
+
+        for proof in (None, True, "CustomMainOnly", object(), crs.CustomMainOnly):
+            with self.subTest(proof=proof), self.assertRaises(crs.Refused):
+                crs.read_ruleset(FakeApi(), proof)
+        self.assertEqual(reads, [])
+        self.assertEqual(crs.read_ruleset(FakeApi(), crs.CustomMainOnly()), _ruleset())
+        self.assertEqual(reads, ["rulesets/22326541"])
+
+    def test_branch_policies_are_a_closed_shape(self) -> None:
+        crs = self._crs()
+        main = {"id": 1, "node_id": "GBP_1", "name": "main", "type": "branch"}
+
+        def parse(policies: object) -> object:
+            return crs.parse_env_policy(_ENV_MAIN_ONLY, lambda: policies)
+
+        for item in (main, {"name": "main", "type": "branch"}, {"id": 7, "name": "main", "type": "branch"}):
+            with self.subTest(admitted=item):
+                self.assertEqual(parse({"total_count": 1, "branch_policies": [item]}), crs.CustomMainOnly())
+        refused = (
+            {"total_count": 1, "branch_policies": [main], "extra": 1},
+            {"total_count": 1},
+            {"branch_policies": [main]},
+            {"total_count": 1.0, "branch_policies": [main]},
+            {"total_count": 1, "branch_policies": (main,)},
+            {"total_count": 1, "branch_policies": [main, main]},
+            {"total_count": 1, "branch_policies": ["main"]},
+            {"total_count": 1, "branch_policies": [{**main, "pattern": "*"}]},
+            {"total_count": 1, "branch_policies": [{"name": "main"}]},
+            {"total_count": 1, "branch_policies": [{"type": "branch"}]},
+            {"total_count": 1, "branch_policies": [{**main, "id": "1"}]},
+            {"total_count": 1, "branch_policies": [{**main, "id": True}]},
+            {"total_count": 1, "branch_policies": [{**main, "node_id": 1}]},
+            {"total_count": 1, "branch_policies": [{**main, "name": "Main"}]},
+            {"total_count": 1, "branch_policies": [{**main, "type": "tag"}]},
+        )
+        for policies in refused:
+            with self.subTest(refused=policies), self.assertRaises(crs.Refused) as cm:
+                parse(policies)
+            self.assertIn("RECONCILIATION.md", str(cm.exception))
+
+    def test_the_admin_read_token_permissions_have_one_home(self) -> None:
+        crs = self._crs()
+        with open(os.path.join(HERE, "RECONCILIATION.md"), encoding="utf-8") as f:
+            doc = " ".join(f.read().split())
+        listed = " and ".join(f"`{p}`" for p in crs.ADMIN_READ_TOKEN_PERMISSIONS)
+        self.assertIn(f"exactly the repository permissions {listed}", doc)
+        with open(os.path.join(HERE, "..", "workflows", "ruleset-admin-read.yml"), encoding="utf-8") as f:
+            header = f.read()
+        self.assertIn(".github/ci/RECONCILIATION.md", header)
+        for permission in crs.ADMIN_READ_TOKEN_PERMISSIONS:
+            name = permission.split(":")[0]
+            with self.subTest(permission=permission):
+                self.assertNotIn(f"{name}:", header)
 
     def test_repo_required_set_is_the_derived_set(self) -> None:
         import subprocess

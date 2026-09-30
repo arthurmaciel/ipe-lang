@@ -449,5 +449,101 @@ class ApiGuards(unittest.TestCase):
         self.assertIn("off the API origin", str(cm.exception))
 
 
+class _FakeResponse:
+    def __init__(self, body: bytes, link: str | None = None):
+        self._body = body
+        self.headers = {"Link": link} if link else {}
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def read(self, n: int) -> bytes:
+        return self._body[:n]
+
+
+class _FakeOpener:
+    """An opener that answers every request with `outcome`: a response, or an
+    exception it raises."""
+
+    def __init__(self, outcome: object):
+        self.outcome = outcome
+        self.requests: list = []
+
+    def open(self, req: object, timeout: float) -> _FakeResponse:
+        self.requests.append(req)
+        if isinstance(self.outcome, BaseException):
+            raise self.outcome
+        return self.outcome  # type: ignore[return-value]
+
+
+class ApiErrorKinds(unittest.TestCase):
+    """Every failed GET is one typed `ApiError`, still a `Refused`, whose
+    message never carries the token."""
+
+    TOKEN = "sentinel-tok-51b8"
+
+    def api_answering(self, outcome: object) -> tr.Api:
+        api = tr.Api("https://api.github.com", "o/r", self.TOKEN)
+        api._opener = _FakeOpener(outcome)  # type: ignore[assignment]
+        return api
+
+    def assertKind(self, api: tr.Api, kind: type, path: str = "pulls/1") -> tr.ApiError:
+        with self.assertRaises(kind) as cm:
+            api.get(path)
+        self.assertIsInstance(cm.exception, tr.Refused)
+        self.assertNotIn(self.TOKEN, str(cm.exception))
+        return cm.exception
+
+    def test_an_http_error_status_is_http_status(self) -> None:
+        import urllib.error
+
+        for code in (401, 403, 404, 500, 502):
+            with self.subTest(code=code):
+                err = urllib.error.HTTPError("https://api.github.com/repos/o/r/pulls/1", code, "x", {}, None)  # type: ignore[arg-type]
+                e = self.assertKind(self.api_answering(err), tr.HttpStatus)
+                self.assertEqual(e.status, code)  # type: ignore[attr-defined]
+
+    def test_an_unreachable_origin_is_transport(self) -> None:
+        import urllib.error
+
+        for cause in (urllib.error.URLError("refused"), TimeoutError("slow"), ConnectionResetError("reset")):
+            with self.subTest(cause=cause):
+                self.assertKind(self.api_answering(cause), tr.Transport)
+
+    def test_an_off_origin_redirect_is_off_origin(self) -> None:
+        self.assertKind(self.api_answering(tr.OffOrigin("https://evil.example/x")), tr.OffOrigin)
+        h = tr._PinnedRedirects("https://api.github.com")
+        with self.assertRaises(tr.OffOrigin):
+            h.redirect_request(None, None, 301, "Moved", {}, "https://evil.example/x")
+
+    def test_an_off_origin_next_link_is_off_origin_and_not_sent(self) -> None:
+        api = self.api_answering(_FakeResponse(b"[]", '<https://evil.example/repos/o/r/pulls?page=2>; rel="next"'))
+        with self.assertRaises(tr.OffOrigin) as cm:
+            api.get_all("pulls")
+        self.assertNotIn(self.TOKEN, str(cm.exception))
+        self.assertEqual(len(api._opener.requests), 1)  # type: ignore[attr-defined]
+
+    def test_an_oversized_body_is_too_large(self) -> None:
+        self.assertKind(self.api_answering(_FakeResponse(b" " * (tr.MAX_BODY_BYTES + 1))), tr.TooLarge)
+
+    def test_too_many_pages_is_too_large(self) -> None:
+        api = self.api_answering(_FakeResponse(b"[]", '<https://api.github.com/repos/o/r/pulls?page=2>; rel="next"'))
+        with self.assertRaises(tr.TooLarge):
+            api.get_all("pulls")
+        self.assertEqual(len(api._opener.requests), tr.MAX_PAGES)  # type: ignore[attr-defined]
+
+    def test_a_non_json_or_misshapen_body_is_malformed(self) -> None:
+        self.assertKind(self.api_answering(_FakeResponse(b"<html>")), tr.Malformed)
+        self.assertKind(self.api_answering(_FakeResponse(b"[]")), tr.Malformed)
+        with self.assertRaises(tr.Malformed):
+            self.api_answering(_FakeResponse(b"{}")).get_all("pulls")
+
+    def test_a_json_object_is_returned(self) -> None:
+        self.assertEqual(self.api_answering(_FakeResponse(b'{"a": 1}')).get("pulls/1"), {"a": 1})
+
+
 if __name__ == "__main__":
     unittest.main()

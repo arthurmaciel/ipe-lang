@@ -2,10 +2,11 @@
 #
 # GitHub shows a ruleset's `bypass_actors` only to a ruleset admin, so the
 # workflow token that `ruleset-drift` reads with cannot see them. This job reads
-# the ruleset with `RULESET_READ_TOKEN` (Administration: read-only on this
-# repository) and fails closed when the body lacks `bypass_actors`, carries a
-# non-empty list, or differs from the derived required set — and when the token
-# is absent or empty.
+# the ruleset with `RULESET_READ_TOKEN`, a fine-grained token whose permissions
+# `.github/ci/RECONCILIATION.md` lists (one-time setup, step 2), and fails
+# closed when the body lacks `bypass_actors`, carries a non-empty list, or
+# differs from the derived required set — and when the token is absent or
+# empty.
 #
 # The token is a secret of the `ruleset-admin-read` environment, whose
 # deployment-branch policy admits `main` alone: GitHub hands it to no run of

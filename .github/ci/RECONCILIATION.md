@@ -27,8 +27,9 @@ The live ruleset is `main-protection` (`RULESET_ID` in
 `check_required_set.py`). `--fetch` parses it into a closed `Ruleset`: every
 key the API returns is examined and pinned or named as display metadata, and
 any other key, rule type, or rule parameter is refused. It must be an active
-branch ruleset on `~DEFAULT_BRANCH` with no exclusions, carrying `deletion`, `non_fast_forward`, `pull_request`,
-`merge_queue` (grouping `ALLGREEN`), and `required_status_checks` once each,
+branch ruleset on `~DEFAULT_BRANCH` with no exclusions, carrying `deletion`,
+`non_fast_forward`, `pull_request`, `merge_queue` (grouping `ALLGREEN`), and
+`required_status_checks` once each,
 the last with pairs equal to the derived set in both directions.
 `current_user_can_bypass`, when returned, must be `never`.
 
@@ -53,8 +54,11 @@ and neither its pull-request run nor its merge-queue run can read it.
 `deployment-branch-policies`) and fails closed unless its policy is custom
 branch policies of exactly the branch `main`. Protected-branches mode is
 refused: without a classic protection rule it lets every branch deploy. An
-environment the token cannot read fails closed naming the missing permission. Defence in depth under the policy, `verify-manifest.py` check 8
-refuses the secret in a workflow triggering on anything but `schedule`, the
+environment read GitHub refuses with 401, 403 or 404 fails closed naming the
+permission the token needs; a server error, an off-origin redirect, an
+oversized body, or a network failure fails closed saying only what failed.
+Defence in depth under the policy, `verify-manifest.py` check 8 refuses the
+secret in a workflow triggering on anything but `schedule`, the
 secret or the environment in any job but `ruleset-admin-read.yml`'s
 `ruleset-admin-read`, and a job environment whose name is computed at run
 time. Check 8 runs on the change, after that change's own runs, so it alone
@@ -72,10 +76,12 @@ An owner does this once, before the first scheduled run:
    "Allow administrators to bypass configured protection rules" unchecked
    (an administrator bypass is refused).
 2. Add `RULESET_READ_TOKEN` to it as an environment secret: a fine-grained
-   token on this repository with the repository permissions Administration:
-   read (the ruleset, `bypass_actors` included) and Actions: read (the
-   environment and its deployment-branch policies). Without either,
-   `--fetch-admin` cannot prove its claim and fails closed.
+   token on this repository with exactly the repository permissions
+   `Administration: read` and `Actions: read` (`ADMIN_READ_TOKEN_PERMISSIONS`
+   in `check_required_set.py`). The first reads the ruleset, `bypass_actors`
+   included; the second reads the environment and its deployment-branch
+   policies. Without either, `--fetch-admin` cannot prove its claim and fails
+   closed.
 3. Delete the repository-level `RULESET_READ_TOKEN` secret, so no job outside
    the environment can reach it.
 
