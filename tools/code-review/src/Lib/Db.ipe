@@ -1,21 +1,18 @@
-module Lib.Db exposing (Decision(..), ReviewRow, findDecision, findDecisions, findLatestForUid, insertDecision, migrate, open, openAt, recordDrain)
+module Lib.Db exposing (Decision(..), ReviewRow, findDecision, findDecisions, findLatestForUid, insertDecision, insertDrainCursor, migrate, open, openAt, recordDrain)
 
 import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
 import Ipe.Config as Config
 import Ipe.Db as Db
-import Ipe.Db.Codec as DbCodec
-import Ipe.Db.Sql as Sql
 import Ipe.Db.Store as Store exposing (Store)
 import Ipe.Error as Error
 import Ipe.Json.Encode as Encode
 import Ipe.List as List
-import Ipe.Maybe as Maybe
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
-import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.Time as Time
 import Ipe.Time.Timestamp as Timestamp exposing (Timestamp)
+import Lib.Settings as Settings exposing (DbLocation)
 import Migrations exposing (all)
 
 
@@ -87,23 +84,31 @@ makeRow uid bodyHash decision reason reviewedAt =
 
 
 -- The typed store for the review table. `fromCodec` validates every column
--- identifier; `public` classifies it as world-readable/writable. No
--- `primaryKey` spec: the composite `PRIMARY KEY (uid, body_hash)` lives only
--- in the hand-written DDL migration, which Store cannot express.
+-- identifier; the composite key records `PRIMARY KEY (uid, body_hash)`, so the
+-- by-key operations fail closed and every access names both key columns. The
+-- table itself comes from the hand-written migration, since `createSql` does
+-- not render a composite key.
 reviewStore : Result Error (Store ReviewRow)
 reviewStore =
     Store.fromCodec "review" reviewCodec
-        |> Result.map Store.public
+        |> Result.map (\draft -> Store.public (Store.compositePrimaryKey2 .uid .bodyHash draft))
 
 
+-- The review database from `IPE_REVIEW_DB`, opened and migrated.
 open : Task.Task Error Db
 open =
-    Db.open "sqlite" (System.getenvOr "IPE_REVIEW_DB" "review.db")
+    do
+        loc <- Settings.reviewDb
+        db <- openAt loc
+        migrate db
+        Task.succeed db
 
 
-openAt : String -> Task.Task Error Db
-openAt path =
-    Db.open "sqlite" path
+-- The review database at a parsed location, opened through the one review URL
+-- builder (`Settings.reviewUrl`); no raw URL reaches the driver.
+openAt : DbLocation -> Task.Task Error Db
+openAt loc =
+    Db.open "sqlite" (Settings.reviewUrl loc)
 
 
 migrate : Db -> Task.Task Error (List String)
@@ -116,7 +121,7 @@ insertDecision db uid bodyHash decision =
     case decision of
         Refused r ->
             if String.length (String.trim r) == 0 then
-                Task.fail (Error.unexpected "a refused review needs a non-empty reason")
+                Task.fail (Error.invalidInput "a refused review needs a non-empty reason")
 
             else
                 insertIfAbsent db uid bodyHash decision
@@ -126,9 +131,20 @@ insertDecision db uid bodyHash decision =
 
 
 -- A duplicate (uid, body_hash) pair is a no-op: the first review wins and
--- re-reviewing the same pair never overwrites it.
+-- re-reviewing the same pair never overwrites it. The insert runs first and
+-- the primary key arbitrates, so two concurrent first reviews cannot both
+-- pass a check and one then fail: an insert that fails where the pair's row
+-- exists is the duplicate (0 rows), and one that fails with no row for the
+-- pair keeps its own error. Review rows are never deleted, so a row seen
+-- after a failed insert is the one that won.
 insertIfAbsent : Db -> String -> String -> Decision -> Task.Task Error Int
 insertIfAbsent db uid bodyHash decision =
+    insertNew db uid bodyHash decision
+        |> Task.onError (\insertError -> duplicateOr db uid bodyHash insertError)
+
+
+duplicateOr : Db -> String -> String -> Error -> Task.Task Error Int
+duplicateOr db uid bodyHash insertError =
     do
         existing <- findDecision db uid bodyHash
         case existing of
@@ -136,7 +152,7 @@ insertIfAbsent db uid bodyHash decision =
                 Task.succeed 0
 
             Nothing ->
-                insertNew db uid bodyHash decision
+                Task.fail insertError
 
 
 insertNew : Db -> String -> String -> Decision -> Task.Task Error Int
@@ -168,9 +184,8 @@ insertNew db uid bodyHash decision =
                 Store.insert db store row
 
 
--- Filter by both `uid` and `body_hash` using `Store.findWhere` with an
--- injection-safe `SqlFragment` (Sql.column + Sql.param). The codec decodes
--- each returned row; a mismatch is a typed error.
+-- The decision recorded for one (uid, body_hash) key, if any. The condition
+-- names both key columns through typed accessors; values bind as parameters.
 findDecision : Db -> String -> String -> Task.Task Error (Maybe Decision)
 findDecision db uid bodyHash =
     case reviewStore of
@@ -179,24 +194,16 @@ findDecision db uid bodyHash =
 
         Ok store ->
             do
-                rows <-
-                    Store.findWhere db
-                        store
-                        (Sql.and
-                            (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
-                            (Sql.eq (Sql.column "body_hash") (Sql.param (SqlString bodyHash)))
-                        )
-                case List.head rows of
+                found <-
+                    Store.query store
+                        |> Store.where (Store.and [ Store.eq .uid uid, Store.eq .bodyHash bodyHash ])
+                        |> Store.toMaybe db
+                case found of
                     Nothing ->
                         Task.succeed Nothing
 
                     Just row ->
-                        case decodeDecision row of
-                            Ok d ->
-                                Task.succeed (Just d)
-
-                            Err e ->
-                                Task.fail e
+                        Task.map Just (Task.fromResult (decodeDecision row))
 
 
 decodeDecision : ReviewRow -> Result Error Decision
@@ -211,10 +218,10 @@ decodeDecision row =
                     Ok (Refused r)
 
                 Nothing ->
-                    Err (Error.unexpected "review row is refused but has no reason")
+                    Err (Error.decode "review row is refused but has no reason")
 
         other ->
-            Err (Error.unexpected ("malformed review decision: " ++ other))
+            Err (Error.decode ("malformed review decision: " ++ other))
 
 
 -- The most recent review row for a uid across all hashes, if any. Filter uses
@@ -254,9 +261,7 @@ makeCursor uid bodyHash updatedAt =
 
 
 -- Codec for the drain cursor. `updated_at` flows through `Codec.timestamp`, so
--- its shape is `CTime` and the projected bind is `SqlTime` (Unix millis in the
--- time role), never `SqlInt`. Column keys match the `drain_cursor` DDL order,
--- which is also the `VALUES (?, ?, ?)` order the projected binds fill.
+-- its shape is `CTime` and it binds in the time role, never as a bare `SqlInt`.
 drainCodec : Codec DrainCursor
 drainCodec =
     Codec
@@ -282,31 +287,75 @@ drainCodec =
         }
 
 
--- Bookkeeping for the drain loop. Re-draining the same pair is a no-op
--- (INSERT OR REPLACE), so a re-queued unit that gets reviewed twice keeps
--- a single cursor row. The row's values are projected through `drainCodec` to
--- typed binds — the timestamp binds as `SqlTime`, not a raw `SqlInt` — then
--- filled positionally into the parameterised statement; no value is
--- interpolated into SQL text.
+-- The typed store for the drain cursor, keyed like the review table.
+drainStore : Result Error (Store DrainCursor)
+drainStore =
+    Store.fromCodec "drain_cursor" drainCodec
+        |> Result.map (\draft -> Store.public (Store.compositePrimaryKey2 .uid .bodyHash draft))
+
+
+-- Bookkeeping for the drain loop. Re-draining the same pair refreshes its
+-- `updated_at` instead of adding a row, so a re-queued unit reviewed twice
+-- keeps a single cursor row. `updateWhere` never writes the key columns. When
+-- the refresh matches no row the cursor is inserted through
+-- `insertDrainCursor`.
 recordDrain : Db -> String -> String -> Task.Task Error Int
 recordDrain db uid bodyHash =
+    withDrainCursor uid bodyHash
+        (\store cursor ->
+            do
+                updated <- refreshCursor db store cursor
+                if updated == 0 then
+                    insertCursor db store cursor
+
+                else
+                    Task.succeed updated
+        )
+
+
+-- The pair's cursor row inserted. An insert that loses a race to a concurrent
+-- drain of the same pair hits the primary key; the pair's row then exists, so
+-- the refresh is retried, and the insert's own error stands only when that
+-- retry still matches no row. Cursor rows are never deleted, so a row the
+-- retry matches is the one that won the race.
+insertDrainCursor : Db -> String -> String -> Task.Task Error Int
+insertDrainCursor db uid bodyHash =
+    withDrainCursor uid bodyHash (\store cursor -> insertCursor db store cursor)
+
+
+withDrainCursor : String -> String -> (Store DrainCursor -> DrainCursor -> Task.Task Error Int) -> Task.Task Error Int
+withDrainCursor uid bodyHash write =
+    case drainStore of
+        Err e ->
+            Task.fail e
+
+        Ok store ->
+            Time.unixMillis ()
+                |> Task.andThen (\now -> write store (makeCursor uid bodyHash now))
+
+
+insertCursor : Db -> Store DrainCursor -> DrainCursor -> Task.Task Error Int
+insertCursor db store cursor =
+    Store.insert db store cursor
+        |> Task.onError (\insertError -> retryRefresh db store cursor insertError)
+
+
+-- The cursor row for `cursor`'s (uid, body_hash) pair given `cursor`'s
+-- `updated_at`; the count of rows it matched.
+refreshCursor : Db -> Store DrainCursor -> DrainCursor -> Task.Task Error Int
+refreshCursor db store cursor =
+    Store.updateWhere db store (Store.and [ Store.eq .uid cursor.uid, Store.eq .bodyHash cursor.bodyHash ]) cursor
+
+
+retryRefresh : Db -> Store DrainCursor -> DrainCursor -> Error -> Task.Task Error Int
+retryRefresh db store cursor insertError =
     do
-        now <- Time.unixMillis ()
-        case DbCodec.codecToBinds drainCodec (makeCursor uid bodyHash now) of
-            Err e ->
-                Task.fail e
+        updated <- refreshCursor db store cursor
+        if updated == 0 then
+            Task.fail insertError
 
-            Ok binds ->
-                Db.exec db
-                    "INSERT OR REPLACE INTO drain_cursor VALUES (?, ?, ?)"
-                    (List.map bindValue binds)
-
-
-bindValue : ( String, SqlValue ) -> SqlValue
-bindValue pair =
-    case pair of
-        ( _, value ) ->
-            value
+        else
+            Task.succeed updated
 
 
 -- Every review row, newest first. `Store.all` fetches all rows; the query

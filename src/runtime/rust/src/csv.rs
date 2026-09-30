@@ -306,15 +306,12 @@ mod tests {
             rows: vec![vec!["=SUM(A1)".into()]],
         };
         // Default OFF: lossless (formula cell emitted verbatim, just CSV-quoted).
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_CSV_SANITIZE_FORMULAS") };
+        crate::system::locked_remove_var("IPE_CSV_SANITIZE_FORMULAS");
         assert!(encode_delim(&doc, b',').contains("=SUM(A1)"));
         // ON: dangerous-leading cell is prefixed with a single quote.
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_CSV_SANITIZE_FORMULAS", "1") };
+        crate::system::locked_set_var("IPE_CSV_SANITIZE_FORMULAS", "1");
         assert!(encode_delim(&doc, b',').contains("'=SUM(A1)"));
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_CSV_SANITIZE_FORMULAS") };
+        crate::system::locked_remove_var("IPE_CSV_SANITIZE_FORMULAS");
     }
 
     /// Bounded by construction (PRINCIPLES §3): a CSV whose decoded field bytes
@@ -327,11 +324,9 @@ mod tests {
         // but over a deliberately tiny byte cap.
         let big_field = "x".repeat(1000);
         let text = format!("h\n{big_field}\n");
-        // SAFETY: test-only env mutation; `set_var`/`remove_var` are `unsafe` in Rust 2024 (environ race).
-        unsafe { std::env::set_var("IPE_CSV_MAX_BYTES", "100") };
+        crate::system::locked_set_var("IPE_CSV_MAX_BYTES", "100");
         let res: IpeResult<String, CsvDoc> = csv_parse(text);
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_CSV_MAX_BYTES") };
+        crate::system::locked_remove_var("IPE_CSV_MAX_BYTES");
         assert!(
             matches!(res, IpeResult::Err(_)),
             "a record past the byte cap must Err, not accumulate unboundedly"
@@ -342,11 +337,9 @@ mod tests {
     /// the over-large input, never a legitimate document.
     #[test]
     fn parse_under_byte_cap_still_succeeds() {
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::set_var("IPE_CSV_MAX_BYTES", "100") };
+        crate::system::locked_set_var("IPE_CSV_MAX_BYTES", "100");
         let res: IpeResult<String, CsvDoc> = csv_parse("a,b\n1,2\n3,4".to_string());
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_CSV_MAX_BYTES") };
+        crate::system::locked_remove_var("IPE_CSV_MAX_BYTES");
         assert!(matches!(res, IpeResult::Ok(_)));
     }
 
@@ -421,12 +414,10 @@ mod tests {
     fn parse_stream_from_file_respects_row_cap() {
         let p = std::env::temp_dir().join(format!("ipe_csv_stream_cap_{}.csv", std::process::id()));
         std::fs::write(&p, "a\n1\n2\n3\n4\n5\n").unwrap();
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_CSV_MAX_ROWS", "2") };
+        crate::system::locked_set_var("IPE_CSV_MAX_ROWS", "2");
         let res: IpeResult<String, Vec<Vec<String>>> =
             block(csv_parse_stream_from_file(make_path(&p.to_string_lossy())));
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_CSV_MAX_ROWS") };
+        crate::system::locked_remove_var("IPE_CSV_MAX_ROWS");
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, IpeResult::Err(_)),
@@ -444,12 +435,10 @@ mod tests {
         // 3 rows, each field 1000 bytes — well under any row cap, over a tiny byte cap.
         let big = "y".repeat(1000);
         std::fs::write(&p, format!("{big}\n{big}\n{big}\n")).unwrap();
-        // SAFETY: test-only env mutation; `set_var`/`remove_var` are `unsafe` in Rust 2024 (environ race).
-        unsafe { std::env::set_var("IPE_CSV_MAX_BYTES", "100") };
+        crate::system::locked_set_var("IPE_CSV_MAX_BYTES", "100");
         let res: IpeResult<String, Vec<Vec<String>>> =
             block(csv_parse_stream_from_file(make_path(&p.to_string_lossy())));
-        // SAFETY: test-only env mutation.
-        unsafe { std::env::remove_var("IPE_CSV_MAX_BYTES") };
+        crate::system::locked_remove_var("IPE_CSV_MAX_BYTES");
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, IpeResult::Err(_)),

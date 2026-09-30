@@ -18,6 +18,10 @@ Modes:
               `gh api repos/OWNER/REPO/rulesets/ID` returns it).
   --fetch     also compare ruleset `RULESET_ID` read from the REST API
               ($REPO, $GH_TOKEN, optional $GITHUB_API_URL).
+  --fetch-admin
+              `--fetch` with a ruleset-admin token: the body must also carry
+              `bypass_actors`, the list must be empty, and the token's
+              environment must admit `main` alone.
 
 The live ruleset is parsed into a closed `Ruleset`: every key the API
 returns is either examined and pinned or named as display metadata, and any
@@ -28,11 +32,20 @@ default branch with no exclusions and no bypass actors, carry exactly one
 pairs equal the derived set in both directions, and exactly one all-green
 `merge_queue` rule. GitHub returns `bypass_actors` only to a ruleset admin, so
 `--fetch` (a workflow token) cannot see them: it refuses a non-empty list when
-one is returned and otherwise leaves the bypass proof to an owner's `--live`
-read, which refuses a ruleset without the list. That read happens when an
-owner reconciles the ruleset, not nightly: a bypass actor added between
-reconciliations is invisible to `ruleset-drift`. Every unreadable
-or malformed input fails closed (exit 1) with nothing printed to stdout.
+one is returned and otherwise leaves the bypass proof to an admin read.
+`--fetch-admin` and `--live` are admin reads: a body without the list is
+refused, so a token that cannot see bypass actors fails rather than passes.
+`--fetch-admin` runs nightly in `ruleset-admin-read.yml` with the
+`RULESET_READ_TOKEN` secret of the `ADMIN_READ_ENVIRONMENT` environment, and
+first parses that environment's deployment-branch policy into a closed
+`EnvPolicy` whose one variant is custom branch policies of exactly `main`;
+any other policy (protected-branches mode included), or none, is refused. An
+admin read GitHub refuses with 401, 403 or 404 says what that status means for
+the token (401: invalid or expired; 403: a missing permission or an exhausted
+rate limit; 404: a missing permission or a missing resource), naming the
+permission that read needs; any other failed read says only what failed. The
+token is never printed. Every unreadable or malformed input — a missing or empty token
+included — fails closed (exit 1) with nothing printed to stdout.
 """
 from __future__ import annotations
 
@@ -40,7 +53,8 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 CI_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, CI_DIR)
@@ -54,6 +68,26 @@ REQUIRED_SET = os.path.join(CI_DIR, "required-set.json")
 GITHUB_ACTIONS_APP_ID = 15368
 # The `main-protection` ruleset that enforces the required set on `main`.
 RULESET_ID = 22326541
+MAIN_BRANCH = "main"
+# The GitHub environment holding `RULESET_READ_TOKEN`: its deployment-branch
+# policy admits `main` alone, so GitHub hands the token to no run of any other
+# ref. `--fetch-admin` proves that policy before it reads the ruleset.
+ADMIN_READ_ENVIRONMENT = "ruleset-admin-read"
+# The fine-grained repository permissions `RULESET_READ_TOKEN` holds, and
+# only these: the first reads the ruleset (`bypass_actors` included), the
+# second the environment and its deployment-branch policies.
+RULESET_READ_PERMISSION = "Administration: read"
+ENV_READ_PERMISSION = "Actions: read"
+ADMIN_READ_TOKEN_PERMISSIONS = (RULESET_READ_PERMISSION, ENV_READ_PERMISSION)
+# What each HTTP status by which GitHub refuses a token its read says about
+# the token; `{permission}` is the permission that read needs. GitHub answers
+# 404, not 403, to a token missing the permission, so a 404 cannot tell that
+# from a missing resource; a 403 may also be an exhausted rate limit.
+_TOKEN_REFUSAL_HINTS: dict[int, str] = {
+    401: "RULESET_READ_TOKEN is invalid or expired; regenerate it",
+    403: "RULESET_READ_TOKEN lacks the fine-grained repository permission {permission}, or the API rate limit is exhausted",
+    404: "it does not exist, or RULESET_READ_TOKEN lacks the fine-grained repository permission {permission}",
+}
 
 Pair = tuple[str, int]
 
@@ -233,7 +267,10 @@ def parse_ruleset(rs: object, *, admin_read: bool) -> Ruleset:
     if "bypass_actors" in rs:
         _pin(rs["bypass_actors"], [], "the ruleset bypass_actors")
     elif admin_read:
-        raise Refused("the ruleset lacks bypass_actors, which an admin read always returns")
+        raise Refused(
+            "the ruleset lacks bypass_actors, which GitHub returns only to a token holding the "
+            f"fine-grained repository permission {RULESET_READ_PERMISSION} — see .github/ci/RECONCILIATION.md"
+        )
     cond = _closed(rs["conditions"], "the ruleset conditions", frozenset({"ref_name"}))
     ref = _closed(cond["ref_name"], "the ruleset ref_name condition", frozenset({"include", "exclude"}))
     include = ref["include"]
@@ -268,15 +305,146 @@ def diff(expected: list[Pair], actual: list[Pair], what: str, fix: str) -> list[
     return out
 
 
-def fetch_ruleset() -> object:
+# The key only `parse_env_policy` holds: a `CustomMainOnly` built without it
+# is refused, so the value is proof the environment read was parsed.
+_KEY = object()
+
+
+@dataclass(frozen=True)
+class CustomMainOnly:
+    """The one deployment-branch policy `ADMIN_READ_ENVIRONMENT` may carry:
+    custom branch policies that are exactly the branch `main`, with no
+    administrator bypass. Protected-branches mode is not admitted: with no
+    classic protection rule on the repository, GitHub lets every branch deploy
+    under it. An administrator bypass would let an admin deploy any branch.
+
+    Only `parse_env_policy` mints one; any other construction is refused."""
+
+    key: object = field(repr=False, compare=False, kw_only=True)
+
+    def __post_init__(self) -> None:
+        if self.key is not _KEY:
+            raise Refused("a CustomMainOnly is minted only by parse_env_policy")
+
+
+EnvPolicy = CustomMainOnly
+
+ENV_POLICY_FIX = "set it up per .github/ci/RECONCILIATION.md"
+RULESET_PATH = f"rulesets/{RULESET_ID}"
+_ENV_PATH = f"environments/{ADMIN_READ_ENVIRONMENT}"
+_ENV_WHERE = f"environment {ADMIN_READ_ENVIRONMENT!r}"
+_BRANCH_POLICIES_KEYS = frozenset({"total_count", "branch_policies"})
+_BRANCH_POLICY_KEYS = frozenset({"name", "type"})
+# Identifiers the API adds to each branch policy; typed, compared by nothing.
+_BRANCH_POLICY_IDS: dict[str, type] = {"id": int, "node_id": str}
+
+
+def _main_only_branch_policies(policies: object) -> None:
+    """Refuse custom deployment-branch policies other than exactly one rule
+    naming the branch `MAIN_BRANCH`."""
+    what = f"{_ENV_WHERE} deployment-branch policies"
+    body = _closed(policies, what, _BRANCH_POLICIES_KEYS)
+    _pin(body["total_count"], 1, f"{what} total_count")
+    items = body["branch_policies"]
+    if not isinstance(items, list) or len(items) != 1:
+        raise Refused(f"{what} are {items!r}, not one policy")
+    item = _closed(items[0], f"{what} entry", _BRANCH_POLICY_KEYS, frozenset(_BRANCH_POLICY_IDS))
+    _pin(item["name"], MAIN_BRANCH, f"{what} entry name")
+    _pin(item["type"], "branch", f"{what} entry type")
+    for key, kind in _BRANCH_POLICY_IDS.items():
+        if key in item:
+            _typed(item[key], kind, f"{what} entry {key}")
+
+
+def parse_env_policy(env: object, fetch_policies: Callable[[], object]) -> EnvPolicy:
+    """The `ADMIN_READ_ENVIRONMENT` read (`env`) as its closed policy, or
+    `Refused`. `fetch_policies` reads the custom branch policies; it is
+    called only once `env` is in custom mode."""
+    where = _ENV_WHERE
+    if not isinstance(env, dict) or env.get("name") != ADMIN_READ_ENVIRONMENT:
+        raise Refused(f"{where}: the API returned no environment of that name — {ENV_POLICY_FIX}")
+    try:
+        _pin(env.get("can_admins_bypass"), False, f"{where} can_admins_bypass")
+    except Refused as e:
+        raise Refused(f"{e}; administrators must not bypass its branch policy — {ENV_POLICY_FIX}") from e
+    policy = env.get("deployment_branch_policy")
+    if policy is None:
+        raise Refused(f"{where}: no deployment-branch policy, so every branch may deploy — {ENV_POLICY_FIX}")
+    try:
+        mode = _closed(
+            policy, f"{where} deployment-branch policy", frozenset({"protected_branches", "custom_branch_policies"})
+        )
+        _pin(mode["protected_branches"], False, f"{where} protected_branches")
+        _pin(mode["custom_branch_policies"], True, f"{where} custom_branch_policies")
+    except Refused as e:
+        raise Refused(
+            f"{e}; only custom branch policies of exactly {MAIN_BRANCH!r} are admitted — {ENV_POLICY_FIX}"
+        ) from e
+    try:
+        _main_only_branch_policies(fetch_policies())
+    except Refused as e:
+        raise Refused(f"{e}; only the one branch {MAIN_BRANCH!r} is admitted — {ENV_POLICY_FIX}") from e
+    return CustomMainOnly(key=_KEY)
+
+
+def admin_read_refusal(e: Exception, where: str, permission: str) -> Refused:
+    """The refusal for a failed admin read of `where`, which needs
+    `permission`: an HTTP status by which GitHub refuses a token says what it
+    means for the token; any other failure (a server error, a transport or
+    size refusal) says only what failed, since no token change would fix it."""
+    import trust_roots  # noqa: PLC0415
+
+    if isinstance(e, trust_roots.HttpStatus) and e.status in _TOKEN_REFUSAL_HINTS:
+        hint = _TOKEN_REFUSAL_HINTS[e.status].format(permission=permission)
+        return Refused(f"cannot read {where} (HTTP {e.status}): {hint} — see .github/ci/RECONCILIATION.md")
+    return Refused(f"cannot read {where}: {e}")
+
+
+def env_read_refusal(e: Exception) -> Refused:
+    """The refusal for a failed read of `ADMIN_READ_ENVIRONMENT`."""
+    return admin_read_refusal(e, _ENV_WHERE, ENV_READ_PERMISSION)
+
+
+def read_env_policy(api: object) -> EnvPolicy:
+    """`ADMIN_READ_ENVIRONMENT` read through `api` and parsed into its policy."""
+    import trust_roots  # noqa: PLC0415
+
+    def read(path: str) -> object:
+        try:
+            return api.get(path)  # type: ignore[attr-defined]
+        except trust_roots.Refused as e:
+            raise env_read_refusal(e) from e
+
+    return parse_env_policy(read(_ENV_PATH), lambda: read(f"{_ENV_PATH}/deployment-branch-policies"))
+
+
+def read_ruleset(api: object, proof: EnvPolicy) -> object:
+    """The admin read of the ruleset. `proof` is the parsed policy confining
+    the token to `main`: the ruleset is not read without it. (The token's one
+    other use is the environment reads that mint `proof`.)"""
+    import trust_roots  # noqa: PLC0415
+
+    if not isinstance(proof, CustomMainOnly):
+        raise Refused(f"the admin read of ruleset {RULESET_ID} needs the parsed policy of {_ENV_WHERE}")
+    try:
+        return api.get(RULESET_PATH)  # type: ignore[attr-defined]
+    except trust_roots.Refused as e:
+        raise admin_read_refusal(e, f"ruleset {RULESET_ID}", RULESET_READ_PERMISSION) from e
+
+
+def fetch_live(*, admin: bool) -> object:
+    """The live ruleset. An admin read first parses `ADMIN_READ_ENVIRONMENT`
+    into its `EnvPolicy`, refusing any other policy."""
     import trust_roots  # noqa: PLC0415  # the pinned-origin authenticated GET
 
     repo, token = os.environ.get("REPO", ""), os.environ.get("GH_TOKEN", "")
     if not repo or not token:
-        raise Refused("--fetch needs $REPO and $GH_TOKEN")
+        raise Refused("reading the live ruleset needs $REPO and a non-empty $GH_TOKEN")
     try:
         api = trust_roots.Api(os.environ.get("GITHUB_API_URL") or "https://api.github.com", repo, token)
-        return api.get(f"rulesets/{RULESET_ID}")
+        if admin:
+            return read_ruleset(api, read_env_policy(api))
+        return api.get(RULESET_PATH)
     except trust_roots.Refused as e:
         raise Refused(str(e)) from e
 
@@ -303,6 +471,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--live", metavar="FILE")
     mode.add_argument("--fetch", action="store_true")
+    mode.add_argument("--fetch-admin", action="store_true")
     args = ap.parse_args(argv)
     try:
         required = derive(_load_manifest())
@@ -318,10 +487,12 @@ def main(argv: list[str] | None = None) -> int:
             required, on_disk, ".github/ci/required-set.json",
             "regenerate it: python3 .github/ci/check_required_set.py --write",
         )
-        if args.live or args.fetch:
-            rs = _load_json(args.live, args.live) if args.live else fetch_ruleset()
+        live = bool(args.live or args.fetch or args.fetch_admin)
+        if live:
+            rs = _load_json(args.live, args.live) if args.live else fetch_live(admin=bool(args.fetch_admin))
+            admin_read = bool(args.live or args.fetch_admin)
             problems += diff(
-                required, list(parse_ruleset(rs, admin_read=bool(args.live)).required), f"ruleset {RULESET_ID}",
+                required, list(parse_ruleset(rs, admin_read=admin_read).required), f"ruleset {RULESET_ID}",
                 "reconcile it per .github/ci/RECONCILIATION.md",
             )
     except Refused as e:
@@ -330,7 +501,6 @@ def main(argv: list[str] | None = None) -> int:
     if problems:
         print("\n".join(problems), file=sys.stderr)
         return 1
-    live = args.live or args.fetch
     where = f"required-set.json and ruleset {RULESET_ID} match" if live else "required-set.json matches"
     print(f"{where} the manifest ({len(required)} required contexts).")
     return 0

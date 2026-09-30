@@ -1819,8 +1819,9 @@ Ipe.Encoding — text encoding helpers.
 |--------|----------|
 | `base64Encode` | Base64-encode a string (RFC 4648 standard alphabet, with padding). |
 | `base64Decode` | Base64-decode a string. |
-| `urlEncode` | Percent-encode a string for use in a URL component (RFC 3986). |
-| `urlDecode` | Percent-decode a URL-encoded string. |
+| `urlEncode` | Form-encode a string for a query-string key or value. |
+| `urlDecode` | Form-decode a query-string key or value, the inverse of `urlEncode`. |
+| `percentDecode` | Percent-decode a non-form URL component such as a path segment (RFC 3986). |
 | `hexEncode` | Hex-encode a string (lowercase output, two hex digits per byte). |
 | `hexDecode` | Hex-decode a string. |
 
@@ -2484,6 +2485,8 @@ Ipe.Path — typed, validated filesystem paths.
 | `dir` | `dir path` — everything but the final component. |
 | `ext` | `ext path` — the file extension (with the dot), or "". |
 | `isAbsolute` | `isAbsolute path` — does the path start from the root? |
+| `under` | `under root child` — join the relative `child` beneath `root`. Returns |
+| `absolute` | `absolute path` — resolve `path` against the working directory. A path |
 
 ## Process
 

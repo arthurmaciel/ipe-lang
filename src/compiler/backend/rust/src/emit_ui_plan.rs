@@ -727,6 +727,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::EncodingBase64Decode
         | KernelFn::EncodingUrlEncode
         | KernelFn::EncodingUrlDecode
+        | KernelFn::EncodingPercentDecode
         | KernelFn::EncodingHexEncode
         | KernelFn::EncodingHexDecode
         | KernelFn::JsonEncString
@@ -1451,6 +1452,8 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::PathBase
         | KernelFn::PathDir
         | KernelFn::PathExt
+        | KernelFn::PathUnder
+        | KernelFn::PathAbsolute
         | KernelFn::PathIsAbsolute
         | KernelFn::TraceSpan
         | KernelFn::TraceEvent

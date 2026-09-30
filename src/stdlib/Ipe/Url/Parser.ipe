@@ -334,13 +334,14 @@ emptyCaptures =
 -- ─── Path/query splitting (over the already-parsed Url) ─────────────
 -- | Split a raw path into non-empty, percent-decoded segments.  Leading /
 -- trailing slashes yield empty segments that carry no route information, so they
--- are dropped; each surviving segment is decoded through `Ipe.Encoding.urlDecode`
--- (the shared percent decoder).  A malformed escape in any segment fails the
+-- are dropped; each surviving segment is decoded through
+-- `Ipe.Encoding.percentDecode` (a path is percent-encoded, not form-encoded, so a
+-- `+` stays a literal `+`).  A malformed escape in any segment fails the
 -- whole path (`Nothing`), never leaking the raw encoded form to a matcher.
 preparePath : String -> Maybe (List String)
 preparePath path =
     Result.toMaybe
-        (Result.traverse Encoding.urlDecode
+        (Result.traverse Encoding.percentDecode
             (List.filter nonEmpty (String.split "/" path))
         )
 
@@ -369,10 +370,11 @@ prepareQuery raw =
                     (Result.traverse splitPair (String.split "&" text))
 
 
--- | Split one `key=value` pair, percent-decoding each side; a bare key binds to
--- the empty string.  Everything after the first `=` is the value (a literal `=`
--- inside a value arrives as `%3D`, so only the delimiting `=` splits), decoded
--- through the shared percent decoder.  A malformed escape returns `Err`.
+-- | Split one `key=value` pair, form-decoding each side (`Encoding.urlDecode`:
+-- a query is form-encoded, so `+` is a space); a bare key binds to the empty
+-- string.  Everything after the first `=` is the value (a literal `=` inside a
+-- value arrives as `%3D`, so only the delimiting `=` splits).  A malformed
+-- escape returns `Err`.
 splitPair : String -> Result Error ( String, String )
 splitPair pair =
     case String.split "=" pair of

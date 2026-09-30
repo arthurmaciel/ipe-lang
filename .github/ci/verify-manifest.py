@@ -92,6 +92,7 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
      The job is parsed once into a `ToolJob`: a literal GitHub-hosted Ubuntu
      runner (a fresh machine per job), job keys from one closed allowlist
      (`TOOL_JOB_KEYS`: no container, services, strategy, concurrency, or
+     environment — save one keyed job's literal `ADMIN_ENVIRONMENT_JOBS`
      environment), every `env:` key at workflow, job, and tool-step scope
      drawn from one allowlist (`TOOL_ENV_ALLOWLIST`), and a masking key
      (`MASKING_KEYS`: `if:`, `continue-on-error:`) on a step or on the job
@@ -124,6 +125,20 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
      order) must be followed by `&& github.event_name != 'merge_group'`, so a
      merge-group run takes the PR tier rather than silently running the full
      tier.
+     A workflow naming a repository-admin secret (`SCHEDULE_ONLY_SECRETS`)
+     triggers on `schedule` alone, and names it only inside its keyed job
+     (`ADMIN_ENVIRONMENT_JOBS`), which declares exactly its literal
+     environment. No other job declares that environment, nor an environment
+     whose name is not a literal string. Every workflow reads a secret only
+     by one literal name — `secrets.NAME` or `secrets['NAME']`, parsed, so
+     escapes are decoded — never by a computed index, `secrets.*`, the bare
+     context, or a non-mapping `secrets:` block (`inherit`); text outside the
+     expression grammar may not mention `secrets`. A name scan is therefore
+     complete: no spelling reaches a secret it does not see. The guarantee
+     is the environment's deployment-branch policy (`main` only), which
+     GitHub enforces; these rules are defence in depth under it, since a
+     same-repository branch that edits the workflow runs its edit before
+     this check can refuse it.
      Limit: this catches honest mistakes, not a hostile PR.  A merge-group run
      executes the workflow files of the queued commit, so a queued PR that
      edits `.github/**` runs its own edit with the base secrets.  The boundary
@@ -290,6 +305,7 @@ import change_class  # noqa: E402  # the path-scope classifier, SSOT for every s
 import trust_roots  # noqa: E402  # the CODEOWNERS trust-root parser, shared with trust-root-diff.yml
 import drift_assertion  # noqa: E402  # the one drift-assertion parser, shared with change_class
 import cargo_invocation  # noqa: E402  # the one cargo-invocation reader, checks 15 and 16
+import check_required_set  # noqa: E402  # owns the admin-read environment's name
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Both extensions: a workflow (or, for check 6, a local composite action) is a
@@ -939,6 +955,18 @@ _BARE_PR_TIER = re.compile(
     r"(?!\s*&&\s*github\.event_name\s*!=\s*['\"]merge_group['\"])"
 )
 _SECRETS_WORD = re.compile(r"\bsecrets\b", re.IGNORECASE)
+# Secrets carrying repository-admin read scope: only a `schedule`-triggered
+# workflow, which runs the default branch's tree, may name one.
+SCHEDULE_ONLY_SECRETS = ("RULESET_READ_TOKEN",)
+_SCHEDULE_ONLY_SECRET = re.compile(r"\b(?:" + "|".join(SCHEDULE_ONLY_SECRETS) + r")\b", re.IGNORECASE)
+# The one `(workflow file, job id)` that may declare a job `environment:`
+# holding a schedule-only secret, and the literal environment it declares.
+# GitHub hands that environment's secrets only to runs of the refs its
+# deployment-branch policy admits (`main`); this pairing is defence in depth.
+ADMIN_ENVIRONMENT_JOBS: dict[tuple[str, str], str] = {
+    ("ruleset-admin-read.yml", "ruleset-admin-read"): check_required_set.ADMIN_READ_ENVIRONMENT,
+}
+_ADMIN_ENVIRONMENTS = frozenset(e.casefold() for e in ADMIN_ENVIRONMENT_JOBS.values())
 _PR_ONLY = "github.event_name == 'pull_request'"
 
 
@@ -955,6 +983,112 @@ def _mentions(node: object, pattern: re.Pattern[str]) -> bool:
 
 def _mentions_secrets(node: object) -> bool:
     return _mentions(node, _SECRETS_WORD)
+
+
+# A secret name GitHub admits: the one shape a `secrets` access may name.
+_SECRET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _secret_access_refusal(e: gha_expr.Expr) -> str | None:
+    """Why an expression reads `secrets` other than by one literal name, or
+    None. Admitted: `secrets.NAME` and `secrets['NAME']`. A bare `secrets`
+    (`toJSON(secrets)`), `secrets.*`, a computed index, and a deeper path
+    each could reach a secret no name scan sees."""
+    for node in gha_expr.walk(e):
+        if not isinstance(node, gha_expr.ContextRef) or node.ctx.casefold() != "secrets":
+            continue
+        if len(node.path) != 1:
+            return "the whole `secrets` context" if not node.path else "a path deeper than one secret name"
+        (seg,) = node.path
+        if isinstance(seg, gha_expr.Prop) and _SECRET_NAME.fullmatch(seg.name):
+            continue
+        if (
+            isinstance(seg, gha_expr.Index)
+            and isinstance(seg.expr, gha_expr.Literal)
+            and seg.expr.is_string
+            and isinstance(seg.expr.value, str)
+            and _SECRET_NAME.fullmatch(seg.expr.value)
+        ):
+            continue
+        return "a secret whose name is not one literal"
+    return None
+
+
+def _check_secret_access(fname: str, node: object, errors: list[str], *, key: object = None) -> None:
+    """Check 8's shape allowlist: every `secrets` access in any key or string
+    scalar of a workflow names one literal secret, a `secrets:` block is a
+    mapping (never `inherit`, which forwards every secret), and text outside
+    the expression grammar never mentions `secrets`."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            _check_secret_access(fname, k, errors)
+            if str(k) == "secrets" and not isinstance(v, dict):
+                errors.append(
+                    f"{fname}: `secrets: {v!r}` forwards secrets no name scan sees — pass each one "
+                    "by name in a mapping; refused"
+                )
+            _check_secret_access(fname, v, errors, key=k)
+        return
+    if isinstance(node, list):
+        for item in node:
+            _check_secret_access(fname, item, errors)
+        return
+    if not isinstance(node, str):
+        return
+    parsed = _parsed_expressions(node, bare_expression=key == "if")
+    if isinstance(parsed, gha_expr.Refusal):
+        if _SECRETS_WORD.search(node):
+            errors.append(
+                f"{fname}: {node!r} names `secrets` in text outside the expression grammar "
+                f"({parsed.why}); refused"
+            )
+        return
+    for e, (lo, hi) in zip(parsed.exprs, parsed.spans):
+        why = _secret_access_refusal(e)
+        if why is not None:
+            errors.append(
+                f"{fname}: {node[lo:hi]!r} reads {why}; only `secrets.NAME` or "
+                "`secrets['NAME']` is admitted; refused"
+            )
+
+
+def _check_admin_environments(fname: str, doc: dict, errors: list[str]) -> None:
+    """Check 8's environment half: a schedule-only secret is named only inside
+    an `ADMIN_ENVIRONMENT_JOBS` job, which declares exactly its literal
+    environment; no other job declares an admin environment, nor an
+    environment whose name is computed at run time."""
+    jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
+    outside = {k: v for k, v in doc.items() if k != "jobs"}
+    if _mentions(outside, _SCHEDULE_ONLY_SECRET):
+        errors.append(f"{fname}: names a schedule-only secret outside a job; only its keyed job may")
+    for jid, job in jobs.items():
+        if not isinstance(job, dict):
+            continue
+        keyed = ADMIN_ENVIRONMENT_JOBS.get((fname, str(jid)))
+        where = f"{fname}: job {str(jid)!r}"
+        if keyed is not None:
+            if job.get("environment") != keyed:
+                errors.append(f"{where} must declare `environment: {keyed}`, a literal name")
+            continue
+        if _mentions(job, _SCHEDULE_ONLY_SECRET):
+            errors.append(
+                f"{where} names a schedule-only secret but is not its keyed job "
+                f"(ADMIN_ENVIRONMENT_JOBS); refused"
+            )
+        if "environment" not in job:
+            continue
+        env = job["environment"]
+        name = env.get("name") if isinstance(env, dict) else env
+        if not isinstance(name, str) or "${{" in name:
+            errors.append(
+                f"{where} declares environment {env!r}, whose name is not a literal string — "
+                "it could name an admin environment at run time; refused"
+            )
+        elif name.strip().casefold() in _ADMIN_ENVIRONMENTS:
+            errors.append(
+                f"{where} declares the admin environment {name!r}; only its keyed job "
+                "(ADMIN_ENVIRONMENT_JOBS) may; refused"
+            )
 
 
 def _top_level_conjuncts(cond: str) -> list[str] | None:
@@ -1049,6 +1183,13 @@ def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = R
         if triggers is None:
             errors.append(f"{fname}: `on:` is not a string, list of strings, or mapping")
             continue
+        if (_SCHEDULE_ONLY_SECRET.search(text) or _mentions(doc, _SCHEDULE_ONLY_SECRET)) and triggers != {"schedule"}:
+            errors.append(
+                f"{fname}: names a schedule-only secret ({', '.join(SCHEDULE_ONLY_SECRETS)}) but "
+                f"triggers on {sorted(triggers)} — only a `schedule`-only workflow may carry it"
+            )
+        _check_admin_environments(fname, doc, errors)
+        _check_secret_access(fname, doc, errors)
         if fname in gate_producers:
             # A `pull_request_target` producer reports the PR-side context from
             # the base workflow; check 12 holds it to running no head code.
@@ -3200,8 +3341,9 @@ PRE_TOOL_STEP_KEYS = frozenset({"name", "id", "env", "run", "uses", "with", "tim
 # `strategy:` expands legs (and a per-leg `continue-on-error`) from a matrix
 # that may be chosen at run time and renames the job's status contexts;
 # `concurrency:` lets another run cancel the job; `environment:` injects
-# variables and secrets the tool env allowlist never sees; `uses:` runs a
-# reusable workflow outside this check. None is needed by a tool job.
+# variables and secrets the tool env allowlist never sees (admitted only as
+# the literal `ADMIN_ENVIRONMENT_JOBS` entry of its own keyed job); `uses:`
+# runs a reusable workflow outside this check. None is needed by a tool job.
 TOOL_JOB_KEYS = frozenset({"name", "runs-on", "steps", "needs", "permissions", "outputs", "env", "defaults", "timeout-minutes"})
 # A tool job runs on a GitHub-hosted Ubuntu label: a fresh virtual machine per
 # job (no earlier job's writes survive into it) whose default shell is bash, the
@@ -3761,6 +3903,11 @@ class ToolJob:
             )
         for key in sorted(str(k) for k in raw):
             if key in TOOL_JOB_KEYS or key in MASKING_KEYS:
+                continue
+            keyed_env = ADMIN_ENVIRONMENT_JOBS.get((wf.fname, job.job_id))
+            if key == "environment" and keyed_env is not None and raw[key] == keyed_env:
+                # The one keyed exception: the environment's secret is the
+                # tool's own token, and check 8 holds its name to this job.
                 continue
             if key in ("container", "services"):
                 refusals.append(

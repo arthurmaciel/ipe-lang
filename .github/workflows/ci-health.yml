@@ -24,6 +24,7 @@ on:
       - "Sandbox"               # admission-sandbox.yml
       - "Static binaries"       # static.yml
       - "Install"               # install-smoke.yml
+      - "Ruleset admin read"    # ruleset-admin-read.yml
     types: [completed]
     # A red merge-group run already ejects its PR from the queue; it is not a
     # main-branch health signal. The queue's runs are on its temporary branches.

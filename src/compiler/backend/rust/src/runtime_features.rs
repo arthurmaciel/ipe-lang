@@ -676,7 +676,7 @@ mod tests {
     fn hello_world_selects_no_features() {
         // A pure program (no surface, no reactor, no Json type) selects NOTHING;
         // the emitted crate carries no `serde_json` and no serde stack, leaving
-        // `app + ipe_runtime + libc`.
+        // `app + ipe_runtime + rustix`.
         assert!(
             features_for(|_| {}).is_empty(),
             "a bare program selects no runtime feature: {:?}",

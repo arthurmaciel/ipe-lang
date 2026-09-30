@@ -1557,7 +1557,7 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn postgres_store_policy_refusal_refuses_startup() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        crate::system::locked_set_var("IPE_HTTP_DENY_PRIVATE", "1");
         for url in [
             "postgres://admin:s3cr3t-pw@127.0.0.1/prod",
             "postgres:///prod?user=admin&password=s3cr3t-pw",
@@ -1577,7 +1577,7 @@ mod tests {
                 assert!(!msg.contains("admin"), "user leaked: {msg}");
             }
         }
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+        crate::system::locked_remove_var("IPE_HTTP_DENY_PRIVATE");
     }
 
     /// A transient connect failure is not a policy refusal: it keeps the

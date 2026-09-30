@@ -474,42 +474,48 @@ pub fn run_in_bwrap_jail_deny_subprocess(
     spec: &JailSpec,
     payload: &[OsString],
 ) -> Result<JailedOutput, SandboxDefect> {
-    use std::os::fd::FromRawFd as _;
-
     // `allow_subprocess = false` ⇒ the fork/process-clone family is denied.
     let Some(program) = seccomp::subprocess_deny_program(false) else {
         // No filter can be compiled here — refuse rather than run unfiltered.
         return Err(SandboxDefect::NoIsolationMechanism);
     };
     let bytes = seccomp::program_bytes(&program);
-    let raw = run_jail::write_seccomp_memfd(&bytes).map_err(|d| SandboxDefect::Spawn {
-        program: "seccomp".to_owned(),
-        detail: d.to_string(),
-    })?;
-    // Own the memfd in the PARENT so it is closed on return — this launcher
+    // The memfd is owned in the PARENT so it is closed on return — this launcher
     // `spawn`s (not `exec`s) and the server is long-lived, so a leaked fd per
     // request would exhaust the process's file-descriptor limit. The child gets
     // its own inherited copy across `spawn`, so closing the parent's copy after
     // the run does not disturb the jailed process.
-    // SAFETY: `raw` is a fresh, owned memfd from `write_seccomp_memfd`; wrapping
-    // it in `OwnedFd` transfers that sole ownership so `Drop` closes it exactly
-    // once.
-    let owned = unsafe { std::os::fd::OwnedFd::from_raw_fd(raw) };
-    let out = run_bwrap(caps, spec, payload, Some(raw));
+    let owned = run_jail::write_seccomp_memfd(&bytes).map_err(|d| SandboxDefect::Spawn {
+        program: "seccomp".to_owned(),
+        detail: d.to_string(),
+    })?;
+    // The sealed seccomp fd MUST be inheritable so bwrap reads the filter from it
+    // across the spawn. Clearing close-on-exec here, in the parent, refuses the
+    // run (fail-closed) when the flag cannot be cleared, rather than run the
+    // payload without its filter.
+    // Known limit: between this close-on-exec clear and the spawn, a sibling child
+    // forked by another thread inherits the same open file description. The seal
+    // blocks writes, not a shared-offset `lseek`/`read`, so this fd must reach only
+    // its one child.
+    let seccomp_fd = owned.make_inheritable().map_err(|e| SandboxDefect::Spawn {
+        program: "seccomp".to_owned(),
+        detail: format!("clearing close-on-exec on the seccomp memfd failed: {e}"),
+    })?;
+    let out = run_bwrap(caps, spec, payload, Some(seccomp_fd));
     drop(owned);
     out
 }
 
 /// The shared spawn+drain core for both the plain and the subprocess-denied jail.
 ///
-/// When `seccomp_fd` is `Some`, `--seccomp <fd>` is inserted into the bwrap argv
-/// and the fd is un-cloexec'd in the child (via a `pre_exec` hook) so bwrap can
-/// read the filter from it across the exec.
+/// When `seccomp_fd` is `Some`, `--seccomp <fd>` is inserted into the bwrap argv;
+/// the caller owns that sealed fd and has already made it inheritable, so bwrap
+/// reads the filter from it across the exec.
 fn run_bwrap(
     caps: &Capabilities,
     spec: &JailSpec,
     payload: &[OsString],
-    seccomp_fd: Option<i32>,
+    seccomp_fd: Option<run_jail::SealedFdNumber<'_>>,
 ) -> Result<JailedOutput, SandboxDefect> {
     let Some(bwrap) = &caps.bwrap else {
         return Err(SandboxDefect::NoIsolationMechanism);
@@ -524,6 +530,7 @@ fn run_bwrap(
     };
     let argv = bwrap_argv_with_seccomp(bwrap, prlimit, timeout, spec, payload, seccomp_fd)?;
     let (program, rest) = argv
+        .args()
         .split_first()
         .ok_or(SandboxDefect::NoIsolationMechanism)?;
     let spawn_err = |e: std::io::Error| SandboxDefect::Spawn {
@@ -535,31 +542,6 @@ fn run_bwrap(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    // The seccomp fd MUST survive exec so bwrap can read the program from it: the
-    // pre_exec hook clears its close-on-exec flag right before exec. A failure
-    // aborts the exec, so a jail that could not un-cloexec its filter refuses
-    // rather than running the payload without the filter (fail-closed).
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    ))]
-    if let Some(fd) = seccomp_fd {
-        // The seccomp fd must survive the exec so bwrap reads the filter from it;
-        // `run_jail::clear_cloexec` is async-signal-safe and defined once, shared
-        // with the run jail's own launcher.
-        // SAFETY: `pre_exec` runs in the child between fork and exec; the hook
-        // only clears a close-on-exec flag on this process's fd table.
-        unsafe {
-            use std::os::unix::process::CommandExt as _;
-            cmd.pre_exec(move || run_jail::clear_cloexec(fd));
-        }
-    }
-    // On platforms without the seccomp path, no caller ever passes a fd.
-    #[cfg(not(all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    )))]
-    let _ = seccomp_fd;
     let child = cmd.spawn().map_err(spawn_err)?;
     drain_and_reap(child, spec.limits.out_cap_bytes, program)
 }
@@ -677,26 +659,23 @@ fn drain_and_reap(
 /// rendered argv, the seccomp flag cannot be attached to bwrap — dropping it
 /// would run the payload without its syscall filter (fail-open). The refusal
 /// here keeps the seccomp guarantee: no filter, no run.
-fn bwrap_argv_with_seccomp(
+fn bwrap_argv_with_seccomp<'fd>(
     bwrap: &Path,
     prlimit: &Path,
     timeout: &Path,
     spec: &JailSpec,
     payload: &[OsString],
-    seccomp_fd: Option<i32>,
-) -> Result<Vec<OsString>, SandboxDefect> {
-    let mut argv = bwrap_argv(bwrap, prlimit, timeout, spec, payload);
+    seccomp_fd: Option<run_jail::SealedFdNumber<'fd>>,
+) -> Result<run_jail::JailArgv<'fd>, SandboxDefect> {
+    let mut argv = run_jail::JailArgv::fd_free(bwrap_argv(bwrap, prlimit, timeout, spec, payload));
     let Some(fd) = seccomp_fd else {
         return Ok(argv);
     };
     // The argv is `timeout … <wall> bwrap …`; insert `--seccomp <fd>` right after
     // the `bwrap` token so it is a bwrap option, not a timeout one.
-    let bwrap_os = bwrap.as_os_str();
-    let Some(pos) = argv.iter().position(|a| a.as_os_str() == bwrap_os) else {
+    if !argv.attach_fd_after(bwrap.as_os_str(), "--seccomp", &fd) {
         return Err(SandboxDefect::SeccompNotAttached);
-    };
-    argv.insert(pos + 1, fd.to_string().into());
-    argv.insert(pos + 1, "--seccomp".into());
+    }
     Ok(argv)
 }
 
@@ -1146,19 +1125,30 @@ mod tests {
         assert!(dev > proc, "--dev /dev must follow --proc /proc: {joined}");
     }
 
+    /// A live stand-in descriptor for a test `SealedFdNumber` to borrow.
+    #[cfg(unix)]
+    #[allow(clippy::expect_used)] // a test host with no `/dev/null` cannot build the fixture
+    fn stand_in_fd() -> std::fs::File {
+        std::fs::File::open("/dev/null").expect("open /dev/null")
+    }
+
+    #[cfg(unix)]
     #[test]
     fn seccomp_flag_is_injected_after_the_bwrap_token() {
+        use std::os::fd::{AsFd as _, AsRawFd as _};
+        let filter = stand_in_fd();
         let argv = bwrap_argv_with_seccomp(
             Path::new("/usr/bin/bwrap"),
             Path::new("/usr/bin/prlimit"),
             Path::new("/usr/bin/timeout"),
             &spec(),
             &[OsString::from("ipe-ffi-inspector")],
-            Some(7),
+            Some(run_jail::SealedFdNumber::for_test(filter.as_fd())),
         )
         .expect("bwrap token present, so the seccomp flag attaches");
         let rendered: Vec<String> = argv
-            .into_iter()
+            .args()
+            .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         let bwrap = rendered
@@ -1169,11 +1159,18 @@ mod tests {
             rendered.get(bwrap + 1).map(String::as_str),
             Some("--seccomp")
         );
-        assert_eq!(rendered.get(bwrap + 2).map(String::as_str), Some("7"));
+        let number = filter.as_raw_fd().to_string();
+        assert_eq!(
+            rendered.get(bwrap + 2).map(String::as_str),
+            Some(number.as_str())
+        );
     }
 
+    #[cfg(unix)]
     #[test]
     fn seccomp_is_attached_and_never_silently_dropped() {
+        use std::os::fd::{AsFd as _, AsRawFd as _};
+        let filter = stand_in_fd();
         // A requested seccomp filter must always reach the argv, whatever the
         // bwrap path — never silently dropped, which would run the payload
         // unfiltered. The `SeccompNotAttached` arm is a fail-closed backstop
@@ -1185,10 +1182,11 @@ mod tests {
             Path::new("/usr/bin/timeout"),
             &spec(),
             &[OsString::from("ipe-ffi-inspector")],
-            Some(7),
+            Some(run_jail::SealedFdNumber::for_test(filter.as_fd())),
         )
         .expect("a requested seccomp filter must attach, never drop");
         let rendered: Vec<String> = argv
+            .args()
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
@@ -1201,7 +1199,11 @@ mod tests {
             Some("--seccomp"),
             "seccomp must be injected right after the bwrap token"
         );
-        assert_eq!(rendered.get(bwrap + 2).map(String::as_str), Some("7"));
+        let number = filter.as_raw_fd().to_string();
+        assert_eq!(
+            rendered.get(bwrap + 2).map(String::as_str),
+            Some(number.as_str())
+        );
     }
 
     #[test]
@@ -1215,6 +1217,6 @@ mod tests {
             None,
         )
         .expect("no filter requested, so the argv renders unchanged");
-        assert!(!argv.iter().any(|a| a.as_os_str() == "--seccomp"));
+        assert!(!argv.args().iter().any(|a| a.as_os_str() == "--seccomp"));
     }
 }

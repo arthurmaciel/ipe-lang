@@ -22,10 +22,14 @@
 //   the runtime's target-specific check: a compile-time reject can only ever be
 //   a superset of what the runtime rejects, so nothing the runtime would refuse
 //   is ever emitted as a validated literal.
-// * `clean_with` / `escapes_root` / `has_disguised_dotdot` / `has_nul`
+// * `clean_with` / `escapes_root` / `has_nul`
 //   — the target-specific primitives the runtime seal drives with its own
 //   host separator regime (`clean_with(s, cfg!(windows))`), keeping the runtime
 //   behaviour byte-identical per platform.
+// * `ElementClass` — the one per-element classifier under Windows filename
+//   canonicalisation, read by the seal, the compile-time gate and the runtime
+//   child-join parse alike (`ElementClass::of` per element,
+//   `ElementClass::windows_elements` over a whole path).
 
 /// Why a `path "…"` literal was rejected by [`validate`].
 ///
@@ -84,7 +88,7 @@ pub fn validate(s: &str) -> Result<String, PathRejection> {
     if has_nul(s) {
         return Err(PathRejection::Nul);
     }
-    if has_disguised_dotdot(s) {
+    if ElementClass::windows_elements(s).any(|c| c == ElementClass::DisguisedParent) {
         return Err(PathRejection::Traversal);
     }
     // Reject if the path escapes under EITHER separator regime: a Windows target
@@ -101,83 +105,290 @@ pub fn validate(s: &str) -> Result<String, PathRejection> {
 /// Unix honours only `/`; Windows ALSO honours `\`, because Windows accepts
 /// either at a syscall — so both must count, or the un-honoured one smuggles a
 /// `..` past the traversal scan.
-const fn is_sep(c: u8, windows: bool) -> bool {
+pub(crate) const fn is_sep(c: u8, windows: bool) -> bool {
     c == b'/' || (windows && c == b'\\')
 }
 
-/// Length in bytes of the leading VOLUME name of `path` under Windows rules.
-///
-/// `0` on Unix, where no path element is ever consumed as a volume. Recognised
-/// prefixes:
-/// * `\\?\…` / `\\.\…` — verbatim / device namespaces (consume up to the next
-///   separator after the namespace tag);
-/// * `\\server\share` — a UNC root (both the server and the share component);
-/// * `C:` — a drive designator (two bytes).
-///
-/// The volume is copied through `clean_with` untouched and is the floor the `..`
-/// scan can never pop below — so `..` can neither delete a drive letter nor
-/// climb out of a UNC share.
-#[must_use]
-pub fn volume_name_len(path: &str, windows: bool) -> usize {
-    if !windows {
-        return 0;
-    }
-    let b = path.as_bytes();
-    let n = b.len();
-    let at = |i: usize| -> Option<u8> { b.get(i).copied() };
-    // `C:` drive designator: an ASCII letter followed by a colon.
-    if at(0).is_some_and(|c| c.is_ascii_alphabetic()) && at(1) == Some(b':') {
-        return 2;
-    }
-    // UNC / device / verbatim: `\\` or `//` (any mix) followed by a component.
-    if n >= 2
-        && at(0).is_some_and(|c| is_sep(c, windows))
-        && at(1).is_some_and(|c| is_sep(c, windows))
-    {
-        // Skip the first component (server, or `?`/`.` namespace tag).
-        let mut i = 2usize;
-        while i < n && !at(i).is_some_and(|c| is_sep(c, windows)) {
-            i += 1;
-        }
-        if i == n {
-            // `\\server` with no trailing separator — whole string is the volume.
-            return n;
-        }
-        // Consume the single separator, then the second component (the share).
-        i += 1;
-        while i < n && !at(i).is_some_and(|c| is_sep(c, windows)) {
-            i += 1;
-        }
-        return i;
-    }
-    0
+/// The namespace tag of a `\\?\…` / `\\.\…` prefix.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Namespace {
+    /// `\\?\…` — verbatim: handed to the object manager without normalisation.
+    Verbatim,
+    /// `\\.\…` — the Win32 device namespace.
+    Device,
 }
 
-/// Could a path element alias to the `..` parent token once Windows applies its
-/// filename canonicalisation?
+/// The leading VOLUME of a path under Windows rules, parsed once.
 ///
-/// Windows strips trailing dots and spaces, so `".. "`
-/// and `".. . "` name the parent directory — yet the lexical `..` scan, which
-/// matches only the exact `..` token, would treat them as ordinary filenames and
-/// miss the climb. Fail closed on any element that is made up SOLELY of dots and
-/// spaces and carries at least two dots (`..`, `.. `, `. .`, `...`, ` .. `, …):
-/// none is a legitimate filename, and each can canonicalise to `..`. Scanned
-/// over the Windows separator set (`\` and `/`).
-///
-/// The exact `..` token is deliberately EXCLUDED here — the lexical scan already
-/// counts it and [`escapes_root`] rejects any that climb out — so an in-bounds
-/// `a\..\b` still resolves instead of being false-rejected.
-#[must_use]
-pub fn has_disguised_dotdot(path: &str) -> bool {
-    let windows = true;
-    path.as_bytes().split(|&c| is_sep(c, windows)).any(|elem| {
-        if elem == b".." {
-            return false;
+/// Every consumer that asks "does this path carry a volume, and how long is
+/// it?" reads this one parse, so the drive / UNC / namespace grammar lives in
+/// one place. Unix never has a volume ([`Volume::None`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Volume<'a> {
+    /// No volume: a Unix path, or a relative / root-relative Windows path.
+    None,
+    /// `X:` — a drive designator. Win32 reads ANY first UTF-16 unit followed by
+    /// `:` as a drive (`é:`, `1:`, `::` included), so any non-separator
+    /// character encoded as one UTF-16 unit qualifies — not only ASCII letters.
+    /// A character outside the BMP is two UTF-16 units, so Win32 never pairs it
+    /// with the `:` and it is not a drive.
+    Drive(char),
+    /// `\\server\share` — a UNC root; the share is absent for a bare `\\server`.
+    Unc {
+        server: &'a str,
+        share: Option<&'a str>,
+    },
+    /// `\\?\UNC\server\share` — a verbatim UNC root. The server and share are
+    /// part of the volume, so `..` can never climb out of the share and a
+    /// root-relative path anchors on the right server.
+    VerbatimUnc {
+        server: &'a str,
+        share: Option<&'a str>,
+    },
+    /// `\\?\name` / `\\.\name` — a verbatim or device namespace plus its first
+    /// component (`\\?\C:`, `\\.\PhysicalDrive0`); `name` is absent for a bare
+    /// `\\?` / `\\.`.
+    Namespaced {
+        tag: Namespace,
+        name: Option<&'a str>,
+    },
+}
+
+/// Split `s` at its first regime separator: the component before it, and the
+/// text after it (`None` when `s` holds no separator).
+fn split_component(s: &str, windows: bool) -> (&str, Option<&str>) {
+    s.bytes()
+        .position(|c| is_sep(c, windows))
+        .map_or((s, None), |i| {
+            // A separator is one ASCII byte, so `i` and `i + 1` are char boundaries.
+            (s.get(..i).unwrap_or(""), s.get(i + 1..))
+        })
+}
+
+/// Byte length of an optional `\component` tail.
+fn tail_len(component: Option<&str>) -> usize {
+    component.map_or(0, |c| 1 + c.len())
+}
+
+impl<'a> Volume<'a> {
+    /// Parse the leading volume of `path`; always [`Volume::None`] on Unix.
+    #[must_use]
+    pub fn parse(path: &'a str, windows: bool) -> Self {
+        if !windows {
+            return Self::None;
         }
-        let only_dots_and_spaces = elem.iter().all(|&c| c == b'.' || c == b' ');
-        // "at least two dots" without a full count (dodges the naive-bytecount lint).
-        let has_two_dots = elem.iter().filter(|&&c| c == b'.').nth(1).is_some();
-        only_dots_and_spaces && has_two_dots
+        let mut chars = path.chars();
+        if let (Some(c), Some(':')) = (chars.next(), chars.next())
+            && !u8::try_from(c).is_ok_and(|c| is_sep(c, windows))
+            && c.len_utf16() == 1
+        {
+            return Self::Drive(c);
+        }
+        let b = path.as_bytes();
+        let lead = |i: usize| b.get(i).is_some_and(|&c| is_sep(c, windows));
+        if !(lead(0) && lead(1)) {
+            return Self::None;
+        }
+        let (first, after) = split_component(path.get(2..).unwrap_or(""), windows);
+        let component = |s: &'a str| split_component(s, windows).0;
+        let tag = match first {
+            "?" => Namespace::Verbatim,
+            "." => Namespace::Device,
+            server => {
+                return Self::Unc {
+                    server,
+                    share: after.map(component),
+                };
+            }
+        };
+        if tag == Namespace::Verbatim
+            && let Some(a) = after
+            && let (name, Some(unc)) = split_component(a, windows)
+            && name.eq_ignore_ascii_case("UNC")
+        {
+            let (server, share) = split_component(unc, windows);
+            return Self::VerbatimUnc {
+                server,
+                share: share.map(component),
+            };
+        }
+        Self::Namespaced {
+            tag,
+            name: after.map(component),
+        }
+    }
+
+    /// Length in bytes of the volume prefix (`0` for [`Volume::None`]).
+    #[must_use]
+    pub fn byte_len(self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::Drive(c) => c.len_utf8() + 1,
+            Self::Unc { server, share } => 2 + server.len() + tail_len(share),
+            // `\\?\UNC\` is eight bytes.
+            Self::VerbatimUnc { server, share } => 8 + server.len() + tail_len(share),
+            // `\\?` / `\\.` is three bytes.
+            Self::Namespaced { name, .. } => 3 + tail_len(name),
+        }
+    }
+
+    /// Is this a drive designator (`X:`)? A drive alone is drive-RELATIVE,
+    /// never rooted.
+    #[must_use]
+    pub const fn is_drive(self) -> bool {
+        matches!(self, Self::Drive(_))
+    }
+
+    /// Can this volume anchor a Windows root-relative path (`\x`)?
+    ///
+    /// Only a volume that names one location completely: a drive, a UNC or
+    /// verbatim-UNC root with both a server and a share, or a namespace with a
+    /// non-UNC name. A device-namespace `\\.\UNC` (whose server and share this
+    /// parse leaves outside the volume) or an incomplete UNC is refused, so a
+    /// root-relative path is never anchored on the wrong server.
+    #[must_use]
+    pub fn anchors(self) -> bool {
+        let named = |part: Option<&str>| part.is_some_and(|p| !p.is_empty());
+        match self {
+            Self::None => false,
+            Self::Drive(_) => true,
+            Self::Unc { server, share } | Self::VerbatimUnc { server, share } => {
+                !server.is_empty() && named(share)
+            }
+            Self::Namespaced { name, .. } => {
+                named(name) && !name.is_some_and(|n| n.eq_ignore_ascii_case("UNC"))
+            }
+        }
+    }
+}
+
+/// Length in bytes of the leading VOLUME name of `path` under Windows rules:
+/// the byte length of its [`Volume::parse`].
+///
+/// `0` on Unix, where no path element is ever consumed as a volume. The volume
+/// is copied through `clean_with` untouched and is the floor the `..` scan can
+/// never pop below — so `..` can neither delete a drive letter nor climb out of
+/// a UNC share.
+#[must_use]
+pub fn volume_name_len(path: &str, windows: bool) -> usize {
+    Volume::parse(path, windows).byte_len()
+}
+
+/// How Windows filename canonicalisation reads one raw path element (the bytes
+/// between two separators).
+///
+/// THE element classifier: the runtime seal, the compile-time [`validate`] gate
+/// and the runtime child-join parse all read an element through
+/// [`ElementClass::of`], so the dot-and-space rule is stated once. Each consumer
+/// decides which classes it refuses; the classes themselves never differ.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ElementClass {
+    /// An empty element (a doubled or trailing separator).
+    Empty,
+    /// The exact `.` token.
+    Current,
+    /// The exact `..` token.
+    Parent,
+    /// Only dots and spaces with at least two dots, other than the exact `..`
+    /// (`.. `, `. .`, `...`, ` .. `): Windows strips trailing dots and spaces,
+    /// so it can name the parent directory.
+    DisguisedParent,
+    /// Only dots and spaces with at most one dot, other than the exact `.`
+    /// (` `, `. `, ` . `): Windows strips it to the directory itself.
+    DisguisedCurrent,
+    /// Holds a `:` — a drive designator (`é:`, `1:`) or an alternate data
+    /// stream (`a:b`).
+    Colon,
+    /// A reserved Win32 DOS device name (see [`is_dos_device`]).
+    DosDevice,
+    /// Any other element.
+    Name,
+}
+
+impl ElementClass {
+    /// Classify one raw element.
+    #[must_use]
+    pub fn of(e: &[u8]) -> Self {
+        match e {
+            b"" => Self::Empty,
+            b"." => Self::Current,
+            b".." => Self::Parent,
+            _ if e.iter().all(|&c| c == b'.' || c == b' ') => {
+                // "at least two dots" without a full count (dodges the
+                // naive-bytecount lint).
+                if e.iter().filter(|&&c| c == b'.').nth(1).is_some() {
+                    Self::DisguisedParent
+                } else {
+                    Self::DisguisedCurrent
+                }
+            }
+            _ if e.contains(&b':') => Self::Colon,
+            _ if is_dos_device(e) => Self::DosDevice,
+            _ => Self::Name,
+        }
+    }
+
+    /// Classify every raw element of `path` split over the Windows separators.
+    ///
+    /// Windows honours both `\` and `/` at a syscall, so a scan that split on
+    /// only one would let the other hide a disguised element. The exact `..`
+    /// token classifies as [`Self::Parent`], never [`Self::DisguisedParent`]: a
+    /// consumer refusing the disguise leaves an in-bounds `a\..\b` to the
+    /// lexical `..` scan and [`escapes_root`].
+    pub fn windows_elements(path: &str) -> impl Iterator<Item = Self> + '_ {
+        path.as_bytes().split(|&c| is_sep(c, true)).map(Self::of)
+    }
+}
+
+/// Does the raw element `e` name a reserved Win32 DOS device?
+///
+/// Win32 opens a device, not a file, for `CON`, `PRN`, `AUX`, `NUL`,
+/// `COM0`–`COM9`, `LPT0`–`LPT9`, the superscript-digit `COM¹²³` / `LPT¹²³`, and
+/// `CONIN$` / `CONOUT$`, matched case-insensitively on the element's stem: the
+/// text before its first `.` or `:`, with trailing spaces dropped. An extension
+/// does not escape the device (`nul.txt`, `aux.tar.gz`) on older Windows
+/// versions, so the check fails closed on every version. The case fold is the
+/// NT one (see `device_fold`), not ASCII alone.
+#[must_use]
+pub fn is_dos_device(e: &[u8]) -> bool {
+    let stem_end = e
+        .iter()
+        .position(|&c| c == b'.' || c == b':')
+        .unwrap_or(e.len());
+    let mut stem = e.get(..stem_end).unwrap_or(e);
+    while let [rest @ .., b' '] = stem {
+        stem = rest;
+    }
+    let named = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
+        .iter()
+        .any(|n| device_fold(stem).eq(n.bytes()));
+    // `COM` / `LPT` hold no `I`, so the one non-ASCII fold never reaches them.
+    let numbered = stem.split_at_checked(3).is_some_and(|(head, digit)| {
+        (head.eq_ignore_ascii_case(b"COM") || head.eq_ignore_ascii_case(b"LPT"))
+            // An ASCII digit, or the UTF-8 encoding of `¹` / `²` / `³`.
+            && matches!(digit, [b'0'..=b'9'] | [0xC2, 0xB9 | 0xB2 | 0xB3])
+    });
+    named || numbered
+}
+
+/// Upcase a device-name stem the way NT compares device names.
+///
+/// NT matches a device name through its Unicode upcase table, not ASCII alone.
+/// The only non-ASCII characters that upcase to an ASCII letter are `ı`
+/// (U+0131, UTF-8 `C4 B1`) to `I` and `ſ` (U+017F) to `S`; no device name holds
+/// an `S`, so `ı` is the one fold beyond ASCII. Every other byte is
+/// ASCII-upcased (a no-op on a non-ASCII byte), so `İ` (U+0130), which upcases
+/// to itself, never matches `I`.
+fn device_fold(stem: &[u8]) -> impl Iterator<Item = u8> + '_ {
+    let mut rest = stem;
+    std::iter::from_fn(move || {
+        let (unit, tail) = match rest {
+            [0xC4, 0xB1, tail @ ..] => (b'I', tail),
+            [c, tail @ ..] => (c.to_ascii_uppercase(), tail),
+            [] => return None,
+        };
+        rest = tail;
+        Some(unit)
     })
 }
 
@@ -202,8 +413,8 @@ pub fn has_disguised_dotdot(path: &str) -> bool {
 ///
 /// This over-rejects a legitimate top-level filename made solely of dots
 /// (e.g. `...` as a real filename). That is ACCEPTABLE — it fails closed, and
-/// matches the Windows `has_disguised_dotdot` behaviour, which already rejects
-/// the same all-dots family (Windows canonicalisation would alias it to `..`).
+/// matches the Windows [`ElementClass::DisguisedParent`] refusal, which already
+/// rejects the same all-dots family (Windows canonicalisation would alias it to `..`).
 #[must_use]
 pub fn escapes_root(cleaned: &str, windows: bool) -> bool {
     let vol = volume_name_len(cleaned, windows);
@@ -451,6 +662,116 @@ mod tests {
         assert_eq!(volume_name_len("\\\\srv\\shr\\x", true), 9);
         assert_eq!(volume_name_len("relative\\x", true), 0);
         assert_eq!(volume_name_len("C:\\x", false), 0);
+    }
+
+    #[test]
+    fn volume_parse_follows_the_win32_drive_and_verbatim_unc_grammar() {
+        // Any single-UTF-16-unit character before `:` is a drive, as in Win32.
+        assert_eq!(volume_name_len("é:\\x", true), 3);
+        assert_eq!(volume_name_len("1:x", true), 2);
+        assert!(Volume::parse("é:", true).is_drive());
+        // A non-BMP character is two UTF-16 units: never a drive.
+        assert_eq!(volume_name_len("𝒳:x", true), 0);
+        // A verbatim UNC root keeps its server and share inside the volume.
+        assert_eq!(volume_name_len("\\\\?\\UNC\\srv\\shr\\x", true), 15);
+        assert!(Volume::parse("\\\\?\\UNC\\srv\\shr\\x", true).anchors());
+        assert_eq!(
+            clean_with("\\\\?\\UNC\\srv\\shr\\..\\..", true),
+            "\\\\?\\UNC\\srv\\shr\\"
+        );
+        assert_eq!(volume_name_len("\\\\?\\C:\\x", true), 6);
+        // A device-namespace UNC and an incomplete UNC name no anchoring volume.
+        assert!(!Volume::parse("\\\\.\\UNC\\srv\\shr\\x", true).anchors());
+        assert!(!Volume::parse("\\\\srv", true).anchors());
+        assert!(!Volume::parse("\\x", true).anchors());
+    }
+
+    // ── ElementClass: the one element classifier ──────────────────────────────
+
+    #[test]
+    fn element_class_names_the_dot_space_aliases() {
+        for (e, want) in [
+            ("", ElementClass::Empty),
+            (".", ElementClass::Current),
+            ("..", ElementClass::Parent),
+            (".. ", ElementClass::DisguisedParent),
+            ("...", ElementClass::DisguisedParent),
+            (". .", ElementClass::DisguisedParent),
+            (" ", ElementClass::DisguisedCurrent),
+            (". ", ElementClass::DisguisedCurrent),
+            (" . ", ElementClass::DisguisedCurrent),
+            ("a:b", ElementClass::Colon),
+            ("CON", ElementClass::DosDevice),
+            ("a.b", ElementClass::Name),
+            ("..foo", ElementClass::Name),
+        ] {
+            assert_eq!(ElementClass::of(e.as_bytes()), want, "{e:?}");
+        }
+    }
+
+    #[test]
+    fn dos_device_names_are_recognised_on_their_stem() {
+        for e in [
+            "CON",
+            "con",
+            "con.txt",
+            "NUL ",
+            "nul.txt",
+            "COM1",
+            "lpt9",
+            "COM0",
+            "COM\u{b9}",
+            "LPT\u{b3}",
+            "CONOUT$",
+            "conin$",
+            "aux.tar.gz",
+            "PRN:",
+            "AUX :x",
+            "CON.",
+            "CON .txt",
+            "LPT0",
+            "CONIN$",
+            "lpt\u{b9}",
+            "CON\u{131}N$",
+            "con\u{131}n$",
+            "CON\u{131}N$.txt",
+        ] {
+            assert!(is_dos_device(e.as_bytes()), "{e:?} is a device");
+        }
+        for e in [
+            "CONSOLE",
+            "COM10",
+            "nulx",
+            "xCON",
+            "COM",
+            "LPT",
+            "COM\u{b4}",
+            "CO",
+            "",
+            "COMa",
+            "CON\u{131}N",
+            "\u{131}CON",
+        ] {
+            assert!(!is_dos_device(e.as_bytes()), "{e:?} is a plain name");
+        }
+    }
+
+    #[test]
+    fn disguised_dotdot_is_exactly_the_disguised_parent_class() {
+        // The seal and gate rule, stated independently of the classifier: an
+        // all-dots-and-spaces element with at least two dots, other than `..`.
+        let rule = |e: &[u8]| {
+            e != b".."
+                && e.iter().all(|&c| c == b'.' || c == b' ')
+                && e.iter().filter(|&&c| c == b'.').nth(1).is_some()
+        };
+        for e in [
+            "", ".", "..", "...", ".. ", " ", ". ", " .. ", "a", "a.", ". . .",
+        ] {
+            let disguised =
+                ElementClass::windows_elements(e).any(|c| c == ElementClass::DisguisedParent);
+            assert_eq!(disguised, rule(e.as_bytes()), "{e:?}");
+        }
     }
 
     // ── escapes_root: two-layer defence against a leading all-dots element ─────

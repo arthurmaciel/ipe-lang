@@ -22559,6 +22559,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DecDiv
                 | KernelFn::DecMod
                 | KernelFn::PathFromString
+                | KernelFn::PathUnder
                 | KernelFn::RegexCompile
                 | KernelFn::UrlFromString
         ) {
@@ -22667,6 +22668,9 @@ impl<'a> Lowerer<'a> {
             | KernelFn::DecDiv
             | KernelFn::DecMod
             | KernelFn::PathFromString
+            // `Path.under : Path -> Path -> Result Error Path` shares the same
+            // `<E: From<String>>` runtime shape and erased-error E0283.
+            | KernelFn::PathUnder
             | KernelFn::RegexCompile
             // `Url.fromString : String -> Result Error Url` shares the same
             // `<E: From<String>>` runtime shape and erased-error E0283.
@@ -24918,6 +24922,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::EncodingBase64Decode
                 | KernelFn::EncodingUrlEncode
                 | KernelFn::EncodingUrlDecode
+                | KernelFn::EncodingPercentDecode
                 | KernelFn::EncodingHexEncode
                 | KernelFn::EncodingHexDecode
                 // ── JsonEnc arity-1 ─────────────────────────────────────
@@ -26396,16 +26401,18 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::RegexSplit,
             ) => Ok(2),
             Callee::Kernel(KernelFn::RegexReplace) => Ok(3),
-            // ── Ipe.Path — all six are unary (arity 1): `fromString`/`toString`
-            // plus the four `Path -> _` helpers. ───
+            // ── Ipe.Path — `fromString`/`toString`, the four `Path -> _`
+            // helpers and `absolute` are unary; `under root child` is binary. ───
             Callee::Kernel(
                 KernelFn::PathFromString
                 | KernelFn::PathToString
                 | KernelFn::PathBase
                 | KernelFn::PathDir
                 | KernelFn::PathExt
-                | KernelFn::PathIsAbsolute,
+                | KernelFn::PathIsAbsolute
+                | KernelFn::PathAbsolute,
             ) => Ok(1),
+            Callee::Kernel(KernelFn::PathUnder) => Ok(2),
             // ── Ipe.Url — all unary (arity 1): `fromString`/`toString` + the seven
             // `Url -> _` accessors + `buildQuery : List _ -> String`, plus the
             // `relative` seal and the four `Relative -> _` accessors.
@@ -27482,6 +27489,9 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Encoding", "urlEncode") => Ok(Callee::Kernel(KernelFn::EncodingUrlEncode)),
                     ("Encoding", "urlDecode") => Ok(Callee::Kernel(KernelFn::EncodingUrlDecode)),
+                    ("Encoding", "percentDecode") => {
+                        Ok(Callee::Kernel(KernelFn::EncodingPercentDecode))
+                    }
                     ("Encoding", "hexEncode") => Ok(Callee::Kernel(KernelFn::EncodingHexEncode)),
                     ("Encoding", "hexDecode") => Ok(Callee::Kernel(KernelFn::EncodingHexDecode)),
                     // ── JsonEnc kernels ──────────────────────────────────
@@ -31528,6 +31538,8 @@ mod tests {
         KernelFn::PathDir,
         KernelFn::PathExt,
         KernelFn::PathIsAbsolute,
+        KernelFn::PathUnder,
+        KernelFn::PathAbsolute,
         // Ipe.Url
         KernelFn::UrlFromString,
         KernelFn::UrlToString,
