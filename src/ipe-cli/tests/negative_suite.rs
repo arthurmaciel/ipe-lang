@@ -32,18 +32,19 @@ const fn false_marker() -> bool {
 }
 
 /// Write `source` as a single-file `Main.ipe` under a fresh scratch dir keyed
-/// by `name`, returning the entry path (or `None` if scratch setup fails — the
-/// caller must fail loudly, never skip). The scratch dir lives in the test
+/// by `name`, returning the entry path (a failed scratch setup fails the
+/// test). The scratch dir lives in the test
 /// crate's `CARGO_TARGET_TMPDIR`, never the repo tree.
-fn write_entry(name: &str, source: &str) -> Option<PathBuf> {
+#[allow(clippy::expect_used)] // a failed scratch setup is the test failure
+fn write_entry(name: &str, source: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("negsuite")
         .join(name);
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::create_dir_all(&dir).expect("scratch setup must succeed");
     let entry = dir.join("Main.ipe");
-    std::fs::write(&entry, source).ok()?;
-    Some(entry)
+    std::fs::write(&entry, source).expect("scratch setup must succeed");
+    entry
 }
 
 /// The outcome of running the pipeline over a fixture.
@@ -3211,9 +3212,7 @@ main =
 #[test]
 fn row_generic_in_scope_web_embed_refused_undetermined() {
     let name = "row_generic_in_scope_web_embed";
-    let Some(entry) = write_entry(name, WEB_EMBED_ROW_IN_SCOPE) else {
-        return;
-    };
+    let entry = write_entry(name, WEB_EMBED_ROW_IN_SCOPE);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("negsuite-out")
         .join(name);
@@ -3282,9 +3281,7 @@ main =
 #[test]
 fn unpinned_msg_web_embed_refused() {
     let name = "unpinned_msg_web_embed";
-    let Some(entry) = write_entry(name, WEB_EMBED_UNPINNED_MSG) else {
-        return;
-    };
+    let entry = write_entry(name, WEB_EMBED_UNPINNED_MSG);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("negsuite-out")
         .join(name);
@@ -3555,17 +3552,14 @@ fn ffi_planted_bindings_file_is_ignored_on_load() {
         \"params\":[{\"name\":\"text\",\"type\":\"String\",\"ipeType\":\"String\",\"rustType\":\"&str\"}],\
         \"results\":[{\"name\":\"\",\"type\":\"Result Error Version\",\"rustType\":\"Result<Version, Error>\"}],\
         \"effect\":\"fallible\"}],\"errors\":[]}";
-    let Some(dir) = write_entry("ffi_planted_cache", "") else {
-        return;
-    };
+    let dir = write_entry("ffi_planted_cache", "");
     let root = dir
         .parent()
         .map(std::path::Path::to_path_buf)
         .unwrap_or(dir);
     let cache = FfiCache::at_project_root(&root);
-    let Ok((_pkg, paths)) = ipe_ffi::driver::install_from_inspection(&cache, doc) else {
-        return;
-    };
+    let (_pkg, paths) = ipe_ffi::driver::install_from_inspection(&cache, doc)
+        .expect("a well-formed inspection document installs");
     // Plant an injected item into a reached wrapper region of _bindings.rs.
     if let Ok(text) = std::fs::read_to_string(&paths.bindings) {
         let planted = text.replace(

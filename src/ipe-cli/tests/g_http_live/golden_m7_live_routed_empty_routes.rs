@@ -175,16 +175,17 @@ main =
 "#;
 
 /// Compile `source` through the ipe pipeline (no cargo).
-fn compile_src(test_name: &str, source: &str) -> Option<Result<(), ipe::CliError>> {
+#[allow(clippy::expect_used)] // a failed scratch setup is the test failure
+fn compile_src(test_name: &str, source: &str) -> Result<(), ipe::CliError> {
     let ipe_dir = crate::support::scratch_root().join(format!("live_routed_empty_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
-    std::fs::create_dir_all(&ipe_dir).ok()?;
+    std::fs::create_dir_all(&ipe_dir).expect("scratch setup must succeed");
     let entry = ipe_dir.join("Main.ipe");
-    std::fs::write(&entry, source).ok()?;
+    std::fs::write(&entry, source).expect("scratch setup must succeed");
     let out = crate::support::scratch_root().join(format!("live_routed_empty_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out);
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, &out, &runtime))
+    ipe::build(&entry, &out, &runtime)
 }
 
 fn repo_root() -> PathBuf {
@@ -284,9 +285,7 @@ fn routed_correct_app_compiles() {
 /// either way IPE-T0001 is the result).
 #[test]
 fn t4d_nonempty_routes_wrong_notfound_is_ipe_t0001() {
-    let Some(result) = compile_src("t4d", T4D_NONEMPTY_ROUTES_WRONG_NOTFOUND) else {
-        return;
-    };
+    let result = compile_src("t4d", T4D_NONEMPTY_ROUTES_WRONG_NOTFOUND);
     let got = match &result {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -304,9 +303,7 @@ fn t4d_nonempty_routes_wrong_notfound_is_ipe_t0001() {
 /// `notFound = CounterPage` (Page) then fails unification → IPE-T0001.
 #[test]
 fn t4f_wrong_route_ctor_is_ipe_t0001() {
-    let Some(result) = compile_src("t4f", T4F_WRONG_ROUTE_CTOR_CORRECT_NOTFOUND) else {
-        return;
-    };
+    let result = compile_src("t4f", T4F_WRONG_ROUTE_CTOR_CORRECT_NOTFOUND);
     let got = match &result {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -324,9 +321,7 @@ fn t4f_wrong_route_ctor_is_ipe_t0001() {
 /// IPE-T0001 from the Part A constraint.
 #[test]
 fn mix_mixed_route_ctors_is_ipe_t0001() {
-    let Some(result) = compile_src("mix", MIX_MIXED_ROUTE_CTORS) else {
-        return;
-    };
+    let result = compile_src("mix", MIX_MIXED_ROUTE_CTORS);
     let got = match &result {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -345,9 +340,7 @@ fn mix_mixed_route_ctors_is_ipe_t0001() {
 /// so the check is skipped and ipe exits Ok.
 #[test]
 fn non_routed_live_app_compiles() {
-    let Some(result) = compile_src("non_routed", NON_ROUTED_LIVE) else {
-        return;
-    };
+    let result = compile_src("non_routed", NON_ROUTED_LIVE);
     assert!(
         result.is_ok(),
         "NON-ROUTED regression: plain Web.tea (no `page` field) must compile, got: {:?}",
@@ -451,10 +444,7 @@ fn routed_empty_routes_well_typed_cargo_builds() {
 /// After fix: ipe exits 0 and emits `web_app` (not `web_app_routed`).
 #[test]
 fn non_routed_with_nonempty_routes_compiles() {
-    let Some(result) = compile_src("non_routed_nonempty", NON_ROUTED_LIVE_WITH_NONEMPTY_ROUTES)
-    else {
-        return;
-    };
+    let result = compile_src("non_routed_nonempty", NON_ROUTED_LIVE_WITH_NONEMPTY_ROUTES);
     assert!(
         result.is_ok(),
         "#153 regression: Web.tea with non-empty routes but no `page` field \
