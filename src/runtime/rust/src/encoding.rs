@@ -122,20 +122,18 @@ pub fn decode_component(raw: &str, grammar: UrlGrammar) -> Result<String, Decode
     decode_component_within(raw, grammar, MAX_URL_COMPONENT_LEN)
 }
 
-/// Split a URL path on its raw `/` separators and decode each segment under
-/// the path grammar.
+/// Split a URL path on its raw `/` separators, without decoding.
 ///
 /// Surrounding `/` are trimmed first, so `/a/b/` and `/a/b` yield the same
-/// segments and `/` yields none. Splitting precedes decoding, so an encoded
-/// `%2F` stays inside its segment. This is the one definition of a
-/// well-formed request path: the route matcher reads its segments from here and
-/// the request gate refuses exactly what this refuses.
+/// segments and `/` yields none. This is the one split rule for a URL path:
+/// [`decode_path_segments`] decodes each piece it yields, and a route pattern
+/// is split by it too, so a pattern and a request path always agree on where
+/// their segments lie.
 ///
 /// # Errors
 ///
-/// `DecodeRefusal::TooLong` for a path over `MAX_URL_COMPONENT_LEN` bytes, else
-/// the refusal of the first segment that does not decode.
-pub fn decode_path_segments(path: &str) -> Result<Vec<String>, DecodeRefusal> {
+/// `DecodeRefusal::TooLong` for a path over `MAX_URL_COMPONENT_LEN` bytes.
+pub fn raw_path_segments(path: &str) -> Result<Vec<&str>, DecodeRefusal> {
     if path.len() > MAX_URL_COMPONENT_LEN.get() {
         return Err(DecodeRefusal::TooLong {
             cap: MAX_URL_COMPONENT_LEN,
@@ -145,10 +143,82 @@ pub fn decode_path_segments(path: &str) -> Result<Vec<String>, DecodeRefusal> {
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
-    trimmed
-        .split('/')
-        .map(|seg| decode_component(seg, UrlGrammar::Path))
+    Ok(trimmed.split('/').collect())
+}
+
+/// Decode one raw path segment under the path grammar (`+` stays literal).
+///
+/// # Errors
+///
+/// The refusal of `decode_component` under [`UrlGrammar::Path`].
+pub fn decode_path_segment(raw: &str) -> Result<String, DecodeRefusal> {
+    decode_component(raw, UrlGrammar::Path)
+}
+
+/// Split a URL path on its raw `/` separators ([`raw_path_segments`]) and
+/// decode each segment under the path grammar ([`decode_path_segment`]).
+///
+/// Splitting precedes decoding, so an encoded `%2F` stays inside its segment.
+/// This is the one definition of a well-formed request path: the route matcher
+/// reads its segments from here and the request gate refuses exactly what this
+/// refuses.
+///
+/// # Errors
+///
+/// `DecodeRefusal::TooLong` for a path over `MAX_URL_COMPONENT_LEN` bytes, else
+/// the refusal of the first segment that does not decode.
+pub fn decode_path_segments(path: &str) -> Result<Vec<String>, DecodeRefusal> {
+    raw_path_segments(path)?
+        .into_iter()
+        .map(decode_path_segment)
         .collect()
+}
+
+/// A request path split on its raw `/` separators, each segment decoded once
+/// under the RFC 3986 path grammar ([`decode_path_segments`]).
+///
+/// A request path is parsed into this once, at the request boundary; every
+/// route matcher, param resolver and base-path strip then reads the decoded
+/// segments and never re-parses the raw text. Splitting precedes decoding, so
+/// an encoded `%2F` stays inside its segment and never becomes a separator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecodedPath(Vec<String>);
+
+impl DecodedPath {
+    /// Split `path` and decode every segment.
+    ///
+    /// # Errors
+    ///
+    /// The `DecodeRefusal` of the first segment that is not a well-formed,
+    /// UTF-8 percent-encoding, or `TooLong` for an oversized path.
+    pub fn parse(path: &str) -> Result<Self, DecodeRefusal> {
+        decode_path_segments(path).map(Self)
+    }
+
+    /// The decoded segments, in path order.
+    #[must_use]
+    pub fn segments(&self) -> &[String] {
+        &self.0
+    }
+
+    /// Is this the root path (`/`, no segments)?
+    #[must_use]
+    pub fn is_root(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The path below `base`, when `base`'s segments are a whole-segment
+    /// prefix of this path's.
+    ///
+    /// The comparison is segment-wise on decoded segments, so a base `/app`
+    /// strips `/app/x` to `/x` and `/app` to `/`, but never touches `/apple`
+    /// (`None`): a base is a path prefix, not a string prefix.
+    #[must_use]
+    pub fn strip_base(&self, base: &Self) -> Option<Self> {
+        self.0
+            .strip_prefix(base.0.as_slice())
+            .map(|rest| Self(rest.to_vec()))
+    }
 }
 
 /// `decode_component` under an explicit length cap.
@@ -773,5 +843,50 @@ mod tests {
                 cap: MAX_QUERY_PAIRS
             })
         );
+    }
+
+    #[test]
+    fn raw_path_segments_trims_and_splits_without_decoding() {
+        assert_eq!(raw_path_segments("/"), Ok(vec![]));
+        assert_eq!(raw_path_segments(""), Ok(vec![]));
+        assert_eq!(raw_path_segments("//"), Ok(vec![]));
+        assert_eq!(raw_path_segments("/a/b/"), Ok(vec!["a", "b"]));
+        assert_eq!(raw_path_segments("/a%2Fb"), Ok(vec!["a%2Fb"]));
+        let long = "a".repeat(MAX_URL_COMPONENT_LEN.get() + 1);
+        assert_eq!(
+            raw_path_segments(&long),
+            Err(DecodeRefusal::TooLong {
+                cap: MAX_URL_COMPONENT_LEN
+            })
+        );
+    }
+
+    #[test]
+    fn decoded_path_root_and_segments() {
+        let root = DecodedPath::parse("/").unwrap();
+        assert!(root.is_root());
+        assert!(root.segments().is_empty());
+        let p = DecodedPath::parse("/a%2Fb/c").unwrap();
+        assert!(!p.is_root());
+        assert_eq!(p.segments(), ["a/b".to_string(), "c".to_string()]);
+        assert!(DecodedPath::parse("/a/%zz").is_err());
+    }
+
+    /// A base is a whole-segment prefix: `/app` never strips `/apple`.
+    #[test]
+    fn strip_base_is_segment_bounded() {
+        let dp = |p: &str| DecodedPath::parse(p).unwrap();
+        let base = dp("/app");
+        assert_eq!(dp("/apple").strip_base(&base), None);
+        assert_eq!(dp("/apple/x").strip_base(&base), None);
+        assert_eq!(dp("/app/x").strip_base(&base), Some(dp("/x")));
+        let at_base = dp("/app").strip_base(&base);
+        assert_eq!(at_base, Some(dp("/")));
+        assert!(at_base.is_some_and(|p| p.is_root()));
+        assert_eq!(dp("/other/app").strip_base(&base), None);
+        // Segments compare decoded: `%61pp` is the segment `app`.
+        assert_eq!(dp("/%61pp/x").strip_base(&base), Some(dp("/x")));
+        // The root base strips nothing.
+        assert_eq!(dp("/app/x").strip_base(&dp("/")), Some(dp("/app/x")));
     }
 }
