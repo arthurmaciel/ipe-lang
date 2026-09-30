@@ -25,7 +25,7 @@
 //!
 //! All tests are pure ipe-pipeline checks (parse → canon → types → lower →
 //! emit). No cargo build or runtime binary required — they run without
-//! `IPE_E2E=1` and skip if the embedded runtime cannot be resolved.
+//! `IPE_E2E=1`.
 
 use std::path::{Path, PathBuf};
 
@@ -174,8 +174,7 @@ main =
         }
 "#;
 
-/// Compile `source` through the ipe pipeline (no cargo). Returns `None` to
-/// skip when the embedded runtime cannot be resolved.
+/// Compile `source` through the ipe pipeline (no cargo).
 fn compile_src(test_name: &str, source: &str) -> Option<Result<(), ipe::CliError>> {
     let ipe_dir = crate::support::scratch_root().join(format!("live_routed_empty_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
@@ -194,8 +193,8 @@ fn repo_root() -> PathBuf {
 }
 
 /// Run the ipe pipeline on the named fixture and return the build result.
-/// Returns `None` (skip) when the embedded runtime cannot be resolved.
-fn run_ipec(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
+/// Returns
+fn run_ipec(fixture: &str, out_suffix: &str) -> Result<(), CliError> {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -206,7 +205,7 @@ fn run_ipec(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, &out, &runtime))
+    ipe::build(&entry, &out, &runtime)
 }
 
 /// R1: Routed Model (`page : Page`), `routes = []`, `notFound = 5` (Int).
@@ -215,12 +214,10 @@ fn run_ipec(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
 /// After Part B: ipe rejects with IPE-T0001 at type-check time.
 #[test]
 fn routed_empty_routes_int_notfound_is_ipe_t0001() {
-    let Some(result) = run_ipec(
+    let result = run_ipec(
         "live_routed_empty_routes_int_notfound",
         "m7_live_routed_empty_routes_int_notfound_emit",
-    ) else {
-        return;
-    };
+    );
 
     let got = match &result {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
@@ -241,12 +238,10 @@ fn routed_empty_routes_int_notfound_is_ipe_t0001() {
 /// After Part B: ipe rejects with IPE-T0001 at type-check time.
 #[test]
 fn routed_empty_routes_wrong_ctor_notfound_is_ipe_t0001() {
-    let Some(result) = run_ipec(
+    let result = run_ipec(
         "live_routed_empty_routes_wrong_ctor_notfound",
         "m7_live_routed_empty_routes_wrong_ctor_notfound_emit",
-    ) else {
-        return;
-    };
+    );
 
     let got = match &result {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
@@ -267,12 +262,10 @@ fn routed_empty_routes_wrong_ctor_notfound_is_ipe_t0001() {
 /// Confirms the Part B hook does NOT trigger on a correctly-typed routed app.
 #[test]
 fn routed_correct_app_compiles() {
-    let Some(result) = run_ipec(
+    let result = run_ipec(
         "live_let_bound_routes",
         "m7_live_let_bound_routes_partb_control",
-    ) else {
-        return;
-    };
+    );
     assert!(
         result.is_ok(),
         "#108 positive control: well-typed routed Web.tea must compile, got: {:?}",
@@ -377,9 +370,8 @@ fn empty_routes_ok_out() -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_routed_empty_routes_ok_emit")
 }
 
-/// Compile the well-typed empty-routes golden into `out`; `None` (skip) when
-/// the runtime cannot be resolved.
-fn compile_empty_routes_ok(out: &Path) -> Option<Result<(), ipe::CliError>> {
+/// Compile the well-typed empty-routes golden into `out`.
+fn compile_empty_routes_ok(out: &Path) -> Result<(), ipe::CliError> {
     let entry = repo_root()
         .join("tests")
         .join("golden")
@@ -387,7 +379,7 @@ fn compile_empty_routes_ok(out: &Path) -> Option<Result<(), ipe::CliError>> {
         .join("Main.ipe");
     let _ = std::fs::remove_dir_all(out);
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, out, &runtime))
+    ipe::build(&entry, out, &runtime)
 }
 
 /// Well-typed routed app with `routes = []` → ipe MUST exit 0, and the
@@ -397,9 +389,7 @@ fn compile_empty_routes_ok(out: &Path) -> Option<Result<(), ipe::CliError>> {
 #[test]
 fn routed_empty_routes_well_typed_compiles_and_renders_route_page() {
     let out = empty_routes_ok_out();
-    let Some(result) = compile_empty_routes_ok(&out) else {
-        return;
-    };
+    let result = compile_empty_routes_ok(&out);
     assert!(
         result.is_ok(),
         "#108 hole 1: well-typed empty-routes routed app must be ipe-0, got: {:?}",
@@ -434,9 +424,7 @@ fn routed_empty_routes_well_typed_cargo_builds() {
     // working directory mid-build.
     let out =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_routed_empty_routes_ok_e2e_emit");
-    let Some(result) = compile_empty_routes_ok(&out) else {
-        return;
-    };
+    let result = compile_empty_routes_ok(&out);
     assert!(result.is_ok(), "must compile: {:?}", result.err());
     let built = e2e_support::build_rust_binary("m7_empty_routes_ok", &out);
     assert!(

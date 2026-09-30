@@ -43,7 +43,7 @@ fn entry_path(root: &Path, name: &str) -> PathBuf {
 
 /// Compile a fixture and assert `ipe` accepts it (the contract now matches the
 /// reference). Returns the emitted output dir for an optional E2E follow-up.
-fn assert_ipec_accepts(name: &str) -> Option<PathBuf> {
+fn assert_ipec_accepts(name: &str) -> PathBuf {
     let root = repo_root();
     let entry = entry_path(&root, name);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_ipec_out"));
@@ -57,7 +57,7 @@ fn assert_ipec_accepts(name: &str) -> Option<PathBuf> {
         "ipe build must succeed for {name} (contract converged to reference): {:?}",
         built.err()
     );
-    Some(out)
+    out
 }
 
 fn e2e_build_and_run(name: &str, expect_stdout_contains: &str) {

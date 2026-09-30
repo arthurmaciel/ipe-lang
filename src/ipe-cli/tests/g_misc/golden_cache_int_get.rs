@@ -22,11 +22,11 @@ fn fixture_entry(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-fn built(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
+fn built(root: &Path, out: &Path) -> Result<(), ipe::CliError> {
     let entry = fixture_entry(root);
     let _ = std::fs::remove_dir_all(out);
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, out, &runtime))
+    ipe::build(&entry, out, &runtime)
 }
 
 /// Emit assertion (default gate): the frontend must accept the
@@ -35,9 +35,7 @@ fn built(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
 fn cache_int_get_emits() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_cache_int_get_emit");
-    let Some(built) = built(&root, &out) else {
-        return;
-    };
+    let built = built(&root, &out);
     assert!(
         built.is_ok(),
         "cache_int_get: must be accepted + emitted, got: {built:?}"
@@ -52,9 +50,7 @@ fn cache_int_get_emits() {
 fn cache_int_get_builds_and_runs() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_cache_int_get_e2e");
-    let Some(built) = built(&root, &out) else {
-        return;
-    };
+    let built = built(&root, &out);
     assert!(
         built.is_ok(),
         "cache_int_get: must be accepted, got: {built:?}"

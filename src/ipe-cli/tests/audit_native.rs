@@ -815,10 +815,7 @@ mod real_jail {
     /// its app crate under `base/out`, and repoint the bound-crate pin at the
     /// local fixture crate so an offline probe build resolves it. Returns the
     /// package root and the emitted crate dir.
-    fn emit_real_native_package(
-        base: &std::path::Path,
-        net_reach: bool,
-    ) -> Option<(PathBuf, PathBuf)> {
+    fn emit_real_native_package(base: &std::path::Path, net_reach: bool) -> (PathBuf, PathBuf) {
         let runtime = e2e_support::require_runtime().into_path_buf();
         let pkg = base.join("pkg");
         std::fs::create_dir_all(pkg.join("src")).expect("pkg src");
@@ -867,7 +864,7 @@ mod real_jail {
             &format!("csum = {{ path = {:?} }}", csum.display().to_string()),
         );
         std::fs::write(&manifest_path, patched).expect("patched manifest");
-        Some((pkg, out))
+        (pkg, out)
     }
 
     /// Build the Tier-2 probe crate `native_tier2` emitted into `out`, OUTSIDE the
@@ -914,10 +911,7 @@ mod real_jail {
             return;
         }
         let base = non_tmp_base("certify");
-        let Some((pkg, out)) = emit_real_native_package(&base, false) else {
-            eprintln!("audit_native e2e: skipping — runtime unavailable");
-            return;
-        };
+        let (pkg, out) = emit_real_native_package(&base, false);
 
         let declared: BTreeSet<Capability> = set(&[Capability::NativeFfi]);
         let _guard = JAIL_LOCK
@@ -982,10 +976,7 @@ mod real_jail {
             return;
         }
         let base = non_tmp_base("reject-undeclared");
-        let Some((pkg, out)) = emit_real_native_package(&base, true) else {
-            eprintln!("audit_native e2e: skipping — runtime unavailable");
-            return;
-        };
+        let (pkg, out) = emit_real_native_package(&base, true);
 
         // Declare only `native-ffi`: network is NOT in the consent surface, so the
         // declared-scoped jail withholds it.

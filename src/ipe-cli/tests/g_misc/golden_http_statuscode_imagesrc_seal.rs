@@ -22,7 +22,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-fn built_statuscode(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
+fn built_statuscode(root: &Path, out: &Path) -> Result<(), ipe::CliError> {
     let entry = root
         .join("tests")
         .join("golden")
@@ -30,10 +30,10 @@ fn built_statuscode(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>
         .join("Main.ipe");
     let _ = std::fs::remove_dir_all(out);
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, out, &runtime))
+    ipe::build(&entry, out, &runtime)
 }
 
-fn built_imagesrc(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
+fn built_imagesrc(root: &Path, out: &Path) -> Result<(), ipe::CliError> {
     let entry = root
         .join("tests")
         .join("golden")
@@ -41,7 +41,7 @@ fn built_imagesrc(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> 
         .join("Main.ipe");
     let _ = std::fs::remove_dir_all(out);
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, out, &runtime))
+    ipe::build(&entry, out, &runtime)
 }
 
 // ── Ipe.Http.StatusCode ──────────────────────────────────────────────────────
@@ -52,9 +52,7 @@ fn built_imagesrc(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> 
 fn statuscode_seal_emits() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_statuscode_seal_emit");
-    let Some(built) = built_statuscode(&root, &out) else {
-        return;
-    };
+    let built = built_statuscode(&root, &out);
     assert!(
         built.is_ok(),
         "statuscode_seal: must be accepted + emitted, got: {built:?}"
@@ -67,9 +65,7 @@ fn statuscode_seal_emits() {
 fn statuscode_seal_builds_and_runs() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_statuscode_seal_e2e");
-    let Some(built) = built_statuscode(&root, &out) else {
-        return;
-    };
+    let built = built_statuscode(&root, &out);
     assert!(
         built.is_ok(),
         "statuscode_seal: must be accepted, got: {built:?}"
@@ -106,9 +102,7 @@ fn statuscode_seal_builds_and_runs() {
 fn imagesrc_seal_emits() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_imagesrc_seal_emit");
-    let Some(built) = built_imagesrc(&root, &out) else {
-        return;
-    };
+    let built = built_imagesrc(&root, &out);
     assert!(
         built.is_ok(),
         "imagesrc_seal: must be accepted + emitted, got: {built:?}"
@@ -123,9 +117,7 @@ fn imagesrc_seal_emits() {
 fn imagesrc_seal_builds_and_runs() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_imagesrc_seal_e2e");
-    let Some(built) = built_imagesrc(&root, &out) else {
-        return;
-    };
+    let built = built_imagesrc(&root, &out);
     assert!(
         built.is_ok(),
         "imagesrc_seal: must be accepted, got: {built:?}"

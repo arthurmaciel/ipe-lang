@@ -29,9 +29,8 @@ fn repo_root() -> PathBuf {
 
 /// Build the named golden fixture through the full pipeline and assert the build
 /// SUCCEEDS (the tuple-pattern shape is now modelled, so no diagnostic fires).
-/// Returns the emitted output directory for the optional E2E build+run. A skip
-/// occurs only when the runtime cannot be resolved.
-fn build_ok(fixture: &str, out_suffix: &str) -> Option<PathBuf> {
+/// Returns the emitted output directory for the optional E2E build+run.
+fn build_ok(fixture: &str, out_suffix: &str) -> PathBuf {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -47,7 +46,7 @@ fn build_ok(fixture: &str, out_suffix: &str) -> Option<PathBuf> {
         built.is_ok(),
         "fixture {fixture}: tuple-pattern shape must now build cleanly, got {built:?}"
     );
-    Some(out)
+    out
 }
 
 /// Behind `IPE_E2E=1`, build the emitted crate with cargo and assert stdout is
@@ -83,14 +82,12 @@ fn assert_e2e_prints_three(out: &Path) {
 
 #[test]
 fn multi_arm_tuple_case_lowers_and_runs() {
-    if let Some(out) = build_ok("gate_multiarm", "m3b1_gate_multiarm_emit") {
-        assert_e2e_prints_three(&out);
-    }
+    let out = build_ok("gate_multiarm", "m3b1_gate_multiarm_emit");
+    assert_e2e_prints_three(&out);
 }
 
 #[test]
 fn refutable_tuple_element_lowers_and_runs() {
-    if let Some(out) = build_ok("gate_refutable", "m3b1_gate_refutable_emit") {
-        assert_e2e_prints_three(&out);
-    }
+    let out = build_ok("gate_refutable", "m3b1_gate_refutable_emit");
+    assert_e2e_prints_three(&out);
 }

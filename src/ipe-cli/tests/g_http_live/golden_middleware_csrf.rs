@@ -20,9 +20,8 @@ fn out_dir() -> PathBuf {
     crate::support::scratch_root().join("ipec_m6_middleware_csrf")
 }
 
-/// Compile the fixture into `out`; `None` (skip) when the runtime cannot be
-/// resolved.
-fn compile(out: &Path) -> Option<Result<(), ipe::CliError>> {
+/// Compile the fixture into `out`.
+fn compile(out: &Path) -> Result<(), ipe::CliError> {
     let entry = repo_root()
         .join("tests")
         .join("golden")
@@ -30,16 +29,14 @@ fn compile(out: &Path) -> Option<Result<(), ipe::CliError>> {
         .join("Main.ipe");
     let _ = std::fs::remove_dir_all(out);
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, out, &runtime))
+    ipe::build(&entry, out, &runtime)
 }
 
 /// A `Server.post` route wrapped in `Middleware.withCsrf` must be ipe-0 and
 /// emit `middleware_with_csrf(...)` wrapping the handler.
 #[test]
 fn middleware_with_csrf_emits_wrapped_handler() {
-    let Some(result) = compile(&out_dir()) else {
-        return;
-    };
+    let result = compile(&out_dir());
     assert!(
         result.is_ok(),
         "#63: Middleware.withCsrf-wrapped route must be ipe-0, got: {:?}",
@@ -65,9 +62,7 @@ fn middleware_with_csrf_cargo_builds() {
     // re-emitting into `out_dir()` in parallel cannot delete rustc's working
     // directory mid-build.
     let out = crate::support::scratch_root().join("ipec_m6_middleware_csrf_e2e");
-    let Some(result) = compile(&out) else {
-        return;
-    };
+    let result = compile(&out);
     assert!(
         result.is_ok(),
         "Middleware.withCsrf-wrapped route must be ipe-0, got: {:?}",

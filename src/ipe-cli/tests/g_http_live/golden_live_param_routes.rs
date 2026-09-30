@@ -45,8 +45,8 @@ fn solo_out() -> PathBuf {
 }
 
 /// Compile the on-disk solo golden (`tests/golden/live_param_routes`) into
-/// `out`. Returns `None` (skip) when the embedded runtime cannot be resolved.
-fn compile_solo_into(out: &Path) -> Option<Result<(), CliError>> {
+/// `out`. Returns
+fn compile_solo_into(out: &Path) -> Result<(), CliError> {
     let entry = repo_root()
         .join("tests")
         .join("golden")
@@ -54,7 +54,7 @@ fn compile_solo_into(out: &Path) -> Option<Result<(), CliError>> {
         .join("Main.ipe");
     let _ = std::fs::remove_dir_all(out);
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, out, &runtime))
+    ipe::build(&entry, out, &runtime)
 }
 
 /// Compile an inline source through the ipe pipeline (no cargo).
@@ -137,9 +137,7 @@ main =
 /// path). Compile-only — always runs.
 #[test]
 fn param_route_solo_compiles_and_emits_param_conversion() {
-    let Some(result) = compile_solo_into(&solo_out()) else {
-        return;
-    };
+    let result = compile_solo_into(&solo_out());
     assert!(
         result.is_ok(),
         "#108 hole 3: a `:param` route with a payload-ctor builder must be \
@@ -251,9 +249,7 @@ fn param_route_solo_cargo_builds_and_delivers_param() {
     // re-emitting into `solo_out()` in parallel cannot delete rustc's working
     // directory mid-build.
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_param_routes_e2e_emit");
-    let Some(result) = compile_solo_into(&out) else {
-        return;
-    };
+    let result = compile_solo_into(&out);
     assert!(
         result.is_ok(),
         "a `:param` route with a payload-ctor builder must be ipe-0, got: {:?}",

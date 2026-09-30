@@ -33,8 +33,8 @@ fn repo_root() -> PathBuf {
 }
 
 /// Run the ipe pipeline on the named fixture and return the build result.
-/// Returns `None` (skip) when the embedded runtime cannot be resolved.
-fn run_ipec(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
+/// Returns
+fn run_ipec(fixture: &str, out_suffix: &str) -> Result<(), CliError> {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -45,7 +45,7 @@ fn run_ipec(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, &out, &runtime))
+    ipe::build(&entry, &out, &runtime)
 }
 
 /// NEGATIVE gate: `Event.onInput` with a `Bool -> msg`
@@ -57,9 +57,7 @@ fn run_ipec(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
 /// expected `String -> msg` → IPE-T0001 at the type-checking stage.
 #[test]
 fn event_oninput_illtyped_bool_handler_is_ipe_t0001() {
-    let Some(result) = run_ipec("stdui_event_illtyped", "m7_stdui_event_illtyped_emit") else {
-        return;
-    };
+    let result = run_ipec("stdui_event_illtyped", "m7_stdui_event_illtyped_emit");
 
     let got = match &result {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
@@ -79,9 +77,7 @@ fn event_oninput_illtyped_bool_handler_is_ipe_t0001() {
 /// break well-typed `Event.onInput` usage.
 #[test]
 fn event_oninput_correct_handler_compiles() {
-    let Some(result) = run_ipec("stdui_event_oninput", "m7_stdui_event_oninput_emit") else {
-        return;
-    };
+    let result = run_ipec("stdui_event_oninput", "m7_stdui_event_oninput_emit");
 
     assert!(
         result.is_ok(),

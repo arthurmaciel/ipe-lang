@@ -29,9 +29,8 @@ fn repo_root() -> PathBuf {
 }
 
 /// Run the ipe pipeline on `tests/golden/live_let_bound_routes/Main.ipe`,
-/// emitting into `out`. Returns `None` when the embedded runtime is
-/// unavailable (skip).
-fn run_ipec(out: &Path) -> Option<Result<(), ipe::CliError>> {
+/// emitting into `out`.
+fn run_ipec(out: &Path) -> Result<(), ipe::CliError> {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -41,7 +40,7 @@ fn run_ipec(out: &Path) -> Option<Result<(), ipe::CliError>> {
     let _ = std::fs::remove_dir_all(out);
 
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, out, &runtime))
+    ipe::build(&entry, out, &runtime)
 }
 
 /// The emit dir shared by the compile-only assertions.
@@ -60,9 +59,7 @@ fn compile_out() -> PathBuf {
 /// `Web.route`, not at the list-collection level.
 #[test]
 fn live_let_bound_routes_compiles_no_ice() {
-    let Some(result) = run_ipec(&compile_out()) else {
-        return;
-    };
+    let result = run_ipec(&compile_out());
     assert!(
         result.is_ok(),
         "IPE-I0001 regression: let-bound routeTable must compile, got: {:?}",
@@ -84,9 +81,7 @@ fn live_let_bound_routes_compiles_no_ice() {
 #[test]
 fn live_let_bound_routes_renders_route_page() {
     let out = compile_out();
-    let Some(result) = run_ipec(&out) else {
-        return;
-    };
+    let result = run_ipec(&out);
     assert!(result.is_ok(), "must compile: {:?}", result.err());
     // A layout builder is compiled-source Ipê now, so the route table's home may
     // lower to `src/ipe_mods/*.rs` — scan the WHOLE emitted Ipê-side tree.
@@ -111,9 +106,7 @@ fn live_let_bound_routes_cargo_builds() {
     // re-emitting into `compile_out()` in parallel cannot delete rustc's
     // working directory mid-build.
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_let_bound_routes_e2e_emit");
-    let Some(result) = run_ipec(&out) else {
-        return;
-    };
+    let result = run_ipec(&out);
     assert!(result.is_ok(), "must compile: {:?}", result.err());
     let built = e2e_support::build_rust_binary("m7_let_bound_routes", &out);
     assert!(

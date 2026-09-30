@@ -31,11 +31,11 @@ fn fixture_entry(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-fn built(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
+fn built(root: &Path, out: &Path) -> Result<(), ipe::CliError> {
     let entry = fixture_entry(root);
     let _ = std::fs::remove_dir_all(out);
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, out, &runtime))
+    ipe::build(&entry, out, &runtime)
 }
 
 /// Emit assertion (default gate): the frontend must accept a program that drives
@@ -44,9 +44,7 @@ fn built(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
 fn typed_primitives_seal_emits() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_typed_primitives_seal_emit");
-    let Some(built) = built(&root, &out) else {
-        return; // resolver unavailable — skip, matches the other goldens
-    };
+    let built = built(&root, &out);
     assert!(
         built.is_ok(),
         "typed_primitives_seal: must be accepted + emitted, got: {built:?}"
@@ -60,9 +58,7 @@ fn typed_primitives_seal_emits() {
 fn typed_primitives_seal_builds_and_runs() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_typed_primitives_seal_e2e");
-    let Some(built) = built(&root, &out) else {
-        return;
-    };
+    let built = built(&root, &out);
     assert!(
         built.is_ok(),
         "typed_primitives_seal: must be accepted, got: {built:?}"

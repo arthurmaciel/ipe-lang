@@ -24,7 +24,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-fn built_url_scheme(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
+fn built_url_scheme(root: &Path, out: &Path) -> Result<(), ipe::CliError> {
     let entry = root
         .join("tests")
         .join("golden")
@@ -32,7 +32,7 @@ fn built_url_scheme(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>
         .join("Main.ipe");
     let _ = std::fs::remove_dir_all(out);
     let runtime = e2e_support::require_runtime().into_path_buf();
-    Some(ipe::build(&entry, out, &runtime))
+    ipe::build(&entry, out, &runtime)
 }
 
 /// Emit assertion: the frontend must accept the whole refusal matrix — every
@@ -41,9 +41,7 @@ fn built_url_scheme(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>
 fn url_scheme_seal_emits() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_url_scheme_seal_emit");
-    let Some(built) = built_url_scheme(&root, &out) else {
-        return;
-    };
+    let built = built_url_scheme(&root, &out);
     assert!(
         built.is_ok(),
         "url_scheme_seal: must be accepted + emitted, got: {built:?}"
@@ -57,9 +55,7 @@ fn url_scheme_seal_emits() {
 fn url_scheme_seal_builds_and_runs() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_url_scheme_seal_e2e");
-    let Some(built) = built_url_scheme(&root, &out) else {
-        return;
-    };
+    let built = built_url_scheme(&root, &out);
     assert!(
         built.is_ok(),
         "url_scheme_seal: must be accepted, got: {built:?}"
