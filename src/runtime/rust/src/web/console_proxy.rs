@@ -87,7 +87,8 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
 /// No-orphan defence in depth: `kill_on_drop` + `shutdown_console` (signal
 /// handler) cover the graceful paths, and on Linux `PR_SET_PDEATHSIG` makes the
 /// kernel SIGTERM the child if the parent dies by ANY means — including SIGKILL
-/// / OOM / a crash the signal handler can't catch.
+/// / OOM / a crash the signal handler can't catch. A refused hardened spawn
+/// falls back to the in-process console, never to an unhardened child.
 pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Option<()> {
     let bin = console_bin_path()?;
     let mut cmd = Command::new(&bin);
@@ -112,12 +113,11 @@ pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Opti
     }
     // Parent-death signal: if the parent dies for ANY reason (SIGKILL, OOM,
     // panic-abort) the kernel SIGTERMs this child, so it can never outlive the
-    // parent as an orphan. Routed through the SINGLE sanctioned `PR_SET_PDEATHSIG`
-    // site (`system::harden_child_parent_death`) via tokio's std view — the
-    // `pre_exec` set there is honoured by tokio's spawn. `kill_on_drop` above
+    // parent as an orphan. `spawn_hardened_tokio` forks it from the runtime's
+    // process-lifetime spawner thread (the signal is bound to the forking
+    // thread), registered with this caller's tokio runtime. `kill_on_drop` above
     // remains the graceful-path floor tokio adds on top. No-op on non-Linux.
-    crate::system::harden_child_parent_death(cmd.as_std_mut());
-    match cmd.spawn() {
+    match crate::system::spawn_hardened_tokio(cmd) {
         Ok(child) => {
             if let Ok(mut g) = CHILD.lock() {
                 *g = Some(child);
@@ -161,8 +161,8 @@ pub fn shutdown_console() {
 // exits 0. A previous `install_shutdown_hook` here installed a SECOND tokio
 // signal handler that `std::process::exit(130)`'d; two handlers raced and the
 // 130 exit defeated the exit-0-on-clean-shutdown contract. It was removed. The
-// `PR_SET_PDEATHSIG` (Linux) + `kill_on_drop` set in `spawn_console` remain the
-// defense-in-depth floor for NON-graceful parent death (SIGKILL / OOM / crash).
+// `PR_SET_PDEATHSIG` (Linux, via `system::spawn_hardened_tokio`) + `kill_on_drop`
+// set in `spawn_console` remain the defense-in-depth floor for NON-graceful parent death (SIGKILL / OOM / crash).
 
 // ─── Reverse proxy ──────────────────────────────────────────────────────────
 
