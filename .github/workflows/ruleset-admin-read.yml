@@ -13,8 +13,9 @@
 # guarantee; `check_required_set.py --fetch-admin` proves it before reading.
 # Defence in depth under it: the trigger is `schedule` alone (a scheduled run
 # uses the default branch's tree), and `verify-manifest.py` check 8 holds the
-# secret and the environment to this one job. Recover a red run with
-# `gh run rerun`.
+# secret and the environment to this one job. Recover a red run caused by the
+# ruleset or its token with `gh run rerun`; one caused by this tree needs the
+# break-glass sequence in `.github/ci/RECONCILIATION.md`.
 name: Ruleset admin read
 
 on:

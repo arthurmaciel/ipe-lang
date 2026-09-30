@@ -109,6 +109,26 @@ strict policy would buy; the queue's grouping is pinned for that reason.
 
    Review `/tmp/rs-new.json` before the `PUT`: it rewrites the whole ruleset.
 
+## Break glass: a red nightly that only a merge can fix
+
+`nightly-green` holds every merge while a nightly run it requires is red.
+When that run is red because of a defect in the tree on `main` (a workflow,
+a `.github/ci/` tool, or the manifest) rather than in the ruleset, a token,
+or the code under test, the fix must merge before the next run can go green,
+and `nightly-green` holds that merge. `gh run rerun` does not help: a re-run
+keeps the run's `created_at`, so it re-judges the same tree and never
+refreshes the run's age. The repository owner breaks the loop:
+
+1. On the fix's tree, prove the live ruleset matches it:
+   `python3 .github/ci/check_required_set.py --live <(gh api "repos/ipe-lang/compiler/rulesets/$id")`
+   (`$id` as in step 3 above). Stop if it is red.
+2. Remove `nightly-green` from the ruleset's required status checks (the
+   `PUT` of step 3, with that one pair dropped).
+3. Merge the fix through the merge queue.
+4. Restore `nightly-green` (the `PUT` of step 3 with `required-set.json`
+   unchanged) and re-run the `--live` read of step 3; it must report a match.
+   The next nightly run on `main` then proves the fix.
+
 ## Contexts outside the required set
 
 - `nightly-gate` contexts run on the nightly full gate, not per change; a red
