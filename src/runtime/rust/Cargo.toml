@@ -676,6 +676,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
 
+[lints.rust]
+# Mirrors the workspace `unsafe_code` deny (this crate keeps its own `[lints]`).
+unsafe_code = "deny"
+
 [lints.clippy]
 # No-runtime-errors gate: a panic vector reached from well-typed code is a bug.
 # Exceptions are per-site #[allow] markers carrying IPE-RUST-AUDIT:ACCEPTED,
