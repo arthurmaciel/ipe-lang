@@ -2070,6 +2070,8 @@ _TOOL_INSTALLER = "taiki-e/install-action@"
 # The one step `if:` a claim step may carry: the release-only trivial pass.
 _CLAIM_STEP_GUARDS = frozenset({"needs.changes.outputs.release_only != 'true'"})
 _TEST_RUNS = frozenset({"test", "nextest run", "bench"})
+# Options that change the manifest, directory, or config a claimed run reads.
+_CLAIM_REDIRECTING = frozenset({"--config", "-C", "-Z", "--manifest-path"})
 _TOOL_SPLIT = re.compile(r"[,\s]+")
 
 
@@ -2114,10 +2116,17 @@ def _claimed_cell(
         return "its runner output is not piped into the count"
     if shell_lex.trim(run) != f"{' '.join(src)} | {' '.join(cmd.words)}":
         return "its `run:` is not exactly `cargo test … | python3 " + WASM_COUNT_SCRIPT + " N`"
-    got = cargo_invocation._unwrap(src)
-    inv = cargo_invocation.parse(got[1]) if not isinstance(got, str) and got[0] == "cargo" else "not a cargo command"
+    if src[:1] != ["cargo"]:
+        return "its runner command is not a bare `cargo` (no env assignment, wrapper, or path)"
+    args = src[1:]
+    redirecting = next((w for w in args if cargo_invocation._option(w, _CLAIM_REDIRECTING, frozenset()) is not None), None)
+    if redirecting is not None:
+        return f"its {redirecting!r} changes what cargo reads, which this check does not follow"
+    inv = cargo_invocation.parse(args)
     if isinstance(inv, str):
         return f"its runner command is unreadable: {inv}"
+    if inv.directory is not None:
+        return "it changes cargo's directory"
     if inv.subcommand not in _TEST_RUNS:
         return f"`cargo {inv.subcommand}` runs no test"
     if len(inv.packages) != 1 or inv.workspace or inv.manifest_path is not None:
