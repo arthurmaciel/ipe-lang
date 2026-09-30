@@ -1038,15 +1038,50 @@ fn transport_failed_message(op: &str, exit: CurlExit) -> String {
     ))
 }
 
+/// The most `errors[]` entries [`pr_already_exists_marker`] walks looking for
+/// the "already exists" marker — GitHub's own reply carries a handful of
+/// entries; a bound keeps a pathological reply from costing an unbounded scan.
+const MAX_PR_REPLY_ERRORS: usize = 16;
+
+/// Whether `json` carries GitHub's "a pull request already exists" marker
+/// (case-insensitive), checking the top-level `message` field AND, bounded to
+/// [`MAX_PR_REPLY_ERRORS`] entries, every `errors[].message`.
+///
+/// GitHub's real duplicate-PR 422 puts the marker only inside
+/// `errors[0].message`; the top-level `message` is the generic "Validation
+/// Failed" shared by every 422. Checking only the top-level field (the prior
+/// shape of this check) never matches that real reply and always falls
+/// through to [`PrResult::Failed`] — a correctness bug in the refusal
+/// direction, not the permissive one, but still a spurious failure this
+/// function closes by looking where GitHub actually puts the marker.
+fn pr_already_exists_marker(json: &serde_json::Value) -> bool {
+    let mentions_marker = |text: &str| text.to_lowercase().contains("already exists");
+    if json
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(mentions_marker)
+    {
+        return true;
+    }
+    json.get("errors")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(MAX_PR_REPLY_ERRORS)
+        .filter_map(|entry| entry.get("message").and_then(serde_json::Value::as_str))
+        .any(mentions_marker)
+}
+
 /// Classify a GitHub PR-open reply into a typed [`PrResult`] — the one place an
 /// [`HttpStatus`] and a parsed JSON body become that outcome, shared by
 /// production and its test.
 ///
-/// A 422 is [`PrResult::AlreadyExists`] only when GitHub's own `message` field
-/// says so (case-insensitively contains "already exists"); any other 422 — or
-/// any status outside 201/422 — is [`PrResult::Failed`]. GitHub also returns
-/// 422 for unrelated validation failures (e.g. a malformed `head`), which the
-/// prior unconditional `422 => AlreadyExists` mapping misreported as success.
+/// A 422 is [`PrResult::AlreadyExists`] only when [`pr_already_exists_marker`]
+/// finds the marker (in the top-level `message` or an `errors[].message`); any
+/// other 422 — or any status outside 201/422 — is [`PrResult::Failed`]. GitHub
+/// also returns 422 for unrelated validation failures (e.g. a malformed
+/// `head`), which the prior unconditional `422 => AlreadyExists` mapping
+/// misreported as success.
 fn classify_pr_reply(status: HttpStatus, json: &serde_json::Value) -> PrResult {
     let message = json.get("message").and_then(serde_json::Value::as_str);
     match status.get() {
@@ -1057,9 +1092,7 @@ fn classify_pr_reply(status: HttpStatus, json: &serde_json::Value) -> PrResult {
                 || PrResult::Failed("201 response missing html_url".to_owned()),
                 |url| PrResult::Created(url.to_owned()),
             ),
-        422 if message.is_some_and(|m| m.to_lowercase().contains("already exists")) => {
-            PrResult::AlreadyExists
-        }
+        422 if pr_already_exists_marker(json) => PrResult::AlreadyExists,
         _ => PrResult::Failed(
             message
                 .unwrap_or("unexpected GitHub API response")
@@ -2183,6 +2216,10 @@ mod tests {
     /// typed [`CurlOutcome::TransportFailed`], never a fabricated status —
     /// and the resulting message carries curl's exit code but no argv and no
     /// token.
+    ///
+    /// Unix-only: the fake binary is a `#!/bin/sh` script made executable via
+    /// `std::os::unix::fs::PermissionsExt`, neither of which exists on Windows.
+    #[cfg(unix)]
     #[test]
     fn curl_nonzero_exit_is_a_typed_transport_failure() {
         // A fake `curl` binary, invoked by absolute path (bypassing `PATH`
@@ -2227,6 +2264,51 @@ mod tests {
         );
     }
 
+    /// A curl child that exits 0 but writes status text `HttpStatus::parse`
+    /// refuses — `"000"`, non-digits, or nothing at all — is a typed
+    /// [`CurlRunError::Status`], never a fabricated 0 or an empty reply
+    /// silently treated as success.
+    ///
+    /// Unix-only: the fake binary is a `#!/bin/sh` script made executable via
+    /// `std::os::unix::fs::PermissionsExt`, neither of which exists on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn curl_zero_exit_with_malformed_status_is_a_typed_status_refusal() {
+        let cases: [(&str, StatusError); 3] = [
+            ("000", StatusError::NoResponse),
+            ("abc", StatusError::NotDigits),
+            ("", StatusError::Empty),
+        ];
+        for (stdout_text, expected) in cases {
+            let fake_bin = ScratchDir::new("fake-curl-bad-status").expect("scratch dir");
+            let fake_curl = fake_bin.path().join("curl");
+            std::fs::write(
+                &fake_curl,
+                format!("#!/bin/sh\nprintf '%s' '{stdout_text}'\nexit 0\n"),
+            )
+            .expect("write fake curl");
+            let mut perms = std::fs::metadata(&fake_curl)
+                .expect("stat fake curl")
+                .permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+            std::fs::set_permissions(&fake_curl, perms).expect("chmod fake curl");
+
+            let token = crate::login::PublishToken::parse("testtoken123").expect("token");
+            let result = run_curl_with_bin(
+                &fake_curl,
+                &CurlMethod::Get,
+                "https://api.github.com/user",
+                &token,
+                "ipe-test-bad-status",
+            );
+
+            assert!(
+                matches!(&result, Err(CurlRunError::Status(actual)) if *actual == expected),
+                "status text {stdout_text:?} should refuse as Status({expected:?}), got {result:?}"
+            );
+        }
+    }
+
     /// A response body past the shared cap is a typed refusal, never a
     /// silently truncated read.
     #[test]
@@ -2245,15 +2327,40 @@ mod tests {
 
     /// HTTP 201 with `html_url` → `PrResult::Created`.
     /// HTTP 200 with `html_url` → `PrResult::Failed` (not a Create response).
-    /// HTTP 422 with an "already exists" message → `PrResult::AlreadyExists`.
-    /// HTTP 422 WITHOUT that marker, 5xx, and 401/403 are all refusals —
-    /// `PrResult::Failed`, never `AlreadyExists` or `Created`.
+    /// HTTP 422 shaped like GitHub's real duplicate-PR reply (the marker sits
+    /// only in `errors[].message`, not the generic top-level `message`) →
+    /// `PrResult::AlreadyExists`.
+    /// HTTP 422 whose `errors` never mention "already exists", 422 with no
+    /// `errors` at all, 5xx, and 401/403 are all refusals — `PrResult::Failed`,
+    /// never `AlreadyExists` or `Created`.
     #[test]
     fn pr_result_classification() {
         let with_url = serde_json::json!({"html_url": "https://github.com/foo/bar/pull/1"});
-        let already_exists =
-            serde_json::json!({"message": "A pull request already exists for foo:branch."});
+        // GitHub's actual shape for a duplicate-PR 422: a generic top-level
+        // `message` plus the real marker nested in `errors[0].message`.
+        let already_exists = serde_json::json!({
+            "message": "Validation Failed",
+            "errors": [
+                {
+                    "resource": "PullRequest",
+                    "code": "custom",
+                    "message": "A pull request already exists for foo:branch."
+                }
+            ]
+        });
         let validation_failed = serde_json::json!({"message": "Validation Failed"});
+        // A 422 that DOES carry `errors`, none of which mention "already
+        // exists" — e.g. a malformed `head` — must still be a refusal.
+        let unrelated_validation_failure = serde_json::json!({
+            "message": "Validation Failed",
+            "errors": [
+                {
+                    "resource": "PullRequest",
+                    "code": "invalid",
+                    "message": "head sha can't be blank"
+                }
+            ]
+        });
         let forbidden = serde_json::json!({"message": "Forbidden"});
         let empty = serde_json::json!({});
 
@@ -2270,12 +2377,19 @@ mod tests {
         );
         assert_eq!(
             classify_pr_reply(s("422"), &already_exists),
-            PrResult::AlreadyExists
+            PrResult::AlreadyExists,
+            "the marker in errors[].message must be found even though the \
+             top-level message is only the generic \"Validation Failed\""
         );
         assert_eq!(
             classify_pr_reply(s("422"), &validation_failed),
             PrResult::Failed("Validation Failed".to_owned()),
             "a 422 without an \"already exists\" marker must never be reported as success"
+        );
+        assert_eq!(
+            classify_pr_reply(s("422"), &unrelated_validation_failure),
+            PrResult::Failed("Validation Failed".to_owned()),
+            "a 422 whose errors never mention \"already exists\" must never be reported as success"
         );
         assert_eq!(
             classify_pr_reply(s("500"), &validation_failed),
