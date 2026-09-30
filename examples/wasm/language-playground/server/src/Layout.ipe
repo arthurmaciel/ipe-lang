@@ -1,4 +1,4 @@
-module Layout exposing (Layout, LayoutRefusal(..), indexPath, layoutMessage, locate, pkgDir, requiredFiles, rootOf, staticDir)
+module Layout exposing (Layout, LayoutRefusal(..), indexPath, layoutMessage, locate, pkgDir, probe, requiredFiles, rootOf, staticDir)
 
 import Ipe.Error as Error exposing (Error)
 import Ipe.File as File
@@ -11,11 +11,13 @@ import Ipe.Task as Task exposing (Task)
 -- Where the files the server serves live. The server starts from the
 -- playground's `server/` directory, so its parent is the playground root; every
 -- file the page needs is proven present there before the server listens, and
--- every served path is absolute from that root, never resolved against the
--- working directory again.
-{-| The playground root, proven to hold every file in `requiredFiles`. -}
+-- every served path is a `Path` parsed from that absolute root, never resolved
+-- against the working directory again.
+{-| The page, the static directory and the wasm bundle directory, under a root
+proven to hold every file in `requiredFiles`.
+-}
 type Layout
-    = Layout String
+    = Layout Path Path Path
 
 
 {-| Why the server refuses to start on the directory it was started from. -}
@@ -30,36 +32,58 @@ requiredFiles =
     [ "index.html", "static/app.js", "pkg/ipe_wasm.js", "pkg/ipe_wasm_bg.wasm" ]
 
 
-{-| The playground root for the server's working directory: its parent. -}
-rootOf : String -> Result LayoutRefusal String
+{-| The playground root for the server's working directory: its parent. The
+directory is parsed once; a path that is not absolute is refused.
+-}
+rootOf : String -> Result LayoutRefusal Path
 rootOf cwd =
-    if String.startsWith "/" cwd then
-        case Path.fromString cwd of
-            Ok path ->
-                Ok (Path.dir path)
+    case Path.fromString cwd of
+        Ok path ->
+            if Path.isAbsolute path then
+                Result.mapError (\_ -> RelativeCwd cwd) (Path.fromString (Path.dir path))
 
-            Err _ ->
+            else
                 Err (RelativeCwd cwd)
 
-    else
-        Err (RelativeCwd cwd)
+        Err _ ->
+            Err (RelativeCwd cwd)
+
+
+-- `rel` under `root`, parsed as a `Path` in its own right.
+child : Path -> String -> Result Error Path
+child root rel =
+    Path.fromString (Path.toString root ++ "/" ++ rel)
+
+
+{-| The layout for the server's working directory, or the refusal naming the
+first required file it lacks.
+-}
+probe : String -> Task Error (Result LayoutRefusal Layout)
+probe cwd =
+    case rootOf cwd of
+        Err refusal ->
+            Task.succeed (Err refusal)
+
+        Ok root ->
+            do
+                missing <- firstMissing root requiredFiles
+                case missing of
+                    Just file ->
+                        Task.succeed (Err (Missing (Path.toString root) file))
+
+                    Nothing ->
+                        Task.map Ok (Task.fromResult (Result.map3 Layout (child root "index.html") (child root "static") (child root "pkg")))
 
 
 {-| Locate the playground from the server's working directory, or refuse. -}
 locate : String -> Task Error Layout
 locate cwd =
     do
-        root <- Task.fromResult (Result.mapError refusalError (rootOf cwd))
-        missing <- firstMissing root requiredFiles
-        case missing of
-            Just file ->
-                Task.fail (refusalError (Missing root file))
-
-            Nothing ->
-                Task.succeed (Layout root)
+        found <- probe cwd
+        Task.fromResult (Result.mapError refusalError found)
 
 
-firstMissing : String -> List String -> Task Error (Maybe String)
+firstMissing : Path -> List String -> Task Error (Maybe String)
 firstMissing root files =
     case files of
         [] ->
@@ -67,7 +91,7 @@ firstMissing root files =
 
         file :: rest ->
             do
-                path <- Task.fromResult (Path.fromString (root ++ "/" ++ file))
+                path <- Task.fromResult (child root file)
                 present <- File.exists path
                 if present then
                     firstMissing root rest
@@ -82,28 +106,27 @@ refusalError refusal =
 
 
 {-| The page, `index.html`. -}
-indexPath : Layout -> Result Error Path
+indexPath : Layout -> Path
 indexPath layout =
-    Path.fromString (rootPath layout ++ "/index.html")
+    case layout of
+        Layout index _ _ ->
+            index
 
 
 {-| The page script and its vendored editor, `static/`. -}
 staticDir : Layout -> String
 staticDir layout =
-    rootPath layout ++ "/static"
+    case layout of
+        Layout _ static _ ->
+            Path.toString static
 
 
 {-| The wasm bundle, `pkg/`. -}
 pkgDir : Layout -> String
 pkgDir layout =
-    rootPath layout ++ "/pkg"
-
-
-rootPath : Layout -> String
-rootPath layout =
     case layout of
-        Layout root ->
-            root
+        Layout _ _ pkg ->
+            Path.toString pkg
 
 
 {-| The startup refusal message. -}

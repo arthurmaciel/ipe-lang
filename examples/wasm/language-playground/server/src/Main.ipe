@@ -60,8 +60,7 @@ origin's script.
 page : Layout -> Server.Request -> Task Error Server.Response
 page layout _ =
     do
-        path <- Task.fromResult (Layout.indexPath layout)
-        html <- File.readFileLimit path (ByteSize.kib 256)
+        html <- File.readFileLimit (Layout.indexPath layout) (ByteSize.kib 256)
         html
             |> Server.html
             |> Server.withHeader "X-Frame-Options" "DENY"

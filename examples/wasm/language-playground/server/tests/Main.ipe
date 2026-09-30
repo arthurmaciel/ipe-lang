@@ -1,12 +1,17 @@
 module Main exposing (main)
 
 import Gate exposing (BindRefusal(..), Refusal(..), Token)
+import Ipe.Error as Error exposing (Error)
+import Ipe.File as File
 import Ipe.List as List
 import Ipe.Maybe as Maybe
+import Ipe.Path as Path exposing (Path)
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task exposing (Task)
 import Ipe.Test as Test exposing (Test, TestResult)
-import Layout exposing (LayoutRefusal(..))
+import Layout exposing (Layout, LayoutRefusal(..))
 import Runner exposing (DeadlineRefusal(..))
 import Staging exposing (StagingError(..))
 
@@ -368,7 +373,7 @@ loopback =
 layout : Test
 layout =
     Test.suite "layout"
-        [ Test.test "the root is the parent of the server directory" (\_ -> Test.equal (Ok "/srv/playground") (Layout.rootOf "/srv/playground/server"))
+        [ Test.test "the root is the parent of the server directory" (\_ -> Test.equal (Ok "/srv/playground") (Result.map Path.toString (Layout.rootOf "/srv/playground/server")))
         , Test.test "a relative directory is refused" (\_ -> Test.equal (Err (RelativeCwd "server")) (Layout.rootOf "server"))
         , Test.test "a parent-relative directory is refused" (\_ -> Test.equal (Err (RelativeCwd "../server")) (Layout.rootOf "../server"))
         , Test.test "an empty directory is refused" (\_ -> Test.equal (Err (RelativeCwd "")) (Layout.rootOf ""))
@@ -379,5 +384,88 @@ layout =
         ]
 
 
+-- The layout probe against real directories: a root holding none of the
+-- required files, one lacking only the wasm module, and one holding them all.
+type alias Probed =
+    { empty : Result LayoutRefusal Layout
+    , partial : Result LayoutRefusal Layout
+    , partialLocate : Result Error Layout
+    , full : Result LayoutRefusal Layout
+    }
+
+
+attempt : Task Error a -> Task Error (Result Error a)
+attempt task =
+    task
+        |> Task.map Ok
+        |> Task.onError (\e -> Task.succeed (Err e))
+
+
+under : String -> String -> Task Error Path
+under root rel =
+    Task.fromResult (Path.fromString (root ++ "/" ++ rel))
+
+
+plant : String -> List String -> Task Error (List ())
+plant root files =
+    Task.sequence
+        (List.map
+            (\rel ->
+                do
+                    path <- under root rel
+                    dir <- Task.fromResult (Path.fromString (Path.dir path))
+                    File.mkdirAll dir
+                    File.writeFile path ""
+            )
+            files
+        )
+
+
+unplant : String -> List String -> Task Error (List ())
+unplant root files =
+    Task.sequence (List.map (\rel -> Task.andThen File.remove (under root rel)) files)
+
+
+probeLayouts : Task Error Probed
+probeLayouts =
+    do
+        token <- Gate.mintToken
+        base <- Task.succeed (System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-playground-layout-" ++ Gate.tokenText token)
+        partialFiles <- Task.succeed (List.filter (\f -> f /= "pkg/ipe_wasm_bg.wasm") Layout.requiredFiles)
+        _ <- plant (base ++ "/partial") partialFiles
+        _ <- plant (base ++ "/full") Layout.requiredFiles
+        empty <- Layout.probe (base ++ "/empty/server")
+        partial <- Layout.probe (base ++ "/partial/server")
+        partialLocate <- attempt (Layout.locate (base ++ "/partial/server"))
+        full <- Layout.probe (base ++ "/full/server")
+        _ <- unplant (base ++ "/partial") partialFiles
+        _ <- unplant (base ++ "/full") Layout.requiredFiles
+        Task.succeed { empty = empty, partial = partial, partialLocate = partialLocate, full = full }
+
+
+missingFile : Result LayoutRefusal Layout -> Maybe String
+missingFile found =
+    case found of
+        Err (Missing _ file) ->
+            Just file
+
+        _ ->
+            Nothing
+
+
+located : Probed -> Test
+located probed =
+    Test.suite "layout on disk"
+        [ Test.test "a root with no page is refused at the page" (\_ -> Test.equal (Just "index.html") (missingFile probed.empty))
+        , Test.test "a root without the wasm module is refused at it" (\_ -> Test.equal (Just "pkg/ipe_wasm_bg.wasm") (missingFile probed.partial))
+        , Test.test "locate refuses the same root before listening" (\_ -> Test.equal (Err True) (Result.map (\_ -> ()) probed.partialLocate |> Result.mapError (\e -> String.contains "pkg/ipe_wasm_bg.wasm is missing" (Error.message e))))
+        , Test.test "a root holding every file is accepted" (\_ -> Test.equal Nothing (missingFile probed.full))
+        , Test.test "the accepted page is under the root" (\_ -> Test.equal (Ok True) (Result.map (\l -> String.endsWith "/full/index.html" (Path.toString (Layout.indexPath l))) probed.full))
+        , Test.test "the accepted directories are under the root" (\_ -> Test.equal (Ok True) (Result.map (\l -> String.endsWith "/full/static" (Layout.staticDir l) && String.endsWith "/full/pkg" (Layout.pkgDir l)) probed.full))
+        ]
+
+
 main =
-    Test.runMain [ accepted, refused, runnerPath, home, wall, gateRun, gateHealth, healthBody, launch, tokenShape, pagePolicy, loopback, layout ]
+    do
+        probed <- probeLayouts
+        Test.runMain [ accepted, refused, runnerPath, home, wall, gateRun, gateHealth, healthBody, launch, tokenShape, pagePolicy, loopback, layout, located probed ]
