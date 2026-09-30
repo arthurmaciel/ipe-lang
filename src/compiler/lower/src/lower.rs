@@ -24917,6 +24917,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::EncodingBase64Decode
                 | KernelFn::EncodingUrlEncode
                 | KernelFn::EncodingUrlDecode
+                | KernelFn::EncodingPercentDecode
                 | KernelFn::EncodingHexEncode
                 | KernelFn::EncodingHexDecode
                 // ── JsonEnc arity-1 ─────────────────────────────────────
@@ -27481,6 +27482,9 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Encoding", "urlEncode") => Ok(Callee::Kernel(KernelFn::EncodingUrlEncode)),
                     ("Encoding", "urlDecode") => Ok(Callee::Kernel(KernelFn::EncodingUrlDecode)),
+                    ("Encoding", "percentDecode") => {
+                        Ok(Callee::Kernel(KernelFn::EncodingPercentDecode))
+                    }
                     ("Encoding", "hexEncode") => Ok(Callee::Kernel(KernelFn::EncodingHexEncode)),
                     ("Encoding", "hexDecode") => Ok(Callee::Kernel(KernelFn::EncodingHexDecode)),
                     // ── JsonEnc kernels ──────────────────────────────────

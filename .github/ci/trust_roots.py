@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import http.client
 import json
 import os
 import re
@@ -386,6 +387,60 @@ MAX_BODY_BYTES = 16 * 1024 * 1024
 _NEXT_RE = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
 
 
+class ApiError(Refused):
+    """A GET the API origin did not answer with a usable JSON body.
+
+    Each subclass names one way the read failed, so a caller can tell a
+    refusal by the API (`HttpStatus`) from one this client made (`OffOrigin`,
+    `TooLarge`, `Malformed`) and from a failure to reach it (`Transport`). No
+    message carries the token: it lives only in the request header."""
+
+
+class HttpStatus(ApiError):
+    """The API answered with an HTTP error status."""
+
+    def __init__(self, url: str, status: int):
+        super().__init__(f"GET {url} failed: HTTP {status}")
+        self.status = status
+
+
+def _origin(url: str) -> str:
+    """`url`'s scheme and host alone: its path and query may carry what a
+    redirect chose to put there, and its userinfo a credential."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        return "an unparseable URL"
+    return f"{parts.scheme or '?'}://{host or '?'}"
+
+
+class OffOrigin(ApiError):
+    """A request or redirect pointed off the API origin; it was not sent.
+    The message names only the target's scheme and host."""
+
+    def __init__(self, url: str):
+        super().__init__(f"refusing to follow a URL to {_origin(url)!r} off the API origin")
+
+
+class TooLarge(ApiError):
+    """The response exceeds a read ceiling: `MAX_BODY_BYTES` or `MAX_PAGES`."""
+
+    def __init__(self, url: str, ceiling: str):
+        super().__init__(f"GET {url}: response exceeds {ceiling}")
+
+
+class Transport(ApiError):
+    """The API origin could not be reached or the connection failed."""
+
+    def __init__(self, url: str, cause: BaseException):
+        super().__init__(f"GET {url} failed: {type(cause).__name__}: {cause}")
+
+
+class Malformed(ApiError):
+    """The body is not JSON, or not the JSON shape the endpoint returns."""
+
+
 class _PinnedRedirects(urllib.request.HTTPRedirectHandler):
     """Follow a redirect only within the API origin: urllib re-sends the
     `Authorization` header to wherever a redirect points."""
@@ -395,7 +450,7 @@ class _PinnedRedirects(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
         if not newurl.startswith(self.base + "/"):
-            raise Refused(f"refusing to follow a redirect to {newurl!r} off the API origin")
+            raise OffOrigin(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -406,6 +461,10 @@ class Api:
         parsed = urllib.parse.urlsplit(base_url)
         if parsed.scheme != "https" or not parsed.netloc:
             raise Refused(f"API URL {base_url!r} is not https")
+        # A token that would be refused as a header value is rejected here, where
+        # the message can name the fault without carrying the token.
+        if not re.fullmatch(r"[!-~]+", token):
+            raise Refused("the API token is empty or not printable ASCII")
         self.base = base_url.rstrip("/")
         self.repo = repo
         self.token = token
@@ -414,7 +473,7 @@ class Api:
     def _get(self, url: str) -> tuple[object, str | None]:
         # The token is only ever sent to the configured API origin.
         if not url.startswith(self.base + "/"):
-            raise Refused(f"refusing to follow {url!r} off the API origin")
+            raise OffOrigin(url)
         req = urllib.request.Request(
             url,
             headers={
@@ -428,21 +487,28 @@ class Api:
             with self._opener.open(req, timeout=30) as resp:
                 body = resp.read(MAX_BODY_BYTES + 1)
                 link = resp.headers.get("Link")
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise Refused(f"GET {url} failed: {e}") from e
+        # `HTTPError` subclasses `URLError`, so it is caught first.
+        except urllib.error.HTTPError as e:
+            raise HttpStatus(url, e.code) from e
+        # `HTTPException` covers a connection that broke mid-response
+        # (`IncompleteRead`, `BadStatusLine`), which is no `OSError`.
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
+            raise Transport(url, e) from e
         if len(body) > MAX_BODY_BYTES:
-            raise Refused(f"GET {url}: response exceeds {MAX_BODY_BYTES} bytes")
+            raise TooLarge(url, f"{MAX_BODY_BYTES} bytes")
         try:
             data = json.loads(body)
         except ValueError as e:
-            raise Refused(f"GET {url}: response is not JSON") from e
+            raise Malformed(f"GET {url}: response is not JSON") from e
+        except RecursionError as e:
+            raise Malformed(f"GET {url}: response nests too deeply") from e
         m = _NEXT_RE.search(link) if link else None
         return data, (m.group(1) if m else None)
 
     def get(self, path: str) -> dict:
         data, _ = self._get(f"{self.base}/repos/{self.repo}/{path}")
         if not isinstance(data, dict):
-            raise Refused(f"GET {path}: expected an object")
+            raise Malformed(f"GET {path}: expected an object")
         return data
 
     def get_all(self, path: str) -> list:
@@ -453,10 +519,10 @@ class Api:
                 return items
             data, url = self._get(url)
             if not isinstance(data, list):
-                raise Refused(f"GET {path}: expected a list")
+                raise Malformed(f"GET {path}: expected a list")
             items.extend(data)
         if url is not None:
-            raise Refused(f"GET {path}: more than {MAX_PAGES} pages")
+            raise TooLarge(path, f"{MAX_PAGES} pages")
         return items
 
 

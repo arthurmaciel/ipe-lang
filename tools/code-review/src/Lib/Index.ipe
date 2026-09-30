@@ -1,17 +1,17 @@
-module Lib.Index exposing (Unit, drainUnit, indexDbUrl, loadPending, loadUnitByUid, nameFor, qualifiedUids)
+module Lib.Index exposing (Unit, drainUnit, loadPending, loadUnitByUid, nameFor, openRead, qualifiedUids)
 
+import Ipe.ByteSize as ByteSize exposing (ByteSize)
 import Ipe.Db
 import Ipe.Db.Decode
 import Ipe.Db.Sql as Sql
 import Ipe.Db.Store as Store exposing (Store)
-import Ipe.Error as Error
 import Ipe.File as File
 import Ipe.List as List
-import Ipe.Path as Path
-import Ipe.Result as Result exposing (Result)
+import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
-import Ipe.System as System
 import Ipe.Task as Task
+import Lib.RepoPath as RepoPath exposing (Root)
+import Lib.Settings as Settings
 
 
 -- One queued ipe-index unit plus its source slice. `path` is the
@@ -37,7 +37,7 @@ type alias Unit =
 
 
 -- The unit columns as they come off the DB, before the source is attached.
--- The unit page (B9) queries units directly, not via change_queue: a decided
+-- The unit page queries units directly, not via change_queue: a decided
 -- unit has no queue row, but its page must still render. change/old_hash/
 -- new_hash are literals then, since the queue row is the only source of a
 -- real change state.
@@ -51,26 +51,24 @@ unitByUidSql =
 loadUnitByUid : String -> Task.Task Error (Maybe Unit)
 loadUnitByUid uid =
     do
-        root <- indexRoot
-        url <- indexDbUrl
-        conn <- Db.open "sqlite" url
+        settings <- Settings.indexSettings
+        conn <- Db.open "sqlite" (Settings.indexReadUrl settings.db)
         rows <- Db.queryDecode conn unitByUidSql [ SqlString uid ] rowDecoder
         case List.head rows of
             Just row ->
-                Task.map Just (loadSource root row)
+                Task.map Just (loadSource settings.root row)
 
             Nothing ->
                 Task.succeed Nothing
 
 
--- Every unit's (qualified, uid) pair. The link resolver (B9) matches
+-- Every unit's (qualified, uid) pair. The link resolver matches
 -- identifier references in a unit's source against these names to build
 -- internal jump links; only the names are needed, so no file reads happen.
 qualifiedUids : Task.Task Error (List ( String, String ))
 qualifiedUids =
     do
-        url <- indexDbUrl
-        conn <- Db.open "sqlite" url
+        conn <- openRead
         Db.queryDecode conn "SELECT qualified, uid FROM units" [] qualifiedDecoder
 
 
@@ -81,7 +79,7 @@ qualifiedDecoder =
         |> Db.Decode.required "uid" (Db.Decode.string "uid")
 
 
--- A unit row before the source is attached. The unit page (B9) queries units
+-- A unit row before the source is attached. The unit page queries units
 -- directly, not via change_queue: a decided unit has no queue row, but its
 -- page must still render. change/old_hash/new_hash are literals then, since
 -- the queue row is the only source of a real change state.
@@ -201,66 +199,12 @@ partBDecoder =
         |> Db.Decode.required "updated_sha" (Db.Decode.string "updated_sha")
 
 
--- Read URL for the ipe-index sqlite database. A `sqlite://` URL with an
--- explicit `mode=ro` query is passed through verbatim by the runtime, so the
--- index DB is never created or modified. This is a function of the env value
--- (not a cached top-level value): loadPending runs against different
--- IPE_INDEX_DB settings within one process (tests).
-indexDbUrlFor : String -> String
-indexDbUrlFor raw =
-    if String.contains "://" raw then
-        if String.contains "?" raw then
-            raw
-
-        else
-            raw ++ "?mode=ro"
-
-    else
-        "sqlite://" ++ raw ++ "?mode=ro"
-
-
--- The same database opened read-write, for the drain step. `mode=ro` (either
--- explicit or implied by the pass-through branch above) is rewritten so the
--- consumed queue row can be deleted; a URL with no mode already defaults to
--- read-write in SQLite.
-indexDbWriteUrlFor : String -> String
-indexDbWriteUrlFor raw =
-    if String.contains "://" raw then
-        String.replace "mode=ro" "mode=rwc" raw
-
-    else
-        "sqlite://" ++ raw ++ "?mode=rwc"
-
-
--- The index database location, read from `IPE_INDEX_DB`. `System.getenv` fails
--- closed when the variable is unset, so a misconfigured run stops with a typed
--- error rather than silently opening a wrong-path (or nonexistent) database —
--- the `main` entry point guards this variable up front, and no code path here
--- reintroduces a permissive default.
-indexDbRaw : Task.Task Error String
-indexDbRaw =
-    System.getenv "IPE_INDEX_DB"
-
-
--- The read-only index URL: the env value shaped into a `mode=ro` `sqlite://`
--- URL so the index db is opened for listing, never created or modified.
-indexDbUrl : Task.Task Error String
-indexDbUrl =
-    Task.map indexDbUrlFor indexDbRaw
-
-
--- The read-write index URL, for the drain step that deletes a consumed
--- `change_queue` row.
-indexDbWriteUrl : Task.Task Error String
-indexDbWriteUrl =
-    Task.map indexDbWriteUrlFor indexDbRaw
-
-
--- The repo root the index's `tag:relative` paths join to, read from
--- `IPE_INDEX_ROOT`; unset fails closed (guarded up front by `main`).
-indexRoot : Task.Task Error String
-indexRoot =
-    System.getenv "IPE_INDEX_ROOT"
+-- The index database opened read-only, for listing.
+openRead : Task.Task Error Db.Db
+openRead =
+    do
+        settings <- Settings.indexSettings
+        Db.open "sqlite" (Settings.indexReadUrl settings.db)
 
 
 pendingSql : String
@@ -274,11 +218,10 @@ pendingSql =
 loadPending : Task.Task Error (List Unit)
 loadPending =
     do
-        root <- indexRoot
-        url <- indexDbUrl
-        conn <- Db.open "sqlite" url
+        settings <- Settings.indexSettings
+        conn <- Db.open "sqlite" (Settings.indexReadUrl settings.db)
         rows <- Db.queryDecode conn pendingSql [] rowDecoder
-        loadSources root rows
+        loadSources settings.root rows
 
 
 -- The review app consumes and clears explicitly: after a unit is decided,
@@ -289,8 +232,8 @@ loadPending =
 drainUnit : String -> Task.Task Error Int
 drainUnit uid =
     do
-        url <- indexDbWriteUrl
-        conn <- Db.open "sqlite" url
+        settings <- Settings.indexSettings
+        conn <- Db.open "sqlite" (Settings.indexWriteUrl settings.db)
         Db.deleteWhere conn "change_queue" (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
 
 
@@ -329,7 +272,7 @@ nameFor conn uid =
                         Task.succeed Nothing
 
 
-loadSources : String -> List RowUnit -> Task.Task Error (List Unit)
+loadSources : Root -> List RowUnit -> Task.Task Error (List Unit)
 loadSources root rows =
     rows
         |> List.map (loadSource root)
@@ -337,19 +280,26 @@ loadSources root rows =
 
 
 -- Reading a unit's source fails the whole load with a typed error: a queued
--- unit whose file cannot be resolved or read is a real problem, not a row to
+-- unit whose stored path is refused by `RepoPath.resolve`, or whose file
+-- cannot be read or exceeds `sourceCeiling`, is a real problem, not a row to
 -- silently skip.
-loadSource : String -> RowUnit -> Task.Task Error Unit
+loadSource : Root -> RowUnit -> Task.Task Error Unit
 loadSource root row =
-    case resolvePath root row.path of
-        Nothing ->
-            Task.fail (Error.unexpected ("index unit has an unresolvable path: " ++ row.path))
+    case RepoPath.resolve root row.path of
+        Err refusal ->
+            Task.fail (RepoPath.toError refusal)
 
-        Just absPath ->
+        Ok path ->
             do
-                path <- Task.fromResult (Path.fromString absPath)
-                text <- File.readFile path
+                text <- File.readFileLimit path sourceCeiling
                 Task.succeed (withSource (sliceLines row.lineStart row.lineEnd text) row)
+
+
+-- The largest source file a unit is sliced from; a bigger file under the root
+-- is refused rather than read whole into memory.
+sourceCeiling : ByteSize
+sourceCeiling =
+    ByteSize.mib 16
 
 
 withSource : String -> RowUnit -> Unit
@@ -370,30 +320,6 @@ withSource source row =
     , updatedSha = row.updatedSha
     , source = source
     }
-
-
--- `ipe:src/Main.ipe` -> `src/Main.ipe`. The first `:`-segment is the repo tag
--- (e.g. `ipe:`); relative paths are joined onto the index root. Absolute and
--- `..`-escaping paths are refused.
-resolvePath : String -> String -> Maybe String
-resolvePath root stored =
-    case String.split ":" stored of
-        _ :: rest ->
-            let
-                rel =
-                    String.join ":" rest
-
-                segments =
-                    String.split "/" rel
-            in
-            if rel == "" || String.startsWith "/" rel || List.member ".." segments then
-                Nothing
-
-            else
-                Just (root ++ "/" ++ rel)
-
-        [] ->
-            Nothing
 
 
 -- 1-based inclusive slice of the unit's lines.

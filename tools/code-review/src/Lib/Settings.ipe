@@ -1,0 +1,165 @@
+module Lib.Settings exposing (DbLocation, IndexSettings, encodeFilePath, indexReadUrl, indexSettings, indexWriteUrl, parseDbLocation, reviewDb, reviewUrl)
+
+import Ipe.Encoding as Encoding
+import Ipe.Error as Error
+import Ipe.Path as Path exposing (Path)
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+import Lib.RepoPath as RepoPath exposing (Root)
+
+
+-- Where a SQLite database lives: an absolute file path. Every accepted
+-- spelling of the setting — a plain path, relative or absolute, or a
+-- `sqlite://` URL — is parsed into this one form, so no raw URL reaches the
+-- driver and the open mode each URL builder appends is the only one it reads.
+-- The path always starts with `/`, so the driver never takes it for a
+-- `file:` URI or `:memory:`.
+type DbLocation
+    = DbFile Path
+
+
+-- The index configuration, parsed from `IPE_INDEX_DB` and `IPE_INDEX_ROOT`.
+type alias IndexSettings =
+    { db : DbLocation
+    , root : Root
+    }
+
+
+-- The one boundary that turns the index environment into typed values. It
+-- reads the environment on every call (the embedded app has no flags, and the
+-- tests re-point the variables between cases), and `main` runs it once at
+-- startup so a bad value stops the server before it listens.
+indexSettings : Task.Task Error IndexSettings
+indexSettings =
+    do
+        rawDb <- System.getenv "IPE_INDEX_DB"
+        rawRoot <- System.getenv "IPE_INDEX_ROOT"
+        db <- parseDbLocation "IPE_INDEX_DB" rawDb
+        root <- RepoPath.parseRoot rawRoot
+        Task.succeed { db = db, root = root }
+
+
+-- The review database location from `IPE_REVIEW_DB`, `review.db` in the
+-- working directory when unset.
+reviewDb : Task.Task Error DbLocation
+reviewDb =
+    parseDbLocation "IPE_REVIEW_DB" (System.getenvOr "IPE_REVIEW_DB" "review.db")
+
+
+-- A file path is refused when blank or when it carries `?`, `#` or `%` (each
+-- changes meaning inside a URL), and is otherwise made absolute. A
+-- `sqlite://` URL is parsed by `parseSqliteUrl`. Any other URL, and a
+-- `sqlite:` or `file:` value without `//`, is refused rather than read as a
+-- file of that name. A refusal names the variable, never its value: a
+-- mistyped URL can carry a password.
+parseDbLocation : String -> String -> Task.Task Error DbLocation
+parseDbLocation var raw =
+    if String.trim raw == "" then
+        Task.fail (Error.invalidInput (dbRefusal var "is empty"))
+
+    else if String.startsWith "sqlite://" raw then
+        parseSqliteUrl var (String.dropLeft (String.length "sqlite://") raw)
+
+    else if String.contains "://" raw then
+        Task.fail (Error.invalidInput (dbRefusal var "is a URL that is not `sqlite://`"))
+
+    else if String.startsWith "sqlite:" raw || String.startsWith "file:" raw then
+        Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite:` or `file:` value without `//`; write `sqlite:///absolute/path` or a plain file path"))
+
+    else if String.contains "?" raw || String.contains "#" raw || String.contains "%" raw then
+        Task.fail (Error.invalidInput (dbRefusal var "is a file path containing `?`, `#` or `%`; pass it as a percent-encoded `sqlite://` URL instead"))
+
+    else
+        RepoPath.absolutize raw
+            |> Task.mapError (\_ -> Error.invalidInput (dbRefusal var "is not a valid file path"))
+            |> Task.andThen (toDbFile var)
+
+
+-- The part of a `sqlite://` URL after the scheme, percent-decoded (RFC 3986,
+-- so a `+` stays a `+` and names the same file as the plain path) into an
+-- absolute file path. Refused: a query or fragment (a query can set its own
+-- `mode`, and the open mode is the app's to choose), a malformed escape, an
+-- empty path, and any decoded path not starting with `/` — which covers
+-- `:memory:`, a working-directory-relative name, a host, and a nested
+-- `file:` or `sqlite:` URI whose own parameters would override the mode.
+parseSqliteUrl : String -> String -> Task.Task Error DbLocation
+parseSqliteUrl var encoded =
+    if String.contains "?" encoded || String.contains "#" encoded then
+        Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL with a query or fragment; the app sets the open mode, so drop it"))
+
+    else
+        case Encoding.percentDecode encoded of
+            Err _ ->
+                Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL with a malformed percent-escape"))
+
+            Ok decoded ->
+                if decoded == "" then
+                    Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL naming no database"))
+
+                else if String.startsWith "/" decoded then
+                    Path.fromString decoded
+                        |> Task.fromResult
+                        |> Task.mapError (\_ -> Error.invalidInput (dbRefusal var "is a `sqlite://` URL whose path is not a valid file path"))
+                        |> Task.andThen (toDbFile var)
+
+                else
+                    Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL whose path is not absolute; write `sqlite:///absolute/path`"))
+
+
+-- The one step both spellings end in: a cleaned absolute path becomes a
+-- `DbLocation` unless it is the root directory itself, which a `..` climbing
+-- past `/` cleans to and which can never be a database file.
+toDbFile : String -> Path -> Task.Task Error DbLocation
+toDbFile var path =
+    if Path.toString path == "/" then
+        Task.fail (Error.invalidInput (dbRefusal var "names the root directory, not a database file"))
+
+    else
+        Task.succeed (DbFile path)
+
+
+dbRefusal : String -> String -> String
+dbRefusal var problem =
+    String.concat [ var, " ", problem, "; set it to a SQLite file path or a `sqlite://` URL" ]
+
+
+-- The URL for `loc` opened in SQLite `mode`. The path is percent-encoded
+-- (`%` first, then `?` and `#`), so a working directory holding any of them
+-- still names the same file instead of starting a query or fragment or
+-- decoding to another name.
+urlWithMode : String -> DbLocation -> String
+urlWithMode mode loc =
+    case loc of
+        DbFile path ->
+            "sqlite://" ++ encodeFilePath (Path.toString path) ++ "?mode=" ++ mode
+
+
+encodeFilePath : String -> String
+encodeFilePath path =
+    path
+        |> String.replace "%" "%25"
+        |> String.replace "?" "%3F"
+        |> String.replace "#" "%23"
+
+
+-- The index opened read-only (`mode=ro`), so listing can never create or
+-- modify it.
+indexReadUrl : DbLocation -> String
+indexReadUrl loc =
+    urlWithMode "ro" loc
+
+
+-- The index opened read-write (`mode=rw`) for the drain step. `rw` never
+-- creates the file, so a mistyped location fails instead of draining an empty
+-- new database.
+indexWriteUrl : DbLocation -> String
+indexWriteUrl loc =
+    urlWithMode "rw" loc
+
+
+-- The review database, created on first open (`mode=rwc`) — the app owns it.
+reviewUrl : DbLocation -> String
+reviewUrl loc =
+    urlWithMode "rwc" loc

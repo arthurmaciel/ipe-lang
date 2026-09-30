@@ -1,0 +1,48 @@
+# The nightly admin read of the `main` ruleset.
+#
+# GitHub shows a ruleset's `bypass_actors` only to a ruleset admin, so the
+# workflow token that `ruleset-drift` reads with cannot see them. This job reads
+# the ruleset with `RULESET_READ_TOKEN`, a fine-grained token whose permissions
+# `.github/ci/RECONCILIATION.md` lists (one-time setup, step 2), and fails
+# closed when the body lacks `bypass_actors`, carries a non-empty list, or
+# differs from the derived required set — and when the token is absent or
+# empty.
+#
+# The token is a secret of the `ruleset-admin-read` environment, whose
+# deployment-branch policy admits `main` alone: GitHub hands it to no run of
+# any other ref, whatever that ref's copy of this file says. That policy is the
+# guarantee; `check_required_set.py --fetch-admin` proves it before reading.
+# Defence in depth under it: the trigger is `schedule` alone (a scheduled run
+# uses the default branch's tree), and `verify-manifest.py` check 8 holds the
+# secret and the environment to this one job. Recover a red run caused by the
+# ruleset or its token with `gh run rerun`; one caused by this tree needs the
+# break-glass sequence in `.github/ci/RECONCILIATION.md`.
+name: Ruleset admin read
+
+on:
+  schedule:
+    - cron: "30 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  ruleset-admin-read:
+    name: ruleset-admin-read
+    runs-on: ubuntu-latest
+    environment: ruleset-admin-read
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install PyYAML
+        run: 'PIP_CONFIG_FILE=/dev/null python3 -m pip install --isolated --require-hashes --only-binary :all: -r "$GITHUB_WORKSPACE/.github/ci/requirements.txt"'
+      - name: The live ruleset has no bypass actor and requires exactly the derived set
+        env:
+          GH_TOKEN: ${{ secrets.RULESET_READ_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: python3 .github/ci/check_required_set.py --fetch-admin
