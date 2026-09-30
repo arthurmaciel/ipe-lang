@@ -35,7 +35,8 @@ use crate::{
 pub fn test_only_item_lines(src: &str) -> Result<Vec<RangeInclusive<usize>>, syn::Error> {
     let file = syn::parse_file(src)?;
     if attrs_test_only(&file.attrs, false) {
-        return Ok(vec![1..=src.lines().count().max(1)]);
+        let whole_file = 1..=src.lines().count().max(1);
+        return Ok(vec![whole_file]);
     }
     let mut spans = TestSpans {
         lines: src.lines().collect(),

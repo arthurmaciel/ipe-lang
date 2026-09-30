@@ -3138,7 +3138,7 @@ dependencies = [
 
 [[package]]
 name = "ipe-test-temp"
-version = "0.3.3"
+version = "0.3.4"
 
 [[package]]
 name = "ipe-wasm"
