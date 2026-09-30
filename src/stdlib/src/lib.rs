@@ -169,12 +169,12 @@ const HTTP: &str = include_str!("../Ipe/Http.ipe");
 /// `Ipe.Process` — subprocess execution (no shell) effect kernels.
 const PROCESS: &str = include_str!("../Ipe/Process.ipe");
 
-/// `Ipe.Path` — pure filesystem-path helpers, compiled-source Layer-3.
+/// `Ipe.Path` — filesystem-path helpers, compiled-source Layer-3.
 ///
 /// The members are point-free `Kernel.kernel "Path_*"` aliases resolved by the
 /// kernel-alias mechanism (`ipe_canon::resolve::detect_kernel_alias`) to
-/// the pure `PathBase`/`PathDir`/`PathExt`/`PathIsAbsolute` `StdlibKernel`
-/// variants. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body
+/// the `PathFromString`/`PathToString`/`PathBase`/`PathDir`/`PathExt`/
+/// `PathIsAbsolute`/`PathUnder`/`PathAbsolute` `StdlibKernel` variants. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body
 /// is actually compiled; NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
 const PATH: &str = include_str!("../Ipe/Path.ipe");

@@ -1452,6 +1452,8 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::PathBase
         | KernelFn::PathDir
         | KernelFn::PathExt
+        | KernelFn::PathUnder
+        | KernelFn::PathAbsolute
         | KernelFn::PathIsAbsolute
         | KernelFn::TraceSpan
         | KernelFn::TraceEvent

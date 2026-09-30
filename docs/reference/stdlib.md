@@ -2485,6 +2485,8 @@ Ipe.Path — typed, validated filesystem paths.
 | `dir` | `dir path` — everything but the final component. |
 | `ext` | `ext path` — the file extension (with the dot), or "". |
 | `isAbsolute` | `isAbsolute path` — does the path start from the root? |
+| `under` | `under root child` — join the relative `child` beneath `root`. Returns |
+| `absolute` | `absolute path` — resolve `path` against the working directory. A path |
 
 ## Process
 
