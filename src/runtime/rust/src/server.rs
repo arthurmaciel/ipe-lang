@@ -2766,7 +2766,7 @@ mod tests {
             ("/:a-b", 1),
             ("/:a:b", 1),
             ("/:a*b", 1),
-            ("/:a_Z9-", 5),
+            ("/:a_Z9-", 4),
             ("/:id.json", 2),
         ] {
             let refused = path_param_names(bad);

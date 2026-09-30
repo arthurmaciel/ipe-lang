@@ -33,6 +33,12 @@ const ACCESSOR_FILES: &[&str] = &[
     "src/runtime/rust/src/system.rs",
 ];
 
+/// The runtime file that names every `clippy.toml`-banned path under an
+/// `#[expect]` to prove each ban fires. It names the `std` home reader as a
+/// value and never calls it, which `ban_proof_file_never_calls_the_home_reader`
+/// pins.
+const BAN_PROOF_FILE: &str = "src/runtime/rust/src/clippy_paths_resolve.rs";
+
 /// Workspace-relative files that hold the only raw environment reads outside
 /// the runtime crate, each under a per-site `clippy::disallowed_methods` allow.
 const ENV_ALLOW_FILES: &[&str] = &[
@@ -617,7 +623,7 @@ fn no_production_source_reads_the_home_directly() {
     );
     let offenders: Vec<_> = files
         .iter()
-        .filter(|(rel, _)| !ACCESSOR_FILES.contains(&rel.as_str()))
+        .filter(|(rel, _)| !ACCESSOR_FILES.contains(&rel.as_str()) && rel != BAN_PROOF_FILE)
         .map(|(rel, text)| (rel, raw_home_reads(text)))
         .filter(|(_, hits)| !hits.is_empty())
         .collect();
@@ -625,6 +631,30 @@ fn no_production_source_reads_the_home_directly() {
         offenders.is_empty(),
         "raw home reads found; use `ipe_sandbox::home::home_dir` (compiler) or \
          `system::home_dir` (runtime) instead: {offenders:?}"
+    );
+}
+
+#[test]
+fn ban_proof_file_never_calls_the_home_reader() {
+    let files = workspace_sources(false);
+    let (_, text) = files
+        .iter()
+        .find(|(rel, _)| rel == BAN_PROOF_FILE)
+        .expect("the ban-proof file moved; update `BAN_PROOF_FILE`");
+    let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    for read in STD_HOME_READS {
+        assert_eq!(
+            flat.matches(read).count(),
+            flat.matches(&format!("let_=::std::{read};")).count(),
+            "`{BAN_PROOF_FILE}` may only name `{read}` as a `let _ = ..;` value"
+        );
+    }
+    assert!(
+        literal_home_reads()
+            .iter()
+            .all(|read| !flat.contains(read.as_str()))
+            && home_crate_paths(text).is_empty(),
+        "`{BAN_PROOF_FILE}` reads the home beyond naming the `std` reader"
     );
 }
 
@@ -1708,7 +1738,10 @@ mod lexical {
         );
 
         let mut offenders = Vec::new();
-        for (rel, text) in files {
+        for (rel, text) in files
+            .into_iter()
+            .filter(|(rel, _)| rel != super::BAN_PROOF_FILE)
+        {
             let hits = raw_home_reads(
                 &text,
                 &exempt_in(LITERAL_ALLOWED, &rel),
