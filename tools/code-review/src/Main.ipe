@@ -27,6 +27,7 @@ import Lib.Index as Index
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
 import Lib.Queue as Queue
+import Lib.Settings as Settings
 
 
 type Page
@@ -112,14 +113,6 @@ pageCmd path =
         Cmd.none
 
 
-reviewDb : Task Error Db.Db
-reviewDb =
-    do
-        db <- Db.open "sqlite" (System.getenvOr "IPE_REVIEW_DB" "review.db")
-        LibDb.migrate db
-        Task.succeed db
-
-
 type Msg
     = PendingLoaded (Result Error (List Queue.QueuedUnit))
     | ApproveUnit String
@@ -199,7 +192,7 @@ update msg model =
             ( { model | selected = clampIndex i (List.length model.queue) }, Cmd.none )
 
 
--- B10: every KeyAction dispatches the same Msg the matching button sends —
+-- Every KeyAction dispatches the same Msg the matching button sends —
 -- the buttons remain the single source of truth; the keys are a mirror.
 keyActionMsg : KeyAction -> Model -> ( Model, Cmd Msg )
 keyActionMsg action model =
@@ -266,13 +259,13 @@ saveDecision : Model -> String -> LibDb.Decision -> Cmd Msg
 saveDecision model uid decision =
     Cmd.perform
         (do
-            db <- reviewDb
+            db <- LibDb.open
             case bodyHashOf uid model.queue of
                 Just bodyHash ->
                     LibDb.insertDecision db uid bodyHash decision
 
                 Nothing ->
-                    Task.fail (Error.unexpected "unit is no longer in the queue")
+                    Task.fail (Error.conflict "unit is no longer in the queue")
         )
         (DecisionSaved uid)
 
@@ -290,7 +283,7 @@ drainAndReload model uid =
         Just bodyHash ->
             Cmd.perform
                 (do
-                    db <- reviewDb
+                    db <- LibDb.open
                     LibDb.recordDrain db uid bodyHash
                     Index.drainUnit uid
                     Queue.load
@@ -313,10 +306,9 @@ bodyHashOf uid qs =
 loadHistory : Task Error (List HistoryRow)
 loadHistory =
     do
-        db <- reviewDb
+        db <- LibDb.open
         rows <- LibDb.findDecisions db
-        indexUrl <- Index.indexDbUrl
-        conn <- Db.open "sqlite" indexUrl
+        conn <- Index.openRead
         Task.sequence (List.map (enrich conn) rows)
 
 
@@ -335,7 +327,7 @@ enrich conn row =
         (Index.nameFor conn row.uid)
 
 
--- B9: the unit page loads the unit by uid (decided units have no change_queue
+-- The unit page loads the unit by uid (decided units have no change_queue
 -- row, so the page queries units directly) and resolves every identifier
 -- token of its source against the index's qualified names.
 loadUnitView : String -> Task Error ( Maybe Index.Unit, List Links.Link )
@@ -486,7 +478,7 @@ queueBody model =
                     ]
 
 
--- B10: the left rail is the keyboard-first overview — one button per queued
+-- The left rail is the keyboard-first overview — one button per queued
 -- unit, the selected one highlighted; j/k, g and 1-5 move the selection.
 queueRail : Model -> Ui.Element Msg
 queueRail model =
@@ -604,7 +596,7 @@ nameOf row =
             row.uid
 
 
--- B9: the unit page shows the source of one unit with its resolved links —
+-- The unit page shows the source of one unit with its resolved links —
 -- no decision buttons, no change state; the unit is read-only here.
 unitPageBody : Model -> Ui.Element Msg
 unitPageBody model =
@@ -783,7 +775,7 @@ changeBadge change =
             chipColored "MODIFIED" (Ui.rgb 145 95 20)
 
 
--- B8: a unit that was already reviewed on an older hash gets an amber
+-- A unit that was already reviewed on an older hash gets an amber
 -- "changed" chip at the queue head; unchanged re-queues are hidden entirely.
 changedChip : Queue.QueuedUnit -> Ui.Element Msg
 changedChip q =
@@ -1024,9 +1016,28 @@ requireEnv key hint =
         (System.getenv key)
 
 
+-- Parse every configured location once before serving: a relative
+-- `IPE_INDEX_ROOT` resolves against the working directory, and a value that
+-- does not name a usable location stops startup with its reason and fix.
+requireSettings : Task Error ()
+requireSettings =
+    Task.onError
+        (\e ->
+            do
+                Io.eprintln ("code-review: " ++ Error.message e)
+                System.exit 1
+        )
+        (do
+            Settings.indexSettings
+            Settings.reviewDb
+            Task.succeed ()
+        )
+
+
 main : Task Error ()
 main =
     do
-        requireEnv "IPE_INDEX_DB" "path or sqlite:// URL of the ipe-index index.db"
-        requireEnv "IPE_INDEX_ROOT" "repo root the index's tag:relative paths join to"
+        requireEnv "IPE_INDEX_DB" "path or sqlite:// URL of the ipe-index index.db (absolute, or relative to the working directory)"
+        requireEnv "IPE_INDEX_ROOT" "repo root the index's tag:relative paths join to (absolute, or relative to the working directory)"
+        requireSettings
         Server.listen 8000 [ Server.mountApp "/" reviewApp ]
