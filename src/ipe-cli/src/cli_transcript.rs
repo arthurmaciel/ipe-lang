@@ -146,7 +146,7 @@ enum VolatilePrefix {
 }
 
 impl VolatilePrefix {
-    fn byte_len(&self) -> usize {
+    const fn byte_len(&self) -> usize {
         match self {
             Self::Text(text) => text.len(),
             Self::TempRoot(root) => root.byte_len(),
