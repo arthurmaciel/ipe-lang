@@ -125,9 +125,9 @@ pub fn cache_new_raw<E: Send + From<String> + 'static>(cfg: CacheCfg) -> IpeTask
         // `maxEntries` would leave `cache_put`'s `max > 0` LRU cap inert — an
         // unbounded, caller-driven allocation. Reject it at the sole
         // construction boundary (fail-closed) rather than silently disabling
-        // the bound. (`ttlMs`/`maxBytes` are documented "0 disables"; a
-        // per-entry ceiling is not — an unbounded entry count has no legitimate
-        // "disabled" meaning for an LRU cache.)
+        // the bound. (`ttlMs` is documented "0 disables"; an entry ceiling is
+        // not — an unbounded entry count has no legitimate "disabled" meaning
+        // for an LRU cache.)
         if cfg.maxEntries <= 0 {
             return IpeResult::Err(
                 format!(
@@ -137,23 +137,25 @@ pub fn cache_new_raw<E: Send + From<String> + 'static>(cfg: CacheCfg) -> IpeTask
                 .into(),
             );
         }
-        // `maxBytes` is not enforced on the Rust backend: the value is erased to a
-        // `Box<dyn Any>`, so per-entry byte accounting isn't available without a
-        // size-measuring bound. Warn ONCE so a caller relying on it for a memory
-        // bound isn't silently unprotected — `maxEntries` (LRU) is the live bound.
+        // A byte bound is a value the runtime must enforce or refuse: values are
+        // stored erased (no size-measuring bound), so no byte accounting exists.
+        // A requested cap is refused at the construction boundary rather than
+        // accepted and ignored; `0` means no byte bound was requested.
+        if cfg.maxBytes < 0 {
+            return IpeResult::Err(
+                format!(
+                    "Cache.new: maxBytes must be non-negative (got {}); a byte cap is a byte count",
+                    cfg.maxBytes
+                )
+                .into(),
+            );
+        }
         if cfg.maxBytes > 0 {
-            use std::sync::atomic::{AtomicBool, Ordering};
-            static WARNED: AtomicBool = AtomicBool::new(false);
-            if !WARNED.swap(true, Ordering::Relaxed) {
-                crate::system::emit_runtime_log(
-                    "cache",
-                    &format!(
-                        "CacheCfg.maxBytes ({}) is not enforced on the Rust backend; use \
-                         maxEntries (LRU) to bound memory",
-                        cfg.maxBytes
-                    ),
-                );
-            }
+            return IpeResult::Err(
+                "Cache.new: maxBytes is not enforced by this runtime; bound the cache with withMaxEntries"
+                    .to_string()
+                    .into(),
+            );
         }
         let h = {
             let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
@@ -445,6 +447,33 @@ mod tests {
         assert!(matches!(
             try_new(CacheCfg {
                 maxEntries: 1,
+                ttlMs: 0,
+                maxBytes: 0,
+            }),
+            IpeResult::Ok(_)
+        ));
+    }
+
+    /// A byte cap the runtime cannot enforce is refused at construction, never
+    /// accepted and ignored; `maxBytes = 0` (no byte cap requested) still builds.
+    #[test]
+    fn new_refuses_a_byte_cap() {
+        for bad in [1, i64::MAX, -1, i64::MIN] {
+            assert!(
+                matches!(
+                    try_new(CacheCfg {
+                        maxEntries: 8,
+                        ttlMs: 0,
+                        maxBytes: bad,
+                    }),
+                    IpeResult::Err(_)
+                ),
+                "maxBytes = {bad} must be refused (no byte accounting exists)"
+            );
+        }
+        assert!(matches!(
+            try_new(CacheCfg {
+                maxEntries: 8,
                 ttlMs: 0,
                 maxBytes: 0,
             }),

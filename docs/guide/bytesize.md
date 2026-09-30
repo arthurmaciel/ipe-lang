@@ -70,7 +70,9 @@ build a `ByteSize` without naming the unit.
 
 Clamping negatives and hiding the constructor is [make invalid states
 unrepresentable][principles]: a negative cap is not a value the type can hold, so
-`File.readFileLimit` and `Cache.withMaxBytes` never receive one. And recovering the
+`File.readFileLimit` and `Cache.withMaxBytes` never receive one. Zero is a
+value, not a switch: `File.readFileLimit path ByteSize.zero` admits only an
+empty file. And recovering the
 raw integer only through `toBytes` at the boundary is [parse, don't
 validate][principles] in reverse — the typed quantity travels through your code,
 and the untyped byte count exists only at the runtime edge.

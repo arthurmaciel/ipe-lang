@@ -700,8 +700,9 @@ pub static ENV_VARS: &[EnvVar] = &[
     // ── File ──────────────────────────────────────────────────────────────────
     EnvVar {
         name: "IPE_FILE_READ_MAX",
-        default: "16777216 (16 MiB)",
-        purpose: "Maximum bytes read by `File.read*` in a single call. Prevents OOM \
+        default: "536870912 (512 MiB)",
+        purpose: "Maximum bytes `File.readFile` reads in a single call; 0 refuses every \
+                  non-empty file; a non-numeric value makes the read fail. Prevents OOM \
                   from unexpectedly large files.",
         subsystem: Subsystem::File,
         class: Class::Tunable,
@@ -1325,6 +1326,17 @@ mod tests {
             }
             last = Some((v.name, v.subsystem));
         }
+    }
+
+    /// The documented `IPE_FILE_READ_MAX` default is the enforced runtime const.
+    #[test]
+    fn file_read_max_default_matches_runtime() {
+        let entry = ENV_VARS.iter().find(|v| v.name == "IPE_FILE_READ_MAX");
+        let expected = format!("{} ", ipe_runtime_rust::file::READ_FILE_DEFAULT_CEILING);
+        assert!(
+            entry.is_some_and(|v| v.default.starts_with(&expected)),
+            "IPE_FILE_READ_MAX default must start with {expected:?}: {entry:?}"
+        );
     }
 
     #[test]

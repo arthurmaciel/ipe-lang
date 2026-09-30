@@ -82,8 +82,8 @@ fn csv_max_rows() -> usize {
         .unwrap_or(10_000_000)
 }
 
-/// Total-decoded-bytes ceiling (default 512 MiB, mirroring `File.readFile`'s
-/// `IPE_FILE_READ_MAX`). The row cap alone does NOT bound memory: a single huge
+/// Total-decoded-bytes ceiling (default 512 MiB, the same default as `File.readFile`'s
+/// `READ_FILE_DEFAULT_CEILING`). The row cap alone does NOT bound memory: a single huge
 /// record (one row of gigabytes) or a file of oversized fields slips under any
 /// row count while exhausting the heap. Bounded by construction (PRINCIPLES §3,
 /// and §1's exhaustion clause when the CSV arrives over the network): the sum of
