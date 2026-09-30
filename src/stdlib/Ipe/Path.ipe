@@ -6,11 +6,24 @@
 -- / `ext` / `isAbsolute`) and every `Ipe.File` entry point take a `Path`, not
 -- a raw `String` — an unvalidated string can never reach a filesystem syscall.
 -- Use `Ipe.File` for the effectful side (read / write / exists).
+--
+-- Compose paths with `under root child`, never by string concatenation: it
+-- refuses an empty, absolute, `..`-bearing, or NUL-bearing child, and checks
+-- that the result lies component-wise below the root (`/repo2/x` is not
+-- under `/repo`). `absolute` resolves a relative path against the working
+-- directory through the same join (it needs the `filesystem` capability).
+--
+-- Symlinks: `under` and `absolute` are lexical. They never touch the
+-- filesystem, so they neither follow nor forbid a symlink; a joined path
+-- whose ancestor is a link can still reach outside the root when opened.
+-- Confining a program against links is the capability jail's job, not
+-- this module's.
 module Ipe.Path exposing
     ( Path
     , fromString, toString
     , base, dir, ext
     , isAbsolute
+    , under, absolute
     )
 
 
@@ -48,3 +61,24 @@ ext = Kernel.kernel "Path_ext"
 -- | `isAbsolute path` — does the path start from the root?
 isAbsolute : Path -> Bool
 isAbsolute = Kernel.kernel "Path_isAbsolute"
+
+
+-- | `under root child` — join the relative `child` beneath `root`. Returns
+-- `Err` when `child` is empty, absolute, contains a `..` element, or the
+-- join would not lie below `root`; otherwise `Ok` the cleaned joined `Path`.
+-- On Windows, a `child` element containing `:` (a drive or an alternate data
+-- stream), made only of dots and spaces (which Windows strips to `.` or
+-- `..`), or naming a reserved device (`CON`, `NUL`, `COM1`, `nul.txt`, ...)
+-- is refused too.
+under : Path -> Path -> Result Error Path
+under = Kernel.kernel "Path_under"
+
+
+-- | `absolute path` — resolve `path` against the working directory. A path
+-- rooted with its own volume is returned re-sealed. On Windows, a path rooted
+-- without a volume (`\x`) takes the working directory's volume, and is refused
+-- when the working directory names no complete volume. A relative path is joined beneath the
+-- working directory with `under`, so it inherits every refusal (including a
+-- drive-relative `C:x`). A working directory that is not UTF-8 is refused.
+absolute : Path -> Task Error Path
+absolute = Kernel.kernel "Path_absolute"

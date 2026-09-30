@@ -10,6 +10,15 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.3.5](https://github.com/ipe-lang/compiler/compare/ipe-v0.3.4...ipe-v0.3.5) (2026-09-30)
+
+
+### Bug Fixes
+
+* **code-review:** typed repo root, strict sqlite settings, percent-decoded URL paths ([#3227](https://github.com/ipe-lang/compiler/issues/3227)) ([1d30c49](https://github.com/ipe-lang/compiler/commit/1d30c4968c94715ab716f487a4aae9b4882cfe43))
+* **lsp:** fail-closed lint config and versioned source actions ([#3206](https://github.com/ipe-lang/compiler/issues/3206)) ([f7f6671](https://github.com/ipe-lang/compiler/commit/f7f6671cf61bd8f803420649411672dd1be8bda2))
+* **path:** close Path.under/absolute containment bypass under every separator regime ([#3235](https://github.com/ipe-lang/compiler/issues/3235)) ([dc7fc0b](https://github.com/ipe-lang/compiler/commit/dc7fc0bf991e693a461b6814b613f9862c6dc140))
+
 ## [0.3.4](https://github.com/ipe-lang/compiler/compare/ipe-v0.3.3...ipe-v0.3.4) (2026-09-30)
 
 

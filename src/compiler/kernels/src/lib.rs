@@ -3595,6 +3595,12 @@ pub enum StdlibKernel {
     PathExt,
     /// `Path.isAbsolute : Path -> Bool` — does the path start from the root?
     PathIsAbsolute,
+    /// `Path.under : Path -> Path -> Result Error Path` — join a relative child
+    /// beneath a root; refuses an empty, absolute, `..`-bearing, or NUL child.
+    PathUnder,
+    /// `Path.absolute : Path -> Task Error Path` — resolve a relative path
+    /// against the working directory (reads the cwd: `Filesystem`).
+    PathAbsolute,
 
     // ── Ipe.Trace — opt-in tracing spans ──────────────────────────────
     // Task-effectful; runtime fns `ipe_runtime::trace::*` are re-exported
@@ -7213,13 +7219,17 @@ impl StdlibKernel {
             Self::RegexSplit => d("Regex", "split", 2, Pure, "regex_split", IpeOrder),
             // ── Ipe.Path ─────────────────────────────────────────
             // Runtime names MUST match `ipe_runtime::path::*` exactly
-            // (`path_is_absolute`). Pure/total, no effect.
+            // (`path_is_absolute`). Total and effect-free, except `absolute`,
+            // which reads the working directory (`Filesystem`) inside an
+            // already-`Ready` task.
             Self::PathFromString => d("Path", "fromString", 1, Pure, "path_from_string", IpeOrder),
             Self::PathToString => d("Path", "toString", 1, Pure, "path_to_string", IpeOrder),
             Self::PathBase => d("Path", "base", 1, Pure, "path_base", IpeOrder),
             Self::PathDir => d("Path", "dir", 1, Pure, "path_dir", IpeOrder),
             Self::PathExt => d("Path", "ext", 1, Pure, "path_ext", IpeOrder),
             Self::PathIsAbsolute => d("Path", "isAbsolute", 1, Pure, "path_is_absolute", IpeOrder),
+            Self::PathUnder => d("Path", "under", 2, Pure, "path_under", IpeOrder),
+            Self::PathAbsolute => d("Path", "absolute", 1, Pure, "path_absolute", IpeOrder),
             // ── Ipe.Trace ─────────────────────────────────────────────
             // Runtime names MUST match `ipe_runtime::trace::*` exactly.
             Self::TraceSpan => d("Trace", "span", 2, Pure, "trace_span", IpeOrder),
@@ -8683,6 +8693,8 @@ impl StdlibKernel {
         Self::PathDir,
         Self::PathExt,
         Self::PathIsAbsolute,
+        Self::PathUnder,
+        Self::PathAbsolute,
         // ── Ipe.Trace ─────────────────────────────────────────────────
         Self::TraceSpan,
         Self::TraceEvent,
@@ -10065,6 +10077,11 @@ impl StdlibKernel {
         const STRING_TO_RESULT_ERR_PATH: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_PATH);
         const PATH_TO_STRING: TyShape = TyShape::Fun(&PATH, &STRING);
         const PATH_TO_BOOL: TyShape = TyShape::Fun(&PATH, &BOOL);
+        const PATH_TO_RESULT_ERR_PATH: TyShape = TyShape::Fun(&PATH, &RESULT_ERR_PATH);
+        const PATH_TO_PATH_TO_RESULT_ERR_PATH: TyShape =
+            TyShape::Fun(&PATH, &PATH_TO_RESULT_ERR_PATH);
+        const TASK_PATH: TyShape = TyShape::Con(BuiltinTag::Task, &[PATH]);
+        const PATH_TO_TASK_PATH: TyShape = TyShape::Fun(&PATH, &TASK_PATH);
         // Url.
         const STRING_TO_RESULT_ERR_URL: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_URL);
         const URL_TO_STRING: TyShape = TyShape::Fun(&URL, &STRING);
@@ -12188,6 +12205,8 @@ impl StdlibKernel {
                 Some(&PATH_TO_STRING)
             }
             Self::PathIsAbsolute => Some(&PATH_TO_BOOL),
+            Self::PathUnder => Some(&PATH_TO_PATH_TO_RESULT_ERR_PATH),
+            Self::PathAbsolute => Some(&PATH_TO_TASK_PATH),
 
             // ── Url. ──
             Self::UrlFromString => Some(&STRING_TO_RESULT_ERR_URL),
@@ -13299,6 +13318,7 @@ impl StdlibKernel {
             | Self::DbConnOpen => Some(Capability::Network),
             Self::SystemCwd
             | Self::SystemGetcwd
+            | Self::PathAbsolute
             | Self::SystemLoadEnv
             | Self::FileReadFile
             | Self::FileWriteFile
@@ -14377,6 +14397,7 @@ impl StdlibKernel {
             | Self::PathDir
             | Self::PathExt
             | Self::PathIsAbsolute
+            | Self::PathUnder
             | Self::TraceSpan
             | Self::TraceEvent
             | Self::TraceAttr
@@ -16015,6 +16036,12 @@ impl StdlibKernel {
                 if matches!(self, Self::StringToUpperIn | Self::StringToLowerIn) {
                     return false;
                 }
+                // `Path.absolute` reads the process working directory — a
+                // `Filesystem` read a browser tab has no denotation for — so it
+                // is denied before the `Path` qualifier-wide allow fires.
+                if matches!(self, Self::PathAbsolute) {
+                    return false;
+                }
                 // Pure families whose runtime modules are in the proven wasm
                 // floor (no host I/O, no tokio, no un-shimmed entropy) OR
                 // whose M4 browser substitute has landed:
@@ -16614,6 +16641,8 @@ mod tests {
             (StdlibKernel::ServerListen, Some(Capability::Network)),
             (StdlibKernel::EmailSend, Some(Capability::Network)),
             (StdlibKernel::FileReadFile, Some(Capability::Filesystem)),
+            (StdlibKernel::PathAbsolute, Some(Capability::Filesystem)),
+            (StdlibKernel::PathUnder, None),
             (StdlibKernel::DbQuery, Some(Capability::Database)),
             (StdlibKernel::DbDecString, Some(Capability::Database)),
             (StdlibKernel::SystemGetenv, Some(Capability::Env)),
@@ -17298,6 +17327,9 @@ mod tests {
             StdlibKernel::CryptoSha256,
             StdlibKernel::CryptoAesGcmEncrypt,
             StdlibKernel::CryptoAesKeyFromPassword,
+            // `Path.absolute` reads the process working directory, which a
+            // browser tab has no denotation for, despite the `Path` family allow.
+            StdlibKernel::PathAbsolute,
         ] {
             assert!(
                 !denied.available_on(Target::WasmClient),
@@ -17368,6 +17400,9 @@ mod tests {
             StdlibKernel::SubSubscribeWebSocket,
             // `Env.public` — build-time-embedded `[wasm] publicEnv` allowlist.
             StdlibKernel::EnvPublic,
+            // The lexical `Path` surface is pure; only `absolute` is denied.
+            StdlibKernel::PathFromString,
+            StdlibKernel::PathUnder,
         ] {
             assert!(
                 allowed.available_on(Target::WasmClient),
