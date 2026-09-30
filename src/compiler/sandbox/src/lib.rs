@@ -26,9 +26,11 @@ use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{Code, Diagnostic as SharedDiag, IPE_F4410, SandboxError};
 
+pub use bounded::run_captured_bounded;
 pub use covers::{JailMounts, bind_exposing, path_covers};
 pub use mounts::{CanonicalPath, HomeMasks, JailPathError, MaskedDir};
 
+mod bounded;
 pub mod build_jail;
 mod covers;
 pub mod home;
@@ -68,6 +70,12 @@ pub enum SandboxDefect {
     /// in the rendered argv, so `--seccomp` could not be attached. Running
     /// without the filter is fail-open, so the jail refuses instead.
     SeccompNotAttached,
+    /// A bounded child was still running, or still held its output open, at
+    /// its wall-clock deadline; its whole process group was killed.
+    WallClockExceeded {
+        /// The deadline the child was given.
+        wall: std::time::Duration,
+    },
     /// A path the jail would mount or hand to the payload could not be
     /// resolved, or a home it must mask is unknown.
     Path(JailPathError),
@@ -106,6 +114,11 @@ impl From<SandboxDefect> for SandboxError {
                  the rendered argv); refusing to run untrusted code without its syscall filter"
                     .to_owned()
             }
+            SandboxDefect::WallClockExceeded { wall } => format!(
+                "the process exceeded its {:.1}s wall-clock limit and was killed with its \
+                 process group",
+                wall.as_secs_f64()
+            ),
             SandboxDefect::Path(e) => e.to_string(),
         };
         Self::BuildJail {
@@ -549,33 +562,6 @@ fn run_bwrap(
     let _ = seccomp_fd;
     let child = cmd.spawn().map_err(spawn_err)?;
     drain_and_reap(child, spec.limits.out_cap_bytes, program)
-}
-
-/// Run `cmd` as a plain child, capturing both streams under one byte cap.
-///
-/// The same concurrent drain the jail uses, so a caller that runs a process
-/// outside the jail (a trusted build step, the explicit unsandboxed opt-out)
-/// can neither wedge on a stream-heavy child nor buffer an unbounded one.
-/// Stdin is closed and both output streams are piped, whatever `cmd` set.
-///
-/// # Errors
-///
-/// [`SandboxDefect::Spawn`] when the child cannot start or a stream cannot be
-/// read; [`SandboxDefect::OutputCapExceeded`] when either stream out-talks
-/// `cap_bytes` (the child is killed at the breach).
-pub fn run_captured_bounded(
-    cmd: &mut std::process::Command,
-    cap_bytes: u64,
-) -> Result<JailedOutput, SandboxDefect> {
-    let program = cmd.get_program().to_os_string();
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let child = cmd.spawn().map_err(|e| SandboxDefect::Spawn {
-        program: program.to_string_lossy().into_owned(),
-        detail: e.to_string(),
-    })?;
-    drain_and_reap(child, cap_bytes, &program)
 }
 
 /// Which jailed stream a drain thread read.

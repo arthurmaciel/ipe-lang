@@ -35,6 +35,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use crate::budget::WallSecs;
 use crate::staging::MAX_TREE_DEPTH;
 use ipe_sandbox::{
     CanonicalPath, Capabilities, HomeMasks, JailPathError, JailSpec, NetworkPolicy, ResourceLimits,
@@ -103,6 +104,15 @@ impl RunCaps {
             // counts threads) start; low enough that a fork bomb is killed.
             proc_cap: 32,
             out_cap_bytes: 8 * 1024 * 1024,
+        }
+    }
+
+    /// These caps with the wall cut to `wall`, the phase's share of the budget.
+    #[must_use]
+    pub const fn with_wall(self, wall: WallSecs) -> Self {
+        Self {
+            wall_secs: wall.get(),
+            ..self
         }
     }
 
@@ -319,7 +329,8 @@ const fn is_wall_clock_kill(status: Option<i32>) -> bool {
 /// user-derived code.
 ///
 /// The crate directory and the target directory both live under `scoped_tmp` (the
-/// only writable bind), so their paths resolve inside the jail.
+/// only writable bind), so their paths resolve inside the jail. `wall` replaces
+/// the build default wall.
 ///
 /// # Errors
 ///
@@ -329,6 +340,7 @@ pub fn jailed_build(
     caps: &Capabilities,
     scoped_tmp: &Path,
     vendor: &VendorSource,
+    wall: WallSecs,
 ) -> Result<PhaseOutcome, SandboxDefect> {
     // One canonical spelling for the writable bind and every payload path
     // under it.
@@ -354,7 +366,7 @@ pub fn jailed_build(
     run_phase(
         caps,
         &scoped_tmp,
-        RunCaps::build_defaults(),
+        RunCaps::build_defaults().with_wall(wall),
         binds,
         Some(vendor.0.clone()),
         // The build spawns rustc + a linker — subprocess creation is required.
@@ -691,7 +703,7 @@ mod copy_tests {
 ///
 /// The binary is executed by absolute path under the jail's writable bind. No
 /// toolchain binds are needed (the program is self-contained), which is a
-/// tighter surface than the build phase.
+/// tighter surface than the build phase. `wall` replaces the run default wall.
 ///
 /// # Errors
 ///
@@ -701,6 +713,7 @@ pub fn jailed_run(
     caps: &Capabilities,
     scoped_tmp: &Path,
     app_binary: &Path,
+    wall: WallSecs,
 ) -> Result<PhaseOutcome, SandboxDefect> {
     // The bind and the binary the payload execs share one canonical spelling.
     let scoped_tmp = CanonicalPath::resolve(scoped_tmp).map_err(SandboxDefect::Path)?;
@@ -709,7 +722,7 @@ pub fn jailed_run(
     run_phase(
         caps,
         &scoped_tmp,
-        RunCaps::run_defaults(),
+        RunCaps::run_defaults().with_wall(wall),
         // No toolchain binds for the run phase — the emitted program does not need
         // rustc/cargo, so nothing extra is exposed.
         ToolchainBinds::default(),
@@ -734,6 +747,19 @@ mod tests {
         let b = RunCaps::build_defaults().to_limits();
         assert!(b.wall_secs > l.wall_secs);
         assert!(b.proc_cap >= l.proc_cap);
+    }
+
+    #[test]
+    fn a_phase_wall_replaces_only_the_wall() {
+        let wall = WallSecs::new(7);
+        assert!(wall.is_some());
+        let Some(wall) = wall else { return };
+        let cut = RunCaps::build_defaults().with_wall(wall).to_limits();
+        let full = RunCaps::build_defaults().to_limits();
+        assert_eq!(cut.wall_secs, 7);
+        assert_eq!(cut.cpu_secs, full.cpu_secs);
+        assert_eq!(cut.proc_cap, full.proc_cap);
+        assert_eq!(cut.out_cap_bytes, full.out_cap_bytes);
     }
 
     #[test]

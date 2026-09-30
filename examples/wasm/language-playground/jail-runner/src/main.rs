@@ -19,14 +19,17 @@
 //! the runtime only honours on the driver's loud trust warning.
 #![allow(clippy::module_name_repetitions)]
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
 use serde::Serialize;
 
 use ipe_sandbox::unsandboxed_override_set;
+use playground_jail_runner::budget::{Budget, MAX_WALL_SECS, WallSecs};
 use playground_jail_runner::run_jailed::{
     self, VendorSource, app_binary_path, jailed_build, jailed_run, probe_or_refuse, seed_target_dir,
 };
@@ -34,10 +37,21 @@ use playground_jail_runner::staging::{
     PREWARM_PROGRAM, RuntimeFiles, check_project_layout, write_emitted, write_runtime,
 };
 
-const HARNESS_WALL_DEFAULT_SECS: u64 = 60;
+const HARNESS_WALL_DEFAULT_SECS: &str = "60";
 const UNSANDBOXED_OUTPUT_CAP_BYTES: u64 = 64 * 1024;
 /// Output cap for one trusted prewarm cargo step, run `--quiet`.
 const PREWARM_OUTPUT_CAP_BYTES: u64 = 1024 * 1024;
+/// Wall for one trusted prewarm cargo step; a cold vendor+build fits well inside.
+const PREWARM_STEP_WALL: Duration = Duration::from_secs(1800);
+/// Bytes of each captured stream a phase reports, kept from the end.
+const PHASE_REPORT_BYTES: usize = 64 * 1024;
+
+/// Whether the one outcome document has been written to stdout.
+///
+/// Whoever writes the document holds this latch while doing so, and the
+/// watchdog keeps holding it through exit, so stdout carries exactly one
+/// document.
+static EMITTED: Mutex<bool> = Mutex::new(false);
 const WARM_DIR_ENV: &str = "IPE_PLAYGROUND_WARM_DIR";
 const DEFAULT_WARM_DIR: &str = ".cache/ipe/playground-warm";
 
@@ -54,9 +68,20 @@ impl From<run_jailed::PhaseOutcome> for PhaseJson {
     fn from(phase: run_jailed::PhaseOutcome) -> Self {
         Self {
             status: phase.status,
-            stdout: phase.stdout,
-            stderr: phase.stderr,
+            stdout: tail(&phase.stdout, PHASE_REPORT_BYTES),
+            stderr: tail(&phase.stderr, PHASE_REPORT_BYTES),
             killed: phase.killed,
+        }
+    }
+}
+
+impl From<Captured> for PhaseJson {
+    fn from(captured: Captured) -> Self {
+        Self {
+            status: captured.status,
+            stdout: tail(&captured.stdout, PHASE_REPORT_BYTES),
+            stderr: tail(&captured.stderr, PHASE_REPORT_BYTES),
+            killed: false,
         }
     }
 }
@@ -129,8 +154,9 @@ fn cmd_run(args: &[String]) -> u8 {
             return 2;
         }
     };
-    start_watchdog(parsed.wall_secs, &parsed.project_dir);
-    let outcome = run_project(&parsed.project_dir, &parsed.warm_dir);
+    let budget = Budget::start(parsed.wall);
+    start_watchdog(budget.total(), &parsed.project_dir);
+    let outcome = run_project(&parsed.project_dir, &parsed.warm_dir, budget);
     let code = print_json(&outcome);
     cleanup_project(&parsed.project_dir);
     code
@@ -138,13 +164,13 @@ fn cmd_run(args: &[String]) -> u8 {
 
 struct RunArgs {
     project_dir: PathBuf,
-    wall_secs: u64,
+    wall: WallSecs,
     warm_dir: PathBuf,
 }
 
 fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
     let mut project_dir: Option<PathBuf> = None;
-    let mut wall_secs = HARNESS_WALL_DEFAULT_SECS;
+    let mut wall = WallSecs::parse_harness(HARNESS_WALL_DEFAULT_SECS).map_err(|e| e.to_string())?;
     let mut warm_dir: Option<PathBuf> = None;
     let mut positionals = 0;
     let mut index = 0;
@@ -154,9 +180,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
             Some("--wall") => {
                 index += 1;
                 let raw = args.get(index).ok_or("--wall requires a value")?;
-                wall_secs = raw
-                    .parse::<u64>()
-                    .map_err(|_| format!("invalid --wall value: {raw}"))?;
+                wall = WallSecs::parse_harness(raw).map_err(|e| e.to_string())?;
             }
             Some("--warm") => {
                 index += 1;
@@ -177,13 +201,21 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
         index += 1;
     }
     let project_dir = project_dir.ok_or_else(|| "missing <project-dir> argument".to_owned())?;
+    // The harness removes this tree when it is done: a cwd-relative spelling
+    // would make what it removes depend on where it was started.
+    if !project_dir.is_absolute() {
+        return Err(format!(
+            "<project-dir> must be an absolute path, got: {}",
+            project_dir.display()
+        ));
+    }
     let warm_dir = match warm_dir {
         Some(dir) => dir,
         None => resolve_warm_dir().map_err(|e| e.to_string())?,
     };
     Ok(RunArgs {
         project_dir,
-        wall_secs,
+        wall,
         warm_dir,
     })
 }
@@ -226,28 +258,32 @@ fn cmd_prewarm(args: &[String]) -> u8 {
     print_json(&prewarm(&warm_dir))
 }
 
-/// Harness-level wall-clock: after `wall_secs` the watchdog prints a timeout
-/// JSON document and exits hard. The jail wrapper runs with
-/// `--die-with-parent`, so the whole bwrap tree dies with the harness.
-fn start_watchdog(wall_secs: u64, project_dir: &Path) {
+/// The backstop at the end of the budget: the watchdog reports a timeout and
+/// exits hard, unless the outcome was already reported.
+///
+/// Every child's own wall ends before the budget does (see [`Budget`]), so a
+/// child outlives the harness by at most its own remaining wall; the jail
+/// wrapper also runs with `--die-with-parent`.
+fn start_watchdog(total: WallSecs, project_dir: &Path) {
     let project_dir = project_dir.to_path_buf();
     thread::spawn(move || {
-        thread::sleep(Duration::from_secs(wall_secs));
-        let outcome = Outcome {
-            ok: false,
-            unsandboxed: false,
-            build: None,
-            run: None,
-            exit: None,
-            error: Some(format!("timed out after {wall_secs}s (harness wall-clock)")),
-        };
-        let _ = print_json(&outcome);
+        thread::sleep(total.duration());
+        let mut emitted = emission_latch();
+        if *emitted {
+            return;
+        }
+        let outcome = Outcome::failure(format!(
+            "timed out after {}s (harness wall-clock)",
+            total.get()
+        ));
+        let _ = emit_to(&mut std::io::stdout().lock(), &mut emitted, &outcome);
         // Best-effort: remove the staged project (compiled artifacts can be
         // large). Children may still hold cwd entries; leftover files in that
         // race are bounded by the wall budget and harmless.
         cleanup_project(&project_dir);
         // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — watchdog expiry: process
-        // exit kills all threads; --die-with-parent reaps the bwrap tree.
+        // exit kills all threads while the emission latch is held, so no
+        // second document follows; --die-with-parent reaps the bwrap tree.
         std::process::exit(2);
     });
 }
@@ -335,8 +371,21 @@ fn stage_harness_files(project_dir: &Path, warm_lock: &Path) -> Result<(), Strin
         .map_err(|error| format!("failed to stage the warm Cargo.lock: {error}"))
 }
 
+/// The outcome for a phase the budget has no room left to start.
+fn out_of_budget(phase: &str, budget: Budget) -> Outcome {
+    Outcome::failure(format!(
+        "timed out before the {phase} phase: the {}s harness wall-clock is spent",
+        budget.total().get()
+    ))
+}
+
+/// The wall for the next phase under `budget`, never above `cap_secs`.
+fn phase_wall(budget: Budget, cap_secs: u64) -> Option<WallSecs> {
+    budget.phase_wall(WallSecs::new(cap_secs.min(MAX_WALL_SECS))?)
+}
+
 /// The jailed pipeline. Returns the JSON outcome; never panics.
-fn run_project(project_dir: &Path, warm_dir: &Path) -> Outcome {
+fn run_project(project_dir: &Path, warm_dir: &Path, budget: Budget) -> Outcome {
     if let Err(error) = check_project_layout(project_dir) {
         return Outcome::failure(error.to_string());
     }
@@ -369,13 +418,17 @@ fn run_project(project_dir: &Path, warm_dir: &Path) -> Outcome {
                      submitted program WITHOUT a jail. This is a trust boundary breach; \
                      only use it on a throwaway host."
                 );
-                return run_unsandboxed(project_dir, &vendor);
+                return run_unsandboxed(project_dir, &vendor, budget);
             }
             return Outcome::failure(format!("sandbox unavailable: {}", refusal.reason));
         }
     };
 
-    let build = match jailed_build(&caps, project_dir, &vendor) {
+    let Some(build_wall) = phase_wall(budget, run_jailed::RunCaps::build_defaults().wall_secs)
+    else {
+        return out_of_budget("build", budget);
+    };
+    let build = match jailed_build(&caps, project_dir, &vendor, build_wall) {
         Ok(build) => build,
         Err(defect) => return Outcome::failure(format!("jail build failed: {defect}")),
     };
@@ -413,7 +466,10 @@ fn run_project(project_dir: &Path, warm_dir: &Path) -> Outcome {
         };
     }
 
-    let run = match jailed_run(&caps, project_dir, &binary) {
+    let Some(run_wall) = phase_wall(budget, run_jailed::RunCaps::run_defaults().wall_secs) else {
+        return out_of_budget("run", budget);
+    };
+    let run = match jailed_run(&caps, project_dir, &binary, run_wall) {
         Ok(run) => run,
         Err(defect) => return Outcome::failure(format!("jail run failed: {defect}")),
     };
@@ -427,23 +483,24 @@ fn run_project(project_dir: &Path, warm_dir: &Path) -> Outcome {
     }
 }
 
-/// The `IPE_FFI_ALLOW_UNSANDBOXED=1` escape hatch: same phases, plain
-/// subprocesses, output capped, wall-clock still enforced by the watchdog.
-fn run_unsandboxed(project_dir: &Path, vendor: &VendorSource) -> Outcome {
+/// The `IPE_FFI_ALLOW_UNSANDBOXED=1` escape hatch: same phases and walls as
+/// the jail, plain subprocesses, output capped.
+fn run_unsandboxed(project_dir: &Path, vendor: &VendorSource, budget: Budget) -> Outcome {
+    let Some(build_wall) = phase_wall(budget, run_jailed::RunCaps::build_defaults().wall_secs)
+    else {
+        return out_of_budget("build", budget);
+    };
     let build = match run_captured(
         &mut cargo_build_cmd(project_dir, vendor),
         UNSANDBOXED_OUTPUT_CAP_BYTES,
+        build_wall.duration(),
     ) {
         Ok(build) => build,
         Err(message) => return Outcome::failure(message),
     };
-    let build_json = PhaseJson {
-        status: build.status,
-        stdout: build.stdout.clone(),
-        stderr: build.stderr.clone(),
-        killed: false,
-    };
-    if build.status != Some(0) {
+    let build_status = build.status;
+    let build_json = PhaseJson::from(build);
+    if build_status != Some(0) {
         return Outcome {
             ok: false,
             unsandboxed: true,
@@ -454,22 +511,29 @@ fn run_unsandboxed(project_dir: &Path, vendor: &VendorSource) -> Outcome {
         };
     }
 
+    let Some(run_wall) = phase_wall(budget, run_jailed::RunCaps::run_defaults().wall_secs) else {
+        return out_of_budget("run", budget);
+    };
     let binary = app_binary_path(project_dir);
-    let run = match run_captured(&mut Command::new(&binary), UNSANDBOXED_OUTPUT_CAP_BYTES) {
+    // The program gets no inherited environment: nothing of the harness's
+    // (tokens, paths, overrides) reaches untrusted code.
+    let mut program = Command::new(&binary);
+    program.env_clear().current_dir(project_dir);
+    let run = match run_captured(
+        &mut program,
+        UNSANDBOXED_OUTPUT_CAP_BYTES,
+        run_wall.duration(),
+    ) {
         Ok(run) => run,
         Err(message) => return Outcome::failure(message),
     };
+    let exit = run.status;
     Outcome {
         ok: true,
         unsandboxed: true,
         build: Some(build_json),
-        run: Some(PhaseJson {
-            status: run.status,
-            stdout: run.stdout,
-            stderr: run.stderr,
-            killed: false,
-        }),
-        exit: run.status,
+        run: Some(PhaseJson::from(run)),
+        exit,
         error: None,
     }
 }
@@ -481,10 +545,9 @@ struct Captured {
 }
 
 /// Run `cmd` outside the jail with both streams drained concurrently under
-/// `cap_bytes`, so a stream-heavy child never wedges and an oversize one is
-/// killed and reported rather than buffered.
-fn run_captured(cmd: &mut Command, cap_bytes: u64) -> Result<Captured, String> {
-    ipe_sandbox::run_captured_bounded(cmd, cap_bytes)
+/// `cap_bytes` and its whole process group stopped at `wall`.
+fn run_captured(cmd: &mut Command, cap_bytes: u64, wall: Duration) -> Result<Captured, String> {
+    ipe_sandbox::run_captured_bounded(cmd, cap_bytes, wall)
         .map(|output| Captured {
             status: output.status,
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -493,6 +556,10 @@ fn run_captured(cmd: &mut Command, cap_bytes: u64) -> Result<Captured, String> {
         .map_err(|defect| defect.to_string())
 }
 
+/// The unjailed cargo build.
+///
+/// The environment is cleared down to the toolchain variables, so no harness
+/// secret or override reaches the build scripts the submitted crate runs.
 fn cargo_build_cmd(project_dir: &Path, vendor: &VendorSource) -> Command {
     let mut cmd = Command::new("cargo");
     cmd.arg("build")
@@ -502,9 +569,21 @@ fn cargo_build_cmd(project_dir: &Path, vendor: &VendorSource) -> Command {
         .arg(project_dir.join("Cargo.toml"))
         .arg("--target-dir")
         .arg(project_dir.join("crate-target"))
+        .current_dir(project_dir)
+        .env_clear()
         .env("CARGO_HOME", project_dir.join("cargo-home"))
         .env("CARGO_TERM_PROGRESS_WHEN", "never");
+    pass_toolchain_env(&mut cmd);
     cmd
+}
+
+/// Re-pass the variables rustup needs to find the toolchain after `env_clear`.
+fn pass_toolchain_env(cmd: &mut Command) {
+    for key in ["PATH", "RUSTUP_HOME"] {
+        if let Some(value) = ipe_env::var_os(key) {
+            cmd.env(key, value);
+        }
+    }
 }
 
 /// A cargo invocation for prewarm over the scratch crate.
@@ -522,17 +601,13 @@ fn prewarm_cargo(subcommand: &str, scratch: &Path, warm_cargo_home: &Path) -> Co
         .env_clear()
         .env("CARGO_HOME", warm_cargo_home)
         .env("CARGO_TERM_PROGRESS_WHEN", "never");
-    for key in ["PATH", "HOME", "RUSTUP_HOME"] {
-        if let Some(value) = ipe_env::var_os(key) {
-            cmd.env(key, value);
-        }
-    }
+    pass_toolchain_env(&mut cmd);
     cmd
 }
 
 /// Run one prewarm cargo step, turning a failure into its message.
 fn prewarm_step(cmd: &mut Command, step: &str) -> Result<(), String> {
-    match run_captured(cmd, PREWARM_OUTPUT_CAP_BYTES) {
+    match run_captured(cmd, PREWARM_OUTPUT_CAP_BYTES, PREWARM_STEP_WALL) {
         Ok(captured) if captured.status == Some(0) => Ok(()),
         Ok(captured) => Err(format!(
             "prewarm {step} failed: {}",
@@ -629,18 +704,39 @@ fn tail(text: &str, max_bytes: usize) -> String {
     }
 }
 
+/// The emission latch, recovered if a thread panicked while holding it.
+fn emission_latch() -> MutexGuard<'static, bool> {
+    EMITTED.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Print `outcome` as the one JSON document on stdout; the exit code to report.
-///
-/// A document that cannot be serialised is reported on stderr with exit 1, so
-/// the harness never exits 0 without a complete document.
 fn print_json(outcome: &Outcome) -> u8 {
-    match serde_json::to_string(outcome) {
-        Ok(json) => {
-            println!("{json}");
-            0
-        }
-        Err(error) => {
-            eprintln!("[jail-runner] fatal: failed to serialize outcome: {error}");
+    let mut emitted = emission_latch();
+    emit_to(&mut std::io::stdout().lock(), &mut emitted, outcome)
+}
+
+/// Write `outcome` to `sink` unless a document was already written.
+///
+/// Exit code `0` when this call wrote the document, `2` when one was already
+/// written (the watchdog's timeout), and `1` when the document could not be
+/// serialised or written — reported on stderr, so the harness never exits 0
+/// without a complete document.
+fn emit_to(sink: &mut impl Write, emitted: &mut bool, outcome: &Outcome) -> u8 {
+    if *emitted {
+        return 2;
+    }
+    *emitted = true;
+    let written = serde_json::to_string(outcome)
+        .map_err(|error| format!("failed to serialize outcome: {error}"))
+        .and_then(|json| {
+            writeln!(sink, "{json}")
+                .and_then(|()| sink.flush())
+                .map_err(|error| format!("failed to write outcome: {error}"))
+        });
+    match written {
+        Ok(()) => 0,
+        Err(message) => {
+            eprintln!("[jail-runner] fatal: {message}");
             1
         }
     }
@@ -648,10 +744,57 @@ fn print_json(outcome: &Outcome) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_WARM_DIR, WarmDirError, resolve_warm_dir_from, run_captured, tail};
+    use super::{
+        DEFAULT_WARM_DIR, Outcome, RunArgs, WarmDirError, emit_to, parse_run_args,
+        resolve_warm_dir_from, run_captured, tail,
+    };
     use std::ffi::OsString;
     use std::path::PathBuf;
     use std::process::Command;
+    use std::time::Duration;
+
+    const WALL: Duration = Duration::from_secs(30);
+
+    fn run_args(args: &[&str]) -> Result<RunArgs, String> {
+        let owned: Vec<String> = args.iter().map(|&arg| arg.to_owned()).collect();
+        parse_run_args(&owned)
+    }
+
+    #[test]
+    fn a_relative_project_dir_is_refused() {
+        assert!(run_args(&["staged", "--warm", "/srv/warm"]).is_err());
+        assert!(run_args(&["./staged", "--warm", "/srv/warm"]).is_err());
+        assert!(run_args(&["/srv/runs/abc", "--warm", "/srv/warm"]).is_ok());
+    }
+
+    #[test]
+    fn an_unbounded_wall_is_refused() {
+        for wall in ["0", "9", "601", "-1", "1e3", "18446744073709551616"] {
+            assert!(
+                run_args(&["/srv/runs/abc", "--wall", wall, "--warm", "/srv/warm"]).is_err(),
+                "--wall {wall} was accepted"
+            );
+        }
+        let parsed = run_args(&["/srv/runs/abc", "--wall", "25", "--warm", "/srv/warm"]);
+        assert!(matches!(parsed, Ok(ref args) if args.wall.get() == 25));
+    }
+
+    #[test]
+    fn only_the_first_outcome_is_emitted() {
+        let mut sink = Vec::new();
+        let mut emitted = false;
+        assert_eq!(
+            emit_to(&mut sink, &mut emitted, &Outcome::failure("first")),
+            0
+        );
+        assert_eq!(
+            emit_to(&mut sink, &mut emitted, &Outcome::failure("second")),
+            2
+        );
+        let text = String::from_utf8_lossy(&sink);
+        assert_eq!(text.lines().count(), 1);
+        assert!(text.contains("first") && !text.contains("second"));
+    }
 
     /// A child that writes `stderr_bytes` to stderr while its stdout stays open.
     fn stderr_heavy(stderr_bytes: u32) -> Command {
@@ -663,7 +806,7 @@ mod tests {
 
     #[test]
     fn a_stderr_heavy_child_is_drained_without_wedging() {
-        let captured = run_captured(&mut stderr_heavy(256 * 1024), 1024 * 1024);
+        let captured = run_captured(&mut stderr_heavy(256 * 1024), 1024 * 1024, WALL);
         assert!(matches!(
             captured,
             Ok(ref out) if out.status == Some(0) && out.stdout == "done\n" && out.stderr.len() == 256 * 1024
@@ -672,7 +815,7 @@ mod tests {
 
     #[test]
     fn a_child_past_the_output_cap_is_refused() {
-        assert!(run_captured(&mut stderr_heavy(256 * 1024), 64 * 1024).is_err());
+        assert!(run_captured(&mut stderr_heavy(256 * 1024), 64 * 1024, WALL).is_err());
     }
 
     #[test]

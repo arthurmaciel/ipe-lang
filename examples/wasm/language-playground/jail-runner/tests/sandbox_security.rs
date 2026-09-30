@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ipe_sandbox::run_jail::netns_jail_available;
+use playground_jail_runner::budget::WallSecs;
 use playground_jail_runner::run_jailed::{
     self, PhaseOutcome, VendorSource, app_binary_path, jailed_build, jailed_run, probe_or_refuse,
     seed_target_dir,
@@ -261,18 +262,24 @@ fn warm_root() -> PathBuf {
     )
 }
 
+/// A legal phase wall of `secs` seconds.
+fn wall(secs: u64) -> WallSecs {
+    WallSecs::new(secs).expect("a legal wall")
+}
+
 /// Build (jailed) then run (jailed) a staged crate. Returns the build outcome and
 /// the run outcome (`None` if the build failed).
 fn build_and_run(staged: &Staged) -> (PhaseOutcome, Option<PhaseOutcome>) {
     let caps = probe_or_refuse().expect("jail primitives present");
     let scoped_tmp = staged.scoped_tmp();
-    let build = jailed_build(&caps, scoped_tmp, &staged.vendor).expect("jailed build spawns");
+    let build =
+        jailed_build(&caps, scoped_tmp, &staged.vendor, wall(600)).expect("jailed build spawns");
     if build.status != Some(0) {
         return (build, None);
     }
     let app = app_binary_path(scoped_tmp);
     assert!(app.is_file(), "no ipe-app after a clean build");
-    let run = jailed_run(&caps, scoped_tmp, &app).expect("jailed run spawns");
+    let run = jailed_run(&caps, scoped_tmp, &app, wall(10)).expect("jailed run spawns");
     (build, Some(run))
 }
 
