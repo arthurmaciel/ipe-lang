@@ -522,7 +522,7 @@ enum ElementRefusal {
 }
 
 impl ElementRefusal {
-    /// The refusal reason [`under_with`] reports.
+    /// The refusal reason [`join_beneath`] reports.
     const fn reason(self) -> &'static str {
         match self {
             Self::Parent => "contains a `..` element",
@@ -539,7 +539,7 @@ impl ElementRefusal {
 
 /// One element of a Windows child path, parsed once by [`ChildElement::parse`].
 ///
-/// The child side of [`under_with`] reads every element through this parse,
+/// The child side of [`join_beneath`] reads every element through this parse,
 /// which refuses the forms Win32 resolves to something other than an entry of
 /// that name beneath the root: `..`, a `:` (a drive or a stream), a dot/space
 /// run (`.` or `..` once stripped), and a reserved DOS device. An accepted name
@@ -649,6 +649,9 @@ fn join_beneath(op: JoinOp, r: &str, c: &str, windows: bool) -> Result<String, P
     } else {
         clean_with(&format!("{rr}{}{cc}", char::from(sep_of(windows))), windows)
     };
+    // Defence in depth: the child checks above already refuse every input
+    // known to land outside `rr`, so no input is known to reach this refusal;
+    // it re-proves containment on the joined result independently of them.
     if !strictly_beneath(&rr, &joined, windows) {
         return Err(PathRefusal::NotBeneath {
             op,
@@ -1585,6 +1588,17 @@ mod tests {
                 "Ipe.Path.absolute: child path \"CON\" contains a reserved Windows device name \
                  (`CON`, `NUL`, `COM1`, ...) that opens a device"
             )
+        );
+        // The post-join containment refusal names its operation too; no input
+        // is known to reach it past the child checks, so its text is pinned here.
+        assert_eq!(
+            PathRefusal::NotBeneath {
+                op: JoinOp::Absolute,
+                child: "x".to_string(),
+                root: "/work".to_string(),
+            }
+            .to_string(),
+            "Ipe.Path.absolute: \"x\" does not resolve beneath the root \"/work\""
         );
         assert_eq!(
             seal_with("../x", false)
