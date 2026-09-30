@@ -803,40 +803,46 @@ fn http_max_inflight() -> usize {
         .unwrap_or(DEFAULT_HTTP_MAX_INFLIGHT)
 }
 
-fn parse_query(q: Option<&str>) -> HashMap<String, String> {
-    let mut out = HashMap::new();
-    if let Some(q) = q {
-        for pair in q.split('&') {
-            if pair.is_empty() {
-                continue;
-            }
-            let mut it = pair.splitn(2, '=');
-            let k = it.next().unwrap_or("");
-            let v = it.next().unwrap_or("");
-            // Repeated keys keep the FIRST value — consistent with
-            // http_client::http_parse_query.
-            out.entry(urldecode(k)).or_insert_with(|| urldecode(v));
+/// Why a request is turned away before its handler runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequestRejection {
+    /// The body exceeds the request-body ceiling.
+    PayloadTooLarge,
+    /// The path or query is not a well-formed URL (a malformed escape, decoded
+    /// bytes that are not UTF-8, an over-cap component or too many query pairs).
+    BadRequest,
+}
+
+impl RequestRejection {
+    /// The status and fixed reason text answered for this rejection.
+    ///
+    /// The text never echoes the request, so a refusal reflects nothing back.
+    const fn status_and_reason(self) -> (axum::http::StatusCode, &'static str) {
+        match self {
+            Self::PayloadTooLarge => (
+                axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                "Payload Too Large",
+            ),
+            Self::BadRequest => (axum::http::StatusCode::BAD_REQUEST, "Bad Request"),
         }
     }
-    out
 }
 
-// Lenient by design — see `encoding::form_url_decode` doc. Result feeds
-// `ServerRequest.query` (app-logic Dict only; not a path, SQL, or re-encode sink).
-fn urldecode(s: &str) -> String {
-    form_url_decode(s)
+/// Decode the request's query string, refusing it whole on any defect.
+fn parse_query(q: Option<&str>) -> Result<HashMap<String, String>, crate::encoding::QueryRefusal> {
+    q.map_or_else(|| Ok(HashMap::new()), crate::encoding::decode_form_query)
 }
 
-/// Percent-decode a raw path-param value so `Server.param` matches the decoding
-/// `Server.queryParam` already applies (`RawPathParams` hands back the raw,
-/// still-escaped segment). Path segments are percent-encoded ONLY — unlike a
-/// query string a literal `+` is NOT a space here (RFC 3986 §3.3), so this uses a
-/// pure percent-decode rather than `form_url_decode` (which maps `+` → space).
-/// Lossy + total (never panics on invalid UTF-8).
-fn decode_path_param(v: &str) -> String {
-    percent_encoding::percent_decode_str(v)
-        .decode_utf8_lossy()
-        .into_owned()
+/// Refuse a request path that is not a well-formed RFC 3986 path.
+///
+/// Every raw segment must decode through `decode_component` under the path
+/// grammar. This is what makes the path parameters sound: the router hands back
+/// each parameter already percent-decoded once by a lenient decoder, and on a
+/// path that passes this check that decoding is byte-for-byte the strict one.
+/// The parameters are therefore used as handed back and never decoded again (a
+/// second decode would turn `%2541` into `A`).
+fn check_path(path: &str) -> Result<(), crate::encoding::DecodeRefusal> {
+    crate::encoding::decode_component(path, crate::encoding::UrlGrammar::Path).map(drop)
 }
 
 fn parse_cookies(header: &str, out: &mut HashMap<String, String>) {
@@ -848,18 +854,21 @@ fn parse_cookies(header: &str, out: &mut HashMap<String, String>) {
     }
 }
 
-/// Build the Ipê `ServerRequest` from the axum request. Returns `Err(status)`
-/// when the request must be rejected before the handler runs — currently only
-/// `Err(413)` for an oversize body. Rejecting here ensures handlers never
-/// receive a silently-truncated body.
+/// Build the Ipê `ServerRequest` from the axum request.
+///
+/// Returns the `RequestRejection` when the request must be turned away before
+/// the handler runs: a malformed path, path parameter or query is a
+/// `BadRequest`, an oversize body is `PayloadTooLarge`. Rejecting here ensures
+/// a handler never sees a lossily decoded URL or a silently-truncated body.
 async fn build_request(
     req: axum::extract::Request,
-) -> Result<(ServerRequest, Option<axum::extract::ws::WebSocketUpgrade>), u16> {
+) -> Result<(ServerRequest, Option<axum::extract::ws::WebSocketUpgrade>), RequestRejection> {
     use axum::extract::{FromRequestParts, RawPathParams};
     let method = req.method().as_str().to_string();
     let uri = req.uri().clone();
     let path = uri.path().to_string();
-    let query = parse_query(uri.query());
+    check_path(&path).map_err(|_| RequestRejection::BadRequest)?;
+    let query = parse_query(uri.query()).map_err(|_| RequestRejection::BadRequest)?;
     let mut headers = HashMap::new();
     let mut cookies = HashMap::new();
     for (k, v) in req.headers() {
@@ -878,13 +887,16 @@ async fn build_request(
         }
     }
     let (mut parts, body) = req.into_parts();
-    let params = match RawPathParams::from_request_parts(&mut parts, &()).await {
-        Ok(rpp) => rpp
-            .iter()
-            .map(|(k, v)| (k.to_string(), decode_path_param(v)))
-            .collect(),
-        Err(_) => HashMap::new(),
-    };
+    // `check_path` has already proved the raw path strict, so the router's
+    // single decode of each parameter is the strict decode: used as-is. A
+    // router refusal (a parameter it could not decode, or no parameter table at
+    // all) is a malformed request, never an empty table.
+    let params = RawPathParams::from_request_parts(&mut parts, &())
+        .await
+        .map_err(|_| RequestRejection::BadRequest)?
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     // remoteAddr: trust the real TCP peer (ConnectInfo) by DEFAULT. Only honour a
     // proxy's X-Forwarded-For / X-Real-IP when `IPE_TRUSTED_PROXY` is set — i.e.
     // the operator declares the app sits behind a trusted proxy that sets those
@@ -931,14 +943,14 @@ async fn build_request(
         .and_then(|(_, v)| v.trim().parse::<usize>().ok())
         && declared > cap
     {
-        return Err(413);
+        return Err(RequestRejection::PayloadTooLarge);
     }
     let body = match axum::body::to_bytes(body, cap).await {
         Ok(b) => String::from_utf8_lossy(&b).into_owned(),
         // to_bytes-with-limit fails almost exclusively on cap-exceeded; a
         // transport read error means the client is already gone so the status
         // is moot. Either way never hand the handler a silently-truncated body.
-        Err(_) => return Err(413),
+        Err(_) => return Err(RequestRejection::PayloadTooLarge),
     };
     Ok((
         ServerRequest {
@@ -1045,11 +1057,7 @@ fn method_router(method: &str, h: ErasedHandler) -> axum::routing::MethodRouter 
         async move {
             let (ipe_req, upgrader) = match build_request(req).await {
                 Ok(v) => v,
-                Err(code) => {
-                    let status = axum::http::StatusCode::from_u16(code)
-                        .unwrap_or(axum::http::StatusCode::PAYLOAD_TOO_LARGE);
-                    return (status, "Payload Too Large").into_response();
-                }
+                Err(rejection) => return rejection.status_and_reason().into_response(),
             };
             // Run the handler with the WS upgrader + a response slot in scope.
             // If the handler called server_web_socket_upgrade, it stashed the
@@ -2667,6 +2675,49 @@ mod tests {
         ));
     }
 
+    /// Run `build_request` inside a router matched on `pattern`.
+    ///
+    /// Returns what `build_request` produced for `wire`, or `None` when the
+    /// router never reached the handler (no route matched).
+    async fn routed_build(
+        pattern: &str,
+        wire: axum::http::Request<axum::body::Body>,
+    ) -> Option<Result<ServerRequest, RequestRejection>> {
+        use tower::ServiceExt;
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let seen = std::sync::Arc::clone(&slot);
+        let app = axum::Router::new().route(
+            pattern,
+            axum::routing::any(move |req: axum::extract::Request| {
+                let seen = std::sync::Arc::clone(&seen);
+                async move {
+                    let built = build_request(req).await.map(|(r, _)| r);
+                    if let Ok(mut s) = seen.lock() {
+                        *s = Some(built);
+                    }
+                    ""
+                }
+            }),
+        );
+        let _ = app.oneshot(wire).await;
+        slot.lock().ok().and_then(|mut s| s.take())
+    }
+
+    #[tokio::test]
+    async fn build_request_without_router_params_is_bad_request() {
+        // Prove the refusal: a request that never passed the router carries no
+        // parameter table, and that is a malformed request, never an empty one.
+        let wire = axum::http::Request::builder()
+            .method("GET")
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .expect("test request builds");
+        assert!(matches!(
+            build_request(wire).await,
+            Err(RequestRejection::BadRequest)
+        ));
+    }
+
     #[tokio::test]
     async fn build_request_stores_canonical_header_keys() {
         let wire = axum::http::Request::builder()
@@ -2676,7 +2727,9 @@ mod tests {
             .header("content-type", "text/plain")
             .body(axum::body::Body::empty())
             .expect("test request builds");
-        let (req, _upgrader) = build_request(wire).await.expect("build_request succeeds");
+        let built = routed_build("/", wire).await;
+        assert!(matches!(built, Some(Ok(_))), "a routed request must build");
+        let Some(Ok(req)) = built else { return };
         assert_eq!(
             req.headers.get("X-Trace-Id").map(String::as_str),
             Some("abc123")
@@ -3012,11 +3065,17 @@ mod tests {
 
     #[test]
     fn query_and_cookies() {
-        let q = parse_query(Some("a=1&b=two%20words&a=ignored&flag"));
+        let parsed = parse_query(Some("a=1&b=two%20words&a=ignored&flag"));
+        assert!(parsed.is_ok(), "a well-formed query must parse");
+        let Ok(q) = parsed else { return };
         assert_eq!(q.get("a").map(String::as_str), Some("1")); // first value wins
         assert_eq!(q.get("b").map(String::as_str), Some("two words"));
         assert_eq!(q.get("flag").map(String::as_str), Some(""));
-        assert!(parse_query(None).is_empty());
+        assert!(parse_query(None).is_ok_and(|q| q.is_empty()));
+        assert!(
+            parse_query(Some("a=%zz")).is_err(),
+            "a malformed query is refused whole"
+        );
 
         let mut c = std::collections::HashMap::new();
         parse_cookies("sid=abc; theme=dark", &mut c);

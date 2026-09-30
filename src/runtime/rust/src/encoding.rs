@@ -151,7 +151,7 @@ impl ComponentLen {
 /// Equal to the server's default request-body ceiling, so a form field that
 /// fits in a body is never refused for length, while no input can make the
 /// decoder allocate without a bound.
-pub const MAX_COMPONENT_LEN: ComponentLen = ComponentLen(32 * 1024 * 1024);
+pub const MAX_URL_COMPONENT_LEN: ComponentLen = ComponentLen(32 * 1024 * 1024);
 
 /// Why a URL component was refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,14 +191,14 @@ impl std::fmt::Display for DecodeRefusal {
 /// `Encoding.percentDecode`, `Http.parseQuery`) is decoded here. It is total and
 /// strict: a `%` not followed by two hex digits, decoded bytes that are not
 /// UTF-8 (overlong forms such as `%C0%AF` included), and a component longer
-/// than `MAX_COMPONENT_LEN` are each a typed refusal, never a lossy or
+/// than `MAX_URL_COMPONENT_LEN` are each a typed refusal, never a lossy or
 /// pass-through success.
 ///
 /// # Errors
 ///
 /// Returns the `DecodeRefusal` naming the first defect found.
 pub fn decode_component(raw: &str, grammar: UrlGrammar) -> Result<String, DecodeRefusal> {
-    decode_component_within(raw, grammar, MAX_COMPONENT_LEN)
+    decode_component_within(raw, grammar, MAX_URL_COMPONENT_LEN)
 }
 
 /// `decode_component` under an explicit length cap.
@@ -264,6 +264,78 @@ fn raw_offset_of(raw: &[u8], decoded: usize) -> ByteOffset {
         produced += 1;
     }
     ByteOffset(i)
+}
+
+/// A number of query pairs, kept apart from lengths and positions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PairCount(usize);
+
+impl PairCount {
+    /// The count as a plain number.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// The most `key=value` pairs one query string may carry.
+///
+/// Bounds the map a single request or `Http.parseQuery` call can build.
+pub const MAX_QUERY_PAIRS: PairCount = PairCount(1024);
+
+/// Why a query string was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueryRefusal {
+    /// A key or value is not a well-formed form component.
+    Component(DecodeRefusal),
+    /// The query carries more than `cap` pairs.
+    TooManyPairs { cap: PairCount },
+}
+
+impl std::fmt::Display for QueryRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Component(refusal) => refusal.fmt(f),
+            Self::TooManyPairs { cap } => write!(f, "more than {} query pairs", cap.get()),
+        }
+    }
+}
+
+/// Decode a form-encoded query string (no leading `?`) into its pairs.
+///
+/// Pairs split on `&` (empty pairs skipped) and each on its first `=` (a bare
+/// key maps to `""`); every key and value is decoded by `decode_component`
+/// under the form grammar. A repeated key keeps its FIRST value. The whole
+/// query is refused when any component is malformed or it carries more than
+/// `MAX_QUERY_PAIRS` pairs — there is no partial, lenient result.
+///
+/// # Errors
+///
+/// Returns the `QueryRefusal` naming the first defect found.
+pub fn decode_form_query(
+    raw: &str,
+) -> Result<std::collections::HashMap<String, String>, QueryRefusal> {
+    decode_form_query_within(raw, MAX_QUERY_PAIRS)
+}
+
+/// `decode_form_query` under an explicit pair cap.
+fn decode_form_query_within(
+    raw: &str,
+    cap: PairCount,
+) -> Result<std::collections::HashMap<String, String>, QueryRefusal> {
+    let mut out = std::collections::HashMap::new();
+    let mut pairs = 0;
+    for pair in raw.split('&').filter(|p| !p.is_empty()) {
+        pairs += 1;
+        if pairs > cap.get() {
+            return Err(QueryRefusal::TooManyPairs { cap });
+        }
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        let k = decode_component(k, UrlGrammar::Form).map_err(QueryRefusal::Component)?;
+        let v = decode_component(v, UrlGrammar::Form).map_err(QueryRefusal::Component)?;
+        out.entry(k).or_insert(v);
+    }
+    Ok(out)
 }
 
 /// Ipê `base64Encode : String -> String` — encodes the input's UTF-8 bytes
@@ -719,11 +791,60 @@ mod tests {
             Err(DecodeRefusal::TooLong { cap })
         );
         // The shipped cap: one byte past it is refused before any decoding.
-        let past = "a".repeat(MAX_COMPONENT_LEN.get() + 1);
+        let past = "a".repeat(MAX_URL_COMPONENT_LEN.get() + 1);
         assert_eq!(
             refusal(&past, UrlGrammar::Form),
             Some(DecodeRefusal::TooLong {
-                cap: MAX_COMPONENT_LEN
+                cap: MAX_URL_COMPONENT_LEN
+            })
+        );
+    }
+
+    // ── decode_form_query: the one query splitter ─────────────────────────
+
+    #[test]
+    fn decode_form_query_first_wins_and_bare_keys() {
+        let decoded = decode_form_query("a=1&b=two+words%21&a=ignored&flag&&c=x=y");
+        assert!(decoded.is_ok(), "a well-formed query must decode");
+        let Ok(q) = decoded else { return };
+        assert_eq!(q.get("a").map(String::as_str), Some("1"));
+        assert_eq!(q.get("b").map(String::as_str), Some("two words!"));
+        assert_eq!(q.get("flag").map(String::as_str), Some(""));
+        assert_eq!(q.get("c").map(String::as_str), Some("x=y"));
+        assert_eq!(q.len(), 4);
+        assert_eq!(decode_form_query(""), Ok(std::collections::HashMap::new()));
+    }
+
+    #[test]
+    fn decode_form_query_refuses_any_malformed_component() {
+        for bad in ["a=%zz", "%zz=1", "a=1&b=%C3", "a=1&a=%zz", "q=100%"] {
+            assert!(
+                matches!(decode_form_query(bad), Err(QueryRefusal::Component(_))),
+                "{bad:?} must be refused whole"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_form_query_pair_cap() {
+        let cap = PairCount(3);
+        assert!(decode_form_query_within("a=1&b=2&c=3", cap).is_ok());
+        // Empty pairs do not count toward the cap.
+        assert!(decode_form_query_within("a=1&&b=2&c=3&", cap).is_ok());
+        assert_eq!(
+            decode_form_query_within("a=1&b=2&c=3&d=4", cap),
+            Err(QueryRefusal::TooManyPairs { cap })
+        );
+        // The shipped cap: exactly at it decodes, one past it is refused.
+        let at: Vec<String> = (0..MAX_QUERY_PAIRS.get())
+            .map(|i| format!("k{i}=v"))
+            .collect();
+        assert!(decode_form_query(&at.join("&")).is_ok());
+        let past = format!("{}&extra=1", at.join("&"));
+        assert_eq!(
+            decode_form_query(&past),
+            Err(QueryRefusal::TooManyPairs {
+                cap: MAX_QUERY_PAIRS
             })
         );
     }
