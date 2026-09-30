@@ -529,7 +529,7 @@ class AdminReadWiringTest(unittest.TestCase):
         )
         for mutate in cases:
             with self.subTest(mutate=mutate):
-                self.assertAdminRefused(mutate, "names `secrets`; only the read step may")
+                self.assertAdminRefused(mutate, "names `secrets`; only the read step's pinned `env` may")
         # The read step's own env is the one sanctioned mention.
         wf = copy.deepcopy(ADMIN_WORKFLOW)
         self.assertFalse([e for e in ng.admin_read_wiring_errors(wf, ADMIN_MANIFEST) if "secrets" in e])
@@ -540,13 +540,95 @@ class AdminReadWiringTest(unittest.TestCase):
             "names `secrets`",
         )
 
-    def test_job_or_workflow_env_and_defaults_refused(self) -> None:
-        for key in ("env", "defaults"):
+    def test_the_workflow_keys_are_closed(self) -> None:
+        for key, value in (
+            ("env", {"GH_HOST": "evil.example"}),
+            ("defaults", {"run": {"shell": "bash -c 'curl evil'"}}),
+            ("concurrency", {"group": "x", "cancel-in-progress": True}),
+            ("run-name", "x"),
+            ("x-extra", 1),
+        ):
             with self.subTest(key=key):
-                self.assertAdminRefused(lambda wf, k=key: _admin_job(wf).update({k: {"GH_HOST": "evil.example"}}),
-                                        f"must not set a job-level `{key}`")
-                self.assertAdminRefused(lambda wf, k=key: wf.update({k: {"GH_HOST": "evil.example"}}),
-                                        f"must not set a workflow-level `{key}`")
+                self.assertAdminRefused(lambda wf, k=key, v=value: wf.update({k: v}), f"must not set workflow-level ['{key}']")
+        self.assertAdminRefused(lambda wf: wf.update({True: wf["on"]}), "sets `on` twice")
+        self.assertEqual(ng.admin_read_wiring_errors({k: v for k, v in ADMIN_WORKFLOW.items() if k != "name"},
+                                                     ADMIN_MANIFEST), [])
+
+    def test_the_workflow_permissions_are_read_only_contents(self) -> None:
+        for perms in ({"contents": "write"}, {"contents": "read", "actions": "read"}, {}, "read-all", "write-all", None):
+            with self.subTest(perms=perms):
+                self.assertAdminRefused(lambda wf, p=perms: wf.update(permissions=p), "`permissions` must be exactly")
+        self.assertAdminRefused(lambda wf: wf.pop("permissions"), "`permissions` must be exactly")
+
+    def test_the_job_keys_are_closed(self) -> None:
+        for key, value in (
+            ("env", {"GH_HOST": "evil.example"}),
+            ("defaults", {"run": {"working-directory": "/tmp"}}),
+            ("permissions", {"contents": "write"}),
+            ("outputs", {"token": "${{ steps.x.outputs.t }}"}),
+            ("container", "evil/image:latest"),
+            ("services", {"proxy": {"image": "evil/mitm"}}),
+            ("concurrency", "x"),
+            ("if", "false"),
+            ("continue-on-error", True),
+            ("needs", "other"),
+            ("strategy", {"matrix": {"n": [1, 2]}}),
+            ("uses", "./.github/workflows/other.yml"),
+        ):
+            with self.subTest(key=key):
+                self.assertAdminRefused(lambda wf, k=key, v=value: _admin_job(wf).update({k: v}), f"must not set ['{key}']")
+        job = {k: v for k, v in _admin_job(ADMIN_WORKFLOW).items() if k != "name"}
+        self.assertEqual(ng.admin_read_wiring_errors(dict(ADMIN_WORKFLOW, jobs={"ruleset-admin-read": job}),
+                                                     ADMIN_MANIFEST), [])
+
+    def test_the_job_runs_on_the_hosted_ubuntu_latest_label(self) -> None:
+        for runs_on in ("self-hosted", ["self-hosted", "linux"], "ubuntu-24.04", "Ubuntu-Latest",
+                        "${{ 'ubuntu-latest' }}", {"group": "x"}, None):
+            with self.subTest(runs_on=runs_on):
+                self.assertAdminRefused(lambda wf, r=runs_on: _admin_job(wf).update({"runs-on": r}),
+                                        "must declare `runs-on: ubuntu-latest`")
+        self.assertAdminRefused(lambda wf: _admin_job(wf).pop("runs-on"), "must declare `runs-on: ubuntu-latest`")
+
+    def test_the_job_timeout_is_a_positive_integer_literal(self) -> None:
+        for minutes in ("${{ 5 }}", "5", 0, -1, 5.0, True, None):
+            with self.subTest(minutes=minutes):
+                self.assertAdminRefused(lambda wf, m=minutes: _admin_job(wf).update({"timeout-minutes": m}),
+                                        "`timeout-minutes` must be a positive integer literal")
+        self.assertAdminRefused(lambda wf: _admin_job(wf).pop("timeout-minutes"),
+                                "`timeout-minutes` must be a positive integer literal")
+
+    def test_secrets_are_matched_in_any_case(self) -> None:
+        for spelling in ("SECRETS", "Secrets", "sEcReTs"):
+            with self.subTest(spelling=spelling):
+                self.assertAdminRefused(
+                    lambda wf, w=spelling: _steps(wf)[0]["with"].update(token=f"${{{{ {w}.RULESET_READ_TOKEN }}}}"),
+                    "names `secrets`",
+                )
+                self.assertAdminRefused(lambda wf, w=spelling: wf.update(name=f"read ${{{{ {w}.X }}}}"), "names `secrets`")
+
+    def test_the_read_step_name_is_scanned(self) -> None:
+        self.assertAdminRefused(lambda wf: _steps(wf)[-1].update(name="${{ secrets.RULESET_READ_TOKEN }}"),
+                                "steps[3].name names `secrets`")
+        self.assertAdminRefused(lambda wf: _steps(wf)[-1].update(name="${{ SECRETS.RULESET_READ_TOKEN }}"),
+                                "steps[3].name names `secrets`")
+
+    def test_a_drifted_read_env_is_not_sanctioned(self) -> None:
+        self.assertAdminRefused(
+            lambda wf: _steps(wf)[-1]["env"].update(EXTRA="${{ secrets.OTHER }}"),
+            "steps[3].env.EXTRA names `secrets`",
+        )
+
+    def test_the_parse_yields_the_typed_job(self) -> None:
+        vm = ng._verify_manifest()
+        parsed = ng.parse_admin_read_workflow(copy.deepcopy(ADMIN_WORKFLOW))
+        self.assertIsInstance(parsed, ng.AdminReadJob)
+        self.assertEqual(parsed.runner, vm.RunnerLabel("ubuntu-latest"))
+        self.assertEqual(parsed.timeout, vm.Timeout(5))
+        self.assertEqual(parsed.environment, "ruleset-admin-read")
+        self.assertEqual(parsed.read_step["run"], ng.ADMIN_READ_INVOCATION)
+        for bad in (None, [], "x"):
+            with self.subTest(bad=bad):
+                self.assertEqual(ng.parse_admin_read_workflow(bad), ["ruleset-admin-read.yml is not a mapping"])
 
     def test_environment_refused_unless_the_admin_read_environment(self) -> None:
         for env in (None, "prod", "Ruleset-Admin-Read", {"name": "ruleset-admin-read"}, "${{ 'ruleset-admin-read' }}"):
@@ -559,9 +641,6 @@ class AdminReadWiringTest(unittest.TestCase):
         self.assertAdminRefused(lambda wf: wf.update(jobs={"x": wf["jobs"]["ruleset-admin-read"]}), "exactly one job")
         self.assertAdminRefused(lambda wf: wf.update(jobs=None), "exactly one job")
         self.assertAdminRefused(lambda wf: _admin_job(wf).update(name="other"), "must report context")
-        for key in ("if", "continue-on-error", "needs", "strategy"):
-            with self.subTest(key=key):
-                self.assertAdminRefused(lambda wf, k=key: _admin_job(wf).update({k: "x"}), f"must not set `{key}`")
 
     def test_manifest_drift_refused(self) -> None:
         for manifest in (

@@ -35,11 +35,13 @@ Modes:
   --lint     fail unless nightly-green.yml runs `--verdict` unconditionally,
              the manifest declares `nightly-green` a gate and
              `ruleset-admin-read` a nightly-gate of ruleset-admin-read.yml,
-             and that workflow triggers on `schedule` alone, with one job in
-             the admin-read environment running exactly the pinned steps, the
-             last one only `check_required_set.py --fetch-admin` with the
-             admin token, and no other `secrets` or `env`
-             (`admin_read_wiring_errors`). manifest-guard runs it.
+             and that workflow parses as a closed shape: triggered on
+             `schedule` alone with read-only `contents`, one job on
+             `ubuntu-latest` with a literal timeout in the admin-read
+             environment running exactly the pinned steps, the last one only
+             `check_required_set.py --fetch-admin` with the admin token, and
+             no other key or `secrets` (`parse_admin_read_workflow`).
+             manifest-guard runs it.
 """
 
 from __future__ import annotations
@@ -323,9 +325,15 @@ ADMIN_READ_RECOVERY = (
     "`created_at`, so it never makes a stale run fresh); one caused by main's tree "
     "needs the break-glass sequence in .github/ci/RECONCILIATION.md."
 )
-# Keys that would put an `env:` or a shell under the read step that its own
-# pinned `env:` and `run:` do not show.
-_ADMIN_READ_SCOPE_KEYS = ("env", "defaults")
+# The admin-read workflow's and job's keys, closed. Any other key (`env:`,
+# `defaults:`, `concurrency:`, `run-name:`, a job-level `permissions:` or
+# `outputs:`, `container:`, `services:`, `if:`, `needs:`, `strategy:`,
+# `continue-on-error:`) could re-scope, mask or skip the read in a way the
+# pinned steps do not show.
+_ADMIN_READ_WORKFLOW_KEYS = frozenset({"name", "on", "permissions", "jobs"})
+_ADMIN_READ_JOB_KEYS = frozenset({"name", "runs-on", "environment", "timeout-minutes", "steps"})
+ADMIN_READ_PERMISSIONS = {"contents": "read"}
+ADMIN_READ_RUNNER = "ubuntu-latest"
 
 
 def _verify_manifest() -> object:
@@ -387,73 +395,111 @@ def _step_errors(index: int, step: object, what: str, pinned: dict[str, object])
     return errors
 
 
-def _secret_mentions(node: object, skip: object, path: str) -> list[str]:
-    """Return the path of every key or scalar under `node` naming `secrets`,
-    skipping the one object `skip` (the read step)."""
+def _secret_mentions(node: object, skip: object, path: str, word: re.Pattern[str]) -> list[str]:
+    """Return the path of every key or scalar under `node` matching `word`
+    (verify-manifest's case-insensitive `secrets`), skipping the one object
+    `skip` (the read step's pinned `env`)."""
     if node is skip:
         return []
     if isinstance(node, dict):
-        found = [f"{path}.{k}" for k in node if "secrets" in str(k)]
+        found = [f"{path}.{k}" for k in node if word.search(str(k))]
         for k, v in node.items():
-            found += _secret_mentions(v, skip, f"{path}.{k}")
+            found += _secret_mentions(v, skip, f"{path}.{k}", word)
         return found
     if isinstance(node, list):
-        return [m for i, v in enumerate(node) for m in _secret_mentions(v, skip, f"{path}[{i}]")]
-    return [path] if "secrets" in str(node) else []
+        return [m for i, v in enumerate(node) for m in _secret_mentions(v, skip, f"{path}[{i}]", word)]
+    return [path] if word.search(str(node)) else []
 
 
-def admin_read_wiring_errors(workflow: object, manifest: object) -> list[str]:
-    """Return why a green `ADMIN_READ` run could fail to be the manifest's
-    ruleset admin read, or []: the workflow triggers on `ADMIN_READ.event`
-    alone and sets no workflow-level `env`/`defaults`; its one job
-    `ADMIN_READ_CONTEXT` runs unconditionally in the admin-read environment
-    with no job-level `env`/`defaults`, and runs exactly `admin_read_steps()`,
-    the last one only `ADMIN_READ_INVOCATION` with env exactly
-    `ADMIN_READ_ENV` (the admin token, not the workflow token); no other part
-    of the workflow names `secrets`; the manifest declares the context a
-    `nightly-gate` the workflow produces."""
+@dataclass(frozen=True)
+class AdminReadJob:
+    """A ruleset-admin-read.yml that `parse_admin_read_workflow` accepted: the
+    one job's runner (a `verify_manifest.RunnerLabel`), its budget (a
+    `verify_manifest.Timeout`), its environment and its read step."""
+
+    runner: object
+    timeout: object
+    environment: str
+    read_step: dict
+
+
+def parse_admin_read_workflow(workflow: object) -> AdminReadJob | list[str]:
+    """Parse ruleset-admin-read.yml into an `AdminReadJob`, or return why it
+    is not one. The workflow's keys are exactly `_ADMIN_READ_WORKFLOW_KEYS`
+    (`name` optional): it triggers on `ADMIN_READ.event` alone with
+    `permissions` exactly `ADMIN_READ_PERMISSIONS`. Its one job
+    `ADMIN_READ_CONTEXT` has exactly `_ADMIN_READ_JOB_KEYS` (`name` optional):
+    `runs-on` the literal `ADMIN_READ_RUNNER`, `timeout-minutes` a positive
+    integer literal, the admin-read environment, and exactly
+    `admin_read_steps()`, the last one only `ADMIN_READ_INVOCATION` with env
+    exactly `ADMIN_READ_ENV` (the admin token, not the workflow token). No
+    other key or scalar names `secrets`, in any case."""
     if HERE not in sys.path:
         sys.path.insert(0, HERE)
     import check_required_set  # noqa: PLC0415  # PyYAML-backed; owns the environment's name
 
+    vm = _verify_manifest()
+    wf = ADMIN_READ.workflow
+    if not isinstance(workflow, dict):
+        return [f"{wf} is not a mapping"]
     errors: list[str] = []
-    on = workflow.get(True, workflow.get("on")) if isinstance(workflow, dict) else None
+    if True in workflow and "on" in workflow:
+        errors.append(f"{wf} sets `on` twice")
+    keys = {"on" if k is True else k for k in workflow}
+    extra = sorted(str(k) for k in keys - _ADMIN_READ_WORKFLOW_KEYS)
+    if extra:
+        errors.append(f"{wf} must not set workflow-level {extra} (its keys are {sorted(_ADMIN_READ_WORKFLOW_KEYS)})")
+    on = workflow.get(True, workflow.get("on"))
     if not isinstance(on, dict) or set(on) != {ADMIN_READ.event}:
-        errors.append(f"{ADMIN_READ.workflow} must trigger on `{ADMIN_READ.event}` alone")
-    for key in _ADMIN_READ_SCOPE_KEYS:
-        if isinstance(workflow, dict) and key in workflow:
-            errors.append(f"{ADMIN_READ.workflow} must not set a workflow-level `{key}`")
-    jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
+        errors.append(f"{wf} must trigger on `{ADMIN_READ.event}` alone")
+    if workflow.get("permissions") != ADMIN_READ_PERMISSIONS:
+        errors.append(f"{wf} `permissions` must be exactly {ADMIN_READ_PERMISSIONS!r}, got {workflow.get('permissions')!r}")
+    jobs = workflow.get("jobs")
     job = jobs.get(ADMIN_READ_CONTEXT) if isinstance(jobs, dict) and len(jobs) == 1 else None
     if not isinstance(job, dict):
-        errors.append(f"{ADMIN_READ.workflow} must define exactly one job, {ADMIN_READ_CONTEXT!r}")
-        job = {}
-    elif job.get("name", ADMIN_READ_CONTEXT) != ADMIN_READ_CONTEXT:
-        errors.append(f"the {ADMIN_READ.workflow} job must report context {ADMIN_READ_CONTEXT!r}")
-    for key in ("if", "continue-on-error", "needs", "strategy"):
-        if key in job:
-            errors.append(f"the {ADMIN_READ.workflow} job must not set `{key}` (the read runs unconditionally, once)")
-    for key in _ADMIN_READ_SCOPE_KEYS:
-        if key in job:
-            errors.append(f"the {ADMIN_READ.workflow} job must not set a job-level `{key}`")
-    if job and job.get("environment") != check_required_set.ADMIN_READ_ENVIRONMENT:
+        return [*errors, f"{wf} must define exactly one job, {ADMIN_READ_CONTEXT!r}"]
+    extra = sorted(str(k) for k in set(job) - _ADMIN_READ_JOB_KEYS)
+    if extra:
+        errors.append(f"the {wf} job must not set {extra} (its keys are {sorted(_ADMIN_READ_JOB_KEYS)})")
+    if job.get("name", ADMIN_READ_CONTEXT) != ADMIN_READ_CONTEXT:
+        errors.append(f"the {wf} job must report context {ADMIN_READ_CONTEXT!r}")
+    runner = vm.RunnerLabel.parse(job.get("runs-on"))
+    if runner is None or runner.label != ADMIN_READ_RUNNER:
+        errors.append(f"the {wf} job must declare `runs-on: {ADMIN_READ_RUNNER}`, got {job.get('runs-on')!r}")
+    timeout = vm.Timeout.parse(job.get("timeout-minutes"))
+    if timeout is None:
         errors.append(
-            f"the {ADMIN_READ.workflow} job must declare `environment: {check_required_set.ADMIN_READ_ENVIRONMENT}`"
+            f"the {wf} job `timeout-minutes` must be a positive integer literal, got {job.get('timeout-minutes')!r}"
         )
+    environment = job.get("environment")
+    if environment != check_required_set.ADMIN_READ_ENVIRONMENT:
+        errors.append(f"the {wf} job must declare `environment: {check_required_set.ADMIN_READ_ENVIRONMENT}`")
     steps = job.get("steps")
     expected = admin_read_steps()
-    read_step: object = None
+    read_step: dict = {}
+    sanctioned: object = None
     if not isinstance(steps, list) or len(steps) != len(expected):
-        errors.append(
-            f"the {ADMIN_READ.workflow} job must run exactly {len(expected)} steps: "
-            + ", ".join(what for what, _ in expected)
-        )
+        errors.append(f"the {wf} job must run exactly {len(expected)} steps: " + ", ".join(w for w, _ in expected))
     else:
-        for i, (step, (what, pinned)) in enumerate(zip(steps, expected)):
-            errors += _step_errors(i, step, what, pinned)
-        read_step = steps[-1]
-    for where in _secret_mentions(workflow, read_step, ADMIN_READ.workflow):
-        errors.append(f"{where} names `secrets`; only the read step may")
+        for i, (step, (what, pinned)) in enumerate(zip(steps, expected, strict=True)):
+            step_errors = _step_errors(i, step, what, pinned)
+            errors += step_errors
+            if i == len(expected) - 1 and not step_errors and isinstance(step, dict):
+                read_step, sanctioned = step, step.get("env")
+    for where in _secret_mentions(workflow, sanctioned, wf, vm._SECRETS_WORD):
+        errors.append(f"{where} names `secrets`; only the read step's pinned `env` may")
+    if errors or runner is None or timeout is None:
+        return errors
+    return AdminReadJob(runner=runner, timeout=timeout, environment=str(environment), read_step=read_step)
+
+
+def admin_read_wiring_errors(workflow: object, manifest: object) -> list[str]:
+    """Return why a green `ADMIN_READ` run could fail to be the manifest's
+    ruleset admin read, or []: the workflow parses
+    (`parse_admin_read_workflow`) and the manifest declares the context a
+    `nightly-gate` the workflow produces."""
+    parsed = parse_admin_read_workflow(workflow)
+    errors = parsed if isinstance(parsed, list) else []
     entries = manifest.get("checks") if isinstance(manifest, dict) else None
     mine = [e for e in entries or [] if isinstance(e, dict) and e.get("context") == ADMIN_READ_CONTEXT]
     if len(mine) != 1 or mine[0].get("disposition") != "nightly-gate" or mine[0].get("producer") != ADMIN_READ.workflow:
