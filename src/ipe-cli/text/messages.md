@@ -2068,6 +2068,34 @@ ipe package publish: `{path}` is not a git repository — publish pins a committ
 
 ipe package publish: could not run `git`: {detail}
 
+## publish-http-status-empty
+
+ipe package publish: {op} got no HTTP status from curl — nothing was published.
+
+## publish-http-status-not-digits
+
+ipe package publish: {op} got a malformed HTTP status from curl, not 3 digits — nothing was published.
+
+## publish-http-status-no-response
+
+ipe package publish: {op} got no response (curl reported status `000`, usually a connection failure) — nothing was published.
+
+## publish-http-status-out-of-range
+
+ipe package publish: {op} got an out-of-range HTTP status from curl: {value} — nothing was published.
+
+## publish-http-transport-failed
+
+ipe package publish: {op} — curl could not complete the request: {detail} — nothing was published.
+
+## publish-http-body-too-large
+
+ipe package publish: {op} response body exceeded the {cap}-byte limit — nothing was published.
+
+## publish-http-body-io
+
+ipe package publish: {op} response body could not be read back from the scratch file — nothing was published.
+
 ## trust-token-invalid
 
 registry trust: `{label}` must be a non-empty token with no whitespace or control characters, got: {raw}
