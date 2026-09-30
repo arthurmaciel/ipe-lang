@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import http.client
 import json
 import os
 import re
@@ -403,11 +404,23 @@ class HttpStatus(ApiError):
         self.status = status
 
 
+def _origin(url: str) -> str:
+    """`url`'s scheme and host alone: its path and query may carry what a
+    redirect chose to put there, and its userinfo a credential."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        return "an unparseable URL"
+    return f"{parts.scheme or '?'}://{host or '?'}"
+
+
 class OffOrigin(ApiError):
-    """A request or redirect pointed off the API origin; it was not sent."""
+    """A request or redirect pointed off the API origin; it was not sent.
+    The message names only the target's scheme and host."""
 
     def __init__(self, url: str):
-        super().__init__(f"refusing to follow {url!r} off the API origin")
+        super().__init__(f"refusing to follow a URL to {_origin(url)!r} off the API origin")
 
 
 class TooLarge(ApiError):
@@ -477,7 +490,9 @@ class Api:
         # `HTTPError` subclasses `URLError`, so it is caught first.
         except urllib.error.HTTPError as e:
             raise HttpStatus(url, e.code) from e
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+        # `HTTPException` covers a connection that broke mid-response
+        # (`IncompleteRead`, `BadStatusLine`), which is no `OSError`.
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
             raise Transport(url, e) from e
         if len(body) > MAX_BODY_BYTES:
             raise TooLarge(url, f"{MAX_BODY_BYTES} bytes")
@@ -485,6 +500,8 @@ class Api:
             data = json.loads(body)
         except ValueError as e:
             raise Malformed(f"GET {url}: response is not JSON") from e
+        except RecursionError as e:
+            raise Malformed(f"GET {url}: response nests too deeply") from e
         m = _NEXT_RE.search(link) if link else None
         return data, (m.group(1) if m else None)
 

@@ -513,6 +513,33 @@ class ApiErrorKinds(unittest.TestCase):
             with self.subTest(cause=cause):
                 self.assertKind(self.api_answering(cause), tr.Transport)
 
+    def test_a_connection_broken_mid_response_is_transport(self) -> None:
+        import http.client
+
+        for cause in (http.client.IncompleteRead(b"par", 10), http.client.BadStatusLine("x"), http.client.HTTPException("h")):
+            with self.subTest(cause=cause):
+                self.assertKind(self.api_answering(cause), tr.Transport)
+
+    def test_off_origin_names_only_scheme_and_host(self) -> None:
+        h = tr._PinnedRedirects("https://api.github.com")
+        for url in (
+            "https://evil.example/secret-path/x?code=q1w2e3#frag",
+            "https://user:pw-5e1@evil.example:8443/secret-path?code=q1w2e3",
+            "http://api.github.com/secret-path?code=q1w2e3",
+        ):
+            with self.subTest(url=url), self.assertRaises(tr.OffOrigin) as cm:
+                h.redirect_request(None, None, 302, "Found", {}, url)
+            msg = str(cm.exception)
+            for leak in ("secret-path", "code=", "q1w2e3", "frag", "user", "pw-5e1", "8443"):
+                self.assertNotIn(leak, msg)
+            self.assertIn("off the API origin", msg)
+        with self.assertRaises(tr.OffOrigin) as cm:
+            h.redirect_request(None, None, 302, "Found", {}, "https://evil.example/secret-path")
+        self.assertIn("https://evil.example", str(cm.exception))
+        with self.assertRaises(tr.OffOrigin) as cm:
+            h.redirect_request(None, None, 302, "Found", {}, "https://[bad/secret-path")
+        self.assertNotIn("secret-path", str(cm.exception))
+
     def test_an_off_origin_redirect_is_off_origin(self) -> None:
         self.assertKind(self.api_answering(tr.OffOrigin("https://evil.example/x")), tr.OffOrigin)
         h = tr._PinnedRedirects("https://api.github.com")
@@ -540,6 +567,11 @@ class ApiErrorKinds(unittest.TestCase):
         self.assertKind(self.api_answering(_FakeResponse(b"[]")), tr.Malformed)
         with self.assertRaises(tr.Malformed):
             self.api_answering(_FakeResponse(b"{}")).get_all("pulls")
+
+    def test_a_too_deeply_nested_body_is_malformed(self) -> None:
+        deep = b"[" * 200_000 + b"]" * 200_000
+        self.assertKind(self.api_answering(_FakeResponse(deep)), tr.Malformed)
+        self.assertKind(self.api_answering(_FakeResponse(b'{"a":' * 200_000 + b"1" + b"}" * 200_000)), tr.Malformed)
 
     def test_a_json_object_is_returned(self) -> None:
         self.assertEqual(self.api_answering(_FakeResponse(b'{"a": 1}')).get("pulls/1"), {"a": 1})

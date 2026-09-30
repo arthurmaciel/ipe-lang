@@ -40,9 +40,11 @@ refused, so a token that cannot see bypass actors fails rather than passes.
 first parses that environment's deployment-branch policy into a closed
 `EnvPolicy` whose one variant is custom branch policies of exactly `main`;
 any other policy (protected-branches mode included), or none, is refused. An
-environment read GitHub refuses with 401, 403 or 404 names the permission the
-token needs; any other failed read says only what failed. The token is
-never printed. Every unreadable or malformed input — a missing or empty token
+admin read GitHub refuses with 401, 403 or 404 says what that status means for
+the token (401: invalid or expired; 403: a missing permission or an exhausted
+rate limit; 404: a missing permission or a missing resource), naming the
+permission that read needs; any other failed read says only what failed. The
+token is never printed. Every unreadable or malformed input — a missing or empty token
 included — fails closed (exit 1) with nothing printed to stdout.
 """
 from __future__ import annotations
@@ -52,7 +54,7 @@ import json
 import os
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 CI_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, CI_DIR)
@@ -77,9 +79,15 @@ ADMIN_READ_ENVIRONMENT = "ruleset-admin-read"
 RULESET_READ_PERMISSION = "Administration: read"
 ENV_READ_PERMISSION = "Actions: read"
 ADMIN_READ_TOKEN_PERMISSIONS = (RULESET_READ_PERMISSION, ENV_READ_PERMISSION)
-# HTTP statuses by which GitHub refuses a token its read: 404 stands for a
-# missing permission as well as a missing environment.
-_PERMISSION_STATUSES = frozenset({401, 403, 404})
+# What each HTTP status by which GitHub refuses a token its read says about
+# the token; `{permission}` is the permission that read needs. GitHub answers
+# 404, not 403, to a token missing the permission, so a 404 cannot tell that
+# from a missing resource; a 403 may also be an exhausted rate limit.
+_TOKEN_REFUSAL_HINTS: dict[int, str] = {
+    401: "RULESET_READ_TOKEN is invalid or expired; regenerate it",
+    403: "RULESET_READ_TOKEN lacks the fine-grained repository permission {permission}, or the API rate limit is exhausted",
+    404: "it does not exist, or RULESET_READ_TOKEN lacks the fine-grained repository permission {permission}",
+}
 
 Pair = tuple[str, int]
 
@@ -259,7 +267,10 @@ def parse_ruleset(rs: object, *, admin_read: bool) -> Ruleset:
     if "bypass_actors" in rs:
         _pin(rs["bypass_actors"], [], "the ruleset bypass_actors")
     elif admin_read:
-        raise Refused("the ruleset lacks bypass_actors, which an admin read always returns")
+        raise Refused(
+            "the ruleset lacks bypass_actors, which GitHub returns only to a token holding the "
+            f"fine-grained repository permission {RULESET_READ_PERMISSION} — see .github/ci/RECONCILIATION.md"
+        )
     cond = _closed(rs["conditions"], "the ruleset conditions", frozenset({"ref_name"}))
     ref = _closed(cond["ref_name"], "the ruleset ref_name condition", frozenset({"include", "exclude"}))
     include = ref["include"]
@@ -294,13 +305,26 @@ def diff(expected: list[Pair], actual: list[Pair], what: str, fix: str) -> list[
     return out
 
 
+# The key only `parse_env_policy` holds: a `CustomMainOnly` built without it
+# is refused, so the value is proof the environment read was parsed.
+_KEY = object()
+
+
 @dataclass(frozen=True)
 class CustomMainOnly:
     """The one deployment-branch policy `ADMIN_READ_ENVIRONMENT` may carry:
     custom branch policies that are exactly the branch `main`, with no
     administrator bypass. Protected-branches mode is not admitted: with no
     classic protection rule on the repository, GitHub lets every branch deploy
-    under it. An administrator bypass would let an admin deploy any branch."""
+    under it. An administrator bypass would let an admin deploy any branch.
+
+    Only `parse_env_policy` mints one; any other construction is refused."""
+
+    key: object = field(repr=False, compare=False, kw_only=True)
+
+    def __post_init__(self) -> None:
+        if self.key is not _KEY:
+            raise Refused("a CustomMainOnly is minted only by parse_env_policy")
 
 
 EnvPolicy = CustomMainOnly
@@ -360,23 +384,25 @@ def parse_env_policy(env: object, fetch_policies: Callable[[], object]) -> EnvPo
         _main_only_branch_policies(fetch_policies())
     except Refused as e:
         raise Refused(f"{e}; only the one branch {MAIN_BRANCH!r} is admitted — {ENV_POLICY_FIX}") from e
-    return CustomMainOnly()
+    return CustomMainOnly(key=_KEY)
+
+
+def admin_read_refusal(e: Exception, where: str, permission: str) -> Refused:
+    """The refusal for a failed admin read of `where`, which needs
+    `permission`: an HTTP status by which GitHub refuses a token says what it
+    means for the token; any other failure (a server error, a transport or
+    size refusal) says only what failed, since no token change would fix it."""
+    import trust_roots  # noqa: PLC0415
+
+    if isinstance(e, trust_roots.HttpStatus) and e.status in _TOKEN_REFUSAL_HINTS:
+        hint = _TOKEN_REFUSAL_HINTS[e.status].format(permission=permission)
+        return Refused(f"cannot read {where} (HTTP {e.status}): {hint} — see .github/ci/RECONCILIATION.md")
+    return Refused(f"cannot read {where}: {e}")
 
 
 def env_read_refusal(e: Exception) -> Refused:
-    """The refusal for a failed read of `ADMIN_READ_ENVIRONMENT`: an HTTP
-    status by which GitHub refuses a token names the permission the token
-    needs; any other failure (a server error, a transport or size refusal)
-    says only what failed, since no permission would fix it."""
-    import trust_roots  # noqa: PLC0415
-
-    if isinstance(e, trust_roots.HttpStatus) and e.status in _PERMISSION_STATUSES:
-        status = e.status
-        return Refused(
-            f"cannot read {_ENV_WHERE} (HTTP {status}): it does not exist, or RULESET_READ_TOKEN lacks the "
-            f"fine-grained repository permission {ENV_READ_PERMISSION} — see .github/ci/RECONCILIATION.md"
-        )
-    return Refused(f"cannot read {_ENV_WHERE}: {e}")
+    """The refusal for a failed read of `ADMIN_READ_ENVIRONMENT`."""
+    return admin_read_refusal(e, _ENV_WHERE, ENV_READ_PERMISSION)
 
 
 def read_env_policy(api: object) -> EnvPolicy:
@@ -394,10 +420,16 @@ def read_env_policy(api: object) -> EnvPolicy:
 
 def read_ruleset(api: object, proof: EnvPolicy) -> object:
     """The admin read of the ruleset. `proof` is the parsed policy confining
-    the token to `main`; without it the token is not used."""
+    the token to `main`: the ruleset is not read without it. (The token's one
+    other use is the environment reads that mint `proof`.)"""
+    import trust_roots  # noqa: PLC0415
+
     if not isinstance(proof, CustomMainOnly):
         raise Refused(f"the admin read of ruleset {RULESET_ID} needs the parsed policy of {_ENV_WHERE}")
-    return api.get(RULESET_PATH)  # type: ignore[attr-defined]
+    try:
+        return api.get(RULESET_PATH)  # type: ignore[attr-defined]
+    except trust_roots.Refused as e:
+        raise admin_read_refusal(e, f"ruleset {RULESET_ID}", RULESET_READ_PERMISSION) from e
 
 
 def fetch_live(*, admin: bool) -> object:

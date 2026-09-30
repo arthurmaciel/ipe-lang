@@ -2697,8 +2697,9 @@ class TestSsotOutputTools(unittest.TestCase):
             with self.subTest(refused=refused):
                 env = {**self._stub_api(_ruleset(), refuse=(refused,)), "GH_TOKEN": sentinel}
                 stderr = self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
-                self.assertIn("cannot read environment 'ruleset-admin-read'", stderr)
+                self.assertIn("cannot read environment 'ruleset-admin-read' (HTTP 403)", stderr)
                 self.assertIn("Actions: read", stderr)
+                self.assertIn("rate limit", stderr)
                 self.assertIn("RECONCILIATION.md", stderr)
                 self.assertNotIn(sentinel, stderr)
 
@@ -2762,7 +2763,9 @@ class TestSsotOutputTools(unittest.TestCase):
 
     def test_check_required_set_fetch_admin_refuses_a_body_without_bypass_actors(self) -> None:
         env = self._stub_api({k: v for k, v in _ruleset().items() if k != "bypass_actors"})
-        self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+        stderr = self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+        self.assertIn("lacks bypass_actors", stderr)
+        self.assertIn("Administration: read", stderr)
         # The workflow-token read cannot see the list, so it is not its proof.
         rc, _, stderr = self.run_tool("check_required_set.py", "--fetch", env=env)
         self.assertEqual(rc, 0, stderr)
@@ -2863,9 +2866,16 @@ class TestSsotOutputTools(unittest.TestCase):
                 self.assertIn("cannot read environment 'ruleset-admin-read'", msg)
                 self.assertNotIn(sentinel, msg)
                 if fail in hinted:
-                    self.assertIn(crs.ENV_READ_PERMISSION, msg)
                     self.assertIn(f"HTTP {fail.status}", msg)
                     self.assertIn("RECONCILIATION.md", msg)
+                    if fail.status == 401:
+                        self.assertIn("invalid or expired", msg)
+                        self.assertNotIn(crs.ENV_READ_PERMISSION, msg)
+                    else:
+                        self.assertIn(crs.ENV_READ_PERMISSION, msg)
+                        self.assertNotIn("invalid or expired", msg)
+                    self.assertEqual("rate limit" in msg, fail.status == 403)
+                    self.assertEqual("does not exist" in msg, fail.status == 404)
                 else:
                     self.assertNotIn(crs.ENV_READ_PERMISSION, msg)
                     self.assertNotIn("RULESET_READ_TOKEN", msg)
@@ -2884,8 +2894,48 @@ class TestSsotOutputTools(unittest.TestCase):
             with self.subTest(proof=proof), self.assertRaises(crs.Refused):
                 crs.read_ruleset(FakeApi(), proof)
         self.assertEqual(reads, [])
-        self.assertEqual(crs.read_ruleset(FakeApi(), crs.CustomMainOnly()), _ruleset())
+        proof = crs.parse_env_policy(_ENV_MAIN_ONLY, lambda: _POLICIES_MAIN)
+        self.assertEqual(crs.read_ruleset(FakeApi(), proof), _ruleset())
         self.assertEqual(reads, ["rulesets/22326541"])
+
+    def test_the_env_policy_proof_is_minted_only_by_its_parse(self) -> None:
+        crs = self._crs()
+        with self.assertRaises(TypeError):
+            crs.CustomMainOnly()  # type: ignore[call-arg]
+        for key in (None, object(), True, "_KEY"):
+            with self.subTest(key=key), self.assertRaises(crs.Refused):
+                crs.CustomMainOnly(key=key)
+        with self.assertRaises(TypeError):
+            crs.CustomMainOnly(crs._KEY)
+        self.assertIsInstance(crs.parse_env_policy(_ENV_MAIN_ONLY, lambda: _POLICIES_MAIN), crs.CustomMainOnly)
+
+    def test_a_refused_admin_ruleset_read_says_what_the_status_means(self) -> None:
+        import trust_roots as tr
+
+        crs = self._crs()
+        url = "https://api.github.com/repos/o/r/rulesets/22326541"
+
+        class FakeApi:
+            def __init__(self, fail: Exception) -> None:
+                self.fail = fail
+
+            def get(self, path: str) -> object:
+                raise self.fail
+
+        proof = crs.parse_env_policy(_ENV_MAIN_ONLY, lambda: _POLICIES_MAIN)
+        for status, want, unwanted in (
+            (401, "invalid or expired", crs.RULESET_READ_PERMISSION),
+            (403, crs.RULESET_READ_PERMISSION, "invalid or expired"),
+            (404, crs.RULESET_READ_PERMISSION, "invalid or expired"),
+            (500, "HTTP 500", crs.RULESET_READ_PERMISSION),
+        ):
+            with self.subTest(status=status), self.assertRaises(crs.Refused) as cm:
+                crs.read_ruleset(FakeApi(tr.HttpStatus(url, status)), proof)
+            msg = str(cm.exception)
+            self.assertIn("cannot read ruleset 22326541", msg)
+            self.assertIn(want, msg)
+            self.assertNotIn(unwanted, msg)
+            self.assertNotIn(crs.ENV_READ_PERMISSION, msg)
 
     def test_branch_policies_are_a_closed_shape(self) -> None:
         crs = self._crs()
@@ -2896,7 +2946,7 @@ class TestSsotOutputTools(unittest.TestCase):
 
         for item in (main, {"name": "main", "type": "branch"}, {"id": 7, "name": "main", "type": "branch"}):
             with self.subTest(admitted=item):
-                self.assertEqual(parse({"total_count": 1, "branch_policies": [item]}), crs.CustomMainOnly())
+                self.assertIsInstance(parse({"total_count": 1, "branch_policies": [item]}), crs.CustomMainOnly)
         refused = (
             {"total_count": 1, "branch_policies": [main], "extra": 1},
             {"total_count": 1},

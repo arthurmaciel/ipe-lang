@@ -54,9 +54,12 @@ and neither its pull-request run nor its merge-queue run can read it.
 `deployment-branch-policies`) and fails closed unless its policy is custom
 branch policies of exactly the branch `main`. Protected-branches mode is
 refused: without a classic protection rule it lets every branch deploy. An
-environment read GitHub refuses with 401, 403 or 404 fails closed naming the
-permission the token needs; a server error, an off-origin redirect, an
-oversized body, or a network failure fails closed saying only what failed.
+admin read (the environment or the ruleset) GitHub refuses with 401, 403 or
+404 fails closed saying what the status means for the token: 401 an invalid or
+expired token; 403 a missing permission (named) or an exhausted rate limit;
+404 a missing permission (named) or a missing resource. A server error, an
+off-origin redirect, an oversized or malformed body, or a network failure fails
+closed saying only what failed.
 Defence in depth under the policy, `verify-manifest.py` check 8 refuses the
 secret in a workflow triggering on anything but `schedule`, the
 secret or the environment in any job but `ruleset-admin-read.yml`'s
