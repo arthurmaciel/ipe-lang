@@ -2159,6 +2159,28 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
                 f"with a job {key}:", "outside the tool job keys", job=job,
             )
 
+    def test_tool_job_environment_is_admitted_only_in_its_keyed_job(self) -> None:
+        def admin(job_id: str, env: str) -> str:
+            return (
+                "name: t\non:\n  schedule:\n    - cron: '30 4 * * *'\npermissions:\n  contents: read\n"
+                f"jobs:\n  {job_id}:\n    runs-on: ubuntu-latest\n    environment: {env}\n    steps:\n"
+                + textwrap.indent(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), "      ")
+            )
+
+        self.fx.workflow("ruleset-admin-read.yml", admin("ruleset-admin-read", "ruleset-admin-read"))
+        self.assertEqual(self.fx.errors(), [])
+        for fname, job_id, env in (
+            ("ruleset-admin-read.yml", "ruleset-admin-read", "prod"),
+            ("ruleset-admin-read.yml", "ruleset-admin-read", "null"),
+            ("ruleset-admin-read.yml", "other", "ruleset-admin-read"),
+            ("other.yml", "ruleset-admin-read", "ruleset-admin-read"),
+        ):
+            with self.subTest(fname=fname, job_id=job_id, env=env):
+                self.fx.workflow("ruleset-admin-read.yml", "")
+                self.fx.workflow(fname, admin(job_id, env))
+                self.assertRefused("with a job environment:", "outside the tool job keys")
+                os.remove(os.path.join(self.fx.root, "workflows", fname))
+
     def test_tool_job_timeout_must_be_a_positive_integer_literal(self) -> None:
         for value in ("0", "-1", "${{ 0 }}", "${{ 30 }}", "true", "1.5", "'5'"):
             self.job_refused(
@@ -2410,6 +2432,13 @@ def _with_rules(*swap: tuple[str, object]) -> dict:
     return _ruleset(rules=rules)
 
 
+_ENV_MAIN_ONLY = {
+    "name": "ruleset-admin-read",
+    "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True},
+}
+_POLICIES_MAIN = {"total_count": 1, "branch_policies": [{"id": 1, "name": "main", "type": "branch"}]}
+
+
 class TestSsotOutputTools(unittest.TestCase):
     """The SSOT-publishing tools fail closed on a malformed SSOT: exit 1 and
     write no output, so a consumer keeps its fail-safe default."""
@@ -2619,11 +2648,18 @@ class TestSsotOutputTools(unittest.TestCase):
                 stderr = self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
                 self.assertNotIn(sentinel, stderr)
 
-    def _stub_api(self, rs: object) -> dict[str, str]:
-        """Replace `trust_roots` with an `Api` whose GET returns `rs`."""
+    def _stub_api(self, rs: object, env: object = _ENV_MAIN_ONLY, policies: object = _POLICIES_MAIN) -> dict[str, str]:
+        """Replace `trust_roots` with an `Api` whose GET returns `env` for the
+        admin-read environment, `policies` for its branch policies, and `rs`
+        for the ruleset; any other path is refused."""
         self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
         self.put("required-set.json", _RS_A)
-        self.put("rs.json", json.dumps(rs).encode())
+        bodies = {
+            "environments/ruleset-admin-read": env,
+            "environments/ruleset-admin-read/deployment-branch-policies": policies,
+            "rulesets/22326541": rs,
+        }
+        self.put("bodies.json", json.dumps(bodies).encode())
         self.put(
             "trust_roots.py",
             b"import json, os\n"
@@ -2631,10 +2667,61 @@ class TestSsotOutputTools(unittest.TestCase):
             b"class Api:\n"
             b"    def __init__(self, base, repo, token):\n        pass\n"
             b"    def get(self, path):\n"
-            b"        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rs.json')) as f:\n"
-            b"            return json.load(f)\n",
+            b"        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bodies.json')) as f:\n"
+            b"            bodies = json.load(f)\n"
+            b"        if path not in bodies:\n"
+            b"            raise Refused('unexpected path ' + path)\n"
+            b"        return bodies[path]\n",
         )
         return {"REPO": "o/r", "GH_TOKEN": "tok"}
+
+    def test_check_required_set_fetch_admin_admits_a_main_only_environment(self) -> None:
+        protected = {"name": "ruleset-admin-read",
+                     "deployment_branch_policy": {"protected_branches": True, "custom_branch_policies": False}}
+        for env, policies in ((_ENV_MAIN_ONLY, _POLICIES_MAIN), (protected, None)):
+            with self.subTest(env=env):
+                rc, stdout, stderr = self.run_tool("check_required_set.py", "--fetch-admin", env=self._stub_api(_ruleset(), env, policies))
+                self.assertEqual(rc, 0, stderr)
+                self.assertIn("ruleset 22326541 match", stdout)
+
+    def test_check_required_set_fetch_admin_refuses_an_environment_not_confined_to_main(self) -> None:
+        def env_with(policy: object, name: str = "ruleset-admin-read") -> dict:
+            return {"name": name, "deployment_branch_policy": policy}
+
+        def policies(*items: dict, total: int | None = None) -> dict:
+            return {"total_count": len(items) if total is None else total, "branch_policies": list(items)}
+
+        main = {"name": "main", "type": "branch"}
+        custom = {"protected_branches": False, "custom_branch_policies": True}
+        cases = (
+            # No environment, or another one.
+            (None, None),
+            ([], None),
+            (env_with(custom, name="prod"), _POLICIES_MAIN),
+            # Every branch may deploy.
+            (env_with(None), None),
+            (env_with("all"), None),
+            # Neither shape, or both.
+            (env_with({"protected_branches": False, "custom_branch_policies": False}), None),
+            (env_with({"protected_branches": True, "custom_branch_policies": True}), _POLICIES_MAIN),
+            (env_with({"protected_branches": "true", "custom_branch_policies": False}), None),
+            # Custom policies other than exactly the branch `main`.
+            (env_with(custom), None),
+            (env_with(custom), policies()),
+            (env_with(custom), policies(main, {"name": "release/*", "type": "branch"})),
+            (env_with(custom), policies(main, total=2)),
+            (env_with(custom), policies({"name": "*", "type": "branch"})),
+            (env_with(custom), policies({"name": "main*", "type": "branch"})),
+            (env_with(custom), policies({"name": "main", "type": "tag"})),
+            (env_with(custom), {"total_count": 1, "branch_policies": main}),
+        )
+        for env, pol in cases:
+            with self.subTest(env=env, policies=pol):
+                stderr = self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=self._stub_api(_ruleset(), env, pol))
+                self.assertIn("RECONCILIATION.md", stderr)
+        # The workflow-token read proves no environment: it never reads one.
+        rc, _, stderr = self.run_tool("check_required_set.py", "--fetch", env=self._stub_api(_ruleset(), None, None))
+        self.assertEqual(rc, 0, stderr)
 
     def test_check_required_set_fetch_admin_refuses_a_body_without_bypass_actors(self) -> None:
         env = self._stub_api({k: v for k, v in _ruleset().items() if k != "bypass_actors"})
@@ -2819,6 +2906,19 @@ jobs:
 """
 
 
+_ADMIN_FILE = "ruleset-admin-read.yml"
+
+
+def _admin_read(*, extra: str = "", ref: str = "${{ secrets.RULESET_READ_TOKEN }}", job: str = "ruleset-admin-read",
+                env: str = "    environment: ruleset-admin-read\n") -> str:
+    """A schedule-only workflow whose job `job` reads the admin-read secret."""
+    return (
+        f"on:\n  schedule:\n    - cron: '30 4 * * *'\n{extra}permissions:\n  contents: read\n"
+        f"jobs:\n  {job}:\n    runs-on: ubuntu-latest\n{env}    steps:\n"
+        f"      - run: echo x\n        env:\n          T: {ref}\n"
+    )
+
+
 class TestMergeQueueSafety(unittest.TestCase):
     """Check 8: gate producers run under the merge queue, and every
     merge_group workflow stays secret-free, read-only, and on the PR tier."""
@@ -2897,20 +2997,20 @@ class TestMergeQueueSafety(unittest.TestCase):
         )
         self.assertRefused(bad, "a merge-group run would take the full tier")
 
+    def admin_errors(self, fname: str, content: str) -> list[str]:
+        self.fx.workflow(fname, content)
+        errors: list[str] = []
+        check_merge_queue(set(), errors, root=self.fx.root)
+        return errors
+
+    def assertAdminRefused(self, fname: str, content: str, needle: str) -> None:
+        errors = self.admin_errors(fname, content)
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
     def test_schedule_only_secret_admitted_on_a_schedule_only_workflow(self) -> None:
-        ok = (
-            "on:\n  schedule:\n    - cron: '30 4 * * *'\npermissions:\n  contents: read\n"
-            "jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
-            "      - run: echo x\n        env:\n          T: ${{ secrets.RULESET_READ_TOKEN }}\n"
-        )
-        self.assertEqual(self.errors(ok, gates=set()), [])
+        self.assertEqual(self.admin_errors(_ADMIN_FILE, _admin_read()), [])
 
     def test_schedule_only_secret_refused_beside_any_other_trigger(self) -> None:
-        base = (
-            "on:\n  schedule:\n    - cron: '30 4 * * *'\n{extra}permissions:\n  contents: read\n"
-            "jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
-            "      - run: echo x\n        env:\n          T: {ref}\n"
-        )
         refs = (
             "${{ secrets.RULESET_READ_TOKEN }}",
             "${{ secrets.ruleset_read_token }}",
@@ -2920,7 +3020,49 @@ class TestMergeQueueSafety(unittest.TestCase):
         for extra in ("  workflow_dispatch: {}\n", "  push:\n", "  pull_request:\n", "  workflow_run:\n    workflows: [x]\n"):
             for ref in refs:
                 with self.subTest(extra=extra, ref=ref):
-                    self.assertRefused(base.format(extra=extra, ref=ref), "schedule-only secret", gates=set())
+                    self.assertAdminRefused(
+                        _ADMIN_FILE, _admin_read(extra=extra, ref=ref), "only a `schedule`-only workflow may carry it"
+                    )
+
+    def test_schedule_only_secret_refused_outside_its_keyed_job(self) -> None:
+        cases = (
+            # The keyed file, another job.
+            (_ADMIN_FILE, _admin_read(job="other")),
+            # Another file, the keyed job's name.
+            ("other.yml", _admin_read()),
+        )
+        for fname, content in cases:
+            with self.subTest(fname=fname):
+                self.assertAdminRefused(fname, content, "is not its keyed job")
+        top = _admin_read().replace("jobs:\n", "env:\n  T: ${{ secrets.RULESET_READ_TOKEN }}\njobs:\n")
+        self.assertAdminRefused(_ADMIN_FILE, top, "outside a job")
+
+    def test_keyed_job_without_its_literal_environment_refused(self) -> None:
+        for env in ("", "    environment: prod\n", "    environment:\n      name: ruleset-admin-read\n",
+                    "    environment: ${{ 'ruleset-admin-read' }}\n"):
+            with self.subTest(env=env):
+                self.assertAdminRefused(_ADMIN_FILE, _admin_read(env=env), "must declare `environment: ruleset-admin-read`")
+
+    def test_admin_environment_refused_in_any_other_job(self) -> None:
+        free = (
+            "on:\n  push:\npermissions:\n  contents: read\n"
+            "jobs:\n  j:\n    runs-on: ubuntu-latest\n{env}    steps:\n      - run: echo x\n"
+        )
+        for env in ("    environment: ruleset-admin-read\n", "    environment: RULESET-Admin-Read\n",
+                    "    environment:\n      name: ruleset-admin-read\n"):
+            with self.subTest(env=env):
+                self.assertAdminRefused("other.yml", free.format(env=env), "declares the admin environment")
+        # The keyed job's own file, another job.
+        other = _admin_read() + "  other:\n    runs-on: ubuntu-latest\n    environment: ruleset-admin-read\n    steps:\n      - run: echo x\n"
+        self.assertAdminRefused(_ADMIN_FILE, other, "declares the admin environment")
+        os.remove(os.path.join(self.fx.root, "workflows", _ADMIN_FILE))
+        for env in ("    environment: ${{ inputs.env }}\n", "    environment:\n      name: ${{ github.head_ref }}\n",
+                    "    environment: [a]\n", "    environment: {}\n"):
+            with self.subTest(env=env):
+                self.assertAdminRefused("other.yml", free.format(env=env), "whose name is not a literal string")
+        for env in ("    environment: prod\n", "    environment:\n      name: github-pages\n      url: ${{ steps.d.outputs.u }}\n"):
+            with self.subTest(env=env):
+                self.assertEqual(self.admin_errors("other.yml", free.format(env=env)), [])
 
     def test_non_gate_workflow_without_merge_group_is_not_checked(self) -> None:
         bad = _MQ_OK.replace("  merge_group:\n", "").replace("run: echo full", "run: echo ${{ secrets.X }}")

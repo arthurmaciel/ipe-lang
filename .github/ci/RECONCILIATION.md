@@ -40,11 +40,38 @@ it nightly with the `RULESET_READ_TOKEN` secret (a fine-grained token with
 Administration read-only on this repository). It fails closed when the token
 is absent or empty, when the body lacks `bypass_actors` (the token cannot see
 them), when the list is non-empty, or when the pairs differ from the derived
-set. The workflow triggers on `schedule` alone — `verify-manifest.py` check 8
-refuses any other trigger on a workflow naming that secret — so no pull
-request or merge-queue run executes with it; recover a red run with
+set.
+
+The token is a secret of the `ruleset-admin-read` environment
+(`ADMIN_READ_ENVIRONMENT` in `check_required_set.py`), whose
+deployment-branch policy admits `main` alone. That policy is the guarantee:
+GitHub hands the token to no run of any other ref, so a branch that edits the
+workflow to add a `pull_request` or `push` trigger runs with an empty token,
+and neither its pull-request run nor its merge-queue run can read it.
+`--fetch-admin` first reads the environment
+(`GET repos/{repo}/environments/ruleset-admin-read`) and fails closed unless
+its policy is protected branches only or custom branch policies of exactly
+`main`. Defence in depth under the policy, `verify-manifest.py` check 8
+refuses the secret in a workflow triggering on anything but `schedule`, the
+secret or the environment in any job but `ruleset-admin-read.yml`'s
+`ruleset-admin-read`, and a job environment whose name is computed at run
+time. Check 8 runs on the change, after that change's own runs, so it alone
+cannot keep the token from a same-repository branch. Recover a red run with
 `gh run rerun`. An owner's `--live` read (step 3) is the same admin check at
 reconciliation time.
+
+### One-time setup of the admin-read environment
+
+An owner does this once, before the first scheduled run:
+
+1. Create the environment `ruleset-admin-read` (Settings → Environments) with
+   deployment branches set to `main` only (a custom branch policy naming
+   `main`).
+2. Add `RULESET_READ_TOKEN` to it as an environment secret. The token also
+   needs read access to the repository's environments, or `--fetch-admin`
+   cannot prove the policy and fails closed.
+3. Delete the repository-level `RULESET_READ_TOKEN` secret, so no job outside
+   the environment can reach it.
 
 A key GitHub adds to the response turns `ruleset-drift` red until this check
 examines it. `ruleset-drift` is a `nightly-gate`: a red nightly makes the

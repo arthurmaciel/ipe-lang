@@ -92,6 +92,7 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
      The job is parsed once into a `ToolJob`: a literal GitHub-hosted Ubuntu
      runner (a fresh machine per job), job keys from one closed allowlist
      (`TOOL_JOB_KEYS`: no container, services, strategy, concurrency, or
+     environment — save one keyed job's literal `ADMIN_ENVIRONMENT_JOBS`
      environment), every `env:` key at workflow, job, and tool-step scope
      drawn from one allowlist (`TOOL_ENV_ALLOWLIST`), and a masking key
      (`MASKING_KEYS`: `if:`, `continue-on-error:`) on a step or on the job
@@ -125,8 +126,13 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
      merge-group run takes the PR tier rather than silently running the full
      tier.
      A workflow naming a repository-admin secret (`SCHEDULE_ONLY_SECRETS`)
-     triggers on `schedule` alone, so no pull request, queued commit, push,
-     or manual dispatch of another ref ever runs with it.
+     triggers on `schedule` alone, and names it only inside its keyed job
+     (`ADMIN_ENVIRONMENT_JOBS`), which declares exactly its literal
+     environment. No other job declares that environment, nor an environment
+     whose name is not a literal string. The guarantee is the environment's
+     deployment-branch policy (`main` only), which GitHub enforces; these
+     rules are defence in depth under it, since a same-repository branch
+     that edits the workflow runs its edit before this check can refuse it.
      Limit: this catches honest mistakes, not a hostile PR.  A merge-group run
      executes the workflow files of the queued commit, so a queued PR that
      edits `.github/**` runs its own edit with the base secrets.  The boundary
@@ -293,6 +299,7 @@ import change_class  # noqa: E402  # the path-scope classifier, SSOT for every s
 import trust_roots  # noqa: E402  # the CODEOWNERS trust-root parser, shared with trust-root-diff.yml
 import drift_assertion  # noqa: E402  # the one drift-assertion parser, shared with change_class
 import cargo_invocation  # noqa: E402  # the one cargo-invocation reader, checks 15 and 16
+import check_required_set  # noqa: E402  # owns the admin-read environment's name
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Both extensions: a workflow (or, for check 6, a local composite action) is a
@@ -946,6 +953,14 @@ _SECRETS_WORD = re.compile(r"\bsecrets\b", re.IGNORECASE)
 # workflow, which runs the default branch's tree, may name one.
 SCHEDULE_ONLY_SECRETS = ("RULESET_READ_TOKEN",)
 _SCHEDULE_ONLY_SECRET = re.compile(r"\b(?:" + "|".join(SCHEDULE_ONLY_SECRETS) + r")\b", re.IGNORECASE)
+# The one `(workflow file, job id)` that may declare a job `environment:`
+# holding a schedule-only secret, and the literal environment it declares.
+# GitHub hands that environment's secrets only to runs of the refs its
+# deployment-branch policy admits (`main`); this pairing is defence in depth.
+ADMIN_ENVIRONMENT_JOBS: dict[tuple[str, str], str] = {
+    ("ruleset-admin-read.yml", "ruleset-admin-read"): check_required_set.ADMIN_READ_ENVIRONMENT,
+}
+_ADMIN_ENVIRONMENTS = frozenset(e.casefold() for e in ADMIN_ENVIRONMENT_JOBS.values())
 _PR_ONLY = "github.event_name == 'pull_request'"
 
 
@@ -962,6 +977,45 @@ def _mentions(node: object, pattern: re.Pattern[str]) -> bool:
 
 def _mentions_secrets(node: object) -> bool:
     return _mentions(node, _SECRETS_WORD)
+
+
+def _check_admin_environments(fname: str, doc: dict, errors: list[str]) -> None:
+    """Check 8's environment half: a schedule-only secret is named only inside
+    an `ADMIN_ENVIRONMENT_JOBS` job, which declares exactly its literal
+    environment; no other job declares an admin environment, nor an
+    environment whose name is computed at run time."""
+    jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
+    outside = {k: v for k, v in doc.items() if k != "jobs"}
+    if _mentions(outside, _SCHEDULE_ONLY_SECRET):
+        errors.append(f"{fname}: names a schedule-only secret outside a job; only its keyed job may")
+    for jid, job in jobs.items():
+        if not isinstance(job, dict):
+            continue
+        keyed = ADMIN_ENVIRONMENT_JOBS.get((fname, str(jid)))
+        where = f"{fname}: job {str(jid)!r}"
+        if keyed is not None:
+            if job.get("environment") != keyed:
+                errors.append(f"{where} must declare `environment: {keyed}`, a literal name")
+            continue
+        if _mentions(job, _SCHEDULE_ONLY_SECRET):
+            errors.append(
+                f"{where} names a schedule-only secret but is not its keyed job "
+                f"(ADMIN_ENVIRONMENT_JOBS); refused"
+            )
+        if "environment" not in job:
+            continue
+        env = job["environment"]
+        name = env.get("name") if isinstance(env, dict) else env
+        if not isinstance(name, str) or "${{" in name:
+            errors.append(
+                f"{where} declares environment {env!r}, whose name is not a literal string — "
+                "it could name an admin environment at run time; refused"
+            )
+        elif name.strip().casefold() in _ADMIN_ENVIRONMENTS:
+            errors.append(
+                f"{where} declares the admin environment {name!r}; only its keyed job "
+                "(ADMIN_ENVIRONMENT_JOBS) may; refused"
+            )
 
 
 def _top_level_conjuncts(cond: str) -> list[str] | None:
@@ -1061,6 +1115,7 @@ def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = R
                 f"{fname}: names a schedule-only secret ({', '.join(SCHEDULE_ONLY_SECRETS)}) but "
                 f"triggers on {sorted(triggers)} — only a `schedule`-only workflow may carry it"
             )
+        _check_admin_environments(fname, doc, errors)
         if fname in gate_producers:
             # A `pull_request_target` producer reports the PR-side context from
             # the base workflow; check 12 holds it to running no head code.
@@ -3212,8 +3267,9 @@ PRE_TOOL_STEP_KEYS = frozenset({"name", "id", "env", "run", "uses", "with", "tim
 # `strategy:` expands legs (and a per-leg `continue-on-error`) from a matrix
 # that may be chosen at run time and renames the job's status contexts;
 # `concurrency:` lets another run cancel the job; `environment:` injects
-# variables and secrets the tool env allowlist never sees; `uses:` runs a
-# reusable workflow outside this check. None is needed by a tool job.
+# variables and secrets the tool env allowlist never sees (admitted only as
+# the literal `ADMIN_ENVIRONMENT_JOBS` entry of its own keyed job); `uses:`
+# runs a reusable workflow outside this check. None is needed by a tool job.
 TOOL_JOB_KEYS = frozenset({"name", "runs-on", "steps", "needs", "permissions", "outputs", "env", "defaults", "timeout-minutes"})
 # A tool job runs on a GitHub-hosted Ubuntu label: a fresh virtual machine per
 # job (no earlier job's writes survive into it) whose default shell is bash, the
@@ -3773,6 +3829,11 @@ class ToolJob:
             )
         for key in sorted(str(k) for k in raw):
             if key in TOOL_JOB_KEYS or key in MASKING_KEYS:
+                continue
+            keyed_env = ADMIN_ENVIRONMENT_JOBS.get((wf.fname, job.job_id))
+            if key == "environment" and keyed_env is not None and raw[key] == keyed_env:
+                # The one keyed exception: the environment's secret is the
+                # tool's own token, and check 8 holds its name to this job.
                 continue
             if key in ("container", "services"):
                 refusals.append(

@@ -20,7 +20,8 @@ Modes:
               ($REPO, $GH_TOKEN, optional $GITHUB_API_URL).
   --fetch-admin
               `--fetch` with a ruleset-admin token: the body must also carry
-              `bypass_actors`, and the list must be empty.
+              `bypass_actors`, the list must be empty, and the token's
+              environment must admit `main` alone.
 
 The live ruleset is parsed into a closed `Ruleset`: every key the API
 returns is either examined and pinned or named as display metadata, and any
@@ -35,8 +36,10 @@ one is returned and otherwise leaves the bypass proof to an admin read.
 `--fetch-admin` and `--live` are admin reads: a body without the list is
 refused, so a token that cannot see bypass actors fails rather than passes.
 `--fetch-admin` runs nightly in `ruleset-admin-read.yml` with the
-`RULESET_READ_TOKEN` secret, outside every merge-queue workflow. The token is
-never printed. Every unreadable or malformed input — a missing or empty token
+`RULESET_READ_TOKEN` secret of the `ADMIN_READ_ENVIRONMENT` environment, and
+first proves that environment's deployment-branch policy admits `main` alone
+(protected branches only, or the one custom branch `main`); any other policy,
+or none, is refused. The token is never printed. Every unreadable or malformed input — a missing or empty token
 included — fails closed (exit 1) with nothing printed to stdout.
 """
 from __future__ import annotations
@@ -59,6 +62,11 @@ REQUIRED_SET = os.path.join(CI_DIR, "required-set.json")
 GITHUB_ACTIONS_APP_ID = 15368
 # The `main-protection` ruleset that enforces the required set on `main`.
 RULESET_ID = 22326541
+MAIN_BRANCH = "main"
+# The GitHub environment holding `RULESET_READ_TOKEN`: its deployment-branch
+# policy admits `main` alone, so GitHub hands the token to no run of any other
+# ref. `--fetch-admin` proves that policy before it reads the ruleset.
+ADMIN_READ_ENVIRONMENT = "ruleset-admin-read"
 
 Pair = tuple[str, int]
 
@@ -273,7 +281,39 @@ def diff(expected: list[Pair], actual: list[Pair], what: str, fix: str) -> list[
     return out
 
 
-def fetch_ruleset() -> object:
+def environment_policy_errors(env: object, policies: object | None) -> list[str]:
+    """Why the `ADMIN_READ_ENVIRONMENT` read (`env`, and its custom branch
+    policies when it has them) does not confine the environment's secrets to
+    `main`, or []. Admitted: protected branches only, or custom branch
+    policies that are exactly the one branch `main`."""
+    where = f"environment {ADMIN_READ_ENVIRONMENT!r}"
+    if not isinstance(env, dict) or env.get("name") != ADMIN_READ_ENVIRONMENT:
+        return [f"{where}: the API returned no environment of that name"]
+    policy = env.get("deployment_branch_policy")
+    if not isinstance(policy, dict):
+        return [f"{where}: no deployment-branch policy — every branch may deploy to it"]
+    protected, custom = policy.get("protected_branches"), policy.get("custom_branch_policies")
+    if protected is True and custom is False:
+        return []
+    if not (protected is False and custom is True):
+        return [f"{where}: deployment-branch policy {policy!r} is neither protected branches only nor custom"]
+    items = policies.get("branch_policies") if isinstance(policies, dict) else None
+    if (
+        not isinstance(policies, dict)
+        or policies.get("total_count") != 1
+        or not isinstance(items, list)
+        or len(items) != 1
+        or not isinstance(items[0], dict)
+        or items[0].get("name") != MAIN_BRANCH
+        or items[0].get("type") != "branch"
+    ):
+        return [f"{where}: custom deployment-branch policies are not exactly the branch {MAIN_BRANCH!r}"]
+    return []
+
+
+def fetch_live(*, admin: bool) -> object:
+    """The live ruleset. An admin read first proves `ADMIN_READ_ENVIRONMENT`
+    confines its secrets to `main`, refusing otherwise."""
     import trust_roots  # noqa: PLC0415  # the pinned-origin authenticated GET
 
     repo, token = os.environ.get("REPO", ""), os.environ.get("GH_TOKEN", "")
@@ -281,6 +321,15 @@ def fetch_ruleset() -> object:
         raise Refused("reading the live ruleset needs $REPO and a non-empty $GH_TOKEN")
     try:
         api = trust_roots.Api(os.environ.get("GITHUB_API_URL") or "https://api.github.com", repo, token)
+        if admin:
+            env_path = f"environments/{ADMIN_READ_ENVIRONMENT}"
+            env = api.get(env_path)
+            policy = env.get("deployment_branch_policy") if isinstance(env, dict) else None
+            custom = isinstance(policy, dict) and policy.get("custom_branch_policies") is True
+            policies = api.get(f"{env_path}/deployment-branch-policies") if custom else None
+            errors = environment_policy_errors(env, policies)
+            if errors:
+                raise Refused("; ".join(errors) + " — set it up per .github/ci/RECONCILIATION.md")
         return api.get(f"rulesets/{RULESET_ID}")
     except trust_roots.Refused as e:
         raise Refused(str(e)) from e
@@ -326,7 +375,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         live = bool(args.live or args.fetch or args.fetch_admin)
         if live:
-            rs = _load_json(args.live, args.live) if args.live else fetch_ruleset()
+            rs = _load_json(args.live, args.live) if args.live else fetch_live(admin=bool(args.fetch_admin))
             admin_read = bool(args.live or args.fetch_admin)
             problems += diff(
                 required, list(parse_ruleset(rs, admin_read=admin_read).required), f"ruleset {RULESET_ID}",

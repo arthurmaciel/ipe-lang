@@ -7,10 +7,14 @@
 # non-empty list, or differs from the derived required set — and when the token
 # is absent or empty.
 #
-# The trigger is `schedule` alone: a secret-bearing workflow never runs on a pull
-# request, the merge queue, or a push, so no untrusted tree ever executes with
-# the token. Scheduled runs use the default branch's tree. Recover a red run
-# with `gh run rerun`.
+# The token is a secret of the `ruleset-admin-read` environment, whose
+# deployment-branch policy admits `main` alone: GitHub hands it to no run of
+# any other ref, whatever that ref's copy of this file says. That policy is the
+# guarantee; `check_required_set.py --fetch-admin` proves it before reading.
+# Defence in depth under it: the trigger is `schedule` alone (a scheduled run
+# uses the default branch's tree), and `verify-manifest.py` check 8 holds the
+# secret and the environment to this one job. Recover a red run with
+# `gh run rerun`.
 name: Ruleset admin read
 
 on:
@@ -24,6 +28,7 @@ jobs:
   ruleset-admin-read:
     name: ruleset-admin-read
     runs-on: ubuntu-latest
+    environment: ruleset-admin-read
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
