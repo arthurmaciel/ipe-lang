@@ -36,7 +36,7 @@ fn rejection_code(golden: &str) -> ipe_diagnostics::Code {
 ///
 /// A build that succeeds, or fails without a pipeline diagnostic, fails the
 /// test: the refusal is the property under proof.
-fn rejection_diagnostic(golden: &str) -> Box<Diagnostic> {
+fn rejection_diagnostic(golden: &str) -> Diagnostic {
     let root = repo_root();
     let entry = fixture_entry(&root, golden);
     let out = crate::support::scratch_root().join(format!("ipec_{golden}"));
@@ -44,7 +44,7 @@ fn rejection_diagnostic(golden: &str) -> Box<Diagnostic> {
 
     let runtime = e2e_support::require_runtime().into_path_buf();
     match ipe::build(&entry, &out, &runtime) {
-        Err(CliError::Pipeline { diag, .. }) => diag,
+        Err(CliError::Pipeline { diag, .. }) => *diag,
         other => panic!("{golden}: must be rejected with a pipeline diagnostic, got {other:?}"),
     }
 }
@@ -145,7 +145,7 @@ fn literal_unsupported_type_is_rejected_with_type_name() {
     let Diagnostic::Lower {
         msg: LowerError::StoreSelectProjectionInvalid(defect),
         ..
-    } = *diag
+    } = diag
     else {
         panic!(
             "expected StoreSelectProjectionInvalid, got a different diagnostic variant: {diag:?}"
