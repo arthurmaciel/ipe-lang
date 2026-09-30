@@ -115,6 +115,15 @@ render =
         -- encoded form).
         ++ " "
         ++ routeOf "https://example.com/user/bad%C0"
+        -- A path segment decodes under the path grammar: `+` stays a literal `+`.
+        ++ " "
+        ++ routeOf "https://example.com/user/a+b"
+        -- An escape that is not two hex digits fails closed, like invalid UTF-8.
+        ++ " "
+        ++ routeOf "https://example.com/user/%zz"
+        -- A query value decodes under the form grammar: `+` is a space.
+        ++ " "
+        ++ routeOf "https://example.com/search?q=a+b"
     }
 
 

@@ -160,8 +160,8 @@ pub struct Module {
     /// and needs the module.
     pub uses_cache: bool,
     /// `true` when the lowerer detected at least one `Ipe.Encoding` codec kernel
-    /// (`base64Encode` / `base64Decode` / `urlEncode` / `urlDecode` / `hexEncode`
-    /// / `hexDecode`) or any `Ipe.Bytes` kernel.
+    /// (`base64Encode` / `base64Decode` / `urlEncode` / `urlDecode` /
+    /// `pathDecode` / `hexEncode` / `hexDecode`) or any `Ipe.Bytes` kernel.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_encoding()` variant. The backend reads this flag to declare

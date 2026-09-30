@@ -7,7 +7,7 @@
 -- Non-UTF-8 binary payloads should go through `Ipe.Bytes` instead.
 module Ipe.Encoding exposing
     ( base64Encode, base64Decode
-    , urlEncode, urlDecode
+    , urlEncode, urlDecode, pathDecode
     , hexEncode, hexDecode
     )
 
@@ -36,14 +36,25 @@ urlEncode =
     Kernel.kernel "Encoding_urlEncode"
 
 
--- | Percent-decode a URL-encoded string.
+-- | Percent-decode a form-encoded string (a query key or value).
 --
--- Returns `Err` when the input contains a malformed percent-escape sequence
--- (a `%` not followed by two hex digits) or when the decoded bytes are not
--- valid UTF-8.
+-- A `+` decodes to a space. Returns `Err` when the input contains a malformed
+-- percent-escape sequence (a `%` not followed by two hex digits), when the
+-- decoded bytes are not valid UTF-8, or when the input exceeds the URL
+-- component length cap. Use `pathDecode` for a path segment.
 urlDecode : String -> Result Error String
 urlDecode =
     Kernel.kernel "Encoding_urlDecode"
+
+
+-- | Percent-decode a URL path segment (RFC 3986).
+--
+-- A `+` stays a literal `+`. Returns `Err` on the same malformed input as
+-- `urlDecode`: a bad percent-escape, decoded bytes that are not valid UTF-8,
+-- or an over-cap input.
+pathDecode : String -> Result Error String
+pathDecode =
+    Kernel.kernel "Encoding_pathDecode"
 
 
 -- | Hex-encode a string (lowercase output, two hex digits per byte).

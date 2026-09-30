@@ -7,7 +7,9 @@
 //! (`tests/golden/url_parser_combinators/Main.ipe`). This pins ipe-0 ∧ cargo-0 ∧
 //! run-0 (THE SEAL: ipe exit 0 ⇒ emitted Rust builds and runs) and the matched
 //! routes are rendered (`blog:42 user:alice home search:rust nomatch`), proving
-//! the pure-data patterns lower over the shipped `Ipe.Url` accessors.
+//! the pure-data patterns lower over the shipped `Ipe.Url` accessors. Path
+//! segments decode under the path grammar and query values under the form
+//! grammar (`user:a+b nomatch search:a b`).
 //!
 //! Gated on `IPE_E2E=1`. Run:
 //! `IPE_E2E=1 cargo test -p ipe --test golden_url_parser_combinators`.
@@ -59,6 +61,13 @@ fn url_parser_combinators_ipec_cargo_and_run_zero() {
             .stdout
             .contains("blog:42 user:alice home search:rust nomatch"),
         "the matched routes must render (map0/map1int/map1str/map1query + oneOf); got: {:?}",
+        outcome.stdout
+    );
+    // Each grammar decodes its own `+` (literal in a path, a space in a query),
+    // and a malformed escape in a segment is no match, never the raw form.
+    assert!(
+        outcome.stdout.contains("user:a+b nomatch search:a b"),
+        "path `+` must stay literal, `%zz` must not match, query `+` must be a space; got: {:?}",
         outcome.stdout
     );
 }

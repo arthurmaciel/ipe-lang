@@ -727,6 +727,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::EncodingBase64Decode
         | KernelFn::EncodingUrlEncode
         | KernelFn::EncodingUrlDecode
+        | KernelFn::EncodingPathDecode
         | KernelFn::EncodingHexEncode
         | KernelFn::EncodingHexDecode
         | KernelFn::JsonEncString

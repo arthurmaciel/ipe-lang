@@ -1934,6 +1934,7 @@ pub enum StdlibKernel {
     EncodingBase64Decode,
     EncodingUrlEncode,
     EncodingUrlDecode,
+    EncodingPathDecode,
     EncodingHexEncode,
     EncodingHexDecode,
     // ── Json.Encode ─────────────────────────────────────────────────────────
@@ -4547,6 +4548,14 @@ impl StdlibKernel {
             Self::EncodingUrlDecode => {
                 d("Encoding", "urlDecode", 1, Pure, "ipe_url_decode", IpeOrder)
             }
+            Self::EncodingPathDecode => d(
+                "Encoding",
+                "pathDecode",
+                1,
+                Pure,
+                "ipe_path_decode",
+                IpeOrder,
+            ),
             Self::EncodingHexEncode => d(
                 "Encoding",
                 "hexEncode",
@@ -7788,6 +7797,7 @@ impl StdlibKernel {
         Self::EncodingBase64Decode,
         Self::EncodingUrlEncode,
         Self::EncodingUrlDecode,
+        Self::EncodingPathDecode,
         Self::EncodingHexEncode,
         Self::EncodingHexDecode,
         // Json.Encode
@@ -12150,9 +12160,10 @@ impl StdlibKernel {
             Self::ErrorKindName => Some(&ERRORKIND_TO_STRING),
 
             // ── Encoding decoders / HttpMethod / Env. ──
-            Self::EncodingBase64Decode | Self::EncodingUrlDecode | Self::EncodingHexDecode => {
-                Some(&STRING_TO_RESULT_ERR_STRING)
-            }
+            Self::EncodingBase64Decode
+            | Self::EncodingUrlDecode
+            | Self::EncodingPathDecode
+            | Self::EncodingHexDecode => Some(&STRING_TO_RESULT_ERR_STRING),
             Self::HttpMethodToString => Some(&HTTP_METHOD_TO_STRING),
             Self::HttpMethodFromString => Some(&STRING_TO_MAYBE_HTTP_METHOD),
             Self::EnvPublic => Some(&STRING_TO_MAYBE_STRING_ENV),
@@ -13773,6 +13784,7 @@ impl StdlibKernel {
             | Self::EncodingBase64Decode
             | Self::EncodingUrlEncode
             | Self::EncodingUrlDecode
+            | Self::EncodingPathDecode
             | Self::EncodingHexEncode
             | Self::EncodingHexDecode
             | Self::JsonEncString
@@ -14941,6 +14953,7 @@ impl StdlibKernel {
                 | Self::EncodingBase64Decode
                 | Self::EncodingUrlEncode
                 | Self::EncodingUrlDecode
+                | Self::EncodingPathDecode
                 | Self::EncodingHexEncode
                 | Self::EncodingHexDecode
         )
@@ -16662,8 +16675,8 @@ mod tests {
     /// consumer of the `url` crate and its large `idna` → ICU4X subtree), so
     /// `qualifier == "Url"` MUST imply `is_url()`, and no other qualifier may
     /// report `is_url()`. The lookalike `String.isUrl` (qualifier `"String"`,
-    /// structural parse, no `url` crate) and `Encoding.urlEncode` / `urlDecode`
-    /// (qualifier `"Encoding"`, `percent-encoding`) are deliberately excluded.
+    /// structural parse, no `url` crate) and `Encoding.urlEncode` / `urlDecode` /
+    /// `pathDecode` (qualifier `"Encoding"`) are deliberately excluded.
     /// Both directions are asserted, so a new `Url.*` kernel the predicate
     /// forgets — or an unrelated kernel wrongly claimed — fails the instant the
     /// two disagree.
