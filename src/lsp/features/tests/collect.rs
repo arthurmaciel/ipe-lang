@@ -9,6 +9,7 @@ use ipe_lint::LintConfig;
 use ipe_lsp_features::PositionEncoding;
 use ipe_lsp_features::code_actions::{DbView, code_actions};
 use ipe_lsp_features::diagnostics::{ModuleDiagnostics, collect, collect_lint, to_lsp};
+use ipe_lsp_features::workspace_edit::Document;
 use lsp_types::{CodeActionOrCommand, Range, TextEdit, Url};
 
 fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
@@ -188,10 +189,13 @@ fn add_import_quick_fix_inserts_the_missing_import_and_clears_the_diagnostic() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         full_range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -271,10 +275,13 @@ fn add_import_quick_fix_sorts_among_existing_imports() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -362,10 +369,13 @@ fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -436,10 +446,13 @@ fn n0023_quick_fix_renames_module_declaration_to_expected_name() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -504,10 +517,13 @@ fn n0036_quick_fix_replaces_removed_surface_with_migration_target() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -557,10 +573,13 @@ fn n0036_no_replacement_produces_no_action() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     assert!(
@@ -617,10 +636,13 @@ fn t0020_quick_fix_wraps_expression_in_ui_html() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -694,10 +716,13 @@ fn rewrite_two_step_decoder_produces_pipeline_form() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -800,10 +825,13 @@ fn unused_imports_quick_fix_removes_the_import_line() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -854,10 +882,13 @@ fn lint_quick_fix_refuses_diagnostic_with_no_fix_data() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     assert!(
@@ -895,10 +926,13 @@ fn unused_imports_quick_fix_removes_a_multiline_exposing_import() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -960,10 +994,13 @@ fn unused_imports_quick_fix_removes_a_wrapped_exposing_list() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -1022,10 +1059,13 @@ fn unused_imports_quick_fix_removes_a_multiline_as_import() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -1138,10 +1178,13 @@ fn unused_imports_quick_fix_offered_with_cursor_on_module_name() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         point_range(2, 7, 10),
         std::slice::from_ref(&diag),
-        src,
         PositionEncoding::Utf16,
     );
     assert_offers_remove_action(&actions);
@@ -1164,10 +1207,13 @@ fn unused_imports_quick_fix_offered_with_cursor_on_exposing_list() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         point_range(2, 28, 31),
         std::slice::from_ref(&diag),
-        src,
         PositionEncoding::Utf16,
     );
     assert_offers_remove_action(&actions);
@@ -1190,10 +1236,13 @@ fn unused_imports_quick_fix_offered_with_cursor_on_alias() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         point_range(2, 14, 17),
         std::slice::from_ref(&diag),
-        src,
         PositionEncoding::Utf16,
     );
     assert_offers_remove_action(&actions);
@@ -1217,10 +1266,13 @@ fn unused_imports_quick_fix_refuses_the_following_unrelated_line() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         point_range(4, 0, 4),
         std::slice::from_ref(&diag),
-        src,
         PositionEncoding::Utf16,
     );
     assert!(
@@ -1245,10 +1297,13 @@ fn apply_unused_import_fix(src: &str) -> String {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         diag.range,
         std::slice::from_ref(&diag),
-        src,
         PositionEncoding::Utf16,
     );
     let edit = actions
@@ -1328,10 +1383,13 @@ fn prefer_pipeline_quick_fix_rewrites_the_nested_call() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -1380,10 +1438,13 @@ fn unused_bindings_quick_fix_prefixes_the_name() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     let action = actions
@@ -1438,10 +1499,13 @@ fn unsafe_convention_offers_no_lsp_action() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     assert!(
@@ -1479,10 +1543,13 @@ fn prim_param_sig_fix_only_offers_no_lsp_action() {
             entry,
         },
         &["Main".to_owned()],
-        &uri,
+        Document {
+            uri: &uri,
+            text: src,
+            version: None,
+        },
         lsp_diag.range,
         std::slice::from_ref(&lsp_diag),
-        src,
         PositionEncoding::Utf16,
     );
     assert!(

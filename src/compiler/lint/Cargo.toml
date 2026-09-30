@@ -11,5 +11,12 @@ ipe_syntax = { path = "../syntax" }
 ipe_parse = { path = "../parse" }
 ipe_canon = { path = "../canon" }
 
+# The one workspace-file open is `O_NONBLOCK | O_NOCTTY | O_NOFOLLOW`, so a
+# FIFO, terminal, or symlink planted at `lint.ipe` is refused instead of
+# blocking, becoming the controlling terminal, or being followed. rustix is
+# the version the CLI's `io_bounded` open already uses.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "0.38", features = ["fs"] }
+
 [lints]
 workspace = true

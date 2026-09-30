@@ -26,6 +26,7 @@ use lsp_types::{TextEdit, Url, WorkspaceEdit};
 
 use crate::navigation::goto_definition;
 use crate::offset::{PositionEncoding, span_to_range};
+use crate::workspace_edit::workspace_edit;
 
 // ── Case class ───────────────────────────────────────────────────────────────
 
@@ -138,6 +139,11 @@ pub struct ModuleResolver<'a> {
     pub uri_of_module: &'a dyn Fn(&[String]) -> Option<Url>,
     /// Maps a module path to its current source text.
     pub text_of_module: &'a dyn Fn(&[String]) -> Option<String>,
+    /// The known version of the open overlay at a URI, or `None` when the
+    /// client lacks the `documentChanges` capability or the document is not
+    /// a tracked overlay. The single source [`rename`] reads to decide
+    /// whether each touched document's edit can be versioned.
+    pub version_of: &'a dyn Fn(&Url) -> Option<i32>,
 }
 
 /// The cursor position and replacement text for a rename request.
@@ -152,6 +158,10 @@ pub struct RenameRequest<'a> {
     pub new_name: &'a str,
     /// Position encoding in use for the session.
     pub encoding: PositionEncoding,
+    /// Whether the client accepts versioned `documentChanges`
+    /// (`workspace.workspaceEdit.documentChanges`); mirrors
+    /// `resolver.version_of`'s capability gate.
+    pub document_changes_supported: bool,
 }
 
 /// Apply a rename across all references to the top-level identifier at
@@ -267,7 +277,7 @@ pub fn rename(
     // Build the WorkspaceEdit from the canon edits, then patch in any
     // `exposing (Name)` header and `import M exposing (Name)` sites that the
     // canon engine does not reach (it only visits body-expression spans).
-    let mut ws_edit = edit_set_to_workspace_edit(db, &edit_set, resolver, req.encoding)?;
+    let mut edits_by_uri = edit_set_to_edits_by_uri(db, &edit_set, resolver, req.encoding)?;
     patch_exposing_headers(
         db,
         root,
@@ -276,24 +286,28 @@ pub fn rename(
         req.new_name,
         resolver,
         req.encoding,
-        &mut ws_edit,
+        &mut edits_by_uri,
     );
-    Some(ws_edit)
+    Some(workspace_edit(
+        edits_by_uri,
+        req.document_changes_supported,
+        resolver.version_of,
+    ))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Group a canon [`EditSet`] into an LSP [`WorkspaceEdit`] keyed by document URI.
+/// Group a canon [`EditSet`] into edits keyed by document URI.
 ///
 /// Each edit's symbol module path is resolved back to a string path for the
 /// resolver's URI and text callbacks; an edit whose path, URI, or text cannot be
 /// resolved is skipped. Returns `None` when no edit survives resolution.
-fn edit_set_to_workspace_edit(
+fn edit_set_to_edits_by_uri(
     db: &IpeDatabase,
     edit_set: &EditSet,
     resolver: &ModuleResolver<'_>,
     encoding: PositionEncoding,
-) -> Option<WorkspaceEdit> {
+) -> Option<BTreeMap<Url, Vec<TextEdit>>> {
     let mut edits_by_uri: BTreeMap<Url, Vec<TextEdit>> = BTreeMap::new();
 
     for edit in &edit_set.edits {
@@ -324,11 +338,7 @@ fn edit_set_to_workspace_edit(
         return None;
     }
 
-    Some(WorkspaceEdit {
-        changes: Some(edits_by_uri.into_iter().collect()),
-        document_changes: None,
-        change_annotations: None,
-    })
+    Some(edits_by_uri)
 }
 
 /// Patch `exposing (Name)` in the defining module's header and every
@@ -350,7 +360,7 @@ fn patch_exposing_headers(
     new_name: &str,
     resolver: &ModuleResolver<'_>,
     encoding: PositionEncoding,
-    ws_edit: &mut WorkspaceEdit,
+    edits_by_uri: &mut BTreeMap<Url, Vec<TextEdit>>,
 ) {
     let files = root.files(db);
 
@@ -379,7 +389,7 @@ fn patch_exposing_headers(
                 db,
             )
         {
-            add_edit(ws_edit, uri, edit);
+            add_edit(edits_by_uri, uri, edit);
         }
     }
 
@@ -430,7 +440,7 @@ fn patch_exposing_headers(
             if let Some(edit) =
                 exposed_name_edit(&imp.exposing.value, old_name, new_name, &text, encoding, db)
             {
-                add_edit(ws_edit, uri.clone(), edit);
+                add_edit(edits_by_uri, uri.clone(), edit);
             }
         }
     }
@@ -467,15 +477,10 @@ fn exposed_name_edit(
     None
 }
 
-/// Insert `edit` for `uri` into an existing `WorkspaceEdit.changes` map,
-/// appending to any existing edits for that URI. Creates the entry when absent.
-fn add_edit(ws_edit: &mut WorkspaceEdit, uri: Url, edit: TextEdit) {
-    ws_edit
-        .changes
-        .get_or_insert_with(Default::default)
-        .entry(uri)
-        .or_default()
-        .push(edit);
+/// Insert `edit` for `uri` into `edits_by_uri`, appending to any existing
+/// edits for that URI. Creates the entry when absent.
+fn add_edit(edits_by_uri: &mut BTreeMap<Url, Vec<TextEdit>>, uri: Url, edit: TextEdit) {
+    edits_by_uri.entry(uri).or_default().push(edit);
 }
 
 fn def_span_lo_usize(span: Span) -> Option<usize> {
@@ -532,6 +537,10 @@ mod tests {
             Some("Main") => Some(MAIN.to_owned()),
             _ => None,
         }
+    }
+
+    fn no_version(_uri: &Url) -> Option<i32> {
+        None
     }
 
     // ── ValidatedIdentifier boundary tests ───────────────────────────────────
@@ -600,10 +609,19 @@ mod tests {
     // ── Integration: rename with illegal names emits no edits ─────────────────
 
     fn do_rename(new_name: &str) -> Option<lsp_types::WorkspaceEdit> {
+        do_rename_versioned(new_name, None, false)
+    }
+
+    fn do_rename_versioned(
+        new_name: &str,
+        version: Option<i32>,
+        document_changes_supported: bool,
+    ) -> Option<lsp_types::WorkspaceEdit> {
         let db = IpeDatabase::new();
         let helper = file(&db, &["Helper"], HELPER);
         let entry = file(&db, &["Main"], MAIN);
         let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
+        let version_of = move |_: &Url| version;
         rename(
             &db,
             root,
@@ -613,10 +631,12 @@ mod tests {
                 byte: ref_byte(),
                 new_name,
                 encoding: PositionEncoding::Utf16,
+                document_changes_supported,
             },
             &super::ModuleResolver {
                 uri_of_module: &make_uri,
                 text_of_module: &make_text,
+                version_of: &version_of,
             },
         )
     }
@@ -747,10 +767,12 @@ mod tests {
                 byte: ctor_value_use_byte(),
                 new_name: "Crimson",
                 encoding: PositionEncoding::Utf16,
+                document_changes_supported: false,
             },
             &super::ModuleResolver {
                 uri_of_module: &ctor_uri,
                 text_of_module: &ctor_text,
+                version_of: &no_version,
             },
         )
         .expect("constructor rename must reach the engine and return Some");
@@ -830,6 +852,30 @@ mod tests {
         assert!(
             has_import_edit,
             "no edit on line 2 (import exposing) in Main: {main_edits:?}"
+        );
+    }
+
+    // ── Versioned `documentChanges` (issue #3116) ────────────────────────────
+
+    #[test]
+    fn a_known_version_yields_versioned_document_changes() {
+        let ws_edit = do_rename_versioned("four", Some(9), true).expect("rename returned Some");
+        assert!(ws_edit.changes.is_none(), "{ws_edit:?}");
+        assert!(
+            matches!(&ws_edit.document_changes, Some(lsp_types::DocumentChanges::Edits(edits))
+                if edits.len() == 2
+                    && edits.iter().all(|e| e.text_document.version == Some(9))),
+            "{ws_edit:?}"
+        );
+    }
+
+    #[test]
+    fn no_known_version_falls_back_to_unversioned_flat_changes() {
+        let ws_edit = do_rename_versioned("four", None, false).expect("rename returned Some");
+        assert!(ws_edit.document_changes.is_none(), "{ws_edit:?}");
+        assert!(
+            matches!(&ws_edit.changes, Some(m) if !m.is_empty()),
+            "{ws_edit:?}"
         );
     }
 }
