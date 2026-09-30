@@ -14,10 +14,12 @@ directory `src-min-noconflict/`:
 Source tarball: `https://registry.npmjs.org/ace-builds/-/ace-builds-1.35.4.tgz`,
 npm integrity
 `sha512-r0KQclhZ/uk5a4zOqRYQkJuQuu4vFMiA6VTj54Tk4nI1TUR3iEMMppZkWbNoWEgWwv4ciDloObb9Rf4V55Qgjw==`.
-`SHA256SUMS` records each file's digest (`sha256sum -c SHA256SUMS`, checked
-by `tools/scripts/lib/playground-verify.mjs`). `LICENSE` is ACE's BSD license,
-from the same tarball.
+`LICENSE` is ACE's BSD license, from the same tarball. Every file in this
+directory is served under `/static/vendor/ace/`, so `SHA256SUMS` records the
+digest of each one but itself, this README and `LICENSE` included
+(`sha256sum -c SHA256SUMS`; `tools/scripts/lib/playground-verify.mjs` refuses
+a file it does not record).
 
 To change the version or the file set: extract the new tarball's
-`src-min-noconflict/` files listed above, regenerate `SHA256SUMS`, and update
-the version and integrity here.
+`src-min-noconflict/` files listed above, update the version and integrity
+here, and regenerate `SHA256SUMS`.
