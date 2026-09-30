@@ -933,7 +933,7 @@ fn read_capped(scratch: &mut ScratchFile, cap: u64) -> Result<Vec<u8>, BodyError
 /// status, and is refused as [`CurlOutcome::TransportFailed`] before the status
 /// text or body are ever looked at.
 ///
-/// Mirrors the prior per-call-site security shape: the token travels on curl's
+/// The token travels on curl's
 /// stdin config (`--config -`), never argv, so it cannot be read from
 /// `/proc/<pid>/cmdline`; the arriving [`crate::login::PublishToken`] alphabet
 /// excludes the quote/newline that could inject a further curl directive; and
@@ -1049,11 +1049,8 @@ const MAX_PR_REPLY_ERRORS: usize = 16;
 ///
 /// GitHub's real duplicate-PR 422 puts the marker only inside
 /// `errors[0].message`; the top-level `message` is the generic "Validation
-/// Failed" shared by every 422. Checking only the top-level field (the prior
-/// shape of this check) never matches that real reply and always falls
-/// through to [`PrResult::Failed`] — a correctness bug in the refusal
-/// direction, not the permissive one, but still a spurious failure this
-/// function closes by looking where GitHub actually puts the marker.
+/// Failed" shared by every 422, so a check of the top-level field alone never
+/// matches the real reply; this function looks where GitHub puts the marker.
 fn pr_already_exists_marker(json: &serde_json::Value) -> bool {
     let mentions_marker = |text: &str| text.to_lowercase().contains("already exists");
     if json
@@ -1080,8 +1077,7 @@ fn pr_already_exists_marker(json: &serde_json::Value) -> bool {
 /// finds the marker (in the top-level `message` or an `errors[].message`); any
 /// other 422 — or any status outside 201/422 — is [`PrResult::Failed`]. GitHub
 /// also returns 422 for unrelated validation failures (e.g. a malformed
-/// `head`), which the prior unconditional `422 => AlreadyExists` mapping
-/// misreported as success.
+/// `head`), so a 422 alone never means success.
 fn classify_pr_reply(status: HttpStatus, json: &serde_json::Value) -> PrResult {
     let message = json.get("message").and_then(serde_json::Value::as_str);
     match status.get() {
