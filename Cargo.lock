@@ -3410,7 +3410,6 @@ dependencies = [
  "ipe_diagnostics",
  "ipe_env",
  "ipe_kernels",
- "libc",
  "rustix 0.38.44",
  "serde",
  "win32job",

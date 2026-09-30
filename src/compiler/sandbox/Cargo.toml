@@ -15,11 +15,10 @@ serde = { version = "1", features = ["derive"] }
 # `getrandom::Error` -> `io::Error` conversion.
 getrandom = { version = "0.3", features = ["std"] }
 
-# `O_NOFOLLOW` for the private-scratch exclusive file open.
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
-# The effective uid/gid the private-scratch and jail-dir ownership checks compare
-# against, obtained without `unsafe`.
+# The private-scratch exclusive `O_NOFOLLOW` open, and the effective uid/gid the
+# private-scratch and jail-dir ownership checks compare against, obtained
+# without `unsafe`.
 rustix = { version = "0.38", features = ["fs", "process"] }
 
 # The Windows run-jail arm builds its confinement primitives through the Win32

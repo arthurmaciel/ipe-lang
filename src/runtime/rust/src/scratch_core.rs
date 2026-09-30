@@ -940,13 +940,23 @@ fn exclusive_mkdir(path: &Path) -> io::Result<()> {
     std::fs::create_dir(path)
 }
 
+/// Signal interruptions `exclusive_open` retries before it surfaces `Interrupted`.
+#[cfg(unix)]
+const OPEN_INTERRUPT_RETRIES: u32 = 8;
+
 /// Open a new file at `path`: exclusive, never through a final symlink, mode 0600.
 #[cfg(unix)]
 fn exclusive_open(path: &Path) -> io::Result<File> {
     use rustix::fs::{Mode, OFlags};
     let flags = OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let fd = rustix::fs::open(path, flags, Mode::from_raw_mode(0o600))?;
-    Ok(File::from(fd))
+    let mut interrupts = 0;
+    loop {
+        match rustix::fs::open(path, flags, Mode::from_raw_mode(0o600)) {
+            Ok(fd) => return Ok(File::from(fd)),
+            Err(rustix::io::Errno::INTR) if interrupts < OPEN_INTERRUPT_RETRIES => interrupts += 1,
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 /// Open a new file at `path` exclusively, inheriting the proven-private parent's access control.
