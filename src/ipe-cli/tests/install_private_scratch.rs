@@ -327,7 +327,7 @@ fn scratch_base_verdict_refuses_empty_or_unexpected_reason_output() -> io::Resul
         );
     }
 
-    let r = root("install-reason-garbage")?;
+    let r = root("install-reason-token")?;
     let base = r.child("base");
     mkdir_mode(&base, 0o700)?;
     let base_arg = base.to_string_lossy().into_owned();
