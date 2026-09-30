@@ -383,19 +383,33 @@ class AdminReadTest(unittest.TestCase):
                 self.assertTrue(_verdict(api, **env))
 
 
+CHECKOUT_USES = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+SETUP_PYTHON_USES = "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
+PIP_RUN = (
+    "PIP_CONFIG_FILE=/dev/null python3 -m pip install --isolated --require-hashes "
+    '--only-binary :all: -r "$GITHUB_WORKSPACE/.github/ci/requirements.txt"'
+)
 ADMIN_STEP = {
     "name": "admin read",
     "env": {"GH_TOKEN": "${{ secrets.RULESET_READ_TOKEN }}", "REPO": "${{ github.repository }}"},
     "run": "python3 .github/ci/check_required_set.py --fetch-admin",
 }
 ADMIN_WORKFLOW = {
+    "name": "Ruleset admin read",
     "on": {"schedule": [{"cron": "30 4 * * *"}]},
+    "permissions": {"contents": "read"},
     "jobs": {
         "ruleset-admin-read": {
             "name": "ruleset-admin-read",
             "runs-on": "ubuntu-latest",
             "environment": "ruleset-admin-read",
-            "steps": [{"uses": "actions/checkout@v7"}, ADMIN_STEP],
+            "timeout-minutes": 5,
+            "steps": [
+                {"uses": CHECKOUT_USES, "with": {"persist-credentials": False}},
+                {"uses": SETUP_PYTHON_USES, "with": {"python-version": "3.13"}},
+                {"name": "Install PyYAML", "run": PIP_RUN},
+                ADMIN_STEP,
+            ],
         }
     },
 }
@@ -403,6 +417,10 @@ ADMIN_WORKFLOW = {
 
 def _admin_job(wf: dict) -> dict:
     return wf["jobs"]["ruleset-admin-read"]
+
+
+def _steps(wf: dict) -> list:
+    return _admin_job(wf)["steps"]
 
 
 ADMIN_MANIFEST = {
@@ -413,7 +431,14 @@ ADMIN_MANIFEST = {
 class AdminReadWiringTest(unittest.TestCase):
     def test_schedule_only_nightly_gate_passes(self) -> None:
         self.assertEqual(ng.admin_read_wiring_errors(ADMIN_WORKFLOW, ADMIN_MANIFEST), [])
-        self.assertEqual(ng.admin_read_wiring_errors({True: ADMIN_WORKFLOW["on"], "jobs": ADMIN_WORKFLOW["jobs"]}, ADMIN_MANIFEST), [])
+        wf = {k: v for k, v in ADMIN_WORKFLOW.items() if k != "on"}
+        self.assertEqual(ng.admin_read_wiring_errors({True: ADMIN_WORKFLOW["on"], **wf}, ADMIN_MANIFEST), [])
+
+    def test_the_fixture_pins_are_the_manifest_pins(self) -> None:
+        vm = ng._verify_manifest()
+        self.assertIn(CHECKOUT_USES, vm.PINNED_CHECKOUT_USES)
+        self.assertIn(SETUP_PYTHON_USES, vm.PINNED_SETUP_PYTHON_USES)
+        self.assertEqual(PIP_RUN, vm.CANONICAL_PIP_INSTALL)
 
     def test_extra_or_other_trigger_refused(self) -> None:
         for on in (
@@ -435,17 +460,18 @@ class AdminReadWiringTest(unittest.TestCase):
 
     def test_workflow_token_read_refused(self) -> None:
         def swapped(wf: dict) -> None:
-            step = _admin_job(wf)["steps"][-1]
+            step = _steps(wf)[-1]
             step["run"] = "python3 .github/ci/check_required_set.py --fetch"
             step["env"]["GH_TOKEN"] = "${{ github.token }}"
 
-        self.assertAdminRefused(swapped, "must run only")
-        self.assertAdminRefused(swapped, "env must be exactly")
+        self.assertAdminRefused(swapped, "(read) `run` must be exactly")
+        self.assertAdminRefused(swapped, "(read) `env` must be exactly")
         for run in ("python3 .github/ci/check_required_set.py --fetch",
                     "python3 .github/ci/check_required_set.py --fetch-admin || true",
-                    "python3 .github/ci/check_required_set.py"):
+                    "python3 .github/ci/check_required_set.py",
+                    None):
             with self.subTest(run=run):
-                self.assertAdminRefused(lambda wf, r=run: _admin_job(wf)["steps"][-1].update(run=r), "must run only")
+                self.assertAdminRefused(lambda wf, r=run: _steps(wf)[-1].update(run=r), "(read) `run` must be exactly")
         for env in ({"GH_TOKEN": "${{ github.token }}", "REPO": "${{ github.repository }}"},
                     {"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}", "REPO": "${{ github.repository }}"},
                     {"GH_TOKEN": "${{ secrets.RULESET_READ_TOKEN }}"},
@@ -453,12 +479,74 @@ class AdminReadWiringTest(unittest.TestCase):
                     {**ADMIN_STEP["env"], "GITHUB_API_URL": "https://evil.example"},
                     None):
             with self.subTest(env=env):
-                self.assertAdminRefused(lambda wf, e=env: _admin_job(wf)["steps"][-1].update(env=e), "env must be exactly")
+                self.assertAdminRefused(lambda wf, e=env: _steps(wf)[-1].update(env=e), "(read) `env` must be exactly")
 
-    def test_read_step_count_refused(self) -> None:
-        self.assertAdminRefused(lambda wf: _admin_job(wf)["steps"].pop(), "exactly one")
-        self.assertAdminRefused(lambda wf: _admin_job(wf)["steps"].append(dict(ADMIN_STEP)), "exactly one")
-        self.assertAdminRefused(lambda wf: _admin_job(wf).pop("steps"), "exactly one")
+    def test_step_list_is_pinned(self) -> None:
+        self.assertAdminRefused(lambda wf: _steps(wf).pop(), "exactly 4 steps")
+        self.assertAdminRefused(lambda wf: _steps(wf).append(dict(ADMIN_STEP)), "exactly 4 steps")
+        self.assertAdminRefused(lambda wf: _steps(wf).insert(3, {"run": "echo hi"}), "exactly 4 steps")
+        self.assertAdminRefused(lambda wf: _admin_job(wf).pop("steps"), "exactly 4 steps")
+        self.assertAdminRefused(lambda wf: _admin_job(wf).update(steps="x"), "exactly 4 steps")
+        self.assertAdminRefused(lambda wf: _steps(wf).reverse(), "step 1 (checkout)")
+        self.assertAdminRefused(lambda wf: _steps(wf).__setitem__(0, "checkout"), "step 1 (checkout) is not a mapping")
+
+    def test_each_step_is_matched_exactly(self) -> None:
+        cases = (
+            (0, {"uses": "actions/checkout@v7"}, "step 1 (checkout) `uses`"),
+            (0, {"uses": "evil/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"}, "step 1 (checkout) `uses`"),
+            (0, {"with": {"persist-credentials": True}}, "step 1 (checkout) `with`"),
+            (0, {"with": {"persist-credentials": False, "ref": "evil"}}, "step 1 (checkout) `with`"),
+            (0, {"with": None}, "step 1 (checkout) `with`"),
+            (1, {"uses": "actions/setup-python@v6"}, "step 2 (setup-python) `uses`"),
+            (1, {"with": {"python-version": "3.13", "cache": "pip"}}, "step 2 (setup-python) `with`"),
+            (2, {"run": PIP_RUN + " evil"}, "step 3 (pip install) `run`"),
+            (2, {"run": "pip install pyyaml"}, "step 3 (pip install) `run`"),
+            (3, {"uses": CHECKOUT_USES}, "step 4 (read) must not set ['uses']"),
+        )
+        for index, update, needle in cases:
+            with self.subTest(index=index, update=update):
+                self.assertAdminRefused(lambda wf, i=index, u=update: _steps(wf)[i].update(u), needle)
+
+    def test_a_step_may_add_only_a_name(self) -> None:
+        for index in range(4):
+            for key in ("env", "if", "continue-on-error", "shell", "working-directory", "id", "timeout-minutes"):
+                if index == 3 and key == "env":
+                    continue
+                with self.subTest(index=index, key=key):
+                    self.assertAdminRefused(lambda wf, i=index, k=key: _steps(wf)[i].update({k: "x"}), f"must not set ['{key}']")
+        self.assertEqual(
+            ng.admin_read_wiring_errors(ADMIN_WORKFLOW, ADMIN_MANIFEST), [],
+        )
+
+    def test_secrets_outside_the_read_step_refused(self) -> None:
+        cases = (
+            lambda wf: _steps(wf)[0]["with"].update(token="${{ secrets.RULESET_READ_TOKEN }}"),
+            lambda wf: _steps(wf)[2].update(name="${{ secrets.RULESET_READ_TOKEN }}"),
+            lambda wf: _admin_job(wf).update({"runs-on": "${{ secrets.RUNNER }}"}),
+            lambda wf: _admin_job(wf).update(secrets="inherit"),
+            lambda wf: wf.update(name="read ${{ secrets.RULESET_READ_TOKEN }}"),
+            lambda wf: wf["on"]["schedule"].append({"cron": "secrets"}),
+        )
+        for mutate in cases:
+            with self.subTest(mutate=mutate):
+                self.assertAdminRefused(mutate, "names `secrets`; only the read step may")
+        # The read step's own env is the one sanctioned mention.
+        wf = copy.deepcopy(ADMIN_WORKFLOW)
+        self.assertFalse([e for e in ng.admin_read_wiring_errors(wf, ADMIN_MANIFEST) if "secrets" in e])
+
+    def test_secrets_scan_covers_a_misshapen_step_list(self) -> None:
+        self.assertAdminRefused(
+            lambda wf: _steps(wf).append({"env": {"T": "${{ secrets.RULESET_READ_TOKEN }}"}, "run": "curl x"}),
+            "names `secrets`",
+        )
+
+    def test_job_or_workflow_env_and_defaults_refused(self) -> None:
+        for key in ("env", "defaults"):
+            with self.subTest(key=key):
+                self.assertAdminRefused(lambda wf, k=key: _admin_job(wf).update({k: {"GH_HOST": "evil.example"}}),
+                                        f"must not set a job-level `{key}`")
+                self.assertAdminRefused(lambda wf, k=key: wf.update({k: {"GH_HOST": "evil.example"}}),
+                                        f"must not set a workflow-level `{key}`")
 
     def test_environment_refused_unless_the_admin_read_environment(self) -> None:
         for env in (None, "prod", "Ruleset-Admin-Read", {"name": "ruleset-admin-read"}, "${{ 'ruleset-admin-read' }}"):
@@ -474,8 +562,6 @@ class AdminReadWiringTest(unittest.TestCase):
         for key in ("if", "continue-on-error", "needs", "strategy"):
             with self.subTest(key=key):
                 self.assertAdminRefused(lambda wf, k=key: _admin_job(wf).update({k: "x"}), f"must not set `{key}`")
-        self.assertAdminRefused(lambda wf: _admin_job(wf)["steps"][-1].update({"continue-on-error": True}), "must not set `if`")
-        self.assertAdminRefused(lambda wf: _admin_job(wf)["steps"][0].update({"if": "false"}), "must not set `if`")
 
     def test_manifest_drift_refused(self) -> None:
         for manifest in (
@@ -487,6 +573,43 @@ class AdminReadWiringTest(unittest.TestCase):
         ):
             with self.subTest(manifest):
                 self.assertTrue(ng.admin_read_wiring_errors(ADMIN_WORKFLOW, manifest))
+
+
+def _normalised(text: str) -> str:
+    return " ".join(" ".join(line.strip().lstrip("#") for line in text.splitlines()).split())
+
+
+class AdminReadRecoveryTest(unittest.TestCase):
+    """Every home of the admin-read recovery advice carries `ADMIN_READ_RECOVERY` verbatim."""
+
+    def test_every_home_states_the_one_recovery(self) -> None:
+        want = _normalised(ng.ADMIN_READ_RECOVERY)
+        homes = {"nightly_green.py docstring": ng.__doc__ or ""}
+        for home, path in (
+            ("nightly-green.yml", os.path.join(ng.REPO_ROOT, ".github", "workflows", ng.WORKFLOW_FILE)),
+            ("ruleset-admin-read.yml", os.path.join(ng.REPO_ROOT, ng.ADMIN_READ.path)),
+            ("RECONCILIATION.md", os.path.join(HERE, "RECONCILIATION.md")),
+        ):
+            with open(path, encoding="utf-8") as fh:
+                homes[home] = fh.read()
+        for home, text in homes.items():
+            with self.subTest(home=home):
+                self.assertIn(want, _normalised(text))
+
+    def test_the_recovery_never_offers_a_rerun_as_the_fix(self) -> None:
+        self.assertIn("never makes a stale run fresh", ng.ADMIN_READ_RECOVERY)
+        self.assertNotIn("re-run with `gh run rerun`", ng.ADMIN_READ_RECOVERY)
+        self.assertNotIn("recovered with `gh run rerun`", ng.ADMIN_READ_RECOVERY)
+
+    def test_the_red_verdict_prints_the_recovery(self) -> None:
+        import contextlib
+        import io
+        from unittest import mock
+
+        err = io.StringIO()
+        with mock.patch.object(ng, "verdict", return_value=["x"]), contextlib.redirect_stderr(err):
+            self.assertEqual(ng.main(["--verdict"]), 1)
+        self.assertIn(ng.ADMIN_READ_RECOVERY, err.getvalue())
 
 
 STEP = {

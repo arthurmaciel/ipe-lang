@@ -8,7 +8,11 @@ name: nightly-green
 # PR that fixes a red nightly: `gh workflow run 'Build & test' --ref <branch>`,
 # then re-run this check). It also requires the latest scheduled ruleset admin
 # read (ruleset-admin-read.yml) on main to be green within 48h, on every
-# change; a red one is recovered with `gh run rerun`. Absence is not a pass.
+# change. A red ruleset admin read caused by the ruleset or its token is fixed
+# there, and the next scheduled run proves the fix (a `gh run rerun` keeps the
+# run's `created_at`, so it never makes a stale run fresh); one caused by
+# main's tree needs the break-glass sequence in .github/ci/RECONCILIATION.md.
+# Absence is not a pass.
 # The rule lives in `.github/ci/nightly_green.py`; its `--lint`
 # (manifest-guard) pins this wiring.
 on:

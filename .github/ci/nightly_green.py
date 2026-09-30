@@ -19,10 +19,11 @@ and, always, on proof the nightly ruleset admin read is green:
      concluded `success`, is at most MAX_AGE_H hours old, and ran on a commit
      of main's own history. It proves the live ruleset has no bypass actor, a
      property of the repository rather than of any change, so no change's own
-     run stands in for it. Recover a red one caused by the ruleset or its
-     token with `gh run rerun` (a re-run keeps `created_at`, so it does not
-     refresh a stale run); one caused by main's tree needs the break-glass
-     sequence in RECONCILIATION.md.
+     run stands in for it. A red ruleset admin read caused by the ruleset or
+     its token is fixed there, and the next scheduled run proves the fix (a
+     `gh run rerun` keeps the run's `created_at`, so it never makes a stale
+     run fresh); one caused by main's tree needs the break-glass sequence in
+     .github/ci/RECONCILIATION.md. (`ADMIN_READ_RECOVERY`)
 
 Absence is not a pass: no run, an unreadable listing, an unexpected shape, a
 cancelled or stale nightly — each is a red.
@@ -35,8 +36,9 @@ Modes:
              the manifest declares `nightly-green` a gate and
              `ruleset-admin-read` a nightly-gate of ruleset-admin-read.yml,
              and that workflow triggers on `schedule` alone, with one job in
-             the admin-read environment whose one read step runs only
-             `check_required_set.py --fetch-admin` with the admin token
+             the admin-read environment running exactly the pinned steps, the
+             last one only `check_required_set.py --fetch-admin` with the
+             admin token, and no other `secrets` or `env`
              (`admin_read_wiring_errors`). manifest-guard runs it.
 """
 
@@ -313,15 +315,102 @@ ADMIN_READ_ENV = {
     "GH_TOKEN": "${{ secrets.RULESET_READ_TOKEN }}",
     "REPO": "${{ github.repository }}",
 }
+# How a red `ADMIN_READ` run is recovered; the docstring, the `--verdict` RED
+# message and nightly-green.yml's header carry it verbatim (a test holds them).
+ADMIN_READ_RECOVERY = (
+    "A red ruleset admin read caused by the ruleset or its token is fixed there, "
+    "and the next scheduled run proves the fix (a `gh run rerun` keeps the run's "
+    "`created_at`, so it never makes a stale run fresh); one caused by main's tree "
+    "needs the break-glass sequence in .github/ci/RECONCILIATION.md."
+)
+# Keys that would put an `env:` or a shell under the read step that its own
+# pinned `env:` and `run:` do not show.
+_ADMIN_READ_SCOPE_KEYS = ("env", "defaults")
+
+
+def _verify_manifest() -> object:
+    """Load verify-manifest.py, the SSOT of the pinned actions and the pip install."""
+    import importlib.util  # noqa: PLC0415  # only the admin-read lint needs it
+
+    loaded = sys.modules.get("verify_manifest")
+    if loaded is not None:
+        return loaded
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    spec = importlib.util.spec_from_file_location("verify_manifest", os.path.join(HERE, "verify-manifest.py"))
+    if spec is None or spec.loader is None:
+        raise NightlyError("verify-manifest.py is not loadable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["verify_manifest"] = module  # dataclasses resolve their module by name
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules["verify_manifest"]
+        raise
+    return module
+
+
+def admin_read_steps() -> list[tuple[str, dict[str, object]]]:
+    """Return the admin-read job's steps in order, each as (what, pinned
+    fields): a checkout without persisted credentials, the interpreter setup,
+    the canonical hash-checked pip install, and the read. A step may add only a
+    `name`; `uses` is matched against its pin set, every other field exactly."""
+    vm = _verify_manifest()
+    return [
+        ("checkout", {"uses": vm.PINNED_CHECKOUT_USES, "with": {"persist-credentials": False}}),
+        ("setup-python", {"uses": vm.PINNED_SETUP_PYTHON_USES, "with": {"python-version": "3.13"}}),
+        ("pip install", {"run": vm.CANONICAL_PIP_INSTALL}),
+        ("read", {"run": ADMIN_READ_INVOCATION, "env": ADMIN_READ_ENV}),
+    ]
+
+
+def _step_errors(index: int, step: object, what: str, pinned: dict[str, object]) -> list[str]:
+    where = f"{ADMIN_READ.workflow} step {index + 1} ({what})"
+    if not isinstance(step, dict):
+        return [f"{where} is not a mapping"]
+    errors: list[str] = []
+    extra = sorted(str(k) for k in set(step) - set(pinned) - {"name"})
+    if extra:
+        errors.append(f"{where} must not set {extra} (only `name` and {sorted(pinned)})")
+    for key, want in pinned.items():
+        got = step.get(key)
+        if isinstance(want, frozenset):
+            ok = isinstance(got, str) and got in want
+        elif isinstance(want, dict):
+            ok = isinstance(got, dict) and {str(k): _strip_expr(v) if isinstance(v, str) else v
+                                            for k, v in got.items()} == want
+        else:
+            ok = isinstance(got, str) and got.strip() == want
+        if not ok:
+            shown = sorted(want) if isinstance(want, frozenset) else want
+            errors.append(f"{where} `{key}` must be exactly {shown!r}, got {got!r}")
+    return errors
+
+
+def _secret_mentions(node: object, skip: object, path: str) -> list[str]:
+    """Return the path of every key or scalar under `node` naming `secrets`,
+    skipping the one object `skip` (the read step)."""
+    if node is skip:
+        return []
+    if isinstance(node, dict):
+        found = [f"{path}.{k}" for k in node if "secrets" in str(k)]
+        for k, v in node.items():
+            found += _secret_mentions(v, skip, f"{path}.{k}")
+        return found
+    if isinstance(node, list):
+        return [m for i, v in enumerate(node) for m in _secret_mentions(v, skip, f"{path}[{i}]")]
+    return [path] if "secrets" in str(node) else []
 
 
 def admin_read_wiring_errors(workflow: object, manifest: object) -> list[str]:
     """Return why a green `ADMIN_READ` run could fail to be the manifest's
     ruleset admin read, or []: the workflow triggers on `ADMIN_READ.event`
-    alone; its one job `ADMIN_READ_CONTEXT` runs unconditionally in the
-    admin-read environment, and exactly one step runs only
-    `ADMIN_READ_INVOCATION` with env exactly `ADMIN_READ_ENV` (the admin
-    token, not the workflow token); the manifest declares the context a
+    alone and sets no workflow-level `env`/`defaults`; its one job
+    `ADMIN_READ_CONTEXT` runs unconditionally in the admin-read environment
+    with no job-level `env`/`defaults`, and runs exactly `admin_read_steps()`,
+    the last one only `ADMIN_READ_INVOCATION` with env exactly
+    `ADMIN_READ_ENV` (the admin token, not the workflow token); no other part
+    of the workflow names `secrets`; the manifest declares the context a
     `nightly-gate` the workflow produces."""
     if HERE not in sys.path:
         sys.path.insert(0, HERE)
@@ -331,6 +420,9 @@ def admin_read_wiring_errors(workflow: object, manifest: object) -> list[str]:
     on = workflow.get(True, workflow.get("on")) if isinstance(workflow, dict) else None
     if not isinstance(on, dict) or set(on) != {ADMIN_READ.event}:
         errors.append(f"{ADMIN_READ.workflow} must trigger on `{ADMIN_READ.event}` alone")
+    for key in _ADMIN_READ_SCOPE_KEYS:
+        if isinstance(workflow, dict) and key in workflow:
+            errors.append(f"{ADMIN_READ.workflow} must not set a workflow-level `{key}`")
     jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
     job = jobs.get(ADMIN_READ_CONTEXT) if isinstance(jobs, dict) and len(jobs) == 1 else None
     if not isinstance(job, dict):
@@ -341,24 +433,27 @@ def admin_read_wiring_errors(workflow: object, manifest: object) -> list[str]:
     for key in ("if", "continue-on-error", "needs", "strategy"):
         if key in job:
             errors.append(f"the {ADMIN_READ.workflow} job must not set `{key}` (the read runs unconditionally, once)")
+    for key in _ADMIN_READ_SCOPE_KEYS:
+        if key in job:
+            errors.append(f"the {ADMIN_READ.workflow} job must not set a job-level `{key}`")
     if job and job.get("environment") != check_required_set.ADMIN_READ_ENVIRONMENT:
         errors.append(
             f"the {ADMIN_READ.workflow} job must declare `environment: {check_required_set.ADMIN_READ_ENVIRONMENT}`"
         )
-    steps = job.get("steps") if isinstance(job.get("steps"), list) else []
-    for step in steps:
-        if isinstance(step, dict) and ("continue-on-error" in step or "if" in step):
-            errors.append(f"step {step.get('name', step.get('uses'))!r} must not set `if` or `continue-on-error`")
-    reads = [s for s in steps if isinstance(s, dict) and "check_required_set.py" in str(s.get("run", ""))]
-    if len(reads) != 1:
-        errors.append(f"exactly one {ADMIN_READ.workflow} step must run `{ADMIN_READ_INVOCATION}`")
+    steps = job.get("steps")
+    expected = admin_read_steps()
+    read_step: object = None
+    if not isinstance(steps, list) or len(steps) != len(expected):
+        errors.append(
+            f"the {ADMIN_READ.workflow} job must run exactly {len(expected)} steps: "
+            + ", ".join(what for what, _ in expected)
+        )
     else:
-        run = str(reads[0].get("run", "")).strip()
-        if run != ADMIN_READ_INVOCATION:
-            errors.append(f"the admin-read step must run only `{ADMIN_READ_INVOCATION}`, got {run!r}")
-        env = reads[0].get("env")
-        if not isinstance(env, dict) or {k: _strip_expr(str(v)) for k, v in env.items()} != ADMIN_READ_ENV:
-            errors.append(f"the admin-read step's env must be exactly {ADMIN_READ_ENV}")
+        for i, (step, (what, pinned)) in enumerate(zip(steps, expected)):
+            errors += _step_errors(i, step, what, pinned)
+        read_step = steps[-1]
+    for where in _secret_mentions(workflow, read_step, ADMIN_READ.workflow):
+        errors.append(f"{where} names `secrets`; only the read step may")
     entries = manifest.get("checks") if isinstance(manifest, dict) else None
     mine = [e for e in entries or [] if isinstance(e, dict) and e.get("context") == ADMIN_READ_CONTEXT]
     if len(mine) != 1 or mine[0].get("disposition") != "nightly-gate" or mine[0].get("producer") != ADMIN_READ.workflow:
@@ -405,10 +500,8 @@ def main(argv: list[str]) -> int:
         if reasons:
             print(
                 "nightly-green: RED — fix main's nightly, or prove this commit with "
-                "`gh workflow run 'Build & test' --ref <branch>`; a red ruleset admin read "
-                "is fixed on the ruleset (or its token) and re-run with `gh run rerun`, or, "
-                "when main's tree causes it, by the break-glass in .github/ci/RECONCILIATION.md. "
-                "Then re-run this check.",
+                "`gh workflow run 'Build & test' --ref <branch>`, then re-run this check. "
+                + ADMIN_READ_RECOVERY,
                 file=sys.stderr,
             )
             return 1
