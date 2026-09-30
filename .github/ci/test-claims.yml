@@ -5,7 +5,8 @@
 # `verify-manifest.py` (check 20) proves each owner job's cargo invocation
 # selects its cell, `src/runtime/rust/tests/wasm_cell_scan.rs` proves every
 # wasm32 test the tree declares is in a listed cell and counts `expect_tests`,
-# and `wasm_test_count.py` proves the runner executed exactly that many.
+# and `tools/scripts/wasm-test/wasm_test_count.py` proves the runner executed
+# exactly that many.
 #
 # Format (read by both a YAML loader and the Rust scanner's line parser):
 # one `- package:` line opens a cell, then one `key: value` line per field.

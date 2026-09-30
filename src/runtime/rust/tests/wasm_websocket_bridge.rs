@@ -8,7 +8,7 @@
 //!
 //! Needs a live counterparty: a native echo server on `127.0.0.1:8033`
 //! (path `/ws`) that echoes every text frame prefixed `"echo: "`. CI's
-//! `browser-e2e` job starts `.github/ci/ws_echo_server.py` and runs:
+//! `browser-e2e` job starts `tools/scripts/wasm-test/ws_echo_server.py` and runs:
 //!
 //! ```sh
 //! CHROMEDRIVER=chromedriver cargo test -p ipe-runtime-rust \
