@@ -1417,7 +1417,7 @@ fn file_read_file_limit_takes_a_byte_size_ceiling() {
         "import Ipe.ByteSize as ByteSize exposing (ByteSize)\n",
         "import Ipe.File as File\n",
         "import Ipe.Io as Io\n",
-        "import Ipe.Path exposing (Path)\n",
+        "import Ipe.Path as Path exposing (Path)\n",
         "import Ipe.Task as Task\n\n",
         "sourceCeiling : ByteSize\n",
         "sourceCeiling =\n",
@@ -1427,7 +1427,10 @@ fn file_read_file_limit_takes_a_byte_size_ceiling() {
         "    File.readFileLimit path sourceCeiling\n\n",
         "main : Task Error ()\n",
         "main =\n",
-        "    readCapped (path \"/tmp/ipe-probe\") |> Task.andThen Io.println\n",
+        "    Path.fromString \"/tmp/ipe-probe\"\n",
+        "        |> Task.fromResult\n",
+        "        |> Task.andThen readCapped\n",
+        "        |> Task.andThen Io.println\n",
     );
     let outcome = compile_main(main);
     assert!(
@@ -1444,15 +1447,68 @@ fn file_read_file_limit_rejects_a_bare_int_ceiling() {
         "module Main exposing (main)\n",
         "import Ipe.File as File\n",
         "import Ipe.Io as Io\n",
+        "import Ipe.Path as Path exposing (Path)\n",
         "import Ipe.Task as Task\n\n",
+        "readBare : Path -> Task Error String\n",
+        "readBare file =\n",
+        "    File.readFileLimit file 16\n\n",
         "main : Task Error ()\n",
         "main =\n",
-        "    File.readFileLimit (path \"/tmp/ipe-probe\") 16 |> Task.andThen Io.println\n",
+        "    Path.fromString \"/tmp/ipe-probe\"\n",
+        "        |> Task.fromResult\n",
+        "        |> Task.andThen readBare\n",
+        "        |> Task.andThen Io.println\n",
     );
     let outcome = compile_main(main);
     assert!(
         outcome.as_ref().is_err_and(|e| e.contains("ByteSize")),
         "a bare-`Int` ceiling must be a type error naming `ByteSize`: {outcome:?}",
+    );
+}
+
+/// `path` is an ordinary name: a binder called `path` applied to a string
+/// literal is a plain call, whatever the literal holds.
+#[test]
+fn a_binder_named_path_applied_to_a_string_is_an_ordinary_call() {
+    let main = concat!(
+        "module Main exposing (main)\n",
+        "import Ipe.File as File\n",
+        "import Ipe.Path as Path exposing (Path)\n",
+        "import Ipe.Task as Task\n\n",
+        "truncate : Path -> Task Error ()\n",
+        "truncate path =\n",
+        "    File.writeFile path \"\"\n\n",
+        "main : Task Error ()\n",
+        "main =\n",
+        "    Path.fromString \"/tmp/ipe-probe\"\n",
+        "        |> Task.fromResult\n",
+        "        |> Task.andThen truncate\n",
+    );
+    let outcome = compile_main(main);
+    assert!(
+        outcome.is_ok(),
+        "`File.writeFile path \"\"` with a `path` binder must type-check: {:?}",
+        outcome.err(),
+    );
+}
+
+/// Refusal: `path "…"` is no literal form, so with no `path` in scope it is an
+/// unresolved name.
+#[test]
+fn path_before_a_string_with_no_path_binder_is_unresolved() {
+    let main = concat!(
+        "module Main exposing (main)\n",
+        "import Ipe.Io as Io\n",
+        "import Ipe.Path as Path\n",
+        "import Ipe.Task as Task\n\n",
+        "main : Task Error ()\n",
+        "main =\n",
+        "    Io.println (Path.toString (path \"src/Main.ipe\"))\n",
+    );
+    let outcome = compile_main(main);
+    assert!(
+        outcome.as_ref().is_err_and(|e| e.contains("path")),
+        "`path \"…\"` with no `path` binder must be a name error: {outcome:?}",
     );
 }
 

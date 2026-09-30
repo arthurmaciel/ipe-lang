@@ -268,7 +268,7 @@ mod load_from_file_tests {
 
     fn make_path(s: &str) -> crate::path::Path {
         // Tests use known-safe literal paths; `path_literal` bypasses the
-        // parse seal, which is the right choice for compiler-controlled sites.
+        // parse seal, which is the right choice for trusted test fixtures.
         crate::path::path_literal(s.to_string())
     }
 

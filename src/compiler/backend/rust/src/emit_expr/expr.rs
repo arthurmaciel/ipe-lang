@@ -50,13 +50,6 @@ pub fn emit_expr_at(
         // `String`, never `&str`). The `{:?}` Debug form produces a valid Rust
         // string literal with deterministic escaping.
         Expr::Str(s) => Ok(format!("{s:?}.to_string()")),
-        // A compile-time-validated `path "…"` literal. The string was already
-        // validated and cleaned by the canonicaliser; emit a direct call to
-        // `path_literal` (the compiler-only bypass constructor) so no runtime
-        // re-validation is performed — the type is the proof.
-        Expr::PathLit(s) => Ok(format!(
-            "ipe_runtime::path::path_literal({s:?}.to_string())"
-        )),
         // The reserved `CustomElement.fromFile` constructor value: a widget handle built
         // from its generated content-addressed tag. The tag was minted at
         // lowering from the sealed, in-project JS path (never raw user input);

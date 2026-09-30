@@ -1092,8 +1092,7 @@ fn custom_element_ctor_missing_file_rejected() {
 }
 
 /// (d) `customElement "../escape.js"` is rejected by the shared path seal — a `..`
-/// that climbs out of the project root is refused at build (IPE-P0063), the same
-/// code the `path "…"` literal uses.
+/// that climbs out of the project root is refused at build (IPE-P0063).
 #[test]
 fn custom_element_ctor_path_traversal_rejected() {
     let src = format!(
@@ -1173,7 +1172,7 @@ fn custom_element_in_unused_binding_compiles_no_model_gate() {
 
 /// (g) `customElement "/etc/passwd"` (an ABSOLUTE path) is rejected at CANON with
 /// IPE-N0044 — the widget path must be project-root-relative. An absolute literal
-/// would survive the shared `path "…"` seal (which legitimately accepts absolute
+/// would survive the shared `ipe_path_core` seal (which legitimately accepts absolute
 /// paths) yet, joined at the build gate, `Path::join` discards the project root
 /// and stats an arbitrary out-of-project file. This closes that escape at the name
 /// stage, before any filesystem access.
