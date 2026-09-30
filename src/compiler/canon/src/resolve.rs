@@ -5116,19 +5116,47 @@ pub fn import_qualifiers(
     dep_path: &[Symbol],
     interner: &mut Interner,
 ) -> DResult<Vec<Symbol>> {
-    let mut qualifiers = Vec::with_capacity(2);
-    if let Some(alias) = alias {
-        qualifiers.push(alias);
-    } else {
-        qualifiers.push(dep_path.last().copied().unwrap_or_else(name_zero));
-        // Only a multi-segment path has a distinct dotted form; a single-segment
-        // `import Owner` already registered its sole qualifier above.
-        if dep_path.len() > 1 {
-            let dotted = interner.intern(&path_to_dot_string(interner, dep_path))?;
-            qualifiers.push(dotted);
-        }
+    let forms = import_qualifier_forms(alias.is_some(), dep_path.len());
+    let mut qualifiers = Vec::with_capacity(forms.len());
+    for form in forms {
+        let qualifier = match form {
+            QualifierForm::Alias => alias.unwrap_or_else(name_zero),
+            QualifierForm::LastSegment => dep_path.last().copied().unwrap_or_else(name_zero),
+            QualifierForm::DottedPath => {
+                interner.intern(&path_to_dot_string(interner, dep_path))?
+            }
+        };
+        qualifiers.push(qualifier);
     }
     Ok(qualifiers)
+}
+
+/// One spelling under which a dep import is reachable as a qualifier.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QualifierForm {
+    /// The explicit `as Alias` name.
+    Alias,
+    /// The last segment of the imported module path (`Utils` for `Lib.Utils`).
+    LastSegment,
+    /// The full dotted module path (`Lib.Utils`).
+    DottedPath,
+}
+
+/// The qualifier forms a dep import registers, in registration order.
+///
+/// The single rule behind [`import_qualifiers`]: an explicit alias names exactly
+/// one qualifier; a bare import names its last segment and, when the path has
+/// more than one segment, its dotted path as well. Consumers working on text
+/// (a lint over the parse tree) spell the same forms without an interner.
+#[must_use]
+pub const fn import_qualifier_forms(has_alias: bool, path_len: usize) -> &'static [QualifierForm] {
+    if has_alias {
+        &[QualifierForm::Alias]
+    } else if path_len > 1 {
+        &[QualifierForm::LastSegment, QualifierForm::DottedPath]
+    } else {
+        &[QualifierForm::LastSegment]
+    }
 }
 
 /// Register a union's constructors into the environment.

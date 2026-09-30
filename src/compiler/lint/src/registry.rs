@@ -17,9 +17,12 @@ use crate::finding::Severity;
 /// `false`.
 #[derive(Clone, Copy, Debug)]
 pub enum Fixability {
-    /// Every finding from this rule carries a [`crate::Fix`] (a local,
+    /// A finding from this rule carries a [`crate::Fix`] (a local,
     /// single-module text edit) or a [`crate::SigFix`] (a cross-module
     /// call-site rewrite) the engine can apply mechanically.
+    ///
+    /// Fail-closed: a finding whose edit the rule cannot prove confined to the
+    /// flagged construct is reported without one, never with a guess.
     Fixable,
     /// No finding from this rule carries a fix. The rewrite needs human
     /// judgement the rule cannot make safely on its own.
@@ -84,7 +87,7 @@ pub const RULES: &[RuleInfo] = &[
         ),
     },
     RuleInfo {
-        name: "unused-imports",
+        name: crate::rules::unused_imports::RULE,
         summary: "an import declaration whose bound names never appear in the module body",
         default_severity: Severity::Warn,
         fixability: Fixability::Fixable,

@@ -40,7 +40,7 @@ jobs:
       - name: Every produced check has exactly one declared disposition
         run: python3 .github/ci/verify-manifest.py
 
-      - name: Prove the sccache-wiring refusals (unit tests)
+      - name: Prove the workflow-step refusals (unit tests)
         run: python3 .github/ci/test_verify_manifest.py -v
 
       - name: Prove the strict-YAML loader refusals (unit tests)

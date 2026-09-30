@@ -48,7 +48,6 @@ SIGNATURES: tuple[tuple[str, str], ...] = (
     ("lost-runner", r"lost communication with the server"),
     ("enospc", r"No space left on device"),
     ("enospc", r"\bENOSPC\b"),
-    ("sccache-5xx", r"sccache: error: .*status: 5\d\d\b"),
     ("cache-5xx", r"Cache service responded with 5\d\d\b"),
     ("download-5xx", r"Unexpected HTTP response: 5\d\d\b"),
     ("download-5xx", r"The requested URL returned error: 5\d\d\b"),

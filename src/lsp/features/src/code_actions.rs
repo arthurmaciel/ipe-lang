@@ -49,16 +49,15 @@
 //! fix with a single-hunk text edit that it can prove correct. Unknown codes
 //! produce no actions rather than a guess.
 
-use std::collections::HashMap;
-
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, Diagnostic, NumberOrString, Range, TextEdit,
-    Url, WorkspaceEdit,
+    Url,
 };
 
 use ipe_db::{Db as _, IpeDatabase, SourceRoot};
 
 use crate::offset::{PositionEncoding, offset_to_position};
+use crate::workspace_edit::{Document, single_edit};
 
 /// The salsa database view a quick-fix reads from.
 ///
@@ -81,19 +80,21 @@ pub struct DbView<'a> {
 
 /// Compute quick-fix code actions for the given range and diagnostic list.
 ///
-/// `diagnostics` are the LSP diagnostics currently shown for `uri` — the
+/// `diagnostics` are the LSP diagnostics currently shown for `doc.uri` — the
 /// client forwards them in the request so we do not need to re-collect them.
-/// `text` is the current source text of the document.
+/// `doc.version` is the document version each produced edit is stamped with —
+/// `None` yields an unversioned flat-`changes` edit, matching
+/// [`crate::source_actions`]'s convention.
 #[must_use]
 pub fn code_actions(
     view: DbView<'_>,
     module: &[String],
-    uri: &Url,
+    doc: Document<'_>,
     range: Range,
     diagnostics: &[Diagnostic],
-    text: &str,
     encoding: PositionEncoding,
 ) -> Vec<CodeActionOrCommand> {
+    let Document { uri, text, version } = doc;
     let DbView { db, root, .. } = view;
     let files = root.files(db);
     let Some(&_file) = files.get(module) else {
@@ -120,7 +121,7 @@ pub fn code_actions(
             // Every fixable lint rule reaches its LSP quick-fix through this one
             // generic path — decoding the `Fix` a rule attached to its finding's
             // `data`, never a per-rule arm below.
-            if let Some(action) = lint_fix_action(diag, uri, text, encoding) {
+            if let Some(action) = lint_fix_action(diag, uri, text, encoding, version) {
                 actions.push(CodeActionOrCommand::CodeAction(action));
             }
             continue;
@@ -130,7 +131,7 @@ pub fn code_actions(
                 // A top-level function with no type signature — insert its
                 // inferred type annotation above the binding.
                 if let Some(action) =
-                    add_type_annotation_action(view, module, uri, diag, text, encoding)
+                    add_type_annotation_action(view, module, uri, diag, text, encoding, version)
                 {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
@@ -140,7 +141,9 @@ pub fn code_actions(
                 // named `import Ipe.X` line. The diagnostic names the exact module
                 // to add (`add `import Ipe.X` to use it`); we insert it in the
                 // module's import block, sorted among the existing imports.
-                if let Some(action) = add_import_action(view, module, uri, diag, text, encoding) {
+                if let Some(action) =
+                    add_import_action(view, module, uri, diag, text, encoding, version)
+                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -149,7 +152,9 @@ pub fn code_actions(
                 // repoint the offending import to the app's own shape. The
                 // diagnostic names both the wrong (`Ipe.Tea.Web.Cmd`) and correct
                 // (`Ipe.Tea.Cli.Cmd`) module paths.
-                if let Some(action) = repoint_shape_import_action(diag, uri, text, encoding) {
+                if let Some(action) =
+                    repoint_shape_import_action(diag, uri, text, encoding, version)
+                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -157,27 +162,32 @@ pub fn code_actions(
                 // The `module` declaration name does not match the path on disk.
                 // The diagnostic message carries the expected name after
                 // `expected `` — replace the declared name token on line 0.
-                if let Some(action) = rename_module_decl_action(diag, uri, text, encoding) {
+                if let Some(action) = rename_module_decl_action(diag, uri, text, encoding, version)
+                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
             "IPE-N0036" => {
                 // A removed stdlib surface: replace the call at the diagnostic
                 // span with the migration target name, when one is carried.
-                if let Some(action) = replace_removed_surface_action(diag, uri, text, encoding) {
+                if let Some(action) =
+                    replace_removed_surface_action(diag, uri, text, encoding, version)
+                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
             "IPE-N0040" => {
                 // Hand-nested decoder pipeline: offer to rewrite as `|>` chain.
-                if let Some(action) = rewrite_nested_decoder_action(diag, uri, text, encoding) {
+                if let Some(action) =
+                    rewrite_nested_decoder_action(diag, uri, text, encoding, version)
+                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
             "IPE-T0020" => {
                 // WebView `view` returns `Html` instead of `View Web msg` —
                 // wrap the expression at the diagnostic span in `Ui.html ( … )`.
-                if let Some(action) = wrap_in_ui_html_action(diag, uri, text, encoding) {
+                if let Some(action) = wrap_in_ui_html_action(diag, uri, text, encoding, version) {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -205,6 +215,7 @@ fn add_type_annotation_action(
     diag: &Diagnostic,
     text: &str,
     encoding: PositionEncoding,
+    version: Option<i32>,
 ) -> Option<CodeAction> {
     // Try to extract name + type from the solved type environment.
     // Diagnostic range points at the name token — resolve it via the parse
@@ -261,17 +272,11 @@ fn add_type_annotation_action(
         },
         new_text: annotation,
     };
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
     Some(CodeAction {
         title: format!("Add type annotation for `{name}`"),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
+        edit: Some(single_edit(uri, version, edit)),
         command: None,
         is_preferred: Some(true),
         disabled: None,
@@ -297,6 +302,7 @@ fn add_import_action(
     diag: &Diagnostic,
     text: &str,
     encoding: PositionEncoding,
+    version: Option<i32>,
 ) -> Option<CodeAction> {
     let import_module = import_module_from_message(&diag.message)?;
 
@@ -362,17 +368,11 @@ fn add_import_action(
         },
         new_text,
     };
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
     Some(CodeAction {
         title: format!("Add import {import_module}"),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
+        edit: Some(single_edit(uri, version, edit)),
         command: None,
         is_preferred: Some(true),
         disabled: None,
@@ -392,6 +392,7 @@ fn repoint_shape_import_action(
     uri: &Url,
     text: &str,
     encoding: PositionEncoding,
+    version: Option<i32>,
 ) -> Option<CodeAction> {
     let (wrong, correct) = shape_paths_from_message(&diag.message)?;
 
@@ -412,17 +413,11 @@ fn repoint_shape_import_action(
         range: Range { start, end },
         new_text: correct.clone(),
     };
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
     Some(CodeAction {
         title: format!("Change import to {correct}"),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
+        edit: Some(single_edit(uri, version, edit)),
         command: None,
         is_preferred: Some(true),
         disabled: None,
@@ -442,6 +437,7 @@ fn rename_module_decl_action(
     uri: &Url,
     text: &str,
     encoding: PositionEncoding,
+    version: Option<i32>,
 ) -> Option<CodeAction> {
     let expected = expected_module_name_from_message(&diag.message)?;
 
@@ -467,17 +463,11 @@ fn rename_module_decl_action(
         range: Range { start, end },
         new_text: expected.clone(),
     };
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
     Some(CodeAction {
         title: format!("Rename module declaration to `{expected}`"),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
+        edit: Some(single_edit(uri, version, edit)),
         command: None,
         is_preferred: Some(true),
         disabled: None,
@@ -497,6 +487,7 @@ fn replace_removed_surface_action(
     uri: &Url,
     text: &str,
     encoding: PositionEncoding,
+    version: Option<i32>,
 ) -> Option<CodeAction> {
     let replacement = replacement_from_removed_surface_message(&diag.message)?;
 
@@ -515,17 +506,11 @@ fn replace_removed_surface_action(
         range: Range { start, end },
         new_text: replacement.clone(),
     };
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
     Some(CodeAction {
         title: format!("Replace with `{replacement}`"),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
+        edit: Some(single_edit(uri, version, edit)),
         command: None,
         is_preferred: Some(true),
         disabled: None,
@@ -552,6 +537,7 @@ fn rewrite_nested_decoder_action(
     uri: &Url,
     text: &str,
     encoding: PositionEncoding,
+    version: Option<i32>,
 ) -> Option<CodeAction> {
     let start_byte = position_to_byte(text, diag.range.start, encoding);
     let end_byte = position_to_byte(text, diag.range.end, encoding);
@@ -566,17 +552,11 @@ fn rewrite_nested_decoder_action(
         range: Range { start, end },
         new_text: rewritten,
     };
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
     Some(CodeAction {
         title: "Rewrite as `|>` pipeline".to_owned(),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
+        edit: Some(single_edit(uri, version, edit)),
         command: None,
         is_preferred: Some(true),
         disabled: None,
@@ -594,6 +574,7 @@ fn wrap_in_ui_html_action(
     uri: &Url,
     text: &str,
     encoding: PositionEncoding,
+    version: Option<i32>,
 ) -> Option<CodeAction> {
     let start_byte = position_to_byte(text, diag.range.start, encoding);
     let end_byte = position_to_byte(text, diag.range.end, encoding);
@@ -608,17 +589,11 @@ fn wrap_in_ui_html_action(
         range: Range { start, end },
         new_text,
     };
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
     Some(CodeAction {
         title: "Wrap in `Ui.html`".to_owned(),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
+        edit: Some(single_edit(uri, version, edit)),
         command: None,
         is_preferred: Some(true),
         disabled: None,
@@ -643,6 +618,7 @@ fn lint_fix_action(
     uri: &Url,
     text: &str,
     encoding: PositionEncoding,
+    version: Option<i32>,
 ) -> Option<CodeAction> {
     let data = diag.data.as_ref()?;
     let fix = data.get("fix")?;
@@ -660,17 +636,11 @@ fn lint_fix_action(
         range: Range { start, end },
         new_text: replacement.to_owned(),
     };
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
     Some(CodeAction {
         title: capitalize_first(describe),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
+        edit: Some(single_edit(uri, version, edit)),
         command: None,
         is_preferred: Some(true),
         disabled: None,
@@ -869,11 +839,15 @@ fn line_byte_range(text: &str, line: usize) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
-    use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
+    use lsp_types::{
+        Diagnostic, DiagnosticSeverity, DocumentChanges, NumberOrString, Position, Range, Url,
+        WorkspaceEdit,
+    };
 
     use crate::offset::PositionEncoding;
+    use crate::workspace_edit::Document;
 
-    use super::{DbView, code_actions};
+    use super::{CodeActionOrCommand, DbView, code_actions};
 
     fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
         SourceFile::new(
@@ -940,10 +914,13 @@ mod tests {
                 entry,
             },
             &["Main".to_owned()],
-            &uri,
+            Document {
+                uri: &uri,
+                text: src,
+                version: None,
+            },
             range,
             &[diag],
-            src,
             PositionEncoding::Utf16,
         );
         assert!(actions.is_empty(), "unknown code → no actions");
@@ -978,10 +955,13 @@ mod tests {
                     entry,
                 },
                 &["Main".to_owned()],
-                &uri,
+                Document {
+                    uri: &uri,
+                    text: src,
+                    version: None,
+                },
                 range,
                 &[diag_at(2, code)],
-                src,
                 PositionEncoding::Utf16,
             );
             assert!(
@@ -990,5 +970,93 @@ mod tests {
                 actions.len()
             );
         }
+    }
+
+    fn module_mismatch_diag() -> Diagnostic {
+        #[allow(deprecated)]
+        Diagnostic {
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 5,
+                },
+            },
+            severity: Some(DiagnosticSeverity::ERROR),
+            code: Some(NumberOrString::String("IPE-N0023".to_owned())),
+            code_description: None,
+            source: Some("ipe".to_owned()),
+            message: "module path mismatch: declared as `Wrong`, expected `Main`".to_owned(),
+            related_information: None,
+            tags: None,
+            data: None,
+        }
+    }
+
+    fn module_mismatch_actions(version: Option<i32>) -> Vec<CodeActionOrCommand> {
+        let db = IpeDatabase::new();
+        let src = "module Wrong exposing (main)\n\nmain : Int\nmain =\n    42\n";
+        let entry = file(&db, &["Main"], src);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+        let uri = Url::from_file_path("/fake/Main.ipe").unwrap();
+        let range = Range {
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 20,
+            },
+        };
+        code_actions(
+            DbView {
+                db: &db,
+                root,
+                entry,
+            },
+            &["Main".to_owned()],
+            Document {
+                uri: &uri,
+                text: src,
+                version,
+            },
+            range,
+            &[module_mismatch_diag()],
+            PositionEncoding::Utf16,
+        )
+    }
+
+    fn only_edit(actions: &[CodeActionOrCommand]) -> Option<&WorkspaceEdit> {
+        match actions {
+            [CodeActionOrCommand::CodeAction(action)] => action.edit.as_ref(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_known_version_yields_versioned_document_changes() {
+        let actions = module_mismatch_actions(Some(5));
+        let edit = only_edit(&actions).expect("exactly one code action with an edit");
+        assert!(edit.changes.is_none(), "{edit:?}");
+        assert!(
+            matches!(&edit.document_changes, Some(DocumentChanges::Edits(edits))
+                if matches!(edits.as_slice(), [e] if e.text_document.version == Some(5))),
+            "{edit:?}"
+        );
+    }
+
+    #[test]
+    fn no_known_version_falls_back_to_unversioned_flat_changes() {
+        let actions = module_mismatch_actions(None);
+        let edit = only_edit(&actions).expect("exactly one code action with an edit");
+        assert!(edit.document_changes.is_none(), "{edit:?}");
+        assert!(
+            matches!(&edit.changes, Some(m) if !m.is_empty()),
+            "{edit:?}"
+        );
     }
 }

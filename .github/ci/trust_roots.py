@@ -14,9 +14,19 @@ typed refusal, never a silently different match.
 `check` (run by `.github/workflows/trust-root-diff.yml` on
 `pull_request_target` and `merge_group`) never sees head code: it reads the
 event payload GitHub wrote, then the PR, its file list, and its reviews over
-the REST API. A PR whose head lives outside this repository and that touches
-a trust root fails unless a code owner's latest decisive review APPROVES the
-PR's current head commit. Every ambiguity (a file list the API truncated, a
+the REST API. A PR that touches a trust root fails unless a code owner's latest
+decisive review APPROVES the PR's current head commit. A code owner cannot
+approve their own PR, so one PR passes without that review: a code owner's
+(GitHub `User` named in CODEOWNERS), from a branch of this repository, whose
+complete commit list ends at the head and whose every commit a code owner or
+this repository's workflow bot authored.
+
+LIMIT: the API links a commit to an account by its email, which any account
+with write access can set, and the workflow bot and `web-flow` stand for any
+write principal (a workflow granted `contents: write`, an API caller naming
+any author). The exemption therefore trusts every write principal alike; it
+separates owners from forks and from outside accounts, not from collaborators.
+Keep write access to the code owners. Every ambiguity (a file list the API truncated, a
 PR that moved since the event, an unparseable merge-queue ref, an HTTP error)
 fails closed.
 
@@ -27,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import http.client
 import json
 import os
 import re
@@ -216,6 +227,75 @@ def _sha(obj: object, *keys: str) -> str:
     return v
 
 
+@dataclass(frozen=True)
+class Owner:
+    """A code owner: a GitHub `User` whose login CODEOWNERS names."""
+
+    login: str
+
+
+@dataclass(frozen=True)
+class Other:
+    """Any other author: a collaborator, a fork, or a bot."""
+
+    login: str
+
+
+Author = Owner | Other
+
+_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}(?:\[bot\])?$")
+# The API caps a PR's commit listing at this many; past it the list is partial.
+MAX_PR_COMMITS = 250
+# `github-actions[bot]` authors and commits with a workflow token of this
+# repository (release-please's fallback token). Any write principal can produce
+# such a commit (a workflow granted `contents: write`, or a local git email), so
+# admitting it trusts write access, not the owners alone (see the LIMIT above).
+_WORKFLOW_BOT = "github-actions[bot]"
+# `web-flow` commits what an account does through GitHub's UI or API; the
+# caller chooses the author, so it too stands for any write principal.
+_TRUSTED_COMMITTERS = frozenset({"web-flow", _WORKFLOW_BOT})
+
+
+def parse_author(pr: dict, owners: frozenset[str]) -> Author:
+    """The PR author, read once from `user.login` + `user.type`. A missing or
+    malformed field is a refusal, never an `Other` that might later pass."""
+    login = _field(pr, "user", "login")
+    kind = _field(pr, "user", "type")
+    if not isinstance(login, str) or not _LOGIN_RE.match(login) or not isinstance(kind, str):
+        raise Refused("PR author has a malformed `user.login` or `user.type`")
+    if kind == "User" and login.casefold() in owners:
+        return Owner(login)
+    return Other(login)
+
+
+def _commit_login(commit: object, role: str) -> str | None:
+    """The GitHub account the API linked to a commit's author or committer,
+    or `None` when it linked none (an email no account claims)."""
+    user = commit.get(role) if isinstance(commit, dict) else None
+    login = user.get("login") if isinstance(user, dict) else None
+    return login.casefold() if isinstance(login, str) else None
+
+
+def commits_by_owners(pr: dict, commits: list, owners: frozenset[str]) -> bool:
+    """True iff the API listed every commit of the PR, the last is the PR's
+    head, and each one's author is a code owner or this repository's workflow
+    bot and its committer one of those or `web-flow`."""
+    expected = _int(pr, "commits")
+    if expected < 1 or expected > MAX_PR_COMMITS or len(commits) != expected:
+        return False
+    last = commits[-1]
+    if not isinstance(last, dict) or last.get("sha") != _sha(pr, "head", "sha"):
+        return False
+    authors = owners | {_WORKFLOW_BOT}
+    committers = owners | _TRUSTED_COMMITTERS
+    for c in commits:
+        author = _commit_login(c, "author")
+        committer = _commit_login(c, "committer")
+        if author is None or author not in authors or committer is None or committer not in committers:
+            return False
+    return True
+
+
 def is_outside(pr: dict) -> bool:
     """True unless the head branch provably lives in the base repository. A
     deleted head repository (`head.repo: null`) counts as outside."""
@@ -266,7 +346,7 @@ def owner_approved(reviews: list, owners: frozenset[str], head_sha: str) -> bool
     return any(r["state"] == "APPROVED" and r.get("commit_id") == head_sha for r in latest.values())
 
 
-def decide(roots: TrustRoots, pr: dict, files: list, reviews: list) -> str:
+def decide(roots: TrustRoots, pr: dict, files: list, reviews: list, commits: list) -> str:
     """Return a pass reason, or raise `Refused`."""
     head_sha = _sha(pr, "head", "sha")
     if _field(pr, "state") != "open":
@@ -274,14 +354,15 @@ def decide(roots: TrustRoots, pr: dict, files: list, reviews: list) -> str:
     touched = sorted(p for p in changed_paths(pr, files) if roots.is_trust_root(p))
     if not touched:
         return "no trust root touched"
-    if not is_outside(pr):
-        return f"{len(touched)} trust root(s) touched from a branch of this repository (ruleset review applies)"
+    author = parse_author(pr, roots.owners)
+    if isinstance(author, Owner) and not is_outside(pr) and commits_by_owners(pr, commits, roots.owners):
+        return f"{len(touched)} trust root(s) touched by code owner {author.login}"
     if owner_approved(reviews, roots.owners, head_sha):
         return f"{len(touched)} trust root(s) touched; code owner approved {head_sha}"
     shown = ", ".join(touched[:20]) + (" ..." if len(touched) > 20 else "")
     raise Refused(
-        f"PR from outside the repository touches trust root(s) [{shown}] without a code owner's "
-        f"approval of head {head_sha}; after that approval, re-run this job"
+        f"PR touches trust root(s) [{shown}] without a code owner's approval of head {head_sha}; "
+        f"after that approval, re-run this job"
     )
 
 
@@ -306,6 +387,60 @@ MAX_BODY_BYTES = 16 * 1024 * 1024
 _NEXT_RE = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
 
 
+class ApiError(Refused):
+    """A GET the API origin did not answer with a usable JSON body.
+
+    Each subclass names one way the read failed, so a caller can tell a
+    refusal by the API (`HttpStatus`) from one this client made (`OffOrigin`,
+    `TooLarge`, `Malformed`) and from a failure to reach it (`Transport`). No
+    message carries the token: it lives only in the request header."""
+
+
+class HttpStatus(ApiError):
+    """The API answered with an HTTP error status."""
+
+    def __init__(self, url: str, status: int):
+        super().__init__(f"GET {url} failed: HTTP {status}")
+        self.status = status
+
+
+def _origin(url: str) -> str:
+    """`url`'s scheme and host alone: its path and query may carry what a
+    redirect chose to put there, and its userinfo a credential."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        return "an unparseable URL"
+    return f"{parts.scheme or '?'}://{host or '?'}"
+
+
+class OffOrigin(ApiError):
+    """A request or redirect pointed off the API origin; it was not sent.
+    The message names only the target's scheme and host."""
+
+    def __init__(self, url: str):
+        super().__init__(f"refusing to follow a URL to {_origin(url)!r} off the API origin")
+
+
+class TooLarge(ApiError):
+    """The response exceeds a read ceiling: `MAX_BODY_BYTES` or `MAX_PAGES`."""
+
+    def __init__(self, url: str, ceiling: str):
+        super().__init__(f"GET {url}: response exceeds {ceiling}")
+
+
+class Transport(ApiError):
+    """The API origin could not be reached or the connection failed."""
+
+    def __init__(self, url: str, cause: BaseException):
+        super().__init__(f"GET {url} failed: {type(cause).__name__}: {cause}")
+
+
+class Malformed(ApiError):
+    """The body is not JSON, or not the JSON shape the endpoint returns."""
+
+
 class _PinnedRedirects(urllib.request.HTTPRedirectHandler):
     """Follow a redirect only within the API origin: urllib re-sends the
     `Authorization` header to wherever a redirect points."""
@@ -315,7 +450,7 @@ class _PinnedRedirects(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
         if not newurl.startswith(self.base + "/"):
-            raise Refused(f"refusing to follow a redirect to {newurl!r} off the API origin")
+            raise OffOrigin(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -326,6 +461,10 @@ class Api:
         parsed = urllib.parse.urlsplit(base_url)
         if parsed.scheme != "https" or not parsed.netloc:
             raise Refused(f"API URL {base_url!r} is not https")
+        # A token that would be refused as a header value is rejected here, where
+        # the message can name the fault without carrying the token.
+        if not re.fullmatch(r"[!-~]+", token):
+            raise Refused("the API token is empty or not printable ASCII")
         self.base = base_url.rstrip("/")
         self.repo = repo
         self.token = token
@@ -334,7 +473,7 @@ class Api:
     def _get(self, url: str) -> tuple[object, str | None]:
         # The token is only ever sent to the configured API origin.
         if not url.startswith(self.base + "/"):
-            raise Refused(f"refusing to follow {url!r} off the API origin")
+            raise OffOrigin(url)
         req = urllib.request.Request(
             url,
             headers={
@@ -348,21 +487,28 @@ class Api:
             with self._opener.open(req, timeout=30) as resp:
                 body = resp.read(MAX_BODY_BYTES + 1)
                 link = resp.headers.get("Link")
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise Refused(f"GET {url} failed: {e}") from e
+        # `HTTPError` subclasses `URLError`, so it is caught first.
+        except urllib.error.HTTPError as e:
+            raise HttpStatus(url, e.code) from e
+        # `HTTPException` covers a connection that broke mid-response
+        # (`IncompleteRead`, `BadStatusLine`), which is no `OSError`.
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
+            raise Transport(url, e) from e
         if len(body) > MAX_BODY_BYTES:
-            raise Refused(f"GET {url}: response exceeds {MAX_BODY_BYTES} bytes")
+            raise TooLarge(url, f"{MAX_BODY_BYTES} bytes")
         try:
             data = json.loads(body)
         except ValueError as e:
-            raise Refused(f"GET {url}: response is not JSON") from e
+            raise Malformed(f"GET {url}: response is not JSON") from e
+        except RecursionError as e:
+            raise Malformed(f"GET {url}: response nests too deeply") from e
         m = _NEXT_RE.search(link) if link else None
         return data, (m.group(1) if m else None)
 
     def get(self, path: str) -> dict:
         data, _ = self._get(f"{self.base}/repos/{self.repo}/{path}")
         if not isinstance(data, dict):
-            raise Refused(f"GET {path}: expected an object")
+            raise Malformed(f"GET {path}: expected an object")
         return data
 
     def get_all(self, path: str) -> list:
@@ -373,10 +519,10 @@ class Api:
                 return items
             data, url = self._get(url)
             if not isinstance(data, list):
-                raise Refused(f"GET {path}: expected a list")
+                raise Malformed(f"GET {path}: expected a list")
             items.extend(data)
         if url is not None:
-            raise Refused(f"GET {path}: more than {MAX_PAGES} pages")
+            raise TooLarge(path, f"{MAX_PAGES} pages")
         return items
 
 
@@ -388,12 +534,13 @@ def run_check(roots: TrustRoots, event_name: str, event: dict, api: Api) -> str:
         raise Refused(f"PR head moved from {event_head} to {head_sha}; the newer run decides")
     files = api.get_all(f"pulls/{number}/files")
     reviews = api.get_all(f"pulls/{number}/reviews")
-    # The file list and reviews are read after the PR: a push in between
+    commits = api.get_all(f"pulls/{number}/commits")
+    # The file list, reviews, and commits are read after the PR: a push in between
     # would pair the older head (and an approval of it) with newer files.
     after = _sha(api.get(f"pulls/{number}"), "head", "sha")
     if after != head_sha:
         raise Refused(f"PR head moved from {head_sha} to {after} while it was read; the newer run decides")
-    return decide(roots, pr, files, reviews)
+    return decide(roots, pr, files, reviews, commits)
 
 
 def main(argv: list[str] | None = None) -> int:

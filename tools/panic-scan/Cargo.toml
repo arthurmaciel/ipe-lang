@@ -1,13 +1,9 @@
-# Detached from the parent workspace (own [workspace] table) so it builds
-# standalone as a pre-commit / CI hook without pulling the compiler crates.
 [package]
 name = "panic-scan"
 version = "0.0.0"
-edition = "2021"
+edition.workspace = true
 license = "Apache-2.0"
 publish = false
-
-[workspace]
 
 [dependencies]
 # span-locations gives real 1-based line numbers outside a proc-macro context.
@@ -16,9 +12,15 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 # never reach past the item, arm, field, or statement it decorates.
 syn = { version = "3", default-features = false, features = ["full", "visit", "parsing"] }
 
+[dev-dependencies]
+ipe_env = { path = "../../src/compiler/env" }
+
 [lib]
 path = "src/lib.rs"
 
 [[bin]]
 name = "panic-scan"
 path = "src/main.rs"
+
+[lints]
+workspace = true

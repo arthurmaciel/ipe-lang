@@ -34,6 +34,9 @@ import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import drift_assertion  # noqa: E402  # the one drift-assertion parser, shared with verify-manifest
+
 # ── The PROSE set: the only paths `code` may skip on ─────────────────────────
 # Each entry is guarded (guard()): no crate, include!, drift check, script,
 # workflow, or source literal may reach it. Directory entries end in "/".
@@ -53,29 +56,50 @@ PROSE_SUFFIXES = (".md", ".png", ".svg", ".jpg", ".jpeg", ".gif", ".webp")
 SCOPED_ROOTS = ("src/", "editors/")
 
 # Relevant patterns per narrow scope, evaluated only inside SCOPED_ROOTS.
-# `code` has none: it skips on PROSE alone.
+# `code` has none: it skips on PROSE alone. A scope must cover every tracked
+# file the packages its jobs select compile or read (verify-manifest check 16).
+
+# Crates the runtime compiles or tests against (its path-dependency closure).
+_RUNTIME = (
+    "src/runtime/**",
+    "src/compiler/diagnostics/**",
+    "src/compiler/env/**",
+    "src/compiler/intern/**",
+    "src/compiler/parse/**",
+    "src/compiler/path-core/**",
+    "src/compiler/syntax/**",
+)
+_EMIT = (
+    "src/compiler/backend/**",
+    "src/compiler/lower/**",
+    "src/compiler/ir/**",
+    "src/compiler/kernels/**",
+    "src/stdlib/**",
+) + _RUNTIME
 SCOPES: dict[str, tuple[str, ...]] = {
     "code": (),
-    "emit": (
-        "src/compiler/backend/**",
-        "src/compiler/lower/**",
-        "src/compiler/ir/**",
-        "src/compiler/kernels/**",
-        "src/runtime/**",
-        "src/stdlib/**",
+    "emit": _EMIT,
+    # The asan/tsan crates' closure beyond `emit`.
+    "sanitize": _EMIT
+    + (
+        "src/compiler/canon/**",
+        "src/compiler/ffi/**",
+        "src/compiler/sandbox/**",
+        "src/compiler/types/**",
+        "src/ffi-bindgen-macro/**",
     ),
-    "wasm": (
-        "src/runtime/**",
+    "wasm": _RUNTIME
+    + (
         "src/compiler/backend/**",
+        "src/compiler/kernels/**",
+        "src/stdlib/**",
         "src/wasm/**",
         "**/*wasm*",
     ),
     "editors": ("editors/**",),
-    "playground": (
-        "src/wasm/**",
-        "src/compiler/sandbox/**",
-        "src/compiler/env/**",
-    ),
+    # `ipe-wasm` compiles the whole front end and backend, and the jail
+    # runner's tests drive the `ipe` binary: every `src/` crate reaches them.
+    "playground": ("src/**",),
     # tools/panic-scan/panic-scan --walk src reads every `.rs` and `Cargo.toml` under src/.
     "panic_scan": ("src/**/*.rs", "src/**/Cargo.toml"),
     # editors/tree-sitter-ipe/scripts/parity-check.sh parses src/stdlib/Ipe/ (and examples/).
@@ -114,7 +138,6 @@ _INCLUDE = re.compile(
 )
 # A second relevance filter would reopen the allowlist class this module closes.
 _FOREIGN_FILTER = re.compile(r"\buses:\s*['\"]?dorny/paths-filter")
-_DRIFT = re.compile(r"git\s+diff\s+(?:--\S+\s+)*--exit-code((?:\s+[^\s|;&]+)+)")
 
 
 @dataclass(frozen=True)
@@ -313,9 +336,10 @@ def guard(root: str, tracked: Iterable[str]) -> list[str]:
                     errors.append(f"{f}:{lineno}: includes {target!r}, which overlaps PROSE entry {e!r}")
             if f.startswith(".github/") and _FOREIGN_FILTER.search(line):
                 errors.append(f"{f}:{lineno}: path filter outside change_class.py — classify through it")
-            for m in _DRIFT.finditer(line):
-                for arg in m.group(1).split():
-                    if (e := _overlaps_prose(arg.strip("'\""))) is not None:
+            for assertion in drift_assertion.in_shell(line):
+                for arg in assertion.paths:
+                    target = _norm(arg)
+                    if target is not None and (e := _overlaps_prose(target + "/" if arg.endswith("/") else target)) is not None:
                         errors.append(f"{f}:{lineno}: drift check reads {arg!r}, which overlaps PROSE entry {e!r}")
             for token, token_re in token_res:
                 if token_re.search(line):

@@ -25,7 +25,7 @@ struct WorkspaceLoader;
 impl ProjectLoader for WorkspaceLoader {
     fn load(
         &self,
-        _workspace_root: Option<&Path>,
+        workspace_root: Option<&Path>,
         open_file: &Path,
         open_text: Option<&str>,
     ) -> Result<LoadedProject, LoadError> {
@@ -55,6 +55,12 @@ impl ProjectLoader for WorkspaceLoader {
         Ok(LoadedProject {
             files,
             entry_module: vec!["Main".to_owned()],
+            // `lint.ipe` is discovered at the workspace root, not next to the
+            // (possibly virtual) open file — matching the real driver, which
+            // anchors on the project root it resolves, never the open file's
+            // own directory.
+            lint_config_dir: workspace_root
+                .map_or_else(|| ipe_lint::lint_config_dir(open_file), Path::to_path_buf),
         })
     }
 }
@@ -207,6 +213,7 @@ impl ProjectLoader for FixtureLoader {
         Ok(LoadedProject {
             files,
             entry_module: vec!["Main".to_owned()],
+            lint_config_dir: ipe_lint::lint_config_dir(open_file),
         })
     }
 }
@@ -489,6 +496,7 @@ impl ProjectLoader for CyclicLoader {
         Ok(LoadedProject {
             files,
             entry_module,
+            lint_config_dir: ipe_lint::lint_config_dir(open_file),
         })
     }
 }

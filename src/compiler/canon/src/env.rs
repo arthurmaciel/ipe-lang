@@ -197,6 +197,20 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Server", "WebSocket"], "Ws"),
 ];
 
+/// The canonical qualifier text a stdlib import path is registered under.
+///
+/// The textual lookup behind [`Env::canonical_stdlib_qualifier`]: matches the
+/// dotted path segments against [`STDLIB_MODULE_QUALIFIERS`], so a consumer
+/// without an [`Env`] (a lint over the parse tree) derives the same qualifier
+/// the resolver registers. `None` for a path naming no kernel-qualified module.
+#[must_use]
+pub fn stdlib_canonical_qualifier(path: &[&str]) -> Option<&'static str> {
+    STDLIB_MODULE_QUALIFIERS
+        .iter()
+        .find(|(p, _)| p.len() == path.len() && p.iter().zip(path).all(|(a, b)| a == b))
+        .map(|(_, canonical)| *canonical)
+}
+
 /// The dot-joined import paths of every kernel stdlib module (e.g. `Ipe.String`,
 /// `Ipe.Json.Decode`), derived from [`STDLIB_MODULE_QUALIFIERS`] — the single
 /// source of truth. Feeds the did-you-mean candidate set when an `Ipe.*` import
@@ -1459,10 +1473,7 @@ impl Env {
                     None => return Ok(None),
                 }
             }
-            STDLIB_MODULE_QUALIFIERS
-                .iter()
-                .find(|(p, _)| p.len() == segs.len() && p.iter().zip(&segs).all(|(a, b)| a == b))
-                .map(|(_, canonical)| *canonical)
+            stdlib_canonical_qualifier(&segs)
         };
         match canonical {
             None => Ok(None),

@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Refusal proofs for `verify-manifest.py`'s step checks (checks 6 and 7),
 merge-queue safety check (check 8), release-only skip-as-pass check
-(check 9), and fast-gate-first check (check 10).
+(check 9), fast-gate-first check (check 10), and one-lock-per-graph
+check (check 14).
 
 Check 7 covers content-pinned `uses:`/images, the hash-checked pip shape, and
 env-file writes only through `github-env.sh`; its cases sit in
 `TestPinnedInputsAndEnvFileWrites` and `TestGithubEnvHelper`. Check 8's sit in
 `TestMergeQueueSafety`.
 
-Each rejection the guard is supposed to make (a raw sccache-action reference,
-a case-variant `uses:`, an env key at workflow/job/step level, a `$GITHUB_ENV`
-write, a deterministic job pulling in sccache, a broken composite) gets its
-own fixture tree and its own test, per PRINCIPLES.md "Prove the refusals": a
+Each rejection the guard is supposed to make (a rustc wrapper or replacement
+set by an env key at any scope, by a `$GITHUB_ENV` write or by free text; a
+`Swatinem/rust-cache` step that saves from a ref other than `main`; a local
+action that cannot be resolved or audited) gets its own fixture tree and its
+own test, per PRINCIPLES.md "Prove the refusals": a
 guard no test drives is a guard one edit away from silently vanishing. One
 positive case proves the happy path still passes cleanly.
 
@@ -24,6 +26,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -45,11 +48,14 @@ check_release_only_skips = verify_manifest.check_release_only_skips
 check_fast_gate_first = verify_manifest.check_fast_gate_first
 check_pull_request_target = verify_manifest.check_pull_request_target
 check_trust_roots = verify_manifest.check_trust_roots
+check_push_concurrency = verify_manifest.check_push_concurrency
+check_one_lock_per_graph = verify_manifest.check_one_lock_per_graph
+check_one_ipe_build = verify_manifest.check_one_ipe_build
+check_scoped_package_coverage = verify_manifest.check_scoped_package_coverage
+check_drift_sees_untracked = verify_manifest.check_drift_sees_untracked
+check_dependabot_pr_budget = verify_manifest.check_dependabot_pr_budget
+check_workspace_inheritance = verify_manifest.check_workspace_inheritance
 
-# The live sanctioned composite is the fixture: the canonical form is proven
-# against the file CI actually runs, never a hand-kept copy.
-with open(os.path.join(os.path.dirname(HERE), "actions", "sccache", "action.yml")) as _f:
-    VALID_COMPOSITE = _f.read()
 with open(os.path.join(HERE, "github-env-allowlist.txt")) as _f:
     VALID_ENV_ALLOWLIST = _f.read()
 
@@ -67,17 +73,15 @@ FIXTURE_TOOLS = (
 )
 
 
-class SccacheFixture:
-    """A scratch repository whose `.github/` holds workflows/, actions/sccache/,
-    ci/ — `repo` is the repository root local `uses: ./...` resolve against."""
+class WorkflowFixture:
+    """A scratch repository whose `.github/` holds workflows/, actions/, ci/ —
+    `repo` is the repository root local `uses: ./...` resolve against."""
 
-    def __init__(self, tmp: str, *, composite: str | None = VALID_COMPOSITE):
+    def __init__(self, tmp: str):
         self.repo = tmp
         self.root = os.path.join(tmp, ".github")
         os.makedirs(self.root, exist_ok=True)
         tmp = self.root
-        if composite is not None:
-            _write(os.path.join(tmp, "actions", "sccache", "action.yml"), composite)
         _write(os.path.join(tmp, "ci", "github-env-allowlist.txt"), VALID_ENV_ALLOWLIST)
         for tool in FIXTURE_TOOLS:
             _write(os.path.join(tmp, "ci", tool), "")
@@ -88,8 +92,7 @@ class SccacheFixture:
 
     def composite(self, name: str, content: str) -> None:
         """Write an arbitrary local composite action at
-        `.github/actions/<name>/action.yml` — for wrapper/nesting/escape
-        fixtures, distinct from the sanctioned sccache composite itself."""
+        `.github/actions/<name>/action.yml`."""
         _write(os.path.join(self.root, "actions", name, "action.yml"), content)
 
     def deterministic_checks(self, *, context: str, step: str) -> None:
@@ -106,15 +109,15 @@ class SccacheFixture:
         return errors
 
 
-class TestSccacheWiringRefusals(unittest.TestCase):
+class TestRustcWiringRefusals(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fx = SccacheFixture(self._tmpdir.name)
+        self.fx = WorkflowFixture(self._tmpdir.name)
 
     # ---- positive case ------------------------------------------------
 
-    def test_composite_in_non_deterministic_job_passes_cleanly(self) -> None:
+    def test_main_only_rust_cache_passes_cleanly(self) -> None:
         self.fx.workflow(
             "ci.yml",
             textwrap.dedent(
@@ -126,35 +129,16 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                     runs-on: ubuntu-latest
                     steps:
                       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-                      - uses: ./.github/actions/sccache
+                      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+                        with:
+                          save-if: ${{ github.ref == 'refs/heads/main' }}
                       - run: cargo build
                 """
             ),
         )
         self.assertEqual(self.fx.errors(), [])
 
-    # ---- (a) raw action reference outside the composite ----------------
-
-    def test_raw_sccache_action_outside_composite_is_refused(self) -> None:
-        self.fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  build:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
-                      - run: cargo build
-                """
-            ),
-        )
-        errors = self.fx.errors()
-        self.assertTrue(
-            any("runs the raw" in e and "build" in e for e in errors), errors
-        )
+    # ---- (a) raw actions refused by name ---------------------------------
 
     def test_raw_setup_mold_is_refused(self) -> None:
         self.fx.workflow(
@@ -178,7 +162,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
             errors,
         )
 
-    def test_case_variant_uses_is_still_refused(self) -> None:
+    def test_case_variant_rust_cache_is_still_audited(self) -> None:
         self.fx.workflow(
             "ci.yml",
             textwrap.dedent(
@@ -189,13 +173,13 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: Mozilla-Actions/Sccache-Action@7d986dd989559c6ecdb630a3fd2557667be217ad
+                      - uses: swatinem/Rust-Cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
                       - run: cargo build
                 """
             ),
         )
         errors = self.fx.errors()
-        self.assertTrue(any("runs the raw" in e for e in errors), errors)
+        self.assertTrue(any("uses Swatinem/rust-cache with save-if None" in e for e in errors), errors)
 
     # ---- (b) env key at each scope --------------------------------------
 
@@ -212,7 +196,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                 """
             ),
         )
@@ -233,16 +217,16 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     env:
-                      SCCACHE_GHA_ENABLED: "true"
+                      CARGO_BUILD_RUSTC: /tmp/fake-rustc
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                 """
             ),
         )
         errors = self.fx.errors()
         self.assertTrue(
             any(
-                "job 'build' env sets" in e and "sccache_gha_enabled" in e
+                "job 'build' env sets" in e and "cargo_build_rustc" in e
                 for e in errors
             ),
             errors,
@@ -259,7 +243,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                       - name: Some step
                         env:
                           RUSTC_WRAPPER: ""
@@ -297,206 +281,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
             errors,
         )
 
-    # ---- (d) composite in a job owning a deterministic check step -------
-
-    def test_composite_in_deterministic_job_is_refused(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  clippy:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - uses: ./.github/actions/sccache
-                      - name: Run clippy
-                        run: cargo clippy
-                """
-            ),
-        )
-        errors = self.fx.errors()
-        self.assertTrue(
-            any(
-                "job 'clippy' uses ./.github/actions/sccache" in e
-                and "Run clippy" in e
-                for e in errors
-            ),
-            errors,
-        )
-
-    def test_composite_in_non_deterministic_job_is_fine_even_with_the_file_present(
-        self,
-    ) -> None:
-        # Same deterministic-checks.json as above, but the composite is used by
-        # a DIFFERENT job that does not own the named step — must not false-positive.
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  clippy:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - name: Run clippy
-                        run: cargo clippy
-                  build:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - uses: ./.github/actions/sccache
-                      - run: cargo build
-                """
-            ),
-        )
-        self.assertEqual(self.fx.errors(), [])
-
-    # ---- composite self-validation --------------------------------------
-
-    def test_missing_composite_file_is_refused(self) -> None:
-        empty_tmpdir = tempfile.TemporaryDirectory()
-        self.addCleanup(empty_tmpdir.cleanup)
-        fx = SccacheFixture(empty_tmpdir.name, composite=None)
-        fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  build:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - run: cargo build
-                """
-            ),
-        )
-        errors = fx.errors()
-        self.assertTrue(any("does not exist" in e for e in errors), errors)
-
-    def test_composite_not_actually_composite_is_refused(self) -> None:
-        fx = SccacheFixture(
-            self._tmpdir.name,
-            composite=textwrap.dedent(
-                """\
-                name: not composite
-                runs:
-                  using: node20
-                  main: index.js
-                """
-            ),
-        )
-        fx.workflow(
-            "ci.yml",
-            "name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: x\n",
-        )
-        errors = fx.errors()
-        self.assertTrue(any("must be 'composite'" in e for e in errors), errors)
-
-    def test_composite_missing_env_write_is_refused(self) -> None:
-        fx = SccacheFixture(
-            self._tmpdir.name,
-            composite=textwrap.dedent(
-                """\
-                name: incomplete
-                runs:
-                  using: composite
-                  steps:
-                    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
-                """
-            ),
-        )
-        fx.workflow(
-            "ci.yml",
-            "name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: x\n",
-        )
-        errors = fx.errors()
-        self.assertTrue(
-            any("exactly two steps" in e for e in errors), errors
-        )
-
-    # ---- (1) normalized local `uses:` path, not raw-string, comparison ---
-
-    def test_trailing_slash_composite_path_is_still_caught_by_rule_d(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  clippy:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - uses: ./.github/actions/sccache/
-                      - name: Run clippy
-                        run: cargo clippy
-                """
-            ),
-        )
-        errors = self.fx.errors()
-        self.assertTrue(
-            any(
-                "job 'clippy' uses ./.github/actions/sccache" in e
-                and "Run clippy" in e
-                for e in errors
-            ),
-            errors,
-        )
-
-    def test_dotted_composite_path_is_still_caught_by_rule_d(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  clippy:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - uses: ./.github/actions/./sccache
-                      - name: Run clippy
-                        run: cargo clippy
-                """
-            ),
-        )
-        errors = self.fx.errors()
-        self.assertTrue(
-            any(
-                "job 'clippy' uses ./.github/actions/sccache" in e
-                and "Run clippy" in e
-                for e in errors
-            ),
-            errors,
-        )
-
     # ---- (2) other local composite actions are audited, not just workflows
-
-    def test_other_composite_running_raw_sccache_action_is_refused(self) -> None:
-        self.fx.composite(
-            "leaky",
-            textwrap.dedent(
-                """\
-                name: leaky
-                description: not the sanctioned composite
-                runs:
-                  using: composite
-                  steps:
-                    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
-                """
-            ),
-        )
-        errors = self.fx.errors()
-        self.assertTrue(
-            any("runs the raw" in e and "leaky" in e for e in errors), errors
-        )
 
     def test_other_composite_writing_github_env_is_refused(self) -> None:
         self.fx.composite(
@@ -518,49 +303,6 @@ class TestSccacheWiringRefusals(unittest.TestCase):
         errors = self.fx.errors()
         self.assertTrue(
             any("writes RUSTC_WRAPPER" in e and "sneaky" in e for e in errors), errors
-        )
-
-    def test_other_composite_nesting_sccache_is_reachable_via_rule_d(self) -> None:
-        self.fx.composite(
-            "wrapper",
-            textwrap.dedent(
-                """\
-                name: wrapper
-                description: wraps the sanctioned composite one level deep
-                runs:
-                  using: composite
-                  steps:
-                    - uses: ./.github/actions/sccache
-                """
-            ),
-        )
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  clippy:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - uses: ./.github/actions/wrapper
-                      - name: Run clippy
-                        run: cargo clippy
-                """
-            ),
-        )
-        errors = self.fx.errors()
-        self.assertTrue(
-            any(
-                "job 'clippy' uses" in e
-                and "via" in e
-                and "wrapper" in e
-                and "Run clippy" in e
-                for e in errors
-            ),
-            errors,
         )
 
     # ---- (3) a $GITHUB_ENV write need not use `KEY=` assignment syntax ----
@@ -606,7 +348,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                     env:
                       CARGO_BUILD_RUSTC_WRAPPER: sccache
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                 """
             ),
         )
@@ -632,13 +374,13 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
+                      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
                 """
             ),
         )
         errors = self.fx.errors()
         self.assertTrue(
-            any("runs the raw" in e and "nightly.yaml" in e for e in errors), errors
+            any("save-if" in e and "nightly.yaml" in e for e in errors), errors
         )
 
     # ---- (6) container:/services: env scopes are scanned too --------------
@@ -658,7 +400,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                       env:
                         RUSTC_WRAPPER: sccache
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                 """
             ),
         )
@@ -685,9 +427,9 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                       db:
                         image: postgres
                         env:
-                          SCCACHE_GHA_ENABLED: "true"
+                          RUSTC: /tmp/fake-rustc
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                 """
             ),
         )
@@ -695,7 +437,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
         self.assertTrue(
             any(
                 "job 'build' service 'db' env sets" in e
-                and "sccache_gha_enabled" in e
+                and "'rustc'" in e
                 for e in errors
             ),
             errors,
@@ -715,7 +457,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                 """
             ),
         )
@@ -735,7 +477,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                       - name: Some step
                         env: ${{ fromJSON(vars.E) }}
                         run: cargo build
@@ -774,7 +516,7 @@ class TestMoldComposite(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fx = SccacheFixture(self._tmpdir.name)
+        self.fx = WorkflowFixture(self._tmpdir.name)
 
     def mold_errors(self, content: str) -> list[str]:
         self.fx.composite("mold", content)
@@ -811,10 +553,7 @@ class TestMoldComposite(unittest.TestCase):
     def test_raw_actions_refused_at_a_subpath(self) -> None:
         for uses, needle in (
             ("rui314/setup-mold/sub@10ca16bf91dc22e05ebdc935cad9c75ea248f621", "rui314/setup-mold"),
-            (
-                "Mozilla-Actions/Sccache-Action/x@7d986dd989559c6ecdb630a3fd2557667be217ad",
-                "mozilla-actions/sccache-action",
-            ),
+            ("Rui314/Setup-Mold/x/y@10ca16bf91dc22e05ebdc935cad9c75ea248f621", "rui314/setup-mold"),
         ):
             with self.subTest(uses=uses):
                 self.fx.workflow(
@@ -834,13 +573,13 @@ class TestMoldComposite(unittest.TestCase):
         self.assertFalse(any("runs the raw" in e for e in self.fx.errors()))
 
 
-class TestSccacheWiringClosure(unittest.TestCase):
+class TestRustcWiringClosure(unittest.TestCase):
     """Each class of wiring check 6 must refuse, one fixture per shape."""
 
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fx = SccacheFixture(self._tmpdir.name)
+        self.fx = WorkflowFixture(self._tmpdir.name)
 
     def assertRefused(self, *needles: str) -> list[str]:
         errors = self.fx.errors()
@@ -858,8 +597,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
     def test_yaml_comment_naming_the_wrapper_is_not_scanned(self) -> None:
         self.fx.workflow(
             "ci.yml",
-            "# a job that wants RUSTC_WRAPPER uses ./.github/actions/sccache\n"
-            + _ci("steps:\n  - uses: ./.github/actions/sccache\n  - run: cargo build\n"),
+            "# no job sets RUSTC_WRAPPER\n" + _ci("steps:\n  - run: cargo build\n"),
         )
         self.assertEqual(self.fx.errors(), [])
 
@@ -898,7 +636,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
     def test_workflow_defaults_run_shell_is_refused(self) -> None:
         self.ci(
             "steps:\n  - run: cargo build\n",
-            top="defaults:\n  run:\n    shell: env SCCACHE_GHA_ENABLED=true bash {0}\n",
+            top="defaults:\n  run:\n    shell: env RUSTC_WRAPPER=sccache bash {0}\n",
         )
         self.assertRefused("ci.yml: workflow-level defaults.run.shell")
 
@@ -966,7 +704,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
     # ---- local `uses:` resolution (F1) -----------------------------------
 
     def test_unresolved_local_action_is_refused(self) -> None:
-        for uses in ("./.github/actions/sccache@main", "./tools/ci/cache", "./.github/actions/nope"):
+        for uses in ("./.github/actions/w@main", "./tools/ci/cache", "./.github/actions/nope"):
             with self.subTest(uses=uses):
                 self.ci(f"steps:\n  - uses: {uses}\n")
                 self.assertRefused("does not exist")
@@ -994,59 +732,51 @@ class TestSccacheWiringClosure(unittest.TestCase):
     def test_action_yaml_extension_is_resolved(self) -> None:
         _write(
             os.path.join(self.fx.root, "actions", "w", "action.yaml"),
-            "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n",
+            "runs:\n  using: composite\n  steps:\n    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6\n",
         )
         self.ci("steps:\n  - uses: ./.github/actions/w\n")
-        self.assertRefused("./.github/actions/w/action.yml", "runs the raw")
+        self.assertRefused("./.github/actions/w/action.yml", "save-if None")
 
-    def test_composite_outside_github_actions_reaching_sccache_hits_rule_d(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.repo_action(
-            "tools/ci/cache",
-            "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/sccache\n",
-        )
-        self.ci("steps:\n  - uses: ./tools/ci/cache\n  - name: Run clippy\n    run: cargo clippy\n")
-        self.assertRefused("job 'clippy' uses", "via ./tools/ci/cache", "Run clippy")
+    def test_composite_outside_github_actions_is_audited(self) -> None:
+        self.repo_action("tools/ci/cache", "runs:\n  using: composite\n  steps:\n    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6\n")
+        self.ci("steps:\n  - uses: ./tools/ci/cache\n  - run: cargo build\n")
+        self.assertRefused("./tools/ci/cache/action.yml", "save-if None")
 
-    def test_nested_path_composite_running_raw_action_is_refused(self) -> None:
-        self.fx.composite("x/y", "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n")
+    def test_trailing_slash_and_dotted_local_paths_resolve(self) -> None:
+        self.fx.composite("w", "runs:\n  using: composite\n  steps: []\n")
+        for uses in ("./.github/actions/w/", "./.github/actions/./w"):
+            with self.subTest(uses=uses):
+                self.ci(f"steps:\n  - uses: {uses}\n  - run: cargo build\n")
+                self.assertEqual(self.fx.errors(), [])
+
+    def test_nested_path_composite_is_audited(self) -> None:
+        self.fx.composite("x/y", "runs:\n  using: composite\n  steps:\n    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6\n")
         self.ci("steps:\n  - uses: ./.github/actions/x/y\n")
-        self.assertRefused("./.github/actions/x/y/action.yml", "runs the raw")
-
-    def test_case_variant_sanctioned_path_hits_rule_d(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.ci(
-            "steps:\n  - uses: ./.github/actions/sccache\n  - uses: ./.github/Actions/SCCACHE\n"
-            "  - name: Run clippy\n    run: cargo clippy\n"
-        )
-        self.assertRefused("job 'clippy' uses ./.github/actions/sccache", "Run clippy")
+        self.assertRefused("./.github/actions/x/y/action.yml", "save-if None")
 
     def test_nesting_past_the_bound_is_refused(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
         limit = verify_manifest.LOCAL_ACTION_DEPTH_LIMIT
         for i in range(limit + 5):
             self.fx.composite(
                 f"c{i}", f"runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/c{i + 1}\n"
             )
         self.fx.composite(
-            f"c{limit + 5}", "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/sccache\n"
+            f"c{limit + 5}", "runs:\n  using: composite\n  steps: []\n"
         )
-        self.ci("steps:\n  - uses: ./.github/actions/c0\n  - name: Run clippy\n    run: cargo clippy\n")
-        self.assertRefused("nesting exceeds")
+        self.ci("steps:\n  - uses: ./.github/actions/c0\n  - run: cargo build\n")
+        self.assertRefused("nesting exceeds", "the chain cannot be audited")
 
     def test_nesting_at_the_bound_is_decided(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
         limit = verify_manifest.LOCAL_ACTION_DEPTH_LIMIT
         for i in range(limit - 1):
             self.fx.composite(
                 f"c{i}", f"runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/c{i + 1}\n"
             )
         self.fx.composite(
-            f"c{limit - 1}", "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/sccache\n"
+            f"c{limit - 1}", "runs:\n  using: composite\n  steps: []\n"
         )
-        self.ci("steps:\n  - uses: ./.github/actions/c0\n  - name: Run clippy\n    run: cargo clippy\n")
-        errors = self.assertRefused("job 'clippy' uses", "via ./.github/actions/c0")
-        self.assertFalse(any("nesting exceeds" in e for e in errors), errors)
+        self.ci("steps:\n  - uses: ./.github/actions/c0\n  - run: cargo build\n")
+        self.assertEqual(self.fx.errors(), [])
 
     def test_local_action_cycle_is_refused(self) -> None:
         self.fx.composite("a", "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/b\n")
@@ -1067,28 +797,17 @@ class TestSccacheWiringClosure(unittest.TestCase):
 
     # ---- byte-exact local-action identity ---------------------------------
 
-    def test_referenced_case_variant_of_sanctioned_composite_is_refused(self) -> None:
-        self.fx.composite(
-            "SCCACHE",
-            "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
-            "    - shell: bash\n      run: echo \"RUSTC_WRAPPER=\" >> \"$GITHUB_ENV\"\n",
-        )
-        self.ci("steps:\n  - uses: ./.github/actions/SCCACHE\n")
-        errors = self.assertRefused("'./.github/actions/SCCACHE' is case-fold-equal to '.github/actions/sccache'")
-        self.assertTrue(any("holds case-fold-equal entries 'SCCACHE' and 'sccache'" in e for e in errors), errors)
+    def test_referenced_case_variant_composite_is_refused(self) -> None:
+        self.fx.composite("w", "runs:\n  using: composite\n  steps: []\n")
+        self.fx.composite("W", "runs:\n  using: composite\n  steps: []\n")
+        self.ci("steps:\n  - uses: ./.github/actions/W\n")
+        self.assertRefused("holds case-fold-equal entries 'W' and 'w'")
 
     def test_unreferenced_case_variant_sibling_is_refused(self) -> None:
-        self.fx.composite("SCCACHE", "runs:\n  using: composite\n  steps: []\n")
-        self.ci("steps:\n  - uses: ./.github/actions/sccache\n  - run: cargo build\n")
-        self.assertRefused("holds case-fold-equal entries 'SCCACHE' and 'sccache'")
-
-    def test_case_variant_exemption_needs_the_sanctioned_file_absent_too(self) -> None:
-        fx = SccacheFixture(self._tmpdir.name + "/bare", composite=None)
-        fx.composite("SCCACHE", "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n")
-        fx.workflow("ci.yml", _ci("steps:\n  - uses: ./.github/actions/SCCACHE\n"))
-        errors = fx.errors()
-        self.assertTrue(any("case-fold-equal" in e or "runs the raw" in e for e in errors), errors)
-        self.assertFalse(any("uses ./.github/actions/sccache" in e for e in errors), errors)
+        self.fx.composite("w", "runs:\n  using: composite\n  steps: []\n")
+        self.fx.composite("W", "runs:\n  using: composite\n  steps: []\n")
+        self.ci("steps:\n  - uses: ./.github/actions/w\n  - run: cargo build\n")
+        self.assertRefused("holds case-fold-equal entries 'W' and 'w'")
 
     def test_reference_differing_in_case_from_disk_is_refused(self) -> None:
         self.repo_action("tools/w", "runs:\n  using: composite\n  steps: []\n")
@@ -1117,7 +836,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
             ),
             "service": (
                 {},
-                f"services:\n  db:\n    image: pg\n    env:\n      K: SCCACHE_DIR\nsteps:\n  - {write}",
+                f"services:\n  db:\n    image: pg\n    env:\n      K: RUSTC_WRAPPER\nsteps:\n  - {write}",
                 "job 'clippy' services.db.env.K",
             ),
         }
@@ -1159,121 +878,6 @@ class TestSccacheWiringClosure(unittest.TestCase):
     def test_benign_rustc_mentions_pass(self) -> None:
         self.ci("env:\n  RUSTFLAGS: -Dwarnings\nsteps:\n  - run: rustc --version && cargo build\n")
         self.assertEqual(self.fx.errors(), [])
-
-    # ---- strict positive proof of the sanctioned composite (F2) ----------
-
-    def _sanctioned(self, steps: str) -> None:
-        _write(
-            os.path.join(self.fx.root, "actions", "sccache", "action.yml"),
-            "runs:\n  using: composite\n  steps:\n" + textwrap.indent(textwrap.dedent(steps), "    "),
-        )
-        self.ci("steps:\n  - run: cargo build\n")
-
-    def test_composite_writing_only_one_var_is_refused(self) -> None:
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
-            "- shell: bash\n  run: echo SCCACHE_GHA_ENABLED=true >> $GITHUB_ENV\n"
-        )
-        self.assertRefused("step 2 is not the canonical wiring step")
-
-    def test_composite_loose_write_is_not_proof(self) -> None:
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
-            "- shell: bash\n  run: |\n"
-            "    # RUSTC_WRAPPER=sccache SCCACHE_GHA_ENABLED=true $GITHUB_ENV\n"
-            "    printf '%s=%s\\n' RUSTC_WRAPPER sccache >> \"$GITHUB_ENV\"\n"
-        )
-        self.assertRefused("step 2 is not the canonical wiring step")
-
-    def test_composite_conditional_wiring_is_not_proof(self) -> None:
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
-            "- shell: bash\n  if: false\n  run: |\n"
-            "    echo \"RUSTC_WRAPPER=sccache\" >> \"$GITHUB_ENV\"\n"
-            "    echo \"SCCACHE_GHA_ENABLED=true\" >> \"$GITHUB_ENV\"\n"
-        )
-        self.assertRefused("step 2 is not the canonical wiring step")
-
-    def test_composite_conditional_install_is_not_proof(self) -> None:
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n  if: false\n"
-            "- shell: bash\n  run: |\n"
-            "    echo \"RUSTC_WRAPPER=sccache\" >> \"$GITHUB_ENV\"\n"
-            "    echo \"SCCACHE_GHA_ENABLED=true\" >> \"$GITHUB_ENV\"\n"
-        )
-        self.assertRefused("step 1 must be exactly")
-
-    _WIRE = (
-        "- name: Wire rustc through sccache\n  shell: bash\n  run: |\n"
-        + textwrap.indent(verify_manifest.SCCACHE_WIRE_RUN, "    ")
-    )
-
-    def test_canonical_composite_with_other_install_ref_passes(self) -> None:
-        self._sanctioned("- uses: mozilla-actions/sccache-action@0123456789abcdef0123456789abcdef01234567\n" + self._WIRE)
-        self.assertEqual(self.fx.errors(), [])
-
-    def test_composite_wiring_under_dead_branch_is_refused(self) -> None:
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
-            "- name: Wire rustc through sccache\n  shell: bash\n  run: |\n"
-            "    if false; then\n"
-            + textwrap.indent(verify_manifest.SCCACHE_WIRE_RUN, "    ")
-            + "    fi\n"
-        )
-        self.assertRefused("step 2 is not the canonical wiring step")
-
-    def test_composite_later_step_unwiring_is_refused(self) -> None:
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
-            + self._WIRE
-            + "- shell: bash\n  run: echo \"RUSTC_WRAPPER=\" >> \"$GITHUB_ENV\"\n"
-        )
-        self.assertRefused("exactly two steps")
-
-    def test_composite_nested_local_uses_is_refused(self) -> None:
-        self.repo_action(
-            "tools/act",
-            "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo \"RUSTC_WRAPPER=\" >> \"$GITHUB_ENV\"\n",
-        )
-        self._sanctioned("- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n" + self._WIRE + "- uses: ./tools/act\n")
-        self.assertRefused("exactly two steps")
-        self._sanctioned("- uses: ./tools/act\n" + self._WIRE)
-        self.assertRefused("step 1 must be exactly")
-
-    def test_composite_install_step_with_extra_keys_is_refused(self) -> None:
-        for extra in ("  with:\n    version: v0.8.0\n", "  continue-on-error: true\n", "  name: x\n"):
-            with self.subTest(extra=extra):
-                self._sanctioned("- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n" + extra + self._WIRE)
-                self.assertRefused("step 1 must be exactly")
-
-    def test_composite_reordered_or_env_bearing_wire_is_refused(self) -> None:
-        self._sanctioned(self._WIRE + "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n")
-        self.assertRefused("step 1 must be exactly")
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n" + self._WIRE + "  env:\n    RUSTC_WRAPPER: ''\n"
-        )
-        self.assertRefused("step 2 is not the canonical wiring step")
-
-    def test_composite_extra_document_or_runs_keys_are_refused(self) -> None:
-        body = "  steps:\n" + textwrap.indent("- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n" + self._WIRE, "    ")
-        path = os.path.join(self.fx.root, "actions", "sccache", "action.yml")
-        self.ci("steps:\n  - run: cargo build\n")
-        _write(path, "inputs:\n  x:\n    default: y\nruns:\n  using: composite\n" + body)
-        self.assertRefused("keys ['inputs'] are outside the canonical composite")
-        _write(path, "runs:\n  using: composite\n  post: x\n" + body)
-        self.assertRefused("`runs:` keys must be exactly")
-
-    # ---- deterministic-checks SSOT (F4) -----------------------------------
-
-    def test_missing_deterministic_checks_file_is_refused(self) -> None:
-        os.remove(os.path.join(self.fx.root, "ci", "deterministic-checks.json"))
-        self.ci("steps:\n  - uses: ./.github/actions/sccache\n  - name: Run clippy\n    run: cargo clippy\n")
-        self.assertRefused("cannot establish the deterministic check steps")
-
-    def test_malformed_deterministic_checks_file_is_refused(self) -> None:
-        _write(os.path.join(self.fx.root, "ci", "deterministic-checks.json"), '{"checks": "x"}')
-        self.ci("steps:\n  - run: cargo build\n")
-        self.assertRefused("cannot establish the deterministic check steps")
 
     # ---- malformed shapes (F5) --------------------------------------------
 
@@ -1353,6 +957,69 @@ class TestSccacheWiringClosure(unittest.TestCase):
         self.assertRefused("ci.yml is not valid YAML")
 
 
+class TestRustCacheSavesMainOnly(unittest.TestCase):
+    """Check 6: every `Swatinem/rust-cache` step, in a workflow or a local
+    composite, saves only from `main` — pull request runs restore, never write."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.fx = WorkflowFixture(self._tmpdir.name)
+
+    def cache_step(self, uses: str = "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6", with_: str | None = None) -> None:
+        step = f"steps:\n  - uses: {uses}\n"
+        if with_ is not None:
+            step += "    with:\n" + textwrap.indent(with_, "      ")
+        self.fx.workflow("ci.yml", _ci(step + "  - run: cargo build\n"))
+
+    def refusals(self) -> list[str]:
+        return [e for e in self.fx.errors() if "uses Swatinem/rust-cache with save-if" in e]
+
+    def test_exact_main_only_save_if_passes(self) -> None:
+        self.cache_step(with_="save-if: ${{ github.ref == 'refs/heads/main' }}\n")
+        self.assertEqual(self.fx.errors(), [])
+
+    def test_missing_with_is_refused(self) -> None:
+        self.cache_step()
+        (e,) = self.refusals()
+        self.assertIn("job 'clippy'", e)
+        self.assertIn("save-if None", e)
+
+    def test_with_lacking_save_if_is_refused(self) -> None:
+        self.cache_step(with_="shared-key: x\n")
+        self.assertEqual(len(self.refusals()), 1)
+
+    def test_other_save_if_values_are_refused(self) -> None:
+        for value in (
+            "true",
+            "'true'",
+            "${{ github.ref == 'refs/heads/dev' }}",
+            "${{ github.ref != 'refs/heads/main' }}",
+            "${{github.ref == 'refs/heads/main'}}",
+            "${{ github.ref == 'refs/heads/main' || true }}",
+        ):
+            with self.subTest(value=value):
+                self.cache_step(with_=f"save-if: {value}\n")
+                self.assertEqual(len(self.refusals()), 1, self.fx.errors())
+
+    def test_case_and_subpath_variants_are_refused(self) -> None:
+        for uses in ("swatinem/RUST-CACHE@6323deb102c322ba6fcbdcafc7e3dddab59af2b6", "Swatinem/rust-cache/sub@6323deb102c322ba6fcbdcafc7e3dddab59af2b6"):
+            with self.subTest(uses=uses):
+                self.cache_step(uses=uses)
+                self.assertEqual(len(self.refusals()), 1, self.fx.errors())
+
+    def test_rust_cache_inside_local_composite_is_refused(self) -> None:
+        self.fx.composite("c", "runs:\n  using: composite\n  steps:\n    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6\n")
+        self.fx.workflow("ci.yml", _ci("steps:\n  - uses: ./.github/actions/c\n"))
+        (e,) = self.refusals()
+        self.assertIn("./.github/actions/c/action.yml", e)
+
+    def test_live_workflows_all_save_main_only(self) -> None:
+        errors: list[str] = []
+        check_workflow_steps(errors, root=os.path.dirname(HERE))
+        self.assertFalse([e for e in errors if "rust-cache" in e], errors)
+
+
 _HELPER_CALL = 'bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh"'
 _REQS = '"$GITHUB_WORKSPACE/.github/ci/requirements.txt"'
 _PINNED_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -1365,7 +1032,7 @@ class TestPinnedInputsAndEnvFileWrites(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fx = SccacheFixture(self._tmpdir.name)
+        self.fx = WorkflowFixture(self._tmpdir.name)
 
     def assertRefused(self, *needles: str) -> list[str]:
         errors = self.fx.errors()
@@ -1636,16 +1303,6 @@ class TestPinnedInputsAndEnvFileWrites(unittest.TestCase):
         self.ci("steps:\n  - uses: ./.github/actions/w\n")
         self.assertRefused("./.github/actions/w/action.yml", "not pinned by content")
 
-    def test_sanctioned_composite_tag_pinned_install_is_refused(self) -> None:
-        _write(
-            os.path.join(self.fx.root, "actions", "sccache", "action.yml"),
-            VALID_COMPOSITE.replace(
-                "sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad", "sccache-action@v0.0.9"
-            ),
-        )
-        self.ci("steps:\n  - run: cargo build\n")
-        self.assertRefused("step 1 must be exactly")
-
     def test_unpinned_job_images_are_refused(self) -> None:
         for body, needle in (
             ("container: rust:1\n", "job 'clippy' container image 'rust:1'"),
@@ -1764,7 +1421,7 @@ class TestTypedExpressionAndShellReads(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fx = SccacheFixture(self._tmpdir.name)
+        self.fx = WorkflowFixture(self._tmpdir.name)
 
     def assertRefused(self, *needles: str) -> list[str]:
         errors = self.fx.errors()
@@ -1942,7 +1599,7 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fx = SccacheFixture(self._tmpdir.name)
+        self.fx = WorkflowFixture(self._tmpdir.name)
 
     def assertRefused(self, *needles: str) -> list[str]:
         errors = self.fx.errors()
@@ -2502,6 +2159,28 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
                 f"with a job {key}:", "outside the tool job keys", job=job,
             )
 
+    def test_tool_job_environment_is_admitted_only_in_its_keyed_job(self) -> None:
+        def admin(job_id: str, env: str) -> str:
+            return (
+                "name: t\non:\n  schedule:\n    - cron: '30 4 * * *'\npermissions:\n  contents: read\n"
+                f"jobs:\n  {job_id}:\n    runs-on: ubuntu-latest\n    environment: {env}\n    steps:\n"
+                + textwrap.indent(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), "      ")
+            )
+
+        self.fx.workflow("ruleset-admin-read.yml", admin("ruleset-admin-read", "ruleset-admin-read"))
+        self.assertEqual(self.fx.errors(), [])
+        for fname, job_id, env in (
+            ("ruleset-admin-read.yml", "ruleset-admin-read", "prod"),
+            ("ruleset-admin-read.yml", "ruleset-admin-read", "null"),
+            ("ruleset-admin-read.yml", "other", "ruleset-admin-read"),
+            ("other.yml", "ruleset-admin-read", "ruleset-admin-read"),
+        ):
+            with self.subTest(fname=fname, job_id=job_id, env=env):
+                self.fx.workflow("ruleset-admin-read.yml", "")
+                self.fx.workflow(fname, admin(job_id, env))
+                self.assertRefused("with a job environment:", "outside the tool job keys")
+                os.remove(os.path.join(self.fx.root, "workflows", fname))
+
     def test_tool_job_timeout_must_be_a_positive_integer_literal(self) -> None:
         for value in ("0", "-1", "${{ 0 }}", "${{ 30 }}", "true", "1.5", "'5'"):
             self.job_refused(
@@ -2571,7 +2250,7 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
     def test_live_masked_tool_jobs_parse_as_output_jobs(self) -> None:
         vm = verify_manifest
         errors: list[str] = []
-        wfs = {wf.fname: wf for wf in vm._load_sccache_workflows(vm.REPO_ROOT, errors)}
+        wfs = {wf.fname: wf for wf in vm._load_workflows(vm.REPO_ROOT, errors)}
         self.assertEqual(errors, [])
         for fname, job_id, masking in (
             ("ci.yml", "cancel-on-cheap-red", {"if"}),
@@ -2674,6 +2353,93 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
             )
 
 
+_PAIR_A = {"context": "a", "integration_id": 15368}
+_RS_A = json.dumps([_PAIR_A]).encode()
+
+
+def _status_rule(checks: list | None = None, **over: object) -> dict:
+    params = {
+        "strict_required_status_checks_policy": False,
+        "do_not_enforce_on_create": False,
+        "required_status_checks": [_PAIR_A] if checks is None else checks,
+    }
+    params.update(over)
+    return {"type": "required_status_checks", "parameters": params}
+
+
+def _pr_rule(**over: object) -> dict:
+    params = {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": True,
+        "required_reviewers": [],
+        "require_code_owner_review": False,
+        "dismissal_restriction": {"enabled": False, "allowed_actors": []},
+        "require_last_push_approval": False,
+        "required_review_thread_resolution": True,
+        "require_extra_approval_for_unattributed_changes": True,
+        "allowed_merge_methods": ["merge", "squash", "rebase"],
+    }
+    params.update(over)
+    return {"type": "pull_request", "parameters": params}
+
+
+def _queue_rule(**over: object) -> dict:
+    params = {
+        "merge_method": "SQUASH",
+        "max_entries_to_build": 5,
+        "min_entries_to_merge": 1,
+        "max_entries_to_merge": 5,
+        "min_entries_to_merge_wait_minutes": 5,
+        "grouping_strategy": "ALLGREEN",
+        "check_response_timeout_minutes": 90,
+    }
+    params.update(over)
+    return {"type": "merge_queue", "parameters": params}
+
+
+def _ruleset(checks: list | None = None, **over: object) -> dict:
+    """A ruleset GET body, in the live response's full shape, requiring
+    `checks` (default: context `a`)."""
+    rs = {
+        "id": 22326541,
+        "name": "main-protection",
+        "target": "branch",
+        "source_type": "Repository",
+        "source": "o/r",
+        "enforcement": "active",
+        "conditions": {"ref_name": {"exclude": [], "include": ["~DEFAULT_BRANCH"]}},
+        "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}, _pr_rule(), _status_rule(checks), _queue_rule()],
+        "node_id": "n",
+        "created_at": "t",
+        "updated_at": "t",
+        "bypass_actors": [],
+        "current_user_can_bypass": "never",
+        "_links": {"self": {"href": "h"}},
+    }
+    rs.update(over)
+    return rs
+
+
+def _with_rules(*swap: tuple[str, object]) -> dict:
+    """`_ruleset()` with the rule of each named type replaced (None drops it)."""
+    rules = []
+    table = dict(swap)
+    for rule in _ruleset()["rules"]:
+        if rule["type"] not in table:
+            rules.append(rule)
+        elif table[rule["type"]] is not None:
+            rules.append(table[rule["type"]])
+    return _ruleset(rules=rules)
+
+
+_ENV_MAIN_ONLY = {
+    "name": "ruleset-admin-read",
+    "can_admins_bypass": False,
+    "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True},
+}
+_POLICIES_MAIN = {"total_count": 1, "branch_policies": [{"id": 1, "name": "main", "type": "branch"}]}
+
+
 class TestSsotOutputTools(unittest.TestCase):
     """The SSOT-publishing tools fail closed on a malformed SSOT: exit 1 and
     write no output, so a consumer keeps its fail-safe default."""
@@ -2682,7 +2448,7 @@ class TestSsotOutputTools(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
         self.dir = self._tmpdir.name
-        for name in ("deterministic_checks_output.py", "check_required_set.py", "strict_yaml.py", "gha_expr.py"):
+        for name in ("deterministic_checks_output.py", "check_required_set.py", "strict_yaml.py", "gha_expr.py", "trust_roots.py"):
             with open(os.path.join(HERE, name), encoding="utf-8") as src:
                 _write(os.path.join(self.dir, name), src.read())
         self.output = os.path.join(self.dir, "github-output")
@@ -2696,18 +2462,19 @@ class TestSsotOutputTools(unittest.TestCase):
         with open(path, "wb") as f:
             f.write(content)
 
-    def run_tool(self, name: str) -> tuple[int, str, str]:
+    def run_tool(self, name: str, *args: str, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         import subprocess
 
         open(self.output, "w").close()
-        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_OUTPUT": self.output}
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_OUTPUT": self.output, **(env or {})}
         proc = subprocess.run(
-            [sys.executable, os.path.join(self.dir, name)], env=env, capture_output=True, text=True, check=False,
+            [sys.executable, os.path.join(self.dir, name), *args],
+            env=env, capture_output=True, text=True, check=False,
         )
         return proc.returncode, proc.stdout, proc.stderr
 
-    def assertFailsClosed(self, name: str) -> None:
-        rc, stdout, stderr = self.run_tool(name)
+    def assertFailsClosed(self, name: str, *args: str, env: dict[str, str] | None = None) -> str:
+        rc, stdout, stderr = self.run_tool(name, *args, env=env)
         self.assertEqual(rc, 1)
         self.assertEqual(stdout, "")
         # A refusal, not a crash that happens to exit 1.
@@ -2715,6 +2482,7 @@ class TestSsotOutputTools(unittest.TestCase):
         self.assertNotEqual(stderr, "")
         with open(self.output, encoding="utf-8") as f:
             self.assertEqual(f.read(), "")
+        return stderr
 
     def test_deterministic_checks_output_publishes_a_valid_ssot(self) -> None:
         self.put("deterministic-checks.json", b'{"checks": [{"context": "c", "step": "s"}]}')
@@ -2735,14 +2503,18 @@ class TestSsotOutputTools(unittest.TestCase):
 
     def test_check_required_set_passes_a_matching_pair(self) -> None:
         self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
-        self.put("required-set.json", b'["a"]')
+        self.put("required-set.json", _RS_A)
         self.assertEqual(self.run_tool("check_required_set.py")[0], 0)
 
     def test_check_required_set_refuses_a_malformed_manifest(self) -> None:
-        self.put("required-set.json", b'["a"]')
+        self.put("required-set.json", _RS_A)
         for content in (
             None, b"", b"\xff\xfe", b"[]", b"checks: 5\n", b"checks:\n- 5\n", b"checks:\n- context: a\n",
             b"checks:\n- context: 1\n  disposition: gate\n", b"checks: [\n", b"checks: []\nchecks: []\n",
+            b"checks:\n- context: a\n  disposition: gate\n  integration_id: 15368\n",
+            b"checks:\n- context: a\n  disposition: gate\n- context: x\n  disposition: gate-external\n",
+            b"checks:\n- context: a\n  disposition: gate\n- context: x\n  disposition: gate-external\n  integration_id: 0\n",
+            b"checks:\n- context: a\n  disposition: gate\n- context: a\n  disposition: gate-external\n  integration_id: 7\n",
         ):
             with self.subTest(content=content):
                 self.put("check-manifest.yml", content)
@@ -2750,10 +2522,474 @@ class TestSsotOutputTools(unittest.TestCase):
 
     def test_check_required_set_refuses_a_malformed_required_set(self) -> None:
         self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
-        for content in (None, b"", b"{", b"\xff\xfe", b"{}", b"[1]", b'"a"'):
+        for content in (
+            None, b"", b"{", b"\xff\xfe", b"{}", b"[1]", b'"a"', b'["a"]', b'[{"context": "a"}]',
+            b'[{"context": "a", "integration_id": "15368"}]', b'[{"context": "a", "integration_id": true}]',
+            b'[{"context": "a", "integration_id": 15368, "app": 1}]', b'[{"context": "a", "integration_id": 1}]',
+            b'[{"context": "a", "integration_id": 15368}, {"context": "a", "integration_id": 15368}]',
+            b'[{"context": "a", "integration_id": 15368}, {"context": "b", "integration_id": 15368}]', b"[]",
+        ):
             with self.subTest(content=content):
                 self.put("required-set.json", content)
                 self.assertFailsClosed("check_required_set.py")
+
+
+    def test_check_required_set_writes_the_derived_pairs(self) -> None:
+        self.put(
+            "check-manifest.yml",
+            b"checks:\n- context: b\n  disposition: gate\n- context: x\n  disposition: informational\n"
+            b"- context: a\n  disposition: gate-external\n  integration_id: 7\n",
+        )
+        self.put("required-set.json", None)
+        self.assertEqual(self.run_tool("check_required_set.py", "--write")[0], 0)
+        with open(os.path.join(self.dir, "required-set.json"), encoding="utf-8") as f:
+            self.assertEqual(
+                json.load(f), [{"context": "a", "integration_id": 7}, {"context": "b", "integration_id": 15368}]
+            )
+        self.assertEqual(self.run_tool("check_required_set.py")[0], 0)
+
+    def test_check_required_set_write_refuses_an_unnamed_external_app(self) -> None:
+        for app in (b"", b"  integration_id: 0\n", b"  integration_id: '7'\n", b"  integration_id: true\n"):
+            with self.subTest(app=app):
+                self.put("check-manifest.yml", b"checks:\n- context: x\n  disposition: gate-external\n" + app)
+                self.put("required-set.json", None)
+                self.assertFailsClosed("check_required_set.py", "--write")
+                self.assertFalse(os.path.exists(os.path.join(self.dir, "required-set.json")))
+
+    def test_check_required_set_matches_a_live_ruleset(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+        self.put("rs.json", json.dumps(_ruleset()).encode())
+        rc, stdout, _ = self.run_tool("check_required_set.py", "--live", os.path.join(self.dir, "rs.json"))
+        self.assertEqual(rc, 0)
+        self.assertIn("ruleset 22326541 match", stdout)
+        # The viewer-dependent keys are pinned when present, not required.
+        bare = {k: v for k, v in _ruleset().items() if k not in ("source_type", "current_user_can_bypass")}
+        self.put("rs.json", json.dumps(bare).encode())
+        self.assertEqual(self.run_tool("check_required_set.py", "--live", os.path.join(self.dir, "rs.json"))[0], 0)
+
+    def test_check_required_set_refuses_a_drifted_live_ruleset(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+
+        def checks(*items: dict) -> dict:
+            return _ruleset(checks=list(items))
+
+        rsc = _status_rule([])
+        without_queue = _with_rules(("merge_queue", None))
+        for label, rs in (
+            ("missing context", checks()),
+            ("extra context", checks(_PAIR_A, {"context": "b", "integration_id": 15368})),
+            ("no integration", checks({"context": "a"})),
+            ("other integration", checks({"context": "a", "integration_id": 1})),
+            ("null integration", checks({"context": "a", "integration_id": None})),
+            ("repeated context", checks(_PAIR_A, _PAIR_A)),
+            ("disabled", _ruleset(enforcement="disabled")),
+            ("evaluate", _ruleset(enforcement="evaluate")),
+            ("tag target", _ruleset(target="tag")),
+            ("other ruleset", _ruleset(id=1)),
+            ("not the default branch", _ruleset(conditions={"ref_name": {"include": ["refs/heads/x"], "exclude": []}})),
+            ("excludes a ref", _ruleset(conditions={"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": ["x"]}})),
+            ("no conditions", _ruleset(conditions=None)),
+            ("no status rule", _with_rules(("required_status_checks", None))),
+            ("two status rules", _ruleset(rules=_ruleset()["rules"] + [rsc])),
+            ("no merge queue", without_queue),
+            ("no deletion rule", _with_rules(("deletion", None))),
+            ("a bypass actor", _ruleset(bypass_actors=[{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}])),
+            ("viewer can bypass", _ruleset(current_user_can_bypass="always")),
+            ("organization ruleset", _ruleset(source_type="Organization")),
+            ("strict policy on", _with_rules(("required_status_checks", _status_rule(strict_required_status_checks_policy=True)))),
+            ("strict policy as 0", _with_rules(("required_status_checks", _status_rule(strict_required_status_checks_policy=0)))),
+            ("not enforced on create", _with_rules(("required_status_checks", _status_rule(do_not_enforce_on_create=True)))),
+            ("status param unread", _with_rules(("required_status_checks", _status_rule(frob=1)))),
+            ("status param missing", _with_rules(("required_status_checks", {"type": "required_status_checks", "parameters": {"required_status_checks": [_PAIR_A]}}))),
+            ("head-green queue", _with_rules(("merge_queue", _queue_rule(grouping_strategy="HEADGREEN")))),
+            ("queue param unread", _with_rules(("merge_queue", _queue_rule(frob=1)))),
+            ("queue param mistyped", _with_rules(("merge_queue", _queue_rule(max_entries_to_build="5")))),
+            ("review param unread", _with_rules(("pull_request", _pr_rule(frob=True)))),
+            ("review param mistyped", _with_rules(("pull_request", _pr_rule(required_approving_review_count=True)))),
+            ("deletion with parameters", _with_rules(("deletion", {"type": "deletion", "parameters": {}}))),
+            ("unexamined rule type", _ruleset(rules=_ruleset()["rules"] + [{"type": "update"}])),
+            ("untyped rule", _ruleset(rules=_ruleset()["rules"] + [{}])),
+            ("unexamined top-level key", _ruleset(frob=1)),
+            ("unexamined condition", _ruleset(conditions={"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}, "repository_name": {}})),
+            ("unexamined ref key", _ruleset(conditions={"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": [], "x": 1}})),
+            ("no bypass_actors", {k: v for k, v in _ruleset().items() if k != "bypass_actors"}),
+            ("rules not a list", _ruleset(rules={})),
+            ("not an object", []),
+        ):
+            with self.subTest(label=label):
+                self.put("rs.json", json.dumps(rs).encode())
+                self.assertFailsClosed("check_required_set.py", "--live", os.path.join(self.dir, "rs.json"))
+        for content in (None, b"", b"{"):
+            with self.subTest(content=content):
+                self.put("rs.json", content)
+                self.assertFailsClosed("check_required_set.py", "--live", os.path.join(self.dir, "rs.json"))
+
+    def test_check_required_set_fetch_needs_its_environment(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+        self.assertFailsClosed("check_required_set.py", "--fetch")
+
+    def test_check_required_set_fetch_admin_needs_its_environment(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+        for env in ({}, {"REPO": "o/r"}, {"REPO": "o/r", "GH_TOKEN": ""}, {"GH_TOKEN": "tok"}, {"REPO": "", "GH_TOKEN": "tok"}):
+            with self.subTest(env=env):
+                self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+
+    def test_check_required_set_fetch_admin_never_prints_the_token(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+        sentinel = "sentinel-token-3f9c"
+        for token in (sentinel, f"{sentinel}\nX-Injected: 1", f"{sentinel} {sentinel}", f"{sentinel}\u00e9"):
+            with self.subTest(token=token):
+                # An unreachable origin: the read fails after the token is in hand.
+                env = {"REPO": "o/r", "GH_TOKEN": token, "GITHUB_API_URL": "https://127.0.0.1:1"}
+                stderr = self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+                self.assertNotIn(sentinel, stderr)
+
+    def _stub_api(self, rs: object, env: object = _ENV_MAIN_ONLY, policies: object = _POLICIES_MAIN,
+                  refuse: tuple[str, ...] = ()) -> dict[str, str]:
+        """Replace `trust_roots` with an `Api` whose GET returns `env` for the
+        admin-read environment, `policies` for its branch policies, and `rs`
+        for the ruleset; any other path is refused, and every path in
+        `refuse` answers HTTP 403."""
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+        bodies = {
+            "environments/ruleset-admin-read": env,
+            "environments/ruleset-admin-read/deployment-branch-policies": policies,
+            "rulesets/22326541": rs,
+        }
+        bodies = {path: body for path, body in bodies.items() if path not in refuse}
+        self.put("bodies.json", json.dumps({"bodies": bodies, "refuse": list(refuse)}).encode())
+        self.put(
+            "trust_roots.py",
+            b"import json, os\n"
+            b"class Refused(Exception):\n    pass\n"
+            b"class HttpStatus(Refused):\n"
+            b"    def __init__(self, url, status):\n"
+            b"        super().__init__(f'GET {url} failed: HTTP {status}')\n"
+            b"        self.status = status\n"
+            b"class Api:\n"
+            b"    def __init__(self, base, repo, token):\n        pass\n"
+            b"    def get(self, path):\n"
+            b"        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bodies.json')) as f:\n"
+            b"            stub = json.load(f)\n"
+            b"        bodies = stub['bodies']\n"
+            b"        if path in stub['refuse']:\n"
+            b"            raise HttpStatus(path, 403)\n"
+            b"        if path not in bodies:\n"
+            b"            raise Refused('unexpected path ' + path)\n"
+            b"        return bodies[path]\n",
+        )
+        return {"REPO": "o/r", "GH_TOKEN": "tok"}
+
+    def test_check_required_set_fetch_admin_admits_a_main_only_environment(self) -> None:
+        rc, stdout, stderr = self.run_tool("check_required_set.py", "--fetch-admin", env=self._stub_api(_ruleset()))
+        self.assertEqual(rc, 0, stderr)
+        self.assertIn("ruleset 22326541 match", stdout)
+
+    def test_check_required_set_fetch_admin_names_the_permission_an_unreadable_environment_needs(self) -> None:
+        sentinel = "sentinel-token-7d2e"
+        for refused in ("environments/ruleset-admin-read", "environments/ruleset-admin-read/deployment-branch-policies"):
+            with self.subTest(refused=refused):
+                env = {**self._stub_api(_ruleset(), refuse=(refused,)), "GH_TOKEN": sentinel}
+                stderr = self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+                self.assertIn("cannot read environment 'ruleset-admin-read' (HTTP 403)", stderr)
+                self.assertIn("Actions: read", stderr)
+                self.assertIn("rate limit", stderr)
+                self.assertIn("RECONCILIATION.md", stderr)
+                self.assertNotIn(sentinel, stderr)
+
+    def test_check_required_set_fetch_admin_refuses_an_environment_not_confined_to_main(self) -> None:
+        def env_with(policy: object, name: str = "ruleset-admin-read", **extra: object) -> dict:
+            return {"name": name, "can_admins_bypass": False, "deployment_branch_policy": policy, **extra}
+
+        def policies(*items: dict, total: int | None = None) -> dict:
+            return {"total_count": len(items) if total is None else total, "branch_policies": list(items)}
+
+        main = {"name": "main", "type": "branch"}
+        custom = {"protected_branches": False, "custom_branch_policies": True}
+        cases = (
+            # No environment, or another one.
+            (None, None),
+            ([], None),
+            (env_with(custom, name="prod"), _POLICIES_MAIN),
+            # Administrators may bypass the branch policy, or the flag is not the bool `False`.
+            (env_with(custom, can_admins_bypass=True), _POLICIES_MAIN),
+            (env_with(custom, can_admins_bypass=None), _POLICIES_MAIN),
+            (env_with(custom, can_admins_bypass=0), _POLICIES_MAIN),
+            (env_with(custom, can_admins_bypass="false"), _POLICIES_MAIN),
+            ({"name": "ruleset-admin-read", "deployment_branch_policy": custom}, _POLICIES_MAIN),
+            # Every branch may deploy.
+            (env_with(None), None),
+            (env_with("all"), None),
+            # Protected-branches mode: with no classic protection rule every
+            # branch may deploy, so it is not proof of `main` alone.
+            (env_with({"protected_branches": True, "custom_branch_policies": False}), None),
+            (env_with({"protected_branches": True, "custom_branch_policies": False}), _POLICIES_MAIN),
+            # Neither mode, or both.
+            (env_with({"protected_branches": False, "custom_branch_policies": False}), None),
+            (env_with({"protected_branches": True, "custom_branch_policies": True}), _POLICIES_MAIN),
+            (env_with({"protected_branches": "true", "custom_branch_policies": False}), None),
+            (env_with({"protected_branches": 0, "custom_branch_policies": 1}), _POLICIES_MAIN),
+            # A mode field missing, or one this check does not examine.
+            (env_with({"custom_branch_policies": True}), _POLICIES_MAIN),
+            (env_with({"protected_branches": False}), _POLICIES_MAIN),
+            (env_with({}), _POLICIES_MAIN),
+            (env_with({**custom, "tag_policies": True}), _POLICIES_MAIN),
+            # Custom policies other than exactly the branch `main`.
+            (env_with(custom), None),
+            (env_with(custom), policies()),
+            (env_with(custom), policies(main, {"name": "release/*", "type": "branch"})),
+            (env_with(custom), policies(main, total=2)),
+            (env_with(custom), policies({"name": "*", "type": "branch"})),
+            (env_with(custom), policies({"name": "main*", "type": "branch"})),
+            (env_with(custom), policies({"name": "main", "type": "tag"})),
+            (env_with(custom), {"total_count": 1, "branch_policies": main}),
+            (env_with(custom), {"total_count": True, "branch_policies": [main]}),
+            (env_with(custom), {"branch_policies": [main]}),
+            (env_with(custom), [main]),
+        )
+        for env, pol in cases:
+            with self.subTest(env=env, policies=pol):
+                stderr = self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=self._stub_api(_ruleset(), env, pol))
+                self.assertIn("RECONCILIATION.md", stderr)
+        # The workflow-token read proves no environment: it never reads one.
+        rc, _, stderr = self.run_tool("check_required_set.py", "--fetch", env=self._stub_api(_ruleset(), None, None))
+        self.assertEqual(rc, 0, stderr)
+
+    def test_check_required_set_fetch_admin_refuses_a_body_without_bypass_actors(self) -> None:
+        env = self._stub_api({k: v for k, v in _ruleset().items() if k != "bypass_actors"})
+        stderr = self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+        self.assertIn("lacks bypass_actors", stderr)
+        self.assertIn("Administration: read", stderr)
+        # The workflow-token read cannot see the list, so it is not its proof.
+        rc, _, stderr = self.run_tool("check_required_set.py", "--fetch", env=env)
+        self.assertEqual(rc, 0, stderr)
+
+    def test_check_required_set_fetch_admin_refuses_a_bypass_actor(self) -> None:
+        actor = [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]
+        env = self._stub_api(_ruleset(bypass_actors=actor))
+        self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+
+    def test_check_required_set_fetch_admin_refuses_a_drifted_set(self) -> None:
+        env = self._stub_api(_ruleset(checks=[{"context": "b", "integration_id": 15368}]))
+        self.assertFailsClosed("check_required_set.py", "--fetch-admin", env=env)
+
+    def test_check_required_set_fetch_admin_passes_a_matching_body(self) -> None:
+        env = self._stub_api(_ruleset())
+        rc, stdout, stderr = self.run_tool("check_required_set.py", "--fetch-admin", env=env)
+        self.assertEqual(rc, 0, stderr)
+        self.assertIn("ruleset 22326541 match", stdout)
+
+    def test_fetch_admin_is_exclusive_with_the_other_modes(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", _RS_A)
+        for other in (("--fetch",), ("--write",), ("--live", "x")):
+            with self.subTest(other=other):
+                rc, stdout, _ = self.run_tool("check_required_set.py", "--fetch-admin", *other)
+                self.assertNotEqual(rc, 0)
+                self.assertEqual(stdout, "")
+
+    def test_repo_admin_read_workflow_is_schedule_only(self) -> None:
+        import strict_yaml
+
+        path = os.path.join(HERE, "..", "workflows", "ruleset-admin-read.yml")
+        with open(path, encoding="utf-8") as f:
+            doc = strict_yaml.safe_load(f)
+        on = doc.get(True, doc.get("on"))
+        self.assertEqual(set(on), {"schedule"})
+        (job,) = doc["jobs"].values()
+        self.assertEqual(job["steps"][-1]["run"], "python3 .github/ci/check_required_set.py --fetch-admin")
+        self.assertEqual(job["steps"][-1]["env"]["GH_TOKEN"], "${{ secrets.RULESET_READ_TOKEN }}")
+
+    def test_a_non_admin_read_leaves_bypass_actors_to_the_admin_read(self) -> None:
+        spec = importlib.util.spec_from_file_location("check_required_set", os.path.join(HERE, "check_required_set.py"))
+        crs = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = crs
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        spec.loader.exec_module(crs)
+        unseen = {k: v for k, v in _ruleset().items() if k != "bypass_actors"}
+        self.assertEqual(crs.parse_ruleset(unseen, admin_read=False).required, (("a", 15368),))
+        with self.assertRaises(crs.Refused):
+            crs.parse_ruleset(unseen, admin_read=True)
+        actor = [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]
+        for admin_read in (False, True):
+            with self.subTest(admin_read=admin_read), self.assertRaises(crs.Refused):
+                crs.parse_ruleset(_ruleset(bypass_actors=actor), admin_read=admin_read)
+            with self.subTest(admin_read=admin_read, viewer="always"), self.assertRaises(crs.Refused):
+                crs.parse_ruleset(_ruleset(current_user_can_bypass="always"), admin_read=admin_read)
+
+    def _crs(self) -> object:
+        spec = importlib.util.spec_from_file_location("check_required_set", os.path.join(HERE, "check_required_set.py"))
+        crs = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = crs
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        spec.loader.exec_module(crs)
+        return crs
+
+    def test_an_env_read_names_the_permission_only_for_a_token_refusal(self) -> None:
+        import trust_roots as tr
+
+        crs = self._crs()
+        sentinel = "sentinel-token-9a41"
+        url = "https://api.github.com/repos/o/r/environments/ruleset-admin-read"
+        hinted = [tr.HttpStatus(url, code) for code in (401, 403, 404)]
+        unhinted = [
+            tr.HttpStatus(url, 500),
+            tr.HttpStatus(url, 502),
+            tr.HttpStatus(url, 422),
+            tr.OffOrigin("https://evil.example/x"),
+            tr.TooLarge(url, "16 bytes"),
+            tr.Transport(url, ConnectionResetError("reset")),
+            tr.Malformed(f"GET {url}: response is not JSON"),
+        ]
+
+        class FakeApi:
+            def __init__(self, base: str, repo: str, token: str, *, fail: Exception) -> None:
+                self.fail = fail
+
+            def get(self, path: str) -> object:
+                raise self.fail
+
+        env = {"REPO": "o/r", "GH_TOKEN": sentinel}
+        for fail in hinted + unhinted:
+            with self.subTest(fail=fail), mock.patch.dict(os.environ, env), mock.patch.object(
+                tr, "Api", lambda b, r, t, fail=fail: FakeApi(b, r, t, fail=fail)
+            ):
+                with self.assertRaises(crs.Refused) as cm:
+                    crs.fetch_live(admin=True)
+                msg = str(cm.exception)
+                self.assertIn("cannot read environment 'ruleset-admin-read'", msg)
+                self.assertNotIn(sentinel, msg)
+                if fail in hinted:
+                    self.assertIn(f"HTTP {fail.status}", msg)
+                    self.assertIn("RECONCILIATION.md", msg)
+                    if fail.status == 401:
+                        self.assertIn("invalid or expired", msg)
+                        self.assertNotIn(crs.ENV_READ_PERMISSION, msg)
+                    else:
+                        self.assertIn(crs.ENV_READ_PERMISSION, msg)
+                        self.assertNotIn("invalid or expired", msg)
+                    self.assertEqual("rate limit" in msg, fail.status == 403)
+                    self.assertEqual("does not exist" in msg, fail.status == 404)
+                else:
+                    self.assertNotIn(crs.ENV_READ_PERMISSION, msg)
+                    self.assertNotIn("RULESET_READ_TOKEN", msg)
+                    self.assertIn(str(fail), msg)
+
+    def test_the_admin_ruleset_read_needs_the_parsed_policy(self) -> None:
+        crs = self._crs()
+        reads: list[str] = []
+
+        class FakeApi:
+            def get(self, path: str) -> object:
+                reads.append(path)
+                return _ruleset()
+
+        for proof in (None, True, "CustomMainOnly", object(), crs.CustomMainOnly):
+            with self.subTest(proof=proof), self.assertRaises(crs.Refused):
+                crs.read_ruleset(FakeApi(), proof)
+        self.assertEqual(reads, [])
+        proof = crs.parse_env_policy(_ENV_MAIN_ONLY, lambda: _POLICIES_MAIN)
+        self.assertEqual(crs.read_ruleset(FakeApi(), proof), _ruleset())
+        self.assertEqual(reads, ["rulesets/22326541"])
+
+    def test_the_env_policy_proof_is_minted_only_by_its_parse(self) -> None:
+        crs = self._crs()
+        with self.assertRaises(TypeError):
+            crs.CustomMainOnly()  # type: ignore[call-arg]
+        for key in (None, object(), True, "_KEY"):
+            with self.subTest(key=key), self.assertRaises(crs.Refused):
+                crs.CustomMainOnly(key=key)
+        with self.assertRaises(TypeError):
+            crs.CustomMainOnly(crs._KEY)
+        self.assertIsInstance(crs.parse_env_policy(_ENV_MAIN_ONLY, lambda: _POLICIES_MAIN), crs.CustomMainOnly)
+
+    def test_a_refused_admin_ruleset_read_says_what_the_status_means(self) -> None:
+        import trust_roots as tr
+
+        crs = self._crs()
+        url = "https://api.github.com/repos/o/r/rulesets/22326541"
+
+        class FakeApi:
+            def __init__(self, fail: Exception) -> None:
+                self.fail = fail
+
+            def get(self, path: str) -> object:
+                raise self.fail
+
+        proof = crs.parse_env_policy(_ENV_MAIN_ONLY, lambda: _POLICIES_MAIN)
+        for status, want, unwanted in (
+            (401, "invalid or expired", crs.RULESET_READ_PERMISSION),
+            (403, crs.RULESET_READ_PERMISSION, "invalid or expired"),
+            (404, crs.RULESET_READ_PERMISSION, "invalid or expired"),
+            (500, "HTTP 500", crs.RULESET_READ_PERMISSION),
+        ):
+            with self.subTest(status=status), self.assertRaises(crs.Refused) as cm:
+                crs.read_ruleset(FakeApi(tr.HttpStatus(url, status)), proof)
+            msg = str(cm.exception)
+            self.assertIn("cannot read ruleset 22326541", msg)
+            self.assertIn(want, msg)
+            self.assertNotIn(unwanted, msg)
+            self.assertNotIn(crs.ENV_READ_PERMISSION, msg)
+
+    def test_branch_policies_are_a_closed_shape(self) -> None:
+        crs = self._crs()
+        main = {"id": 1, "node_id": "GBP_1", "name": "main", "type": "branch"}
+
+        def parse(policies: object) -> object:
+            return crs.parse_env_policy(_ENV_MAIN_ONLY, lambda: policies)
+
+        for item in (main, {"name": "main", "type": "branch"}, {"id": 7, "name": "main", "type": "branch"}):
+            with self.subTest(admitted=item):
+                self.assertIsInstance(parse({"total_count": 1, "branch_policies": [item]}), crs.CustomMainOnly)
+        refused = (
+            {"total_count": 1, "branch_policies": [main], "extra": 1},
+            {"total_count": 1},
+            {"branch_policies": [main]},
+            {"total_count": 1.0, "branch_policies": [main]},
+            {"total_count": 1, "branch_policies": (main,)},
+            {"total_count": 1, "branch_policies": [main, main]},
+            {"total_count": 1, "branch_policies": ["main"]},
+            {"total_count": 1, "branch_policies": [{**main, "pattern": "*"}]},
+            {"total_count": 1, "branch_policies": [{"name": "main"}]},
+            {"total_count": 1, "branch_policies": [{"type": "branch"}]},
+            {"total_count": 1, "branch_policies": [{**main, "id": "1"}]},
+            {"total_count": 1, "branch_policies": [{**main, "id": True}]},
+            {"total_count": 1, "branch_policies": [{**main, "node_id": 1}]},
+            {"total_count": 1, "branch_policies": [{**main, "name": "Main"}]},
+            {"total_count": 1, "branch_policies": [{**main, "type": "tag"}]},
+        )
+        for policies in refused:
+            with self.subTest(refused=policies), self.assertRaises(crs.Refused) as cm:
+                parse(policies)
+            self.assertIn("RECONCILIATION.md", str(cm.exception))
+
+    def test_the_admin_read_token_permissions_have_one_home(self) -> None:
+        crs = self._crs()
+        with open(os.path.join(HERE, "RECONCILIATION.md"), encoding="utf-8") as f:
+            doc = " ".join(f.read().split())
+        listed = " and ".join(f"`{p}`" for p in crs.ADMIN_READ_TOKEN_PERMISSIONS)
+        self.assertIn(f"exactly the repository permissions {listed}", doc)
+        with open(os.path.join(HERE, "..", "workflows", "ruleset-admin-read.yml"), encoding="utf-8") as f:
+            header = f.read()
+        self.assertIn(".github/ci/RECONCILIATION.md", header)
+        for permission in crs.ADMIN_READ_TOKEN_PERMISSIONS:
+            name = permission.split(":")[0]
+            with self.subTest(permission=permission):
+                self.assertNotIn(f"{name}:", header)
+
+    def test_repo_required_set_is_the_derived_set(self) -> None:
+        import subprocess
+
+        proc = subprocess.run(
+            [sys.executable, os.path.join(HERE, "check_required_set.py")], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
 
 
 class TestGithubEnvHelper(unittest.TestCase):
@@ -2870,13 +3106,26 @@ jobs:
 """
 
 
+_ADMIN_FILE = "ruleset-admin-read.yml"
+
+
+def _admin_read(*, extra: str = "", ref: str = "${{ secrets.RULESET_READ_TOKEN }}", job: str = "ruleset-admin-read",
+                env: str = "    environment: ruleset-admin-read\n") -> str:
+    """A schedule-only workflow whose job `job` reads the admin-read secret."""
+    return (
+        f"on:\n  schedule:\n    - cron: '30 4 * * *'\n{extra}permissions:\n  contents: read\n"
+        f"jobs:\n  {job}:\n    runs-on: ubuntu-latest\n{env}    steps:\n"
+        f"      - run: echo x\n        env:\n          T: {ref}\n"
+    )
+
+
 class TestMergeQueueSafety(unittest.TestCase):
     """Check 8: gate producers run under the merge queue, and every
     merge_group workflow stays secret-free, read-only, and on the PR tier."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.fx = SccacheFixture(self._tmp.name)
+        self.fx = WorkflowFixture(self._tmp.name)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -2947,6 +3196,128 @@ class TestMergeQueueSafety(unittest.TestCase):
             "github.event_name != 'pull_request'",
         )
         self.assertRefused(bad, "a merge-group run would take the full tier")
+
+    def admin_errors(self, fname: str, content: str) -> list[str]:
+        self.fx.workflow(fname, content)
+        errors: list[str] = []
+        check_merge_queue(set(), errors, root=self.fx.root)
+        return errors
+
+    def assertAdminRefused(self, fname: str, content: str, needle: str) -> None:
+        errors = self.admin_errors(fname, content)
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def test_schedule_only_secret_admitted_on_a_schedule_only_workflow(self) -> None:
+        self.assertEqual(self.admin_errors(_ADMIN_FILE, _admin_read()), [])
+
+    def test_schedule_only_secret_refused_beside_any_other_trigger(self) -> None:
+        refs = (
+            "${{ secrets.RULESET_READ_TOKEN }}",
+            "${{ secrets.ruleset_read_token }}",
+            # An escape only the parser decodes still names the secret.
+            '"${{ secrets.\\x52ULESET_READ_TOKEN }}"',
+        )
+        for extra in ("  workflow_dispatch: {}\n", "  push:\n", "  pull_request:\n", "  workflow_run:\n    workflows: [x]\n"):
+            for ref in refs:
+                with self.subTest(extra=extra, ref=ref):
+                    self.assertAdminRefused(
+                        _ADMIN_FILE, _admin_read(extra=extra, ref=ref), "only a `schedule`-only workflow may carry it"
+                    )
+
+    def test_schedule_only_secret_refused_outside_its_keyed_job(self) -> None:
+        cases = (
+            # The keyed file, another job.
+            (_ADMIN_FILE, _admin_read(job="other")),
+            # Another file, the keyed job's name.
+            ("other.yml", _admin_read()),
+        )
+        for fname, content in cases:
+            with self.subTest(fname=fname):
+                self.assertAdminRefused(fname, content, "is not its keyed job")
+        top = _admin_read().replace("jobs:\n", "env:\n  T: ${{ secrets.RULESET_READ_TOKEN }}\njobs:\n")
+        self.assertAdminRefused(_ADMIN_FILE, top, "outside a job")
+
+    def test_keyed_job_without_its_literal_environment_refused(self) -> None:
+        for env in ("", "    environment: prod\n", "    environment:\n      name: ruleset-admin-read\n",
+                    "    environment: ${{ 'ruleset-admin-read' }}\n"):
+            with self.subTest(env=env):
+                self.assertAdminRefused(_ADMIN_FILE, _admin_read(env=env), "must declare `environment: ruleset-admin-read`")
+
+    def test_admin_environment_refused_in_any_other_job(self) -> None:
+        free = (
+            "on:\n  push:\npermissions:\n  contents: read\n"
+            "jobs:\n  j:\n    runs-on: ubuntu-latest\n{env}    steps:\n      - run: echo x\n"
+        )
+        for env in ("    environment: ruleset-admin-read\n", "    environment: RULESET-Admin-Read\n",
+                    "    environment:\n      name: ruleset-admin-read\n"):
+            with self.subTest(env=env):
+                self.assertAdminRefused("other.yml", free.format(env=env), "declares the admin environment")
+        # The keyed job's own file, another job.
+        other = _admin_read() + "  other:\n    runs-on: ubuntu-latest\n    environment: ruleset-admin-read\n    steps:\n      - run: echo x\n"
+        self.assertAdminRefused(_ADMIN_FILE, other, "declares the admin environment")
+        os.remove(os.path.join(self.fx.root, "workflows", _ADMIN_FILE))
+        for env in ("    environment: ${{ inputs.env }}\n", "    environment:\n      name: ${{ github.head_ref }}\n",
+                    "    environment: [a]\n", "    environment: {}\n"):
+            with self.subTest(env=env):
+                self.assertAdminRefused("other.yml", free.format(env=env), "whose name is not a literal string")
+        for env in ("    environment: prod\n", "    environment:\n      name: github-pages\n      url: ${{ steps.d.outputs.u }}\n"):
+            with self.subTest(env=env):
+                self.assertEqual(self.admin_errors("other.yml", free.format(env=env)), [])
+
+    def test_secret_access_admits_only_one_literal_name(self) -> None:
+        wf = (
+            "on:\n  push:\npermissions:\n  contents: read\n"
+            "jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - run: echo x\n        if: {cond}\n        env:\n          T: {ref}\n"
+        )
+        for ref in ("${{ secrets.X }}", "${{ secrets['X'] }}", "${{ SECRETS.x_1 }}", "${{ (secrets).X }}",
+                    "${{ format('{0}', secrets.X) }}", "\"${{ secrets['X'] }}\""):
+            with self.subTest(ref=ref):
+                self.assertEqual(self.admin_errors("other.yml", wf.format(cond="success()", ref=ref)), [])
+        refused = (
+            # A name computed at run time: the probe that reaches any secret.
+            ("${{ secrets[github.event.workflow_run.head_branch] }}", "not one literal"),
+            ("${{ secrets[format('RULESET_{0}', 'READ_TOKEN')] }}", "not one literal"),
+            ("${{ secrets[inputs.name] }}", "not one literal"),
+            ("${{ secrets['RULESET' || 'X'] }}", "not one literal"),
+            ("${{ secrets[1] }}", "not one literal"),
+            ("${{ secrets['not a name'] }}", "not one literal"),
+            ("${{ secrets.X-Y }}", "not one literal"),
+            ("${{ secrets.* }}", "not one literal"),
+            ("${{ secrets[*] }}", "not one literal"),
+            # The whole context.
+            ("${{ toJSON(secrets) }}", "the whole `secrets` context"),
+            ("${{ (secrets) }}", "the whole `secrets` context"),
+            ("${{ fromJSON(toJSON(Secrets)).X }}", "the whole `secrets` context"),
+            ("${{ secrets.X.Y }}", "a path deeper than one secret name"),
+            # Outside the grammar (GitHub strings are single-quoted).
+            ('\'${{ secrets["X"] }}\'', "outside the expression grammar"),
+            ("${{ secrets.X", "outside the expression grammar"),
+            # An escape only the parser decodes.
+            ('"${{ \\x73ecrets[github.head_ref] }}"', "not one literal"),
+        )
+        for ref, needle in refused:
+            with self.subTest(ref=ref):
+                self.assertAdminRefused("other.yml", wf.format(cond="success()", ref=ref), needle)
+        # A bare `if:` is an expression without `${{ }}`.
+        for cond, needle in (("secrets[github.head_ref] != ''", "not one literal"),
+                             ("toJSON(secrets) != ''", "the whole `secrets` context"),
+                             ('secrets["X"]', "outside the expression grammar")):
+            with self.subTest(cond=cond):
+                self.assertAdminRefused("other.yml", wf.format(cond=json.dumps(cond), ref="x"), needle)
+        # A key is scanned too.
+        keyed = wf.format(cond="success()", ref="x").replace("          T: x\n", "          ${{ toJSON(secrets) }}: x\n")
+        self.assertAdminRefused("other.yml", keyed, "the whole `secrets` context")
+
+    def test_secrets_block_must_name_each_secret(self) -> None:
+        call = (
+            "on:\n  push:\npermissions:\n  contents: read\n"
+            "jobs:\n  reuse:\n    uses: ./.github/workflows/x.yml\n    secrets: {v}\n"
+        )
+        for v in ("inherit", "INHERIT", "''", "null", "[a]", "${{ secrets }}"):
+            with self.subTest(v=v):
+                self.assertAdminRefused("other.yml", call.format(v=v), "forwards secrets no name scan sees")
+        self.assertEqual(self.admin_errors("other.yml", call.format(v="{T: '${{ secrets.X }}'}")), [])
 
     def test_non_gate_workflow_without_merge_group_is_not_checked(self) -> None:
         bad = _MQ_OK.replace("  merge_group:\n", "").replace("run: echo full", "run: echo ${{ secrets.X }}")
@@ -3086,7 +3457,7 @@ class TestReleaseOnlySkipAsPass(unittest.TestCase):
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.fx = SccacheFixture(self._tmp.name)
+        self.fx = WorkflowFixture(self._tmp.name)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -3411,7 +3782,7 @@ class TestPullRequestTarget(unittest.TestCase):
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.fx = SccacheFixture(self._tmp.name)
+        self.fx = WorkflowFixture(self._tmp.name)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -3599,7 +3970,7 @@ class TestHeadFreeExemption(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self.fx = SccacheFixture(self._tmp.name)
+        self.fx = WorkflowFixture(self._tmp.name)
 
     def errors(self, content: str) -> list[str]:
         self.fx.workflow("prt.yml", content)
@@ -3626,7 +3997,7 @@ class TestHeadFreeExemption(unittest.TestCase):
     def test_live_workspaces(self) -> None:
         vm = verify_manifest
         errors: list[str] = []
-        wfs = {wf.fname: wf.workspace for wf in vm._load_sccache_workflows(vm.REPO_ROOT, errors)}
+        wfs = {wf.fname: wf.workspace for wf in vm._load_workflows(vm.REPO_ROOT, errors)}
         self.assertEqual(errors, [])
         self.assertEqual(sorted(f for f, w in wfs.items() if w is vm.Workspace.NONE), ["trust-root-diff.yml"])
         self.assertIs(wfs["ci.yml"], vm.Workspace.CHECKOUT)
@@ -3792,6 +4163,937 @@ class TestTrustRoots(unittest.TestCase):
         errors: list[str] = []
         check_trust_roots(errors)
         self.assertEqual(errors, [])
+
+
+_PUSH_WF = """\
+name: w
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: GROUP
+  cancel-in-progress: true
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
+"""
+
+
+class TestPushConcurrency(unittest.TestCase):
+    """Check 13: two pushes to one branch never share a concurrency group."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = self._tmp.name
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, content: str, name: str = "w.yml", extra: dict[str, str] | None = None) -> list[str]:
+        _write(os.path.join(self.root, "workflows", name), content)
+        for n, c in (extra or {}).items():
+            _write(os.path.join(self.root, "workflows", n), c)
+        errors: list[str] = []
+        with mock.patch.dict(verify_manifest.LATEST_WINS_PUSH_GROUPS, {}, clear=True):
+            check_push_concurrency(errors, root=self.root)
+        return errors
+
+    def group(self, group: str) -> list[str]:
+        return self.errors(_PUSH_WF.replace("GROUP", group))
+
+    def assertRefused(self, group: str, needle: str) -> None:
+        errors = self.group(group)
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def test_per_sha_push_group_passes(self) -> None:
+        self.assertEqual(self.group("${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}"), [])
+
+    def test_plain_sha_and_run_id_groups_pass(self) -> None:
+        self.assertEqual(self.group("w-${{ github.sha }}"), [])
+        self.assertEqual(self.group("w-${{ github.run_id }}"), [])
+
+    def test_event_name_compared_without_case(self) -> None:
+        self.assertEqual(self.group("w-${{ github.event_name == 'PUSH' && github.sha || github.ref }}"), [])
+
+    def test_no_concurrency_passes(self) -> None:
+        self.assertEqual(self.errors(_PUSH_WF.replace("concurrency:\n  group: GROUP\n  cancel-in-progress: true\n", "")), [])
+
+    def test_non_push_workflow_ignored(self) -> None:
+        self.assertEqual(self.errors(_PUSH_WF.replace("  push:\n    branches: [main]\n", "").replace("GROUP", "fixed")), [])
+
+    def test_per_ref_group_refused(self) -> None:
+        self.assertRefused("${{ github.workflow }}-${{ github.ref }}", "same for two pushes")
+
+    def test_constant_group_refused(self) -> None:
+        self.assertRefused("pages", "same for two pushes")
+
+    def test_sha_only_off_push_refused(self) -> None:
+        self.assertRefused("w-${{ github.event_name == 'pull_request' && github.sha || github.ref }}", "same for two pushes")
+
+    def test_negated_event_test_refused(self) -> None:
+        self.assertRefused("w-${{ !(github.event_name == 'push') && github.sha || github.ref }}", "same for two pushes")
+
+    def test_string_shorthand_concurrency_refused(self) -> None:
+        errors = self.errors(_PUSH_WF.replace("concurrency:\n  group: GROUP\n  cancel-in-progress: true\n", "concurrency: w-${{ github.ref }}\n"))
+        self.assertTrue(any("same for two pushes" in e for e in errors), errors)
+
+    def test_job_level_group_refused(self) -> None:
+        wf = _PUSH_WF.replace("GROUP", "w-${{ github.sha }}").replace(
+            "    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    concurrency:\n      group: j-${{ github.ref }}\n"
+        )
+        errors = self.errors(wf)
+        self.assertTrue(any("job 'j'" in e and "same for two pushes" in e for e in errors), errors)
+
+    def test_unknown_context_refused(self) -> None:
+        self.assertRefused("w-${{ github.event.head_commit.id }}", "cannot resolve")
+        self.assertRefused("w-${{ env.X }}", "cannot resolve")
+        self.assertRefused("w-${{ github.actor }}", "cannot resolve")
+
+    def test_function_refused(self) -> None:
+        self.assertRefused("${{ format('w-{0}', github.sha) }}", "does not evaluate")
+
+    def test_mixed_type_comparison_refused(self) -> None:
+        self.assertRefused("w-${{ github.sha == true && github.sha || github.ref }}", "different types")
+
+    def test_number_literal_refused(self) -> None:
+        self.assertRefused("w-${{ github.sha == 1 && github.sha || github.ref }}", "number literal")
+
+    def test_unparseable_group_refused(self) -> None:
+        self.assertRefused("w-${{ github.sha", "cannot prove")
+
+    def test_non_string_group_refused(self) -> None:
+        errors = self.errors(_PUSH_WF.replace("group: GROUP", "group: [a]"))
+        self.assertTrue(any("no string `group`" in e for e in errors), errors)
+
+    def test_unreadable_triggers_refused(self) -> None:
+        errors = self.errors(_PUSH_WF.replace("on:\n  push:\n    branches: [main]\n  pull_request:\n", "on: 3\n"))
+        self.assertTrue(any("cannot tell whether it runs on push" in e for e in errors), errors)
+
+    def test_latest_wins_entry_exempts_and_must_exist(self) -> None:
+        _write(os.path.join(self.root, "workflows", "w.yml"), _PUSH_WF.replace("GROUP", "pages"))
+        errors: list[str] = []
+        with mock.patch.dict(verify_manifest.LATEST_WINS_PUSH_GROUPS, {"w.yml": "r", "gone.yml": "r"}, clear=True):
+            check_push_concurrency(errors, root=self.root)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("gone.yml", errors[0])
+
+    def test_live_workflows_pass(self) -> None:
+        errors: list[str] = []
+        check_push_concurrency(errors)
+        self.assertEqual(errors, [])
+
+    def test_every_live_exemption_carries_a_reason(self) -> None:
+        for name, why in verify_manifest.LATEST_WINS_PUSH_GROUPS.items():
+            self.assertTrue(why.strip(), name)
+
+
+def _lock(*packages: tuple[str, str | None]) -> str:
+    out = ["# This file is automatically @generated by Cargo.", "version = 4", ""]
+    for name, source in packages:
+        out += ["[[package]]", f'name = "{name}"', 'version = "1.0.0"']
+        if source is not None:
+            out.append(f'source = "{source}"')
+        out.append("")
+    return "\n".join(out)
+
+
+_REG = "registry+https://github.com/rust-lang/crates.io-index"
+_ROOT_LOCK = _lock(("ipe", None), ("panic-scan", None), ("syn", _REG))
+_DEPENDABOT = """\
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+  - package-ecosystem: cargo
+    %s
+    schedule: {interval: weekly}
+"""
+
+
+class TestOneLockPerGraph(unittest.TestCase):
+    """Check 14: each dependency graph has one lock, and Dependabot updates it."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.repo = self._tmpdir.name
+        self.root = os.path.join(self.repo, ".github")
+        self.files: dict[str, str] = {"Cargo.lock": _ROOT_LOCK}
+        self.dependabot = _DEPENDABOT % "directory: /"
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def run_check(self) -> list[str]:
+        for rel, text in self.files.items():
+            _write(os.path.join(self.repo, rel), text)
+        if self.dependabot is not None:
+            _write(os.path.join(self.root, "dependabot.yml"), self.dependabot)
+        errors: list[str] = []
+        check_one_lock_per_graph(errors, root=self.root, tracked=sorted(self.files))
+        return errors
+
+    def assertRefused(self, needle: str) -> None:
+        errors = self.run_check()
+        self.assertTrue(any(needle in e for e in errors), errors)
+
+    def test_single_root_lock_passes(self) -> None:
+        self.assertEqual(self.run_check(), [])
+
+    def test_disjoint_nested_lock_passes(self) -> None:
+        self.files["editors/ext/Cargo.lock"] = _lock(("ext", None), ("syn", _REG))
+        self.dependabot = _DEPENDABOT % "directories: [/, /editors/ext]"
+        self.assertEqual(self.run_check(), [])
+
+    def test_nested_lock_sharing_a_path_package_is_refused(self) -> None:
+        self.files["tools/panic-scan/Cargo.lock"] = _lock(("panic-scan", None), ("syn", _REG))
+        self.assertRefused("tools/panic-scan/Cargo.lock resolves panic-scan")
+
+    def test_dependabot_on_a_shared_lock_is_refused(self) -> None:
+        self.files["tools/panic-scan/Cargo.lock"] = _lock(("panic-scan", None), ("syn", _REG))
+        self.dependabot = _DEPENDABOT % "directories: [/, /tools/panic-scan]"
+        self.assertRefused("a second lock over the root workspace graph")
+
+    def test_dependabot_directory_without_a_lock_is_refused(self) -> None:
+        self.dependabot = _DEPENDABOT % "directories: [/, /tools/panic-scan]"
+        self.assertRefused("'/tools/panic-scan' holds no tracked Cargo.lock")
+
+    def test_dependabot_glob_directory_is_refused(self) -> None:
+        self.dependabot = _DEPENDABOT % "directories: [/, /tools/*]"
+        self.assertRefused("is not a literal absolute path")
+
+    def test_dependabot_relative_directory_is_refused(self) -> None:
+        self.dependabot = _DEPENDABOT % "directories: [/, tools/x]"
+        self.assertRefused("is not a literal absolute path")
+
+    def test_dependabot_without_the_root_is_refused(self) -> None:
+        self.files["editors/ext/Cargo.lock"] = _lock(("ext", None))
+        self.dependabot = _DEPENDABOT % "directory: /editors/ext"
+        self.assertRefused("proposes no cargo update for the root Cargo.lock")
+
+    def test_dependabot_without_cargo_is_refused(self) -> None:
+        self.dependabot = "version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n"
+        self.assertRefused("proposes no cargo update for the root Cargo.lock")
+
+    def test_dependabot_both_directory_forms_is_refused(self) -> None:
+        self.dependabot = _DEPENDABOT % "directory: /\n    directories: [/]"
+        self.assertRefused("needs exactly one of")
+
+    def test_missing_dependabot_is_refused(self) -> None:
+        self.dependabot = None
+        self.assertRefused("dependabot.yml is missing")
+
+    def test_untracked_root_lock_is_refused(self) -> None:
+        del self.files["Cargo.lock"]
+        self.assertRefused("the root Cargo.lock is not tracked")
+
+    def test_unparseable_lock_is_refused(self) -> None:
+        self.files["tools/x/Cargo.lock"] = "not a lock\n"
+        self.assertRefused("tools/x/Cargo.lock: declares no [[package]]; refused")
+
+    def test_package_without_a_name_is_refused(self) -> None:
+        self.files["tools/x/Cargo.lock"] = "[[package]]\nversion = \"1\"\n"
+        self.assertRefused("has no single name/source")
+
+    def test_the_pre_fix_panic_scan_layout_is_refused(self) -> None:
+        # The layout that let a tool-lock-only update drift the root lock.
+        self.files["tools/panic-scan/Cargo.lock"] = _lock(
+            ("panic-scan", None), ("proc-macro2", _REG), ("syn", _REG)
+        )
+        self.dependabot = _DEPENDABOT % "directories:\n      - /\n      - /tools/panic-scan"
+        errors = self.run_check()
+        self.assertTrue(any("resolves panic-scan" in e for e in errors), errors)
+        self.assertTrue(any("second lock over the root workspace graph" in e for e in errors), errors)
+
+    def test_live_repository_is_clean(self) -> None:
+        errors: list[str] = []
+        check_one_lock_per_graph(errors)
+        self.assertEqual(errors, [])
+
+
+
+_BUDGET = """\
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+    %s
+  - package-ecosystem: cargo
+    %s
+    schedule: {interval: weekly}
+    %s
+"""
+
+
+class TestDependabotPrBudget(unittest.TestCase):
+    """Check 18: every ecosystem declares a positive limit within the budget."""
+
+    def run_check(self, actions: str, cargo: str, cargo_dir: str = "directory: /") -> list[str]:
+        with tempfile.TemporaryDirectory() as root:
+            _write(os.path.join(root, "dependabot.yml"), _BUDGET % (actions, cargo_dir, cargo))
+            errors: list[str] = []
+            check_dependabot_pr_budget(errors, root=root)
+            return errors
+
+    def assertRefused(self, needle: str, *args: str) -> None:
+        errors = self.run_check(*args)
+        self.assertTrue(any(needle in e for e in errors), errors)
+
+    def test_limits_within_the_budget_pass(self) -> None:
+        self.assertEqual(self.run_check("open-pull-requests-limit: 1", "open-pull-requests-limit: 2"), [])
+
+    def test_absent_limit_is_refused(self) -> None:
+        self.assertRefused("updates[0] (github-actions) needs an integer", "", "open-pull-requests-limit: 2")
+
+    def test_zero_limit_is_refused(self) -> None:
+        self.assertRefused("updates[1] (cargo) needs an integer", "open-pull-requests-limit: 1", "open-pull-requests-limit: 0")
+
+    def test_non_integer_limits_are_refused(self) -> None:
+        for bad in ("true", '"2"', "1.5", "null"):
+            with self.subTest(bad=bad):
+                self.assertRefused("needs an integer", "open-pull-requests-limit: 1", f"open-pull-requests-limit: {bad}")
+
+    def test_limits_over_the_budget_are_refused(self) -> None:
+        # The pre-throttle configuration: 3 + 3.
+        self.assertRefused("allows 6 open update PRs", "open-pull-requests-limit: 3", "open-pull-requests-limit: 3")
+
+    def test_one_past_the_budget_is_refused(self) -> None:
+        self.assertRefused("allows 4 open update PRs", "open-pull-requests-limit: 2", "open-pull-requests-limit: 2")
+
+    def test_each_directory_counts_against_the_budget(self) -> None:
+        self.assertRefused(
+            "allows 5 open update PRs", "open-pull-requests-limit: 1",
+            "open-pull-requests-limit: 2", "directories: [/, /tools/x]",
+        )
+
+    def test_missing_file_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            errors: list[str] = []
+            check_dependabot_pr_budget(errors, root=root)
+            self.assertTrue(any("check 18" in e for e in errors), errors)
+
+    def test_non_mapping_entry_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            _write(os.path.join(root, "dependabot.yml"), "version: 2\nupdates: [x]\n")
+            errors: list[str] = []
+            check_dependabot_pr_budget(errors, root=root)
+            self.assertTrue(any("updates[0] (None) needs an integer" in e for e in errors), errors)
+
+    def test_live_repository_is_clean(self) -> None:
+        errors: list[str] = []
+        check_dependabot_pr_budget(errors)
+        self.assertEqual(errors, [])
+
+
+_IB_OK = """\
+on: pull_request
+jobs:
+  build-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          cargo build --release -p ipe
+          cargo build --release -p regen-cli-transcripts
+      - uses: actions/upload-artifact@0000000000000000000000000000000000000000
+        with:
+          name: ci-ipe-release
+          path: target/release/ipe
+  consumer:
+    needs: [changes, build-tools]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@0000000000000000000000000000000000000000
+        with:
+          name: ci-ipe-release
+          path: /tmp/ipe-release
+      - run: |
+          cd "$EMITTED"
+          cargo build --release
+          cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown
+          cargo nextest run -p ipe
+"""
+_IB_CONSUMER_RUN = "          cargo nextest run -p ipe\n"
+
+
+_IB_FILES = {
+    "Cargo.toml": '[workspace]\nmembers = ["src/ipe-cli", "src/ipe-docs", "tools/panic-scan"]\n',
+    "src/ipe-cli/Cargo.toml": '[package]\nname = "ipe"\n',
+    "src/ipe-cli/src/main.rs": "fn main() {}\n",
+    "src/ipe-docs/Cargo.toml": '[package]\nname = "ipe_docs"\n',
+    "tools/panic-scan/Cargo.toml": '[package]\nname = "panic-scan"\n',
+    "editors/grammar/README.md": "x\n",
+}
+
+
+class TestOneIpeBuild(unittest.TestCase):
+    """Check 15: ci.yml compiles `ipe` in one job; its consumers need it."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.repo = self._tmp.name
+        self.root = os.path.join(self.repo, ".github")
+        self.files = dict(_IB_FILES)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, content: str) -> list[str]:
+        for rel, text in self.files.items():
+            _write(os.path.join(self.repo, rel), text)
+        _write(os.path.join(self.root, "workflows", "ci.yml"), content)
+        errors: list[str] = []
+        check_one_ipe_build(errors, root=self.root, tracked=sorted(self.files))
+        return errors
+
+    def with_consumer_step(self, run: str, extra: str = "") -> str:
+        """`_IB_OK` with one more consumer step running `run` from the root."""
+        step = "      - " + extra + ("\n        " if extra else "") + "run: " + run + "\n"
+        return _IB_OK.replace(_IB_CONSUMER_RUN, _IB_CONSUMER_RUN + step)
+
+    def assertRefused(self, content: str, needle: str) -> None:
+        errors = self.errors(content)
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def with_consumer_line(self, line: str) -> str:
+        return _IB_OK.replace(_IB_CONSUMER_RUN, _IB_CONSUMER_RUN + "          " + line + "\n")
+
+    def test_valid_workflow_passes(self) -> None:
+        self.assertEqual(self.errors(_IB_OK), [])
+
+    def test_repo_ci_yml_passes(self) -> None:
+        errors: list[str] = []
+        check_one_ipe_build(errors)
+        self.assertEqual(errors, [])
+
+    def test_second_ipe_build_refused_in_every_spelling(self) -> None:
+        for line in (
+            "cargo build --release -p ipe",
+            "cargo b -p ipe",
+            "cargo +1.98.1 --locked build --package ipe",
+            "cargo --config x=1 build --package=ipe",
+            "cargo build -pipe",
+            "cargo build -p=ipe@0.2.5",
+            "cargo run -p ipe -- check x",
+            "cargo r --release -p ipe",
+            "cargo rustc -p ipe",
+            "cargo build --workspace",
+            "cargo build --all --release",
+            "cargo build --manifest-path src/ipe-cli/Cargo.toml",
+            "cargo build --manifest-path=./src/ipe-cli/Cargo.toml",
+            "cargo build --workspace --manifest-path $X/Cargo.toml",
+            "cargo install --path src/ipe-cli",
+            "cargo install ipe",
+            "RUSTFLAGS=x cargo build -p ipe",
+            "sh -c 'cargo build -p ipe'",
+            'c""argo build -p "ipe"',
+            "cargo build -p x; cargo build -p ipe",
+        ):
+            with self.subTest(line=line):
+                self.assertRefused(self.with_consumer_line(line), "compiles `ipe`")
+
+    def test_second_ipe_build_in_a_heredoc_refused(self) -> None:
+        line = "bash <<'EOF'\n          cargo build -p ipe\n          EOF"
+        self.assertRefused(self.with_consumer_line(line), "compiles `ipe`")
+
+    def test_unreadable_package_pattern_refused(self) -> None:
+        self.assertRefused(self.with_consumer_line("cargo build -p 'ip*'"), "cannot resolve")
+
+    def test_ipe_build_by_directory_or_bin_refused(self) -> None:
+        for run in (
+            "cargo build",
+            "cargo build --release --locked",
+            "cargo -C src/ipe-cli build",
+            "cargo -C src build --manifest-path ipe-cli/Cargo.toml",
+            "cargo build --manifest-path Cargo.toml",
+            "cargo build --manifest-path ./Cargo.toml --release",
+            "cargo build --bin ipe",
+            "cargo run --bin ipe -- check x",
+            "cd src/ipe-cli && cargo build",
+            "cd src/ipe-cli/src; cargo build",
+            "(cd src/ipe-docs); cargo build",
+            "pushd src/ipe-cli; cargo rustc",
+            "cd src && cargo build --manifest-path ipe-cli/Cargo.toml",
+            'cargo build --manifest-path "$GITHUB_WORKSPACE/src/ipe-cli/Cargo.toml"',
+            "cargo build --manifest-path ${{ github.workspace }}/Cargo.toml",
+            "env -u X timeout 30m cargo build",
+            "bash -c 'cd src/ipe-cli && cargo build'",
+            "x=$(cargo build -p ipe)",
+        ):
+            with self.subTest(run=run):
+                self.assertRefused(self.with_consumer_step(repr(run) if ":" in run else run), "compiles `ipe`")
+
+    def test_ipe_build_through_working_directory_refused(self) -> None:
+        self.assertRefused(self.with_consumer_step("cargo build", "working-directory: src/ipe-cli"), "compiles `ipe`")
+        job_default = self.with_consumer_step("cargo build").replace(
+            "  consumer:\n", "  consumer:\n    defaults:\n      run:\n        working-directory: src/ipe-cli\n"
+        )
+        self.assertRefused(job_default, "compiles `ipe`")
+        wf_default = "defaults:\n  run:\n    working-directory: src/ipe-cli\n" + self.with_consumer_step("cargo build")
+        self.assertRefused(wf_default, "compiles `ipe`")
+
+    def test_ipe_build_in_a_local_action_refused(self) -> None:
+        self.files[".github/actions/b/action.yml"] = (
+            "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: cargo build -p ipe\n"
+        )
+        self.assertRefused(self.with_consumer_step("true", "uses: ./.github/actions/b"), "compiles `ipe`")
+        del self.files[".github/actions/b/action.yml"]
+        self.files[".github/actions/b/action.yaml"] = (
+            "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/c\n"
+        )
+        self.files[".github/actions/c/action.yml"] = (
+            "runs:\n  using: composite\n  steps:\n    - shell: bash\n      working-directory: src/ipe-cli\n      run: cargo build\n"
+        )
+        self.assertRefused(self.with_consumer_step("true", "uses: ./.github/actions/b"), "compiles `ipe`")
+
+    def test_missing_local_action_refused(self) -> None:
+        self.assertRefused(self.with_consumer_step("true", "uses: ./.github/actions/none"), "has no single action.yml")
+
+    def test_unreadable_cargo_command_refused(self) -> None:
+        for run, needle in (
+            ("cargo build --frobnicate -p x", "is not one this check reads"),
+            ("cargo --unknown-global build -p x", "is not one this check reads"),
+            ("cargo bld -p x", "a cargo alias could compile anything"),
+            ("cargo build -p", "lacks its value"),
+            ("cargo build extra-operand", "is not one `cargo build` takes"),
+            ("xargs cargo build", "cannot read"),
+            ("env -C src/ipe-cli cargo build", "does not read"),
+            ("cargo build --manifest-path src/ipe-docs", "names no Cargo.toml"),
+        ):
+            with self.subTest(run=run):
+                self.assertRefused(self.with_consumer_step(run), needle)
+
+    def test_bare_build_in_an_output_directory_passes(self) -> None:
+        # `**/out` reserves `out/rust/Cargo.toml` for an emitted crate: the
+        # manifest cargo finds there is generated, not the workspace root's.
+        self.files[".gitignore"] = "**/out\n"
+        for rel, text in self.files.items():
+            _write(os.path.join(self.repo, rel), text)
+        subprocess.run(["git", "init", "-q", self.repo], check=True)
+        self.assertEqual(self.errors(self.with_consumer_step("cd editors/grammar/out/rust && cargo build --release")), [])
+        # A directory the ignore rules do not reserve is searched upward.
+        self.assertRefused(self.with_consumer_step("mkdir -p x && cd x && cargo build"), "compiles `ipe`")
+
+    def test_other_packages_pass(self) -> None:
+        for line in (
+            "cargo build -p ipe_docs --bin gen-stdlib-docs",
+            "cargo build -p ipe-runtime-rust",
+            "cargo build --manifest-path tools/panic-scan/Cargo.toml",
+            "cargo build --manifest-path Cargo.toml -p ipe_lsp_server",
+            "cargo test -p ipe",
+            "echo cargo is not run here",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(self.errors(self.with_consumer_line(line)), [])
+        for run in (
+            "cargo install tree-sitter-cli --version ^0.27.0 --locked",
+            "cd src/ipe-docs && cargo build",
+            "cargo -C tools/panic-scan build --release",
+            "cd src/ipe-cli; cargo test; cargo fmt --all -- --check",
+            'cd "$dir" && cargo build',
+            "(cd src/ipe-cli && cargo check)",
+            "cargo build -p ipe_docs --bin gen-stdlib-docs",
+            'printf "cargo build\\n"',
+            "command -v cargo",
+        ):
+            with self.subTest(run=run):
+                self.assertEqual(self.errors(self.with_consumer_step(repr(run) if ":" in run else run)), [])
+
+    def test_consumer_without_needs_producer_refused(self) -> None:
+        bad = _IB_OK.replace("needs: [changes, build-tools]", "needs: [changes]")
+        self.assertRefused(bad, "without `needs: build-tools`")
+
+    def test_consumer_with_unnamed_download_refused(self) -> None:
+        bad = _IB_OK.replace("needs: [changes, build-tools]", "needs: [changes]").replace(
+            "          name: ci-ipe-release\n          path: /tmp/ipe-release\n",
+            "          pattern: ci-*\n",
+        )
+        self.assertRefused(bad, "'<unnamed>'")
+
+    def test_producer_missing_refused(self) -> None:
+        bad = _IB_OK.replace("  build-tools:\n", "  tools:\n").replace("build-tools]", "tools]")
+        self.assertRefused(bad, "producer 'build-tools' is not a job")
+
+    def test_producer_not_building_ipe_refused(self) -> None:
+        bad = _IB_OK.replace("          cargo build --release -p ipe\n", "", 1)
+        self.assertRefused(bad, "does not build the `ipe` package")
+
+    def test_producer_not_uploading_refused(self) -> None:
+        bad = _IB_OK.replace("name: ci-ipe-release\n          path: target", "name: other\n          path: target")
+        self.assertRefused(bad, "does not upload 'ci-ipe-release'")
+
+    def test_unreadable_workflow_refused(self) -> None:
+        self.assertRefused("jobs: [1]\n", "has no `jobs:` mapping")
+
+
+
+_SC_LOCK = """\
+version = 4
+
+[[package]]
+name = "rt"
+version = "0.1.0"
+dependencies = [
+ "dx",
+ "serde 1.0.0",
+]
+
+[[package]]
+name = "dx"
+version = "0.1.0"
+
+[[package]]
+name = "serde"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"""
+_SC_FILES = {
+    "Cargo.toml": '[workspace]\nmembers = ["src/rt", "src/dx", "src/other"]\n',
+    "Cargo.lock": _SC_LOCK,
+    "src/rt/Cargo.toml": '[package]\nname = "rt"\n',
+    "src/rt/src/lib.rs": 'const F: &str = include_str!("../../shared/f.txt");\nconst R: &str = "../..";\n',
+    "src/dx/Cargo.toml": '[package]\nname = "dx"\n',
+    "src/dx/src/lib.rs": "pub fn f() {}\n",
+    "src/shared/f.txt": "data\n",
+    "src/other/Cargo.toml": '[package]\nname = "other"\n',
+    "src/other/src/lib.rs": "pub fn g() {}\n",
+}
+_SC_WF = """\
+on: pull_request
+jobs:
+  asan:
+    needs: changes
+    if: needs.changes.outputs.emit != 'false' || github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - run: cargo +nightly --locked test -p rt
+"""
+_SC_SCOPE = ("src/rt/**", "src/dx/**", "src/shared/**")
+
+
+class TestScopedPackageCoverage(unittest.TestCase):
+    """Check 16: a path-scoped job's scope covers its packages' closure."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.repo = self._tmp.name
+        self.files = dict(_SC_FILES)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, wf: str = _SC_WF, scope: tuple[str, ...] = _SC_SCOPE) -> list[str]:
+        for rel, text in self.files.items():
+            _write(os.path.join(self.repo, rel), text)
+        _write(os.path.join(self.repo, ".github", "workflows", "ci.yml"), wf)
+        errors: list[str] = []
+        with mock.patch.dict(verify_manifest.change_class.SCOPES, {"emit": scope}):
+            check_scoped_package_coverage(errors, root=os.path.join(self.repo, ".github"), tracked=sorted(self.files))
+        return errors
+
+    def assertRefused(self, needle: str, **kw: object) -> None:
+        errors = self.errors(**kw)  # type: ignore[arg-type]
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def test_covering_scope_passes(self) -> None:
+        self.assertEqual(self.errors(), [])
+
+    def test_repo_workflows_pass(self) -> None:
+        errors: list[str] = []
+        check_scoped_package_coverage(errors)
+        self.assertEqual(errors, [])
+
+    def test_uncovered_path_dependency_refused(self) -> None:
+        self.assertRefused("src/dx/src/lib.rs", scope=("src/rt/**", "src/shared/**"))
+
+    def test_uncovered_dev_dependency_refused(self) -> None:
+        # Cargo.lock lists dev-dependencies too; a test build compiles them.
+        self.assertRefused("src/dx/Cargo.toml", scope=("src/rt/**", "src/shared/**"))
+
+    def test_uncovered_parent_literal_read_refused(self) -> None:
+        self.assertRefused("src/shared/f.txt", scope=("src/rt/**", "src/dx/**"))
+
+    def test_bare_ancestor_literal_is_not_a_read(self) -> None:
+        # `"../.."` names no file; `src/other` stays out of the closure.
+        self.assertEqual(self.errors(), [])
+
+    def test_whole_workspace_selection_refused(self) -> None:
+        self.assertRefused("selects the whole workspace", wf=_SC_WF.replace("-p rt", "--workspace"))
+
+    def test_package_pattern_refused(self) -> None:
+        self.assertRefused("cannot resolve", wf=_SC_WF.replace("-p rt", "-p 'r*'"))
+
+    def test_every_package_spelling_is_read(self) -> None:
+        for spec in ("--package rt", "--package=rt", "-prt", "-p=rt", "-p rt@0.1.0"):
+            with self.subTest(spec=spec):
+                self.assertRefused("src/dx/src/lib.rs", wf=_SC_WF.replace("-p rt", spec), scope=("src/rt/**", "src/shared/**"))
+
+    def test_valued_global_flag_is_skipped(self) -> None:
+        wf = _SC_WF.replace("cargo +nightly --locked test", "cargo --frozen --config k=v -Z x -q test")
+        self.assertRefused("src/dx/src/lib.rs", wf=wf, scope=("src/rt/**", "src/shared/**"))
+
+    def test_unknown_package_refused(self) -> None:
+        self.assertRefused("not a path package", wf=_SC_WF.replace("-p rt", "-p nope"))
+
+    def test_directory_selection_is_read(self) -> None:
+        narrow = ("src/rt/**", "src/shared/**")
+        for run in (
+            "cargo -C src/rt test",
+            "cargo test --manifest-path src/rt/Cargo.toml",
+            "cd src/rt && cargo +nightly test",
+            "cd src && cargo test --manifest-path rt/Cargo.toml",
+        ):
+            with self.subTest(run=run):
+                self.assertRefused("src/dx/src/lib.rs", wf=_SC_WF.replace("cargo +nightly --locked test -p rt", run), scope=narrow)
+        wd = _SC_WF.replace("      - run: cargo +nightly --locked test -p rt\n", "      - working-directory: src/rt\n        run: cargo test\n")
+        self.assertRefused("src/dx/src/lib.rs", wf=wd, scope=narrow)
+
+    def test_bare_root_or_bin_selection_refused(self) -> None:
+        self.assertRefused("selects the whole workspace", wf=_SC_WF.replace(" -p rt", ""))
+        self.assertRefused("by `--bin` alone", wf=_SC_WF.replace("-p rt", "--bin rt"))
+
+    def test_unreadable_cargo_command_refused(self) -> None:
+        self.assertRefused("is not one this check reads", wf=_SC_WF.replace("-p rt", "-p rt --frobnicate"))
+        self.assertRefused("a cargo alias", wf=_SC_WF.replace("test -p rt", "tst -p rt"))
+
+    def test_yaml_workflow_is_read(self) -> None:
+        for rel, text in self.files.items():
+            _write(os.path.join(self.repo, rel), text)
+        _write(os.path.join(self.repo, ".github", "workflows", "extra.yaml"), _SC_WF.replace("-p rt", "--workspace"))
+        errors = self.errors()
+        self.assertTrue(any("extra.yaml" in e and "selects the whole workspace" in e for e in errors), errors)
+
+    def test_registry_package_refused(self) -> None:
+        self.assertRefused("not a path package", wf=_SC_WF.replace("-p rt", "-p serde"))
+
+    def test_duplicate_manifest_name_refused(self) -> None:
+        self.files["src/copy/Cargo.toml"] = '[package]\nname = "rt"\n'
+        self.assertRefused("declared by two manifests")
+
+    def test_missing_lock_refused(self) -> None:
+        del self.files["Cargo.lock"]
+        self.assertRefused("root Cargo.lock")
+
+    def test_code_scoped_job_is_not_narrow(self) -> None:
+        wf = _SC_WF.replace("outputs.emit", "outputs.code")
+        self.assertEqual(self.errors(wf=wf, scope=()), [])
+
+    def test_prose_under_a_crate_never_counts(self) -> None:
+        with mock.patch.object(verify_manifest.change_class, "PROSE_FILES", frozenset({"src/dx/NOTES.md"})):
+            self.files["src/dx/NOTES.md"] = "x\n"
+            self.assertEqual(self.errors(scope=("src/rt/**", "src/shared/**", "src/dx/src/**", "src/dx/Cargo.toml")), [])
+
+
+
+_DU_WF = """\
+on: pull_request
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./gen --repo-root .
+      - run: tools/scripts/generated-unchanged.sh docs/reference/x.md docs/reference/x/
+"""
+_DU_MANIFEST = """\
+checks:
+  - context: drift
+    disposition: gate
+    producer: ci.yml
+    local:
+      tier: quick
+      run:
+        - cmd: cargo run -p gen -- --repo-root {repo_root}
+          differs: local build
+        - tools/scripts/generated-unchanged.sh docs/reference/x.md
+"""
+
+
+class TestDriftSeesUntracked(unittest.TestCase):
+    """Check 17: drift assertions never rest on `git diff --exit-code`."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = self._tmp.name
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, wf: str = _DU_WF, manifest: str = _DU_MANIFEST) -> list[str]:
+        _write(os.path.join(self.root, "workflows", "ci.yml"), wf)
+        _write(os.path.join(self.root, "ci", "check-manifest.yml"), manifest)
+        errors: list[str] = []
+        check_drift_sees_untracked(errors, root=self.root)
+        return errors
+
+    def test_valid_passes(self) -> None:
+        self.assertEqual(self.errors(), [])
+
+    def test_repo_passes(self) -> None:
+        errors: list[str] = []
+        check_drift_sees_untracked(errors)
+        self.assertEqual(errors, [])
+
+    def test_workflow_git_diff_exit_code_refused_in_every_spelling(self) -> None:
+        for line in (
+            "git diff --exit-code docs/reference/x.md",
+            "git -C . diff --stat --exit-code docs/",
+            "/usr/bin/git --no-pager diff --exit-code -- docs/",
+            'g""it diff "--exit-code" docs/',
+            "true && git diff --exit-code docs/",
+            "bash <<'EOF'\n          git diff --exit-code docs/\n          EOF",
+            "git diff --quiet docs/reference/x.md",
+            "if git diff --quiet Cargo.lock; then echo same; fi",
+            "git diff-index --quiet HEAD -- docs/",
+            "git diff-files --exit-code",
+            "sh -c 'git diff --quiet docs/'",
+        ):
+            with self.subTest(line=line):
+                wf = _DU_WF.replace("tools/scripts/generated-unchanged.sh docs/reference/x.md docs/reference/x/", line)
+                errors = self.errors(wf=wf)
+                self.assertTrue(any("check 17: workflows/ci.yml job 'drift'" in e for e in errors), errors)
+
+    def test_manifest_local_git_diff_exit_code_refused(self) -> None:
+        for item in (
+            "        - git diff --exit-code docs/reference/x.md\n",
+            "        - cmd: git diff --exit-code docs/reference/x.md\n          differs: x\n",
+        ):
+            with self.subTest(item=item):
+                bad = _DU_MANIFEST.replace("        - tools/scripts/generated-unchanged.sh docs/reference/x.md\n", item)
+                errors = self.errors(manifest=bad)
+                self.assertTrue(any("manifest context 'drift'" in e for e in errors), errors)
+
+    def test_other_git_diffs_pass(self) -> None:
+        for line in ("git diff --stat", "git diff --name-only origin/main", "git log --exit-code"):
+            with self.subTest(line=line):
+                self.assertEqual(self.errors(wf=_DU_WF.replace("./gen --repo-root .", line)), [])
+
+    def test_parser_reads_both_spellings(self) -> None:
+        parse = verify_manifest.drift_assertion.parse
+        self.assertEqual(
+            [(a.paths, a.sees_untracked) for a in parse("./tools/scripts/generated-unchanged.sh a b/".split())],
+            [(("a", "b/"), True)],
+        )
+        self.assertEqual(
+            [(a.paths, a.sees_untracked) for a in parse("git -C . --no-pager diff --stat --exit-code HEAD -- a".split())],
+            [(("a",), False)],
+        )
+        self.assertEqual(parse("git -C diff status --quiet".split()), [])
+        self.assertEqual(parse("git log --exit-code a".split()), [])
+
+    def test_yaml_workflow_and_local_action_are_read(self) -> None:
+        _write(os.path.join(self.root, "workflows", "other.yaml"), _DU_WF.replace(
+            "tools/scripts/generated-unchanged.sh docs/reference/x.md docs/reference/x/", "git diff --exit-code gen/"))
+        for name in ("action.yml", "action.yaml"):
+            _write(os.path.join(self.root, "actions", name.replace(".", "-"), name),
+                   "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: git diff --quiet gen/\n")
+        errors = self.errors()
+        self.assertTrue(any("workflows/other.yaml job 'drift'" in e for e in errors), errors)
+        for name in ("action.yml", "action.yaml"):
+            path = f"actions/{name.replace('.', '-')}/{name} composite steps"
+            self.assertTrue(any(path in e for e in errors), (path, errors))
+
+    def test_unreadable_inputs_refused(self) -> None:
+        self.assertTrue(any("check 17: cannot read" in e for e in self.errors(wf="jobs: [\n")))
+        self.assertTrue(any("no `checks:` list" in e for e in self.errors(manifest="checks: 1\n")))
+
+
+_WI_ROOT = """\
+[workspace]
+members = ["a", "rt"]
+
+[workspace.package]
+edition = "2024"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+"""
+_WI_INHERITS = '[package]\nname = "a"\nedition.workspace = true\n\n[lints]\nworkspace = true\n'
+_WI_OWN = '[package]\nname = "rt"\nedition = "2024"\n\n[lints.clippy]\npanic = "deny"\n'
+
+
+class TestWorkspaceInheritance(unittest.TestCase):
+    """Check 19: members inherit the workspace edition and lints, bar a tested allowlist."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.repo = self._tmp.name
+        self.files = {"Cargo.toml": _WI_ROOT, "a/Cargo.toml": _WI_INHERITS, "rt/Cargo.toml": _WI_OWN}
+        self.exempt = {"rt": "vendored"}
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self) -> list[str]:
+        for rel, text in self.files.items():
+            _write(os.path.join(self.repo, rel), text)
+        errors: list[str] = []
+        with mock.patch.object(verify_manifest, "WORKSPACE_INHERIT_EXEMPT", self.exempt):
+            check_workspace_inheritance(errors, root=os.path.join(self.repo, ".github"))
+        return errors
+
+    def assertRefused(self, needle: str) -> None:
+        errors = self.errors()
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def test_valid_passes(self) -> None:
+        self.assertEqual(self.errors(), [])
+
+    def test_repo_passes(self) -> None:
+        errors: list[str] = []
+        check_workspace_inheritance(errors)
+        self.assertEqual(errors, [])
+
+    def test_repo_exemptions_are_exactly_the_documented_two(self) -> None:
+        self.assertEqual(
+            set(verify_manifest.WORKSPACE_INHERIT_EXEMPT), {"src/runtime/rust", "tools/ipe-ffi-inspector"}
+        )
+
+    def test_literal_edition_refused(self) -> None:
+        self.files["a/Cargo.toml"] = _WI_INHERITS.replace("edition.workspace = true", 'edition = "2021"')
+        self.assertRefused("a/Cargo.toml sets edition '2021'")
+
+    def test_missing_edition_refused(self) -> None:
+        self.files["a/Cargo.toml"] = _WI_INHERITS.replace("edition.workspace = true\n", "")
+        self.assertRefused("a/Cargo.toml sets edition None")
+
+    def test_missing_lints_refused(self) -> None:
+        self.files["a/Cargo.toml"] = _WI_INHERITS.replace("\n[lints]\nworkspace = true\n", "")
+        self.assertRefused("a/Cargo.toml does not inherit the workspace lint policy")
+
+    def test_own_lints_on_a_non_exempt_member_refused(self) -> None:
+        self.files["a/Cargo.toml"] = _WI_INHERITS.replace("[lints]\nworkspace = true", '[lints.clippy]\npanic = "allow"')
+        self.assertRefused("a/Cargo.toml does not inherit the workspace lint policy")
+
+    def test_exempt_member_with_other_edition_refused(self) -> None:
+        self.files["rt/Cargo.toml"] = _WI_OWN.replace('"2024"', '"2021"')
+        self.assertRefused("its literal edition must equal the workspace's '2024'")
+
+    def test_exempt_member_without_own_lints_refused(self) -> None:
+        self.files["rt/Cargo.toml"] = _WI_OWN.replace('[lints.clippy]\npanic = "deny"\n', "")
+        self.assertRefused("must carry its own `[lints]` table")
+
+    def test_stale_exemption_that_inherits_refused(self) -> None:
+        self.files["rt/Cargo.toml"] = _WI_INHERITS
+        self.assertRefused("inherits the workspace edition and lints anyway")
+
+    def test_exemption_for_a_non_member_refused(self) -> None:
+        self.exempt = {"rt": "vendored", "gone": "x"}
+        self.assertRefused("'gone', which is not a workspace member")
+
+    def test_glob_member_refused(self) -> None:
+        self.files["Cargo.toml"] = _WI_ROOT.replace('["a", "rt"]', '["a", "rt", "tools/*"]')
+        self.assertRefused("'tools/*' is not a literal normalized path")
+
+    def test_missing_member_manifest_refused(self) -> None:
+        self.files["Cargo.toml"] = _WI_ROOT.replace('["a", "rt"]', '["a", "rt", "b"]')
+        self.assertRefused("b/Cargo.toml is missing")
+
+    def test_root_without_workspace_lints_refused(self) -> None:
+        self.files["Cargo.toml"] = _WI_ROOT.replace('[workspace.lints.clippy]\nunwrap_used = "deny"\n', "")
+        self.assertRefused("`[workspace.lints]` table")
 
 
 if __name__ == "__main__":

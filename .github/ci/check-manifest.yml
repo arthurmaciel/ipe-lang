@@ -37,7 +37,7 @@
 #                 crates only), {repo_root}, {target_dir}.
 #   covered-by    Another gate context whose local run exercises this one.
 #   ci-only       Not reproducible locally: platform | privileged | classifier |
-#                 inline-script.
+#                 run-history | pull-request-state | inline-script.
 # `.github/ci/local_gate.py` parses and verifies these; the verifier refuses a
 # gate without one and a local command that drifts from CI.
 
@@ -128,10 +128,11 @@ checks:
     local:
       tier: affected
       run:
-        - cargo build --release -p ipe
+        - cmd: cargo build --release -p ipe
+          differs: CI builds it once in build-tools and shares it by artifact
         - cmd: bash tools/scripts/check-explain-examples.sh
           env:
-            IPE_BIN: "{target_dir}/release/ipe"
+            IPE_BIN: "{ipe_bin}"
             IPE_RUNTIME_DIR: "{repo_root}/src/runtime/rust/src"
   - context: "doc-string example gate"
     disposition: gate
@@ -139,10 +140,11 @@ checks:
     local:
       tier: affected
       run:
-        - cargo build --release -p ipe
+        - cmd: cargo build --release -p ipe
+          differs: CI builds it once in build-tools and shares it by artifact
         - cmd: bash tools/scripts/check-doc-examples.sh
           env:
-            IPE_BIN: "{target_dir}/release/ipe"
+            IPE_BIN: "{ipe_bin}"
             IPE_RUNTIME_DIR: "{repo_root}/src/runtime/rust/src"
   - context: "first-party check floor (ipe type-check only)"
     disposition: gate
@@ -150,10 +152,11 @@ checks:
     local:
       tier: affected
       run:
-        - cargo build --release -p ipe
+        - cmd: cargo build --release -p ipe
+          differs: CI builds it once in build-tools and shares it by artifact
         - cmd: bash tools/scripts/first-party-check-floor.sh
           env:
-            IPE_BIN: "{target_dir}/release/ipe"
+            IPE_BIN: "{ipe_bin}"
             IPE_RUNTIME_DIR: "{repo_root}/src/runtime/rust/src"
   - context: "first-party shapes (build gate)"
     disposition: gate
@@ -186,8 +189,10 @@ checks:
       Security — a build step that a required gate `needs` must itself be
       required, or its failure/skip silently fail-opens the gates depending on
       it (the same fail-closed-classifier property as `changes` below).
-      Compiles the six doc/golden regenerator binaries once and shares them
-      via artifact across the docs-drift gates.
+      The one job that compiles the `ipe` package (verify-manifest check 15):
+      builds the release `ipe` and the six doc/golden regenerator binaries
+      once and shares them by artifact with the docs-drift gates and every
+      gate that runs `ipe`.
   - context: stdlib-docs-drift
     disposition: gate
     producer: ci.yml
@@ -196,7 +201,7 @@ checks:
       run:
         - cmd: cargo run -p ipe_docs --bin gen-stdlib-docs -- --repo-root {repo_root}
           differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
-        - git diff --exit-code docs/reference/stdlib.md docs/reference/stdlib/
+        - tools/scripts/generated-unchanged.sh docs/reference/stdlib.md docs/reference/stdlib/
   - context: env-docs-drift
     disposition: gate
     producer: ci.yml
@@ -205,7 +210,7 @@ checks:
       run:
         - cmd: cargo run -p ipe_docs --bin gen-env-docs -- --repo-root {repo_root}
           differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
-        - git diff --exit-code docs/reference/env.md
+        - tools/scripts/generated-unchanged.sh docs/reference/env.md
   - context: capabilities-docs-drift
     disposition: gate
     producer: ci.yml
@@ -214,7 +219,7 @@ checks:
       run:
         - cmd: cargo run -p ipe_docs --bin gen-capabilities-docs -- --repo-root {repo_root}
           differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
-        - git diff --exit-code docs/reference/capabilities.md
+        - tools/scripts/generated-unchanged.sh docs/reference/capabilities.md
   - context: cli-docs-drift
     disposition: gate
     producer: ci.yml
@@ -223,7 +228,7 @@ checks:
       run:
         - cmd: cargo run -p ipe --bin gen-cli-docs -- --repo-root {repo_root}
           differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
-        - git diff --exit-code docs/reference/cli.md
+        - tools/scripts/generated-unchanged.sh docs/reference/cli.md
   - context: requirements-docs-drift
     disposition: gate
     producer: ci.yml
@@ -232,7 +237,7 @@ checks:
       run:
         - cmd: cargo run -p ipe_docs --bin gen-requirements-docs -- --repo-root {repo_root}
           differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
-        - git diff --exit-code docs/reference/requirements.md
+        - tools/scripts/generated-unchanged.sh docs/reference/requirements.md
   - context: cli-transcripts-drift
     disposition: gate
     producer: ci.yml
@@ -240,8 +245,8 @@ checks:
       tier: quick
       run:
         - cmd: cargo run -p regen-cli-transcripts -- --repo-root {repo_root}
-          differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally, and CI points it at its prebuilt ipe via --ipe-bin
-        - git diff --exit-code src/ipe-cli/tests/golden/cli/
+          differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally, and CI points it at build-tools' release ipe via --ipe-bin
+        - tools/scripts/generated-unchanged.sh src/ipe-cli/tests/golden/cli/
   - context: markdown-parity
     disposition: gate
     producer: ci.yml
@@ -249,7 +254,7 @@ checks:
       tier: quick
       run:
         - tools/scripts/regen-markdown-parity.sh
-        - git diff --exit-code src/ipe-docs/src/markdown/parity/snapshot.txt
+        - tools/scripts/generated-unchanged.sh src/ipe-docs/src/markdown/parity/snapshot.txt
   - context: runtime-full-features
     disposition: gate
     producer: ci.yml
@@ -285,15 +290,18 @@ checks:
       red at its check step, so the heavy tier stops consuming runners; see the comment above
       the job in ci.yml.
 
-  # ── Trust-root diff — informational until promoted with the ruleset ───────
+  # ── Trust-root diff (code-owner review of trust-root changes) ─────────────
   - context: trust-root-diff
-    disposition: informational
+    disposition: gate
     producer: trust-root-diff.yml
+    local:
+      ci-only: pull-request-state
+    guards: Security
     owner: maintainer
     note: >-
-      Fails an outside PR that touches a path .github/CODEOWNERS owns until a
-      code owner approves its current commit. Promote to `gate` in one commit
-      together with required-set.json and the ruleset's required checks.
+      Fails a PR that touches a path .github/CODEOWNERS owns until a code
+      owner approves its current commit, unless a code owner opened it from
+      a branch of this repository and authored every commit.
 
   # ── Panic-scan / cargo-deny / playground / admission (per-change gates) ────
   - context: panic-scan
@@ -304,7 +312,7 @@ checks:
       run:
         - cargo test --manifest-path tools/panic-scan/Cargo.toml
         - cmd: cargo run --release --manifest-path tools/panic-scan/Cargo.toml -- --walk src
-          differs: CI builds the scanner then runs it from its in-tree target dir; cargo run resolves the local target dir
+          differs: CI builds the scanner then runs it from the workspace target dir; cargo run resolves the local target dir
     guards: Soundness
   - context: cargo-deny
     disposition: gate
@@ -421,6 +429,22 @@ checks:
     disposition: nightly-gate
     producer: ci.yml
     guards: Security
+
+  # ── Required-set enforcement — nightly-gate ───────────────────────────────
+  - context: ruleset-drift
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: >-
+      Security — the live `main-protection` ruleset requires exactly the
+      derived `{context, integration_id}` set, so no gate is dropped from the
+      merge path and no required check is satisfiable by another app's status.
+  - context: ruleset-admin-read
+    disposition: nightly-gate
+    producer: ruleset-admin-read.yml
+    guards: >-
+      Security — an admin read of the live `main-protection` ruleset proves it
+      has no bypass actor; a token that cannot see `bypass_actors` fails the
+      read instead of passing it.
 
   # ── Cross-platform jail proofs — nightly-gate (Security §1) ───────────────
   # The Linux jail Tier-2 proofs — the containment gate CI produces on GitHub-

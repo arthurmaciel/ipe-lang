@@ -179,6 +179,7 @@ impl ProjectLoader for DriverLoader {
         Ok(LoadedProject {
             files,
             entry_module,
+            lint_config_dir: ipe_lint::lint_config_dir(&blame_path),
         })
     }
 }

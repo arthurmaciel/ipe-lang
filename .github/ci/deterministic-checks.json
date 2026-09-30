@@ -2,7 +2,7 @@
   "about": [
     "SSOT: the (job, check step) pairs whose failure is a deterministic red.",
     "A job counts as deterministically red ONLY when it failed AT its named check",
-    "step. A failure in any other step (checkout, toolchain install, sccache,",
+    "step. A failure in any other step (checkout, toolchain install,",
     "rust-cache, mold install, crate fetch, a regenerate/build step) or a skipped",
     "job behind a failed ancestor is infra-shaped and never counts.",
     "context = the job's status context exactly as `gh api .../jobs` reports it",

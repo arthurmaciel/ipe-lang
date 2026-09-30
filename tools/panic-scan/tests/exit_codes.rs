@@ -8,8 +8,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The built scanner, archive-safe: nextest re-exports `CARGO_BIN_EXE_panic-scan`
+/// at runtime pointing at the extracted binary; fall back to the baked path for a
+/// plain (non-archive) run.
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_panic-scan"))
+    Command::new(ipe_env::var_os("CARGO_BIN_EXE_panic-scan").map_or_else(
+        || PathBuf::from(env!("CARGO_BIN_EXE_panic-scan")),
+        PathBuf::from,
+    ))
 }
 
 fn fixture(name: &str) -> PathBuf {

@@ -13,12 +13,17 @@ Pure stdlib `unittest`, no network, no cargo.
 
 from __future__ import annotations
 
+import contextlib
+import importlib.machinery
+import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -336,7 +341,7 @@ PLAN_ENTRIES = [
     gate("fmt", run("cargo fmt --all -- --check")),
     gate("clippy", run("cargo clippy --all-targets {packages} -- -D warnings")),
     gate("test", run("cargo nextest run {packages}", "cargo test --doc {lib_packages}", tier="affected")),
-    gate("e2e", run({"cmd": "cargo nextest run --workspace", "env": {"BIN": "{target_dir}/ipe"}}, tier="full")),
+    gate("e2e", run({"cmd": "cargo nextest run --workspace", "env": {"BIN": "{target_dir}/ipe", "IPE": "{ipe_bin}"}}, tier="full")),
     gate("dup", run("cargo fmt --all -- --check", tier="full")),
     gate("win", {"ci-only": "platform"}),
 ]
@@ -430,27 +435,42 @@ class SourceReaders(unittest.TestCase):
         self.assertEqual(sel.packages, frozenset({"back"}))
 
 
-class ChangedFiles(unittest.TestCase):
-    """`changed_files` against a real throwaway repository."""
-
+class _TmpRepo(unittest.TestCase):
     def setUp(self) -> None:
+        # Every git the test runs, directly or through the code under test,
+        # reads only the throwaway repository's config.
+        isolated = mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+        isolated.start()
+        self.addCleanup(isolated.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = self.tmp.name
         self.git("init", "-q", "-b", "main")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+        ident = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+        return subprocess.run(["git", *ident, *args], cwd=self.root, check=check, capture_output=True, text=True)
+
+    def write(self, rel: str, text: str) -> None:
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+
+
+class ChangedFiles(_TmpRepo):
+    """`changed_files` against a real throwaway repository."""
+
+    def setUp(self) -> None:
+        super().setUp()
         os.makedirs(os.path.join(self.root, "src/a"))
         with open(os.path.join(self.root, "src/a/moved.rs"), "w") as f:
             f.write("fn moved() {}\n" * 20)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "base")
         self.git("checkout", "-q", "-b", "topic")
-
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
-
-    def git(self, *args: str) -> None:
-        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
-        ident = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
-        subprocess.run(["git", *ident, *args], cwd=self.root, check=True, capture_output=True, env=env)
 
     def test_a_rename_reports_both_paths(self) -> None:
         os.makedirs(os.path.join(self.root, "src/b"))
@@ -500,7 +520,7 @@ class Plan(unittest.TestCase):
 
     def test_local_placeholders_expand(self) -> None:
         e2e = [s for s in planned(lg.Tier.FULL, []) if s.context == "e2e"]
-        self.assertEqual([s.env for s in e2e], [(("BIN", "/t/ipe"),)])
+        self.assertEqual([s.env for s in e2e], [(("BIN", "/t/ipe"), ("IPE", "/t/release/ipe"))])
 
 
 class LiveManifest(unittest.TestCase):
@@ -527,6 +547,257 @@ class LiveManifest(unittest.TestCase):
         ).with_source_readers()
         self.assertIn("ipe_kernels", ws.readers.get("ipe_stdlib", frozenset()))
         self.assertIn("ipe_ffi", ws.readers.get("ipe-ffi-inspector", frozenset()))
+
+
+
+def _load_gate_runner():
+    path = os.path.join(lg.REPO_ROOT, "tools", "scripts", "gate")
+    loader = importlib.machinery.SourceFileLoader("gate_runner", path)
+    spec = importlib.util.spec_from_loader("gate_runner", loader)
+    assert spec is not None
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+@contextlib.contextmanager
+def _silenced():
+    """Send this process's and its children's stdout/stderr to /dev/null."""
+    saved = [os.dup(1), os.dup(2)]
+    with open(os.devnull, "w") as null:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(null.fileno(), 1)
+        os.dup2(null.fileno(), 2)
+        try:
+            yield
+        finally:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os.dup2(saved[0], 1)
+            os.dup2(saved[1], 2)
+            os.close(saved[0])
+            os.close(saved[1])
+
+
+class QuickCatchesPlantedErrors(_TmpRepo):
+    """`gate quick`, run by `tools/scripts/gate` on the plan the live
+    manifest yields, goes red on a planted manifest/lock desync and on every
+    planted generated-output drift: a changed, a deleted, and a newly
+    generated (untracked) file under each drift gate's paths.
+
+    The generators need a cargo build, so the plan's drift *assertions* run
+    against a tree in which the planted file stands for what a generator
+    wrote.
+    """
+
+    DRIFT_CONTEXTS = (
+        "stdlib-docs-drift",
+        "env-docs-drift",
+        "capabilities-docs-drift",
+        "cli-docs-drift",
+        "requirements-docs-drift",
+        "cli-transcripts-drift",
+        "markdown-parity",
+    )
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.entries = lg.load_manifest_entries()
+        errs: list[str] = []
+        cls.parsed = lg.check_local_dispositions(cls.entries, errs)
+        assert errs == [], errs
+        cls.runner = _load_gate_runner()
+
+    def setUp(self) -> None:
+        super().setUp()
+        ws = lg.Workspace(self.root, os.path.join(self.root, "target"), {}, frozenset(), {})
+        self.steps = lg.plan(lg.Tier.QUICK, self.entries, self.parsed, ["Cargo.lock"], ws)
+        for rel in (".github/ci/manifest-lock-consistency.sh", "tools/scripts/generated-unchanged.sh", "Cargo.toml", "Cargo.lock"):
+            os.makedirs(os.path.dirname(os.path.join(self.root, rel)), exist_ok=True)
+            shutil.copy2(os.path.join(lg.REPO_ROOT, rel), os.path.join(self.root, rel))
+        self.paths: list[str] = []
+        for step in self.drift_checks():
+            for rel in step.argv[1:]:
+                src = os.path.join(lg.REPO_ROOT, rel)
+                if os.path.isdir(src):
+                    shutil.copytree(src, os.path.join(self.root, rel), dirs_exist_ok=True)
+                    self.paths.append(rel)
+                else:
+                    os.makedirs(os.path.dirname(os.path.join(self.root, rel)), exist_ok=True)
+                    shutil.copy2(src, os.path.join(self.root, rel))
+                    self.paths.append(rel)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "base")
+
+    def of(self, ctx: str) -> list[lg.Step]:
+        found = [s for s in self.steps if s.context == ctx]
+        self.assertTrue(found, f"`gate quick` plans no {ctx!r} step")
+        return found
+
+    def drift_checks(self) -> list[lg.Step]:
+        out: list[lg.Step] = []
+        for ctx in self.DRIFT_CONTEXTS:
+            steps = self.of(ctx)
+            self.assertGreater(len(steps), 1, f"{ctx}: no generator runs before the drift assertion")
+            self.assertEqual(steps[-1].argv[0], "tools/scripts/generated-unchanged.sh", ctx)
+            self.assertGreater(len(steps[-1].argv), 1, ctx)
+            out.append(steps[-1])
+        return out
+
+    def run_gate(self, steps: list[lg.Step]) -> int:
+        """`tools/scripts/gate quick` exit status, planning `steps`."""
+        r = self.runner.local_gate
+        ws = lg.Workspace(self.root, "", {}, frozenset(), {})
+        with (
+            mock.patch.object(r, "load_manifest_entries", return_value=self.entries),
+            mock.patch.object(r, "check_local_dispositions", return_value=self.parsed),
+            mock.patch.object(r, "load_workspace", return_value=ws),
+            mock.patch.object(r, "changed_files", return_value=["Cargo.lock"]),
+            mock.patch.object(r, "plan", return_value=steps),
+            mock.patch.object(sys, "argv", ["gate", "quick", "--keep-going"]),
+            _silenced(),
+        ):
+            return self.runner.main()
+
+    def planted_steps(self) -> list[lg.Step]:
+        return self.of("manifest-lock-consistency") + self.drift_checks()
+
+    def test_clean_tree_passes(self) -> None:
+        self.assertEqual(self.run_gate(self.planted_steps()), 0)
+
+    def test_planted_manifest_lock_desync_fails_quick(self) -> None:
+        lock = os.path.join(self.root, "Cargo.lock")
+        with open(lock) as f:
+            text = f.read()
+        marker = 'name = "ipe"\nversion = "'
+        self.assertIn(marker, text)
+        with open(lock, "w") as f:
+            f.write(text.replace(marker, marker + "9999.", 1))
+        self.assertEqual(self.run_gate(self.planted_steps()), 1)
+
+    def test_planted_doc_drift_fails_quick(self) -> None:
+        for rel in self.paths:
+            target = os.path.join(self.root, rel)
+            files = (
+                [os.path.join(target, sorted(os.listdir(target))[0])] if os.path.isdir(target) else [target]
+            )
+            for f in files:
+                with open(f) as fh:
+                    original = fh.read()
+                for plant in ("changed", "deleted"):
+                    with self.subTest(path=rel, plant=plant):
+                        if plant == "changed":
+                            with open(f, "a") as fh:
+                                fh.write("\nplanted drift\n")
+                        else:
+                            os.remove(f)
+                        self.assertEqual(self.run_gate(self.planted_steps()), 1)
+                        with open(f, "w") as fh:
+                            fh.write(original)
+                        self.assertEqual(self.run_gate(self.planted_steps()), 0)
+
+    def test_planted_new_generated_file_fails_quick(self) -> None:
+        for rel in self.paths:
+            if not rel.endswith("/"):
+                continue
+            with self.subTest(path=rel):
+                new = os.path.join(self.root, rel, "PlantedNew.md")
+                with open(new, "w") as f:
+                    f.write("a generated file never committed\n")
+                self.assertEqual(self.run_gate(self.planted_steps()), 1)
+                os.remove(new)
+                self.assertEqual(self.run_gate(self.planted_steps()), 0)
+        self.assertTrue(any(p.endswith("/") for p in self.paths), "no drift gate covers a directory")
+
+
+class GeneratedUnchanged(_TmpRepo):
+    """`tools/scripts/generated-unchanged.sh` refusals."""
+
+    SCRIPT = os.path.join(lg.REPO_ROOT, "tools", "scripts", "generated-unchanged.sh")
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("docs/a.md", "a\n")
+        self.write("docs/d/b.md", "b\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "base")
+
+    def status(self, *paths: str, cwd: str | None = None) -> int:
+        return subprocess.run([self.SCRIPT, *paths], cwd=cwd or self.root, capture_output=True).returncode
+
+    def test_clean_passes(self) -> None:
+        self.assertEqual(self.status("docs/a.md", "docs/d/"), 0)
+
+    def test_staged_regenerated_content_is_clean(self) -> None:
+        self.write("docs/a.md", "regenerated\n")
+        self.git("add", "docs/a.md")
+        self.assertEqual(self.status("docs/a.md"), 0)
+
+    def test_modified_deleted_and_untracked_refused(self) -> None:
+        self.write("docs/a.md", "x\n")
+        self.assertEqual(self.status("docs/a.md"), 1)
+        self.git("checkout", "--", "docs/a.md")
+        os.remove(os.path.join(self.root, "docs/d/b.md"))
+        self.assertEqual(self.status("docs/d/"), 1)
+        self.git("checkout", "--", "docs/d/b.md")
+        self.write("docs/d/sub/new.md", "n\n")
+        self.assertEqual(self.status("docs/d/"), 1)
+
+    def test_ignored_output_refused(self) -> None:
+        self.write(".gitignore", "*.gen\nhidden/\n")
+        self.git("add", ".gitignore")
+        self.git("commit", "-q", "-m", "ignore")
+        self.assertEqual(self.status("docs/d/"), 0)
+        self.write("docs/d/new.gen", "n\n")
+        self.assertEqual(self.status("docs/d/"), 1)
+        os.remove(os.path.join(self.root, "docs/d/new.gen"))
+        self.write("docs/d/hidden/deep.md", "n\n")
+        out = subprocess.run([self.SCRIPT, "docs/d/"], cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("ignored: docs/d/hidden/", out.stderr)
+
+    def test_unusual_file_names_are_read_whole(self) -> None:
+        for name in ("docs/d/sp ace.md", 'docs/d/q"uote.md', "docs/d/new\nline.md", "docs/d/tab\t.md"):
+            with self.subTest(name=name):
+                self.write(name, "n\n")
+                out = subprocess.run([self.SCRIPT, "docs/d/"], cwd=self.root, capture_output=True, text=True)
+                self.assertEqual(out.returncode, 1, out.stderr)
+                self.assertIn("untracked: " + name, out.stderr)
+                self.git("add", name)
+                self.git("commit", "-q", "-m", "add")
+                self.assertEqual(self.status("docs/d/"), 0)
+                self.write(name, "changed\n")
+                out = subprocess.run([self.SCRIPT, "docs/d/"], cwd=self.root, capture_output=True, text=True)
+                self.assertEqual(out.returncode, 1, out.stderr)
+                self.assertIn("changed: " + name, out.stderr)
+                self.git("checkout", "--", name)
+
+    def test_unmerged_path_refused(self) -> None:
+        self.git("checkout", "-q", "-b", "side")
+        self.write("docs/a.md", "side\n")
+        self.git("commit", "-q", "-am", "side")
+        self.git("checkout", "-q", "-")
+        self.write("docs/a.md", "main\n")
+        self.git("commit", "-q", "-am", "main")
+        self.git("merge", "-q", "side", check=False)
+        self.assertTrue(self.git("ls-files", "-u", "--", "docs/a.md").stdout, "the fixture merge must leave docs/a.md unmerged")
+        out = subprocess.run([self.SCRIPT, "docs/a.md"], cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("unmerged: docs/a.md", out.stderr)
+
+    def test_change_outside_the_paths_is_not_drift(self) -> None:
+        self.write("docs/other.md", "o\n")
+        self.assertEqual(self.status("docs/a.md", "docs/d/"), 0)
+
+    def test_no_path_or_untracked_path_refused(self) -> None:
+        self.assertEqual(self.status(), 2)
+        self.assertEqual(self.status("docs/missing.md"), 2)
+        self.assertEqual(self.status("docs/a.md", "nope/"), 2)
+
+    def test_outside_a_repository_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as bare:
+            self.assertNotEqual(self.status("docs/a.md", cwd=bare), 0)
 
 
 if __name__ == "__main__":

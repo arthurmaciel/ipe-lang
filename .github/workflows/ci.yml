@@ -10,9 +10,9 @@ name: Build & test
 #     the docs-drift gates, the first-party check-floor + shapes build gate,
 #     seal-smoke (build+run ONE emitted example, a fast SEAL proxy), the runtime
 #     feature-combo / full-feature builds (`emit` filter), wasm-floor
-#     (`wasm` filter), and the ASAN/TSAN sanitizers (`emit` filter — PRINCIPLE 3:
-#     a codegen/runtime change is exactly what introduces memory UB or a data
-#     race, so those gate PRE-merge). It ALSO runs the full SEAL at PR time —
+#     (`wasm` filter), and the ASAN/TSAN sanitizers (`sanitize` filter —
+#     PRINCIPLE 3: a codegen/runtime change is exactly what introduces memory UB
+#     or a data race, so those gate PRE-merge). It ALSO runs the full SEAL at PR time —
 #     the 14-shard e2e (and the seal-slice proof that its shards cover every
 #     archived test), seal-modset (vendored), and the arm64 Tier-2
 #     refuse-to-certify proof — each keyed on the `code` superset (not `emit`):
@@ -36,14 +36,9 @@ name: Build & test
 #
 # Job-level `if:` keys on the `changes` classifier output (all authors) for the
 # correctness/soundness gates and on github.event_name for the nightly infra/
-# flaky-env jobs. E2E is sharded across runners; a job that wants sccache adds
-# `uses: ./.github/actions/sccache` (installs the binary and wires
-# RUSTC_WRAPPER/SCCACHE_GHA_ENABLED itself — no workflow-level env, so a job
-# without that step never inherits a wrapper it never installed). The
-# ASAN/TSAN sanitizer jobs (instrumented `-Zbuild-std` compiles) and every job
-# owning a deterministic check step (ci/deterministic-checks.json — sccache's
-# GitHub Actions cache backend does network I/O) skip it and use
-# `Swatinem/rust-cache` alone.
+# flaky-env jobs. E2E is sharded across runners. Compiled dependencies are
+# cached by `Swatinem/rust-cache` alone, saved only from `main` so pull request
+# runs restore the main cache without evicting it.
 
 on:
   push:
@@ -70,12 +65,13 @@ permissions:
   contents: read
 
 concurrency:
-  # On pull requests, cancel the previous run for the same ref so devs get fast
-  # feedback without wasting runner minutes. On push/tags, never cancel: the
-  # heavy jobs (the full e2e matrix, the Tier-2 jails) produce the
-  # main-required contexts the FF promotion waits on — killing an in-progress
-  # push run would leave those contexts un-green and stall promotion.
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A pull request run cancels the previous run for the same ref, so devs get
+  # fast feedback without wasting runner minutes. A push run is keyed by its
+  # commit: GitHub replaces a queued run in a group whenever a newer one joins
+  # it (whatever cancel-in-progress says), so a per-ref push group lets a
+  # newer main commit discard an older one's run before it starts, leaving
+  # that commit's main-required contexts never reported.
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -100,10 +96,12 @@ jobs:
       # `editors` — the editor setup scripts/configs, incl. the Zed extension's
       # Rust source Zed itself compiles for wasm32-wasip2.
       editors: ${{ steps.classify.outputs.editors != 'false' }}
-      # `emit` — true when the backend, runtime, stdlib, or emitted-crate support
-      # paths changed. Scopes the runtime feature-combo/full-feature builds and
-      # the sanitizers; the SEAL tiers key on `code`, never on this.
+      # `emit` — true when the backend, runtime, stdlib, or a crate the runtime
+      # compiles against changed. Scopes the runtime feature-combo/full-feature
+      # builds; the SEAL tiers key on `code`, never on this.
       emit: ${{ steps.classify.outputs.emit != 'false' }}
+      # `sanitize` — `emit` plus the rest of the asan/tsan crates' closure.
+      sanitize: ${{ steps.classify.outputs.sanitize != 'false' }}
       # `release_only` — normalised to `true`/`false` here, once, so no consumer
       # ever splices the raw writer value into a `run:` script.
       release_only: ${{ steps.release.outputs.release_only == 'true' }}
@@ -145,7 +143,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: python3 .github/ci/change_class.py --code --emit --wasm --editors
+        run: python3 .github/ci/change_class.py --code --emit --sanitize --wasm --editors
 
   # Fail-closed guard against clone bloat: a commit that tracks a build artifact
   # (a target/ directory, an .rlib/.rmeta/.o/.a/.so/.dylib/.wasm blob) or any file
@@ -248,7 +246,7 @@ jobs:
         # or `tests.rs` only after confirming its `#[cfg(test)] mod tests;`
         # declaration (or, for integration tests, the crate's `Cargo.toml`),
         # and exits 2 naming the file when that premise does not hold.
-        run: tools/panic-scan/target/release/panic-scan --walk src
+        run: target/release/panic-scan --walk src
 
       - name: No panic-scan-relevant paths changed
         if: steps.classify.outputs.panic_scan == 'false'
@@ -270,7 +268,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -322,25 +319,22 @@ jobs:
   explain-examples:
     name: explain-page example gate (ADR 0059)
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    needs: [changes, quick-check, build-tools]
     # Change-gated: runs on a PR that touches src/**, plus nightly.
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build ipe
-        run: cargo build --release -p ipe
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       - name: Compile every explain-page example
         env:
-          IPE_BIN: ${{ github.workspace }}/target/release/ipe
+          IPE_BIN: ${{ runner.temp }}/ipe-release/ipe
         run: bash tools/scripts/check-explain-examples.sh
 
   # Every fenced ```ipe block in every {-| … -} doc-string in the standard
@@ -350,25 +344,22 @@ jobs:
   doc-examples:
     name: doc-string example gate
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    needs: [changes, quick-check, build-tools]
     # Change-gated: runs on a PR that touches src/**, plus nightly.
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build ipe
-        run: cargo build --release -p ipe
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       - name: Type-check every doc-string example
         env:
-          IPE_BIN: ${{ github.workspace }}/target/release/ipe
+          IPE_BIN: ${{ runner.temp }}/ipe-release/ipe
         run: bash tools/scripts/check-doc-examples.sh
 
   # Registry supply-chain admission gate: `ipe package publish` computes a correct
@@ -397,7 +388,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -462,8 +452,6 @@ jobs:
         if: needs.changes.outputs.release_only != 'true'
         with:
           components: clippy
-      - uses: ./.github/actions/sccache
-        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: needs.changes.outputs.release_only != 'true'
         with:
@@ -508,8 +496,6 @@ jobs:
         if: needs.changes.outputs.release_only != 'true'
         with:
           targets: wasm32-unknown-unknown, wasm32-wasip1
-      - uses: ./.github/actions/sccache
-        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: needs.changes.outputs.release_only != 'true'
         with:
@@ -601,7 +587,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -688,30 +673,32 @@ jobs:
   # the compiler emits a crate that no longer builds or runs — a hard stop.
   seal-smoke:
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    needs: [changes, quick-check, build-tools]
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
-      # One shared cargo target for the EMITTED crates (kept out of the default
-      # workspace target/ so the ipe compiler build above still caches normally):
-      # the runtime dep tree compiles into it once and later emitted builds go
-      # incremental instead of cold-building axum/tokio/serde per example.
+      # One shared cargo target for the EMITTED crates: the runtime dep tree
+      # compiles into it once and later emitted builds go incremental instead
+      # of cold-building axum/tokio/serde per example.
       IPE_SEAL_TARGET: ${{ github.workspace }}/.cache/seal-shared-target
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
-      # Cache the shared emitted-crate target too (keyed on this job), so the
+      # Cache the shared emitted-crate target (keyed on this job), so the
       # runtime + its deps stay warm across runs and later emitted builds are
-      # incremental. The default workspace target is cached by the entry above.
+      # incremental.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ github.workspace }}/.cache/seal-shared-target
-      - name: Build ipe
-        run: cargo build --release -p ipe
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       # Pre-warm the shared emitted-crate target with the runtime + a trivial
       # emitted crate BEFORE the per-example build below, so the cold runtime dep
       # build lands once (and in cache) rather than on the tested hot path. Does
@@ -721,7 +708,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/seal-shared-target
         run: |
           set -euo pipefail
-          IPE="$PWD/target/release/ipe"
+          IPE="$RUNNER_TEMP/ipe-release/ipe"
           WARM="$(mktemp -d)"
           cd "$WARM"
           "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/non-tea/hello-world/package.ipe" --out out
@@ -732,7 +719,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/seal-shared-target
         run: |
           set -euo pipefail
-          IPE="$PWD/target/release/ipe"
+          IPE="$RUNNER_TEMP/ipe-release/ipe"
           cd examples/shapes/non-tea/hello-world
           "$IPE" build package.ipe --out out
           cd out/rust
@@ -752,7 +739,7 @@ jobs:
   shapes-examples:
     name: first-party shapes (build gate)
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    needs: [changes, quick-check, build-tools]
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
@@ -764,13 +751,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ github.workspace }}/.cache/shapes-shared-target
-      - name: Build ipe
-        run: cargo build --release -p ipe
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       # Pre-warm the shared target with the runtime dep tree (via the lightest
       # shape) so the first heavy shape build goes incremental instead of cold.
       - name: Pre-warm the shared emitted-crate target
@@ -778,7 +768,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/shapes-shared-target
         run: |
           set -euo pipefail
-          IPE="$PWD/target/release/ipe"
+          IPE="$RUNNER_TEMP/ipe-release/ipe"
           WARM="$(mktemp -d)"; cd "$WARM"
           "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/script/release-preflight/package.ipe" --out out
           cd out/rust && cargo build
@@ -787,7 +777,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/shapes-shared-target
         run: |
           set -uo pipefail
-          IPE="$PWD/target/release/ipe"
+          IPE="$RUNNER_TEMP/ipe-release/ipe"
           fail=0
           for toml in examples/shapes/*/*/package.ipe; do
             dir="$(dirname "$toml")"
@@ -829,27 +819,24 @@ jobs:
   first-party-check-floor:
     name: first-party check floor (ipe type-check only)
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    needs: [changes, quick-check, build-tools]
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       # ripgrep — scripts/lib/examples.sh's classification helpers require it.
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-      - name: Build ipe
-        run: cargo build --release -p ipe
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       - name: Type-check every first-party example
         env:
-          IPE_BIN: ${{ github.workspace }}/target/release/ipe
+          IPE_BIN: ${{ runner.temp }}/ipe-release/ipe
         run: bash tools/scripts/first-party-check-floor.sh
 
   # `ipe-runtime-rust`'s `default = []` leaves `compression`/`csv`/`config`/
@@ -886,8 +873,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
-        if: needs.changes.outputs.release_only != 'true'
-      - uses: ./.github/actions/sccache
         if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: needs.changes.outputs.release_only != 'true'
@@ -940,7 +925,7 @@ jobs:
   #
   # Runtime-soundness gate on the PR boundary (PRINCIPLE 3): a codegen/runtime
   # change is exactly what introduces memory UB, so ASAN gates PRE-merge on any
-  # emit-relevant PR. Sharded 1/6 via nextest partitioning; `asan-all` is the
+  # PR touching a crate it tests or compiles against (`sanitize`). Sharded 1/6 via nextest partitioning; `asan-all` is the
   # single stable context (mirrors `e2e-all`) that branch protection could require
   # once these are proven green — deliberately NOT added to the required ruleset
   # yet. Path-scoping keeps it off a prose-only PR; always runs on push/nightly.
@@ -948,7 +933,7 @@ jobs:
     name: asan (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: (needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.sanitize != 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -1009,13 +994,13 @@ jobs:
   # or cargo-spawning child is as hostile to TSAN as to ASAN). Small enough to
   # run as a single job, not sharded. Runtime-soundness gate on the PR boundary
   # (PRINCIPLE 3): a codegen/runtime change is what introduces data races, so TSAN
-  # gates PRE-merge on any emit-relevant PR; path-scoping keeps it off a
-  # prose-only PR; always runs on push/nightly.
+  # gates PRE-merge on any PR touching a crate it tests or compiles against
+  # (`sanitize`); always runs on push/nightly.
   tsan:
     name: tsan
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: (needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.sanitize != 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     env:
       RUSTFLAGS: -Zsanitizer=thread
       RUSTDOCFLAGS: -Zsanitizer=thread
@@ -1113,16 +1098,6 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ github.workspace }}/.cache/oracle-shared-target
-      # Reclaim runner disk before the E2E build: each emitted golden crate pulls
-      # the full runtime dep tree (axum/tokio/sqlx/serde) into the shared target.
-      - name: Free disk space
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/share/swift || true
-          sudo rm -rf /opt/hostedtoolcache/CodeQL /opt/microsoft /opt/google/chrome /opt/az || true
-          sudo swapoff -a || true; sudo rm -f /swapfile /mnt/swapfile || true
-          sudo apt-get clean || true
-          df -h /
       # wry 0.55 (Webview runtime) requires GLib/GTK/WebKitGTK on Linux.
       # Without these the `bare_html_view_cargo_builds` E2E golden fails when
       # cargo tries to link the emitted Webview project — pkg-config cannot find
@@ -1320,7 +1295,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1366,7 +1340,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1458,7 +1431,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1492,36 +1464,60 @@ jobs:
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
         run: cargo nextest run -p ipe --test audit_native --profile ci
 
-  # Compiles the six doc/golden regenerator binaries ONCE and shares them as an
-  # artifact, so the drift jobs below run the prebuilt binary instead of each
-  # independently paying its own `cargo run` (== a full compile) for the same
-  # crates. needs quick-check so a workspace that does not even compile never
-  # pays for this build.
+  # The ONE job that compiles the `ipe` package: the release `ipe` compiler and
+  # the six doc/golden regenerator binaries, built once and shared as
+  # artifacts, so every job that runs `ipe` or a regenerator runs this build
+  # instead of paying its own compile of the same crates. All of them are
+  # release builds, so they share one dependency build. `ci/verify-manifest.py`
+  # check 15 refuses a `cargo build`/`run`/`install` of `ipe` in any other job
+  # of this workflow, and a job that downloads these artifacts without
+  # `needs: build-tools`. needs quick-check so a workspace that does not even
+  # compile never pays for this build.
+  #
+  # The `if:` is the union of its consumers' conditions: the `code`-gated
+  # jobs, plus browser-e2e's untrusted-author pull request, so no consumer is
+  # skipped behind a skipped build.
   build-tools:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: >-
+      needs.changes.outputs.code == 'true'
+      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
+      - uses: ./.github/actions/mold
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build the doc/golden regenerator binaries
+      # `-p ipe` alone first, so the compiler resolves exactly the features a
+      # standalone `cargo build --release -p ipe` does; it also builds the
+      # package's `gen-cli-docs` binary.
+      - name: Build ipe and the doc/golden regenerator binaries
         run: |
-          cargo build -p ipe_docs --bin gen-stdlib-docs --bin gen-env-docs --bin gen-capabilities-docs --bin gen-requirements-docs
-          cargo build -p ipe --bin gen-cli-docs
-          cargo build -p regen-cli-transcripts
+          cargo build --release -p ipe
+          cargo build --release -p ipe_docs --bin gen-stdlib-docs --bin gen-env-docs --bin gen-capabilities-docs --bin gen-requirements-docs
+          cargo build --release -p regen-cli-transcripts
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ci-build-tools
           path: |
-            target/debug/gen-stdlib-docs
-            target/debug/gen-env-docs
-            target/debug/gen-capabilities-docs
-            target/debug/gen-requirements-docs
-            target/debug/gen-cli-docs
-            target/debug/regen-cli-transcripts
+            target/release/gen-stdlib-docs
+            target/release/gen-env-docs
+            target/release/gen-capabilities-docs
+            target/release/gen-requirements-docs
+            target/release/gen-cli-docs
+            target/release/regen-cli-transcripts
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-ipe-release
+          path: target/release/ipe
+          if-no-files-found: error
           retention-days: 1
 
   # Drift gate for docs/reference/stdlib.md + docs/reference/stdlib/<Module>.md.
@@ -1547,7 +1543,7 @@ jobs:
           chmod +x gen-stdlib-docs
           ./gen-stdlib-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
-        run: git diff --exit-code docs/reference/stdlib.md docs/reference/stdlib/
+        run: tools/scripts/generated-unchanged.sh docs/reference/stdlib.md docs/reference/stdlib/
 
   # Drift gate for docs/reference/env.md.
   #
@@ -1572,7 +1568,7 @@ jobs:
           chmod +x gen-env-docs
           ./gen-env-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
-        run: git diff --exit-code docs/reference/env.md
+        run: tools/scripts/generated-unchanged.sh docs/reference/env.md
 
   # Drift gate for docs/reference/capabilities.md.
   #
@@ -1597,7 +1593,7 @@ jobs:
           chmod +x gen-capabilities-docs
           ./gen-capabilities-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
-        run: git diff --exit-code docs/reference/capabilities.md
+        run: tools/scripts/generated-unchanged.sh docs/reference/capabilities.md
 
   # Drift gate for docs/reference/cli.md.
   #
@@ -1622,7 +1618,7 @@ jobs:
           chmod +x gen-cli-docs
           ./gen-cli-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
-        run: git diff --exit-code docs/reference/cli.md
+        run: tools/scripts/generated-unchanged.sh docs/reference/cli.md
 
   # Drift gate for docs/reference/requirements.md.
   #
@@ -1648,7 +1644,7 @@ jobs:
           chmod +x gen-requirements-docs
           ./gen-requirements-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
-        run: git diff --exit-code docs/reference/requirements.md
+        run: tools/scripts/generated-unchanged.sh docs/reference/requirements.md
 
   # Drift gate for the byte-exact CLI transcript goldens.
   #
@@ -1669,27 +1665,29 @@ jobs:
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # regen-cli-transcripts records every transcript from the prebuilt `ipe`
-      # passed as --ipe-bin, so a toolchain/crate download or compile failure
-      # reddens the `Build ipe` step, never the regenerate step. The tool itself
-      # exits non-zero, writing no golden, when `ipe` cannot be spawned or is
-      # killed by a signal, so a tool failure never surfaces as golden drift.
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build ipe
-        run: cargo build -p ipe --bin ipe
+      # regen-cli-transcripts records every transcript from build-tools' release
+      # `ipe`, passed as --ipe-bin, so a compile failure reddens build-tools,
+      # never the regenerate step. The tool itself exits non-zero, writing no
+      # golden, when `ipe` cannot be spawned or is killed by a signal, so a
+      # tool failure never surfaces as golden drift. The build profile is not
+      # part of what this gate proves: the `cli_transcripts` test replays the
+      # same goldens against its own test-profile `ipe`.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ci-build-tools
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       - name: Regenerate the CLI transcript goldens
         run: |
           chmod +x regen-cli-transcripts
           ./regen-cli-transcripts --repo-root "${{ github.workspace }}" \
-            --ipe-bin "${{ github.workspace }}/target/debug/ipe"
+            --ipe-bin "$RUNNER_TEMP/ipe-release/ipe"
       - name: Fail if the regenerated goldens differ from the committed ones
-        run: git diff --exit-code src/ipe-cli/tests/golden/cli/
+        run: tools/scripts/generated-unchanged.sh src/ipe-cli/tests/golden/cli/
 
   # Semantic-parity gate for the doc-side Markdown parser.
   #
@@ -1713,14 +1711,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Regenerate the Markdown parity snapshot via an ipe run
         run: tools/scripts/regen-markdown-parity.sh
       - name: Fail if the regenerated snapshot differs from the committed one
-        run: git diff --exit-code src/ipe-docs/src/markdown/parity/snapshot.txt
+        run: tools/scripts/generated-unchanged.sh src/ipe-docs/src/markdown/parity/snapshot.txt
 
   # A PR run whose outcome a deterministic gate has already decided red gets no
   # benefit from letting the expensive matrix tier (e2e, seal-slice, asan/tsan,
@@ -1731,13 +1728,13 @@ jobs:
   #
   # Latency: a job starts only after EVERY `needs:` entry has finished, so the
   # cancel lands when the slowest member finishes (the docs-drift jobs:
-  # quick-check, then build-tools, then a prebuilt-binary regenerate — plus a
-  # debug `ipe` build for the transcripts), not when the first red appears. Members that need a release build are deliberately
-  # left out so that bound stays a few minutes rather than the length of a
-  # release build.
+  # quick-check, then build-tools' one shared release build, then a
+  # prebuilt-binary regenerate), not when the first red appears. Members
+  # that run an emitted `cargo build` of their own are deliberately left out
+  # so that bound stays one shared compile rather than growing with it.
   #
   # Classification is per FAILED STEP, not per job: every member also runs
-  # network-bound setup (checkout, toolchain install, sccache, rust-cache, the
+  # network-bound setup (checkout, toolchain install, rust-cache, the
   # crate fetch), and `failure()` is also true when an ANCESTOR outside the set
   # failed (e.g. `changes`, whose checkout is network-bound, whose failure skips
   # its dependants). Neither is a deterministic red. The step below lists the
@@ -1837,7 +1834,7 @@ jobs:
   browser-e2e:
     name: browser-e2e (Ipe.Browser geo+clipboard — headless Playwright)
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    needs: [changes, quick-check, build-tools]
     # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
     if: >-
       (github.event_name != 'pull_request' && github.event_name != 'merge_group')
@@ -1850,7 +1847,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1863,14 +1859,18 @@ jobs:
         run: |
           npm install --save-dev @playwright/test
           npx playwright install --with-deps chromium
-      - name: Build ipe compiler
-        run: cargo build --release -p ipe
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       - name: Compile geo-clipboard example
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/browser-e2e-target
         run: |
           set -euo pipefail
-          IPE="$PWD/target/release/ipe"
+          IPE="$RUNNER_TEMP/ipe-release/ipe"
           OUT="${{ runner.temp }}/geo-clipboard-emitted"
           "$IPE" build examples/shapes/web/geo-clipboard/package.ipe --out "$OUT"
           bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_GEO_CLIPBOARD_EMITTED "$OUT/rust"
@@ -1921,3 +1921,27 @@ jobs:
           path: tools/scripts/browser-e2e/artifacts/
           if-no-files-found: warn
           retention-days: 7
+
+  # The live `main-protection` ruleset requires exactly the manifest's derived
+  # `{context, integration_id}` set (.github/ci/check_required_set.py). Not
+  # required on a PR, where it flags a required-set change the ruleset has not
+  # taken yet; a red on the nightly makes `nightly-green` hold every merge until
+  # the ruleset is reconciled (.github/ci/RECONCILIATION.md).
+  ruleset-drift:
+    name: ruleset-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install PyYAML
+        run: 'PIP_CONFIG_FILE=/dev/null python3 -m pip install --isolated --require-hashes --only-binary :all: -r "$GITHUB_WORKSPACE/.github/ci/requirements.txt"'
+      - name: The live ruleset requires exactly the derived set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: python3 .github/ci/check_required_set.py --fetch
