@@ -129,10 +129,16 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
      triggers on `schedule` alone, and names it only inside its keyed job
      (`ADMIN_ENVIRONMENT_JOBS`), which declares exactly its literal
      environment. No other job declares that environment, nor an environment
-     whose name is not a literal string. The guarantee is the environment's
-     deployment-branch policy (`main` only), which GitHub enforces; these
-     rules are defence in depth under it, since a same-repository branch
-     that edits the workflow runs its edit before this check can refuse it.
+     whose name is not a literal string. Every workflow reads a secret only
+     by one literal name — `secrets.NAME` or `secrets['NAME']`, parsed, so
+     escapes are decoded — never by a computed index, `secrets.*`, the bare
+     context, or a non-mapping `secrets:` block (`inherit`); text outside the
+     expression grammar may not mention `secrets`. A name scan is therefore
+     complete: no spelling reaches a secret it does not see. The guarantee
+     is the environment's deployment-branch policy (`main` only), which
+     GitHub enforces; these rules are defence in depth under it, since a
+     same-repository branch that edits the workflow runs its edit before
+     this check can refuse it.
      Limit: this catches honest mistakes, not a hostile PR.  A merge-group run
      executes the workflow files of the queued commit, so a queued PR that
      edits `.github/**` runs its own edit with the base secrets.  The boundary
@@ -979,6 +985,73 @@ def _mentions_secrets(node: object) -> bool:
     return _mentions(node, _SECRETS_WORD)
 
 
+# A secret name GitHub admits: the one shape a `secrets` access may name.
+_SECRET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _secret_access_refusal(e: gha_expr.Expr) -> str | None:
+    """Why an expression reads `secrets` other than by one literal name, or
+    None. Admitted: `secrets.NAME` and `secrets['NAME']`. A bare `secrets`
+    (`toJSON(secrets)`), `secrets.*`, a computed index, and a deeper path
+    each could reach a secret no name scan sees."""
+    for node in gha_expr.walk(e):
+        if not isinstance(node, gha_expr.ContextRef) or node.ctx.casefold() != "secrets":
+            continue
+        if len(node.path) != 1:
+            return "the whole `secrets` context" if not node.path else "a path deeper than one secret name"
+        (seg,) = node.path
+        if isinstance(seg, gha_expr.Prop) and _SECRET_NAME.fullmatch(seg.name):
+            continue
+        if (
+            isinstance(seg, gha_expr.Index)
+            and isinstance(seg.expr, gha_expr.Literal)
+            and seg.expr.is_string
+            and isinstance(seg.expr.value, str)
+            and _SECRET_NAME.fullmatch(seg.expr.value)
+        ):
+            continue
+        return "a secret whose name is not one literal"
+    return None
+
+
+def _check_secret_access(fname: str, node: object, errors: list[str], *, key: object = None) -> None:
+    """Check 8's shape allowlist: every `secrets` access in any key or string
+    scalar of a workflow names one literal secret, a `secrets:` block is a
+    mapping (never `inherit`, which forwards every secret), and text outside
+    the expression grammar never mentions `secrets`."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            _check_secret_access(fname, k, errors)
+            if str(k) == "secrets" and not isinstance(v, dict):
+                errors.append(
+                    f"{fname}: `secrets: {v!r}` forwards secrets no name scan sees — pass each one "
+                    "by name in a mapping; refused"
+                )
+            _check_secret_access(fname, v, errors, key=k)
+        return
+    if isinstance(node, list):
+        for item in node:
+            _check_secret_access(fname, item, errors)
+        return
+    if not isinstance(node, str):
+        return
+    parsed = _parsed_expressions(node, bare_expression=key == "if")
+    if isinstance(parsed, gha_expr.Refusal):
+        if _SECRETS_WORD.search(node):
+            errors.append(
+                f"{fname}: {node!r} names `secrets` in text outside the expression grammar "
+                f"({parsed.why}); refused"
+            )
+        return
+    for e, (lo, hi) in zip(parsed.exprs, parsed.spans):
+        why = _secret_access_refusal(e)
+        if why is not None:
+            errors.append(
+                f"{fname}: {node[lo:hi]!r} reads {why}; only `secrets.NAME` or "
+                "`secrets['NAME']` is admitted; refused"
+            )
+
+
 def _check_admin_environments(fname: str, doc: dict, errors: list[str]) -> None:
     """Check 8's environment half: a schedule-only secret is named only inside
     an `ADMIN_ENVIRONMENT_JOBS` job, which declares exactly its literal
@@ -1116,6 +1189,7 @@ def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = R
                 f"triggers on {sorted(triggers)} — only a `schedule`-only workflow may carry it"
             )
         _check_admin_environments(fname, doc, errors)
+        _check_secret_access(fname, doc, errors)
         if fname in gate_producers:
             # A `pull_request_target` producer reports the PR-side context from
             # the base workflow; check 12 holds it to running no head code.

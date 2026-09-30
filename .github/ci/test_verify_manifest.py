@@ -3064,6 +3064,61 @@ class TestMergeQueueSafety(unittest.TestCase):
             with self.subTest(env=env):
                 self.assertEqual(self.admin_errors("other.yml", free.format(env=env)), [])
 
+    def test_secret_access_admits_only_one_literal_name(self) -> None:
+        wf = (
+            "on:\n  push:\npermissions:\n  contents: read\n"
+            "jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - run: echo x\n        if: {cond}\n        env:\n          T: {ref}\n"
+        )
+        for ref in ("${{ secrets.X }}", "${{ secrets['X'] }}", "${{ SECRETS.x_1 }}", "${{ (secrets).X }}",
+                    "${{ format('{0}', secrets.X) }}", "\"${{ secrets['X'] }}\""):
+            with self.subTest(ref=ref):
+                self.assertEqual(self.admin_errors("other.yml", wf.format(cond="success()", ref=ref)), [])
+        refused = (
+            # A name computed at run time: the probe that reaches any secret.
+            ("${{ secrets[github.event.workflow_run.head_branch] }}", "not one literal"),
+            ("${{ secrets[format('RULESET_{0}', 'READ_TOKEN')] }}", "not one literal"),
+            ("${{ secrets[inputs.name] }}", "not one literal"),
+            ("${{ secrets['RULESET' || 'X'] }}", "not one literal"),
+            ("${{ secrets[1] }}", "not one literal"),
+            ("${{ secrets['not a name'] }}", "not one literal"),
+            ("${{ secrets.X-Y }}", "not one literal"),
+            ("${{ secrets.* }}", "not one literal"),
+            ("${{ secrets[*] }}", "not one literal"),
+            # The whole context.
+            ("${{ toJSON(secrets) }}", "the whole `secrets` context"),
+            ("${{ (secrets) }}", "the whole `secrets` context"),
+            ("${{ fromJSON(toJSON(Secrets)).X }}", "the whole `secrets` context"),
+            ("${{ secrets.X.Y }}", "a path deeper than one secret name"),
+            # Outside the grammar (GitHub strings are single-quoted).
+            ('\'${{ secrets["X"] }}\'', "outside the expression grammar"),
+            ("${{ secrets.X", "outside the expression grammar"),
+            # An escape only the parser decodes.
+            ('"${{ \\x73ecrets[github.head_ref] }}"', "not one literal"),
+        )
+        for ref, needle in refused:
+            with self.subTest(ref=ref):
+                self.assertAdminRefused("other.yml", wf.format(cond="success()", ref=ref), needle)
+        # A bare `if:` is an expression without `${{ }}`.
+        for cond, needle in (("secrets[github.head_ref] != ''", "not one literal"),
+                             ("toJSON(secrets) != ''", "the whole `secrets` context"),
+                             ('secrets["X"]', "outside the expression grammar")):
+            with self.subTest(cond=cond):
+                self.assertAdminRefused("other.yml", wf.format(cond=json.dumps(cond), ref="x"), needle)
+        # A key is scanned too.
+        keyed = wf.format(cond="success()", ref="x").replace("          T: x\n", "          ${{ toJSON(secrets) }}: x\n")
+        self.assertAdminRefused("other.yml", keyed, "the whole `secrets` context")
+
+    def test_secrets_block_must_name_each_secret(self) -> None:
+        call = (
+            "on:\n  push:\npermissions:\n  contents: read\n"
+            "jobs:\n  reuse:\n    uses: ./.github/workflows/x.yml\n    secrets: {v}\n"
+        )
+        for v in ("inherit", "INHERIT", "''", "null", "[a]", "${{ secrets }}"):
+            with self.subTest(v=v):
+                self.assertAdminRefused("other.yml", call.format(v=v), "forwards secrets no name scan sees")
+        self.assertEqual(self.admin_errors("other.yml", call.format(v="{T: '${{ secrets.X }}'}")), [])
+
     def test_non_gate_workflow_without_merge_group_is_not_checked(self) -> None:
         bad = _MQ_OK.replace("  merge_group:\n", "").replace("run: echo full", "run: echo ${{ secrets.X }}")
         self.assertEqual(self.errors(bad, gates=set()), [])
