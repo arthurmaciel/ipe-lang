@@ -21,26 +21,79 @@ the pair, not the name, is what every comparison below checks.
 | `verify-manifest.py` check 4 | manifest ⇄ `required-set.json` | `manifest-guard`, the local gate |
 | `check_required_set.py` | manifest ⇄ `required-set.json` | `manifest-guard` |
 | `check_required_set.py --fetch` | manifest ⇄ the live ruleset | `ruleset-drift` job in `ci.yml` |
+| `check_required_set.py --fetch-admin` | manifest ⇄ the live ruleset, `bypass_actors` included | `ruleset-admin-read` job in `ruleset-admin-read.yml`, nightly |
 
 The live ruleset is `main-protection` (`RULESET_ID` in
 `check_required_set.py`). `--fetch` parses it into a closed `Ruleset`: every
 key the API returns is examined and pinned or named as display metadata, and
 any other key, rule type, or rule parameter is refused. It must be an active
-branch ruleset on `~DEFAULT_BRANCH` with no exclusions, carrying `deletion`, `non_fast_forward`, `pull_request`,
-`merge_queue` (grouping `ALLGREEN`), and `required_status_checks` once each,
+branch ruleset on `~DEFAULT_BRANCH` with no exclusions, carrying `deletion`,
+`non_fast_forward`, `pull_request`, `merge_queue` (grouping `ALLGREEN`), and
+`required_status_checks` once each,
 the last with pairs equal to the derived set in both directions.
 `current_user_can_bypass`, when returned, must be `never`.
 
 GitHub returns `bypass_actors` only to a ruleset admin, and the workflow token
-is not one. `--fetch` refuses a non-empty list when it sees one, but the proof
-that no bypass actor exists comes only from an owner's `--live` read, which
-refuses a ruleset without the list. That read runs at reconciliation (step 3),
-not nightly, so a bypass actor added between reconciliations is invisible to
-`ruleset-drift`; re-run the `--live` check after any ruleset edit. A key GitHub
-adds to the response turns `ruleset-drift` red until this check examines it. `ruleset-drift` is a `nightly-gate`: a red nightly makes the
+is not one. `--fetch` refuses a non-empty list when it sees one; the proof
+that no bypass actor exists is an admin read, which refuses a ruleset body
+without the list. `--fetch-admin` is that read: `ruleset-admin-read.yml` runs
+it nightly with the `RULESET_READ_TOKEN` secret (a fine-grained token; its
+permissions are in the one-time setup below). It fails closed when the token
+is absent or empty, when the body lacks `bypass_actors` (the token cannot see
+them), when the list is non-empty, or when the pairs differ from the derived
+set.
+
+The token is a secret of the `ruleset-admin-read` environment
+(`ADMIN_READ_ENVIRONMENT` in `check_required_set.py`), whose
+deployment-branch policy admits `main` alone. That policy is the guarantee:
+GitHub hands the token to no run of any other ref, so a branch that edits the
+workflow to add a `pull_request` or `push` trigger runs with an empty token,
+and neither its pull-request run nor its merge-queue run can read it.
+`--fetch-admin` first reads the environment
+(`GET repos/{repo}/environments/ruleset-admin-read` and its
+`deployment-branch-policies`) and fails closed unless its policy is custom
+branch policies of exactly the branch `main`. Protected-branches mode is
+refused: without a classic protection rule it lets every branch deploy. An
+admin read (the environment or the ruleset) GitHub refuses with 401, 403 or
+404 fails closed saying what the status means for the token: 401 an invalid or
+expired token; 403 a missing permission (named) or an exhausted rate limit;
+404 a missing permission (named) or a missing resource. A server error, an
+off-origin redirect, an oversized or malformed body, or a network failure fails
+closed saying only what failed.
+Defence in depth under the policy, `verify-manifest.py` check 8 refuses the
+secret in a workflow triggering on anything but `schedule`, the
+secret or the environment in any job but `ruleset-admin-read.yml`'s
+`ruleset-admin-read`, and a job environment whose name is computed at run
+time. Check 8 runs on the change, after that change's own runs, so it alone
+cannot keep the token from a same-repository branch. Recover a red run with
+`gh run rerun`. An owner's `--live` read (step 3) is the same admin check at
+reconciliation time.
+
+### One-time setup of the admin-read environment
+
+An owner does this once, before the first scheduled run:
+
+1. Create the environment `ruleset-admin-read` (Settings → Environments) with
+   deployment branches set to selected branches, with one branch rule naming
+   exactly `main` (the protected-branches setting is refused), and with
+   "Allow administrators to bypass configured protection rules" unchecked
+   (an administrator bypass is refused).
+2. Add `RULESET_READ_TOKEN` to it as an environment secret: a fine-grained
+   token on this repository with exactly the repository permissions
+   `Administration: read` and `Actions: read` (`ADMIN_READ_TOKEN_PERMISSIONS`
+   in `check_required_set.py`). The first reads the ruleset, `bypass_actors`
+   included; the second reads the environment and its deployment-branch
+   policies. Without either, `--fetch-admin` cannot prove its claim and fails
+   closed.
+3. Delete the repository-level `RULESET_READ_TOKEN` secret, so no job outside
+   the environment can reach it.
+
+A key GitHub adds to the response turns `ruleset-drift` red until this check
+examines it. `ruleset-drift` is a `nightly-gate`: a red nightly makes the
 required `nightly-green` context hold every merge until the ruleset is
 reconciled. On a pull request it is not required; there it flags a
-required-set change the ruleset has not taken yet.
+required-set change the ruleset has not taken yet. `ruleset-admin-read` is a
+`nightly-gate` too; `ci-health` surfaces its red.
 
 `strict_required_status_checks_policy` ("require branches to be up to date")
 is pinned `false` and `do_not_enforce_on_create` is pinned `false`. The strict
@@ -70,6 +123,26 @@ strict policy would buy; the queue's grouping is pinned for that reason.
    ```
 
    Review `/tmp/rs-new.json` before the `PUT`: it rewrites the whole ruleset.
+
+## Break glass: a red nightly that only a merge can fix
+
+`nightly-green` holds every merge while a nightly run it requires is red.
+When that run is red because of a defect in the tree on `main` (a workflow,
+a `.github/ci/` tool, or the manifest) rather than in the ruleset, a token,
+or the code under test, the fix must merge before the next run can go green,
+and `nightly-green` holds that merge. `gh run rerun` does not help: a re-run
+keeps the run's `created_at`, so it re-judges the same tree and never
+refreshes the run's age. The repository owner breaks the loop:
+
+1. On the fix's tree, prove the live ruleset matches it:
+   `python3 .github/ci/check_required_set.py --live <(gh api "repos/ipe-lang/compiler/rulesets/$id")`
+   (`$id` as in step 3 above). Stop if it is red.
+2. Remove `nightly-green` from the ruleset's required status checks (the
+   `PUT` of step 3, with that one pair dropped).
+3. Merge the fix through the merge queue.
+4. Restore `nightly-green` (the `PUT` of step 3 with `required-set.json`
+   unchanged) and re-run the `--live` read of step 3; it must report a match.
+   The next nightly run on `main` then proves the fix.
 
 ## Contexts outside the required set
 
