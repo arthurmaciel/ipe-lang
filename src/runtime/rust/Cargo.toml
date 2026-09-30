@@ -626,11 +626,7 @@ proc-macro2 = "1"
 
 # `wasm-bindgen-test` drives the headless-browser test harness (`tests/
 # wasm_*` files, `#[wasm_bindgen_test]`) — meaningless on native, so it is
-# wasm32-only (see the `# `pipe`: the echo-guard tests build a non-tty fd pair.
-[target.'cfg(unix)'.dev-dependencies]
-rustix = { version = "1", features = ["pipe"] }
-
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]`
+# wasm32-only (see the `[target.'cfg(target_arch = "wasm32")'.dev-dependencies]`
 # table below), never pulled into a native `cargo test`.
 #
 # `proptest`/`bcrypt`/`jsonwebtoken`/`aes-gcm`/`chacha20poly1305`/`pbkdf2` are
@@ -672,6 +668,10 @@ tokio = { version = "1", features = ["full", "test-util", "macros"] }
 # A fake TLS PostgreSQL server proves the pinned relay keeps SNI and
 # certificate host-name verification.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+
+# `pipe`: the echo-guard tests build a non-tty fd pair.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1", features = ["pipe"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
