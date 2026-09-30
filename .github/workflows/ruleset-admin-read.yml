@@ -1,10 +1,14 @@
 # The nightly admin read of the `main` ruleset.
 #
 # GitHub shows a ruleset's `bypass_actors` only to a ruleset admin, so the
-# workflow token that `ruleset-drift` reads with cannot see them. This job reads
-# the ruleset with `RULESET_READ_TOKEN`, a fine-grained token whose permissions
-# `.github/ci/RECONCILIATION.md` lists (one-time setup, step 2), and fails
-# closed when the body lacks `bypass_actors`, carries a non-empty list, or
+# workflow token that `ruleset-drift` reads with cannot see them. This job
+# reads with `RULESET_READ_TOKEN`, a fine-grained token whose permissions
+# `.github/ci/RECONCILIATION.md` lists (one-time setup, step 2): first the
+# `ruleset-admin-read` environment's deployment-branch policy, proof the
+# token can reach only `main`, then — only once that proof is in hand — the
+# ruleset itself. It fails closed when either read is refused, when the
+# environment's policy is not custom branch policies of exactly `main`, when
+# the ruleset body lacks `bypass_actors`, carries a non-empty list, or
 # differs from the derived required set — and when the token is absent or
 # empty. `nightly-green` requires this workflow's latest scheduled run on main
 # to be green and fresh, so a red one holds every merge.
