@@ -23,7 +23,10 @@ use std::process::Command;
 use ipe_ir::Capability;
 
 use crate::CliError;
-use crate::index::{self, CommitId, EntryVersion, PinnedRev, Sha256Hex, SourceUrl};
+use crate::index::{
+    self, CommitId, EntryVersion, PinnedRev, RequestedRev, RevMismatch, Sha256Hex, SourceUrl,
+    check_served, served_commit,
+};
 use crate::lockfile::{LocalSource, LockedDep, LockedOrigin, Lockfile};
 use crate::package_name::PackageName;
 use crate::project::IpeDep;
@@ -153,11 +156,40 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
             // here but not yet an immutable pin.
             let raw_rev = rev.as_deref().unwrap_or("HEAD");
             let requested = CommitId::parse(&package_name, raw_rev)?;
+            // Classify the request's shape once, from the already
+            // injection-validated `CommitId` — never re-parse the raw string.
+            let shape = RequestedRev::classify(&package_name, &requested)?;
             // Fetch first into a temporary location keyed by the requested ref,
-            // then resolve to the concrete SHA that names the exact commit.
+            // then read the commit git actually checked out.
             let checkout =
                 fetch_git_requested(project_root, &package_name, &typed_url, &requested)?;
-            let pinned = PinnedRev::resolve_in_checkout(&package_name, &checkout, &requested)?;
+            let pinned = served_commit(&package_name, &checkout)?;
+            match check_served(&shape, &pinned) {
+                None => {}
+                Some(RevMismatch::Different { requested, served }) => {
+                    return Err(CliError::Resolve(
+                        crate::text::msg::index_rev_served_mismatch(
+                            &package_name,
+                            &requested,
+                            &served,
+                        ),
+                    ));
+                }
+                Some(RevMismatch::ShadowedAbbrev { requested, served }) => {
+                    // A same-shaped ref shadowed the abbreviation. The checkout
+                    // still succeeded and is what gets locked — warn, don't
+                    // refuse, per the maintainer-resolved override for this
+                    // specific ambiguity.
+                    let mut screen = crate::screen::Screen::new(crate::screen::Stream::Stderr);
+                    let warning = crate::style::escape_abbrev_shadowed_warning(
+                        screen.palette(),
+                        package_name.as_str(),
+                        &requested,
+                        served.as_str(),
+                    );
+                    screen.guttered(&warning).emit();
+                }
+            }
             // Re-key the cache dir by the immutable SHA so fetch and verify
             // share the same key regardless of what ref was requested.
             let final_dest = escape_cache_dir(project_root, &package_name, &pinned);
@@ -439,9 +471,9 @@ fn fetch_source(
 /// Fetch a git escape's source at the requested ref into a temporary cache
 /// location keyed by the requested ref string.
 ///
-/// The returned path holds the checked-out tree; the caller resolves the
-/// concrete SHA via [`PinnedRev::resolve_in_checkout`] and then renames the
-/// directory to the SHA-keyed final location.
+/// The returned path holds the checked-out tree; the caller reads the
+/// concrete SHA git actually served via [`index::served_commit`] and then
+/// renames the directory to the SHA-keyed final location.
 fn fetch_git_requested(
     project_root: &Path,
     name: &PackageName,
@@ -1141,6 +1173,121 @@ mod tests {
         let err = resolve_escape(&proj, "evil", &dep).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("rev"), "bad rev rejected: {msg}");
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// Commit twice to `repo`, returning (first commit sha, second commit sha).
+    /// The second commit becomes `HEAD`.
+    fn two_commits(repo: &Path) -> (String, String) {
+        let git = |args: &[&str]| {
+            let ok = Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .expect("git runs")
+                .status
+                .success();
+            assert!(ok, "git {args:?} must succeed");
+        };
+        let head = || {
+            let out = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(repo)
+                .output()
+                .expect("git rev-parse HEAD");
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        let c1 = head();
+        std::fs::write(repo.join("lib.ipe"), "module Lib\nv = 2\n").expect("write");
+        git(&["add", "."]);
+        git(&["commit", "--quiet", "-m", "second"]);
+        let c2 = head();
+        (c1, c2)
+    }
+
+    #[test]
+    fn git_escape_warns_not_refuses_when_a_tag_shadows_an_abbreviation() {
+        // A tag literally named "abcd123" (hex-shaped, 7 chars — inside the
+        // AbbrevHex range) points at C1, not HEAD (C2). Git's ref-name-first
+        // resolution serves C1 for the request, not an abbreviated-hex lookup
+        // against C2. Per the maintainer-resolved override, this is a WARN,
+        // not a refusal: the escape still resolves and locks the commit git
+        // actually served (C1), not C2.
+        let src = git_source("shadow-warn-src", "module Lib\nv = 1\n");
+        let (c1, _c2) = two_commits(&src);
+        let tag_ok = Command::new("git")
+            .args(["tag", "abcd123", &c1])
+            .current_dir(&src)
+            .output()
+            .expect("git tag runs")
+            .status
+            .success();
+        assert!(tag_ok, "creating the shadowing tag must succeed");
+
+        let proj = temp_dir("escape-shadow-warn");
+        scaffold_project(&proj);
+        let dep = IpeDep::Git {
+            url: src.display().to_string(),
+            rev: Some("abcd123".to_owned()),
+        };
+        resolve_escape(&proj, "shadowed", &dep)
+            .expect("a shadowed abbreviation warns but still resolves");
+        let lock = Lockfile::read(&proj).expect("lock");
+        let entry = lock
+            .packages()
+            .iter()
+            .find(|p| p.name.as_str() == "shadowed")
+            .expect("shadowed must be locked");
+        let rev_str = entry
+            .origin
+            .pinned_rev()
+            .map(PinnedRev::as_str)
+            .expect("a git escape pins a rev");
+        assert_eq!(
+            rev_str, c1,
+            "the commit the shadowing tag served (C1) must be locked, not C2"
+        );
+
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    #[test]
+    fn git_escape_refuses_when_a_tag_shadows_a_full_sha() {
+        // A tag literally named after C1's full 40-hex SHA points at C2, not
+        // C1. The request, classified as a `FullSha`, is unambiguous — the
+        // author pinned an exact commit — so a same-shaped ref serving a
+        // different commit is a hard refusal, not a warning. This case is
+        // NOT covered by the maintainer's abbreviation-only override.
+        let src = git_source("shadow-refuse-src", "module Lib\nv = 1\n");
+        let (c1, c2) = two_commits(&src);
+        let tag_ok = Command::new("git")
+            .args(["tag", &c1, &c2])
+            .current_dir(&src)
+            .output()
+            .expect("git tag runs")
+            .status
+            .success();
+        assert!(tag_ok, "creating the shadowing tag must succeed");
+
+        let proj = temp_dir("escape-shadow-refuse");
+        scaffold_project(&proj);
+        let dep = IpeDep::Git {
+            url: src.display().to_string(),
+            rev: Some(c1.clone()),
+        };
+        let err = resolve_escape(&proj, "shadowed", &dep)
+            .expect_err("a full-SHA request shadowed by a differing tag must refuse");
+        assert!(
+            matches!(err, CliError::Resolve(_)),
+            "expected a Resolve refusal, got: {err:?}"
+        );
+
         let _ = std::fs::remove_dir_all(&proj);
         let _ = std::fs::remove_dir_all(&src);
     }

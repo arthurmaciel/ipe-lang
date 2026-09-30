@@ -162,8 +162,8 @@ impl std::fmt::Display for CommitId {
 /// The only inhabitants are 40-char lowercase-hex strings produced by resolving
 /// a ref against a real git object. A moving ref (`HEAD`, `main`, a tag) cannot
 /// inhabit this type — it must first be resolved to a concrete SHA via
-/// [`PinnedRev::resolve_in_checkout`] (write path) or re-parsed from a stored
-/// value via [`PinnedRev::from_full_sha`] (read path).
+/// [`served_commit`] (write path) or re-parsed from a stored value via
+/// [`PinnedRev::from_full_sha`] (read path).
 ///
 /// This is the recorded-pin type. [`CommitId`] is the distinct request type
 /// (what the author typed; may be a branch).
@@ -194,40 +194,6 @@ impl PinnedRev {
         Ok(Self(raw.to_owned()))
     }
 
-    /// Resolve a requested ref to a concrete commit SHA by running
-    /// `git rev-parse --verify --quiet <ref>^{{commit}}` inside `checkout`.
-    ///
-    /// This is the single WRITE-path site that collapses any ref — including the
-    /// default `HEAD` — to a concrete, immutable SHA before it is recorded.
-    ///
-    /// # Errors
-    /// [`CliError::Resolve`] when git cannot be run, when the ref does not
-    /// resolve to a commit, or when the output is not a 40-hex SHA.
-    pub fn resolve_in_checkout(
-        pkg: &PackageName,
-        checkout: &std::path::Path,
-        requested: &CommitId,
-    ) -> Result<Self, CliError> {
-        let refspec = format!("{}^{{commit}}", requested.as_str());
-        let output = std::process::Command::new("git")
-            .args(["rev-parse", "--verify", "--quiet", &refspec])
-            .current_dir(checkout)
-            .output()
-            .map_err(|e| {
-                CliError::Resolve(crate::text::msg::index_rev_parse_unavailable(pkg, &e))
-            })?;
-        if !output.status.success() {
-            return Err(CliError::Resolve(crate::text::msg::index_rev_unresolved(
-                pkg,
-                &crate::style::TerminalSafe::sanitize(&refspec),
-                &crate::style::TerminalSafe::sanitize(&format!("{:?}", requested.as_str())),
-            )));
-        }
-        let raw = String::from_utf8_lossy(&output.stdout);
-        let sha = raw.trim();
-        Self::from_full_sha(pkg, sha)
-    }
-
     /// The pinned SHA string, suitable for use as a cache-dir key or for
     /// writing to the lockfile or index entry.
     #[must_use]
@@ -240,6 +206,148 @@ impl std::fmt::Display for PinnedRev {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
+}
+
+/// The shape a requested ref takes, classified once from an already
+/// injection-validated [`CommitId`] so the same string is never re-parsed.
+///
+/// A same-shaped ref (a branch or tag literally named like a hex string) is
+/// resolved by git BEFORE it is ever tried as an abbreviated or full object
+/// id — this classification is what lets [`check_served`] tell "the checkout
+/// moved because the ref moved" (expected, for [`Head`](Self::Head) and
+/// [`Name`](Self::Name)) apart from "the checkout served a different commit
+/// than the hex the author pinned" (a mismatch, for
+/// [`FullSha`](Self::FullSha) and [`AbbrevHex`](Self::AbbrevHex)).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RequestedRev {
+    /// The literal string `"HEAD"` — always the checkout's current tip.
+    Head,
+    /// Exactly 40 lowercase-hex characters: an unambiguous full commit SHA.
+    FullSha(PinnedRev),
+    /// 4 to 39 lowercase-hex characters: an abbreviated commit SHA, ambiguous
+    /// with a same-shaped ref name.
+    AbbrevHex(String),
+    /// Anything else a branch, tag, or other ref name. Free to move; never
+    /// compared against what was served.
+    Name(String),
+}
+
+impl RequestedRev {
+    /// Classify an already-[`CommitId::parse`]d requested ref by hex shape.
+    ///
+    /// Mixed-case hex (e.g. `"DeadBEEF"`) is rejected outright: it is neither
+    /// a valid SHA spelling (git SHAs are always lowercase) nor a plausible
+    /// ref name, so treating it as a [`Name`](Self::Name) would silently
+    /// widen what counts as a moving ref.
+    ///
+    /// # Errors
+    /// [`CliError::Resolve`] when `id` is mixed-case hex.
+    pub fn classify(pkg: &PackageName, id: &CommitId) -> Result<Self, CliError> {
+        let raw = id.as_str();
+        if raw == "HEAD" {
+            return Ok(Self::Head);
+        }
+        let all_hex_lower = raw.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
+        let all_hex_any_case = raw.chars().all(|c| c.is_ascii_hexdigit());
+        if all_hex_any_case && !all_hex_lower {
+            return Err(CliError::Resolve(
+                crate::text::msg::index_rev_mixed_case_hex(
+                    pkg,
+                    &crate::style::TerminalSafe::sanitize(raw),
+                ),
+            ));
+        }
+        if all_hex_lower {
+            match raw.len() {
+                40 => return Ok(Self::FullSha(PinnedRev::from_full_sha(pkg, raw)?)),
+                4..=39 => return Ok(Self::AbbrevHex(raw.to_owned())),
+                _ => {}
+            }
+        }
+        Ok(Self::Name(raw.to_owned()))
+    }
+}
+
+/// A requested ref's shape disagreed with the commit git actually served
+/// after checkout — [`check_served`]'s only two outcomes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RevMismatch {
+    /// An unambiguous SHA (full or abbreviated with no shadow) does not
+    /// prefix-match what was served: a hard refusal. Named `requested` for a
+    /// [`RequestedRev::FullSha`]; the served commit did not come from
+    /// resolving that exact hash.
+    Different {
+        /// The full SHA the author pinned.
+        requested: PinnedRev,
+        /// The commit git actually checked out.
+        served: PinnedRev,
+    },
+    /// An abbreviated hex ref was shadowed by a same-shaped ref name (a
+    /// branch or tag literally spelled like the abbreviation), so git served
+    /// that ref's commit instead of resolving the hex as an object id.
+    /// Warn, never refuse — the checkout itself succeeded and its result is
+    /// used as pinned.
+    ShadowedAbbrev {
+        /// The abbreviated hex the author pinned.
+        requested: String,
+        /// The commit the shadowing ref actually served.
+        served: PinnedRev,
+    },
+}
+
+/// Compare a classified request against the commit git actually served.
+///
+/// [`RequestedRev::Head`] and [`RequestedRev::Name`] never mismatch — both
+/// name refs that are expected to move. A [`RequestedRev::FullSha`] that
+/// disagrees with `served` is a [`RevMismatch::Different`] (hard refuse); a
+/// [`RequestedRev::AbbrevHex`] that is not a prefix of `served` is a
+/// [`RevMismatch::ShadowedAbbrev`] (warn only).
+#[must_use]
+pub fn check_served(requested: &RequestedRev, served: &PinnedRev) -> Option<RevMismatch> {
+    match requested {
+        RequestedRev::Head | RequestedRev::Name(_) => None,
+        RequestedRev::FullSha(full) => (full != served).then(|| RevMismatch::Different {
+            requested: full.clone(),
+            served: served.clone(),
+        }),
+        RequestedRev::AbbrevHex(abbrev) => {
+            (!served.as_str().starts_with(abbrev.as_str())).then(|| RevMismatch::ShadowedAbbrev {
+                requested: abbrev.clone(),
+                served: served.clone(),
+            })
+        }
+    }
+}
+
+/// Read the commit git actually checked out, by running
+/// `git rev-parse --verify --quiet HEAD^{commit}` inside `checkout`.
+///
+/// Deliberately reads `HEAD` rather than re-resolving the original requested
+/// string: right after a successful checkout, `HEAD` is unambiguous and
+/// always available, even when a shallow single-object fetch left no local
+/// ref copy of a branch or tag name the request spelled out (the checkout
+/// still succeeded — only a second, independent re-resolution of the same
+/// string would spuriously fail).
+///
+/// # Errors
+/// [`CliError::Resolve`] when git cannot be run, `HEAD` does not resolve to a
+/// commit, or the output is not a 40-hex SHA.
+pub fn served_commit(pkg: &PackageName, checkout: &std::path::Path) -> Result<PinnedRev, CliError> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+        .current_dir(checkout)
+        .output()
+        .map_err(|e| CliError::Resolve(crate::text::msg::index_rev_parse_unavailable(pkg, &e)))?;
+    if !output.status.success() {
+        return Err(CliError::Resolve(crate::text::msg::index_rev_unresolved(
+            pkg,
+            &crate::style::TerminalSafe::sanitize("HEAD^{commit}"),
+            &crate::style::TerminalSafe::sanitize("\"HEAD\""),
+        )));
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let sha = raw.trim();
+    PinnedRev::from_full_sha(pkg, sha)
 }
 
 /// A validated source-tree content hash: exactly 64 lowercase hex characters.
@@ -1586,6 +1694,117 @@ mod tests {
             PinnedRev::from_full_sha(&pn("p"), FIXTURE_REV).is_ok(),
             "40-char lowercase hex must be accepted"
         );
+    }
+
+    // --- RequestedRev::classify / check_served (shape vs served-commit) ---
+
+    #[test]
+    fn requested_rev_classifies_head_and_names() {
+        assert!(matches!(
+            RequestedRev::classify(&pn("p"), &CommitId::parse(&pn("p"), "HEAD").unwrap()),
+            Ok(RequestedRev::Head)
+        ));
+        assert!(matches!(
+            RequestedRev::classify(&pn("p"), &CommitId::parse(&pn("p"), "main").unwrap()),
+            Ok(RequestedRev::Name(name)) if name == "main"
+        ));
+        assert!(matches!(
+            RequestedRev::classify(&pn("p"), &CommitId::parse(&pn("p"), "v1.2").unwrap()),
+            Ok(RequestedRev::Name(name)) if name == "v1.2"
+        ));
+        // 3 hex chars is below the abbreviation floor (git's own minimum is 4) —
+        // still a `Name`, not `AbbrevHex`.
+        assert!(matches!(
+            RequestedRev::classify(&pn("p"), &CommitId::parse(&pn("p"), "abc").unwrap()),
+            Ok(RequestedRev::Name(name)) if name == "abc"
+        ));
+    }
+
+    #[test]
+    fn requested_rev_classifies_hex_by_length() {
+        let abbrev4 = CommitId::parse(&pn("p"), "dead").unwrap();
+        assert!(matches!(
+            RequestedRev::classify(&pn("p"), &abbrev4),
+            Ok(RequestedRev::AbbrevHex(a)) if a == "dead"
+        ));
+        let abbrev39 = CommitId::parse(&pn("p"), &"a".repeat(39)).unwrap();
+        assert!(matches!(
+            RequestedRev::classify(&pn("p"), &abbrev39),
+            Ok(RequestedRev::AbbrevHex(a)) if a.len() == 39
+        ));
+        let full40 = CommitId::parse(&pn("p"), FIXTURE_REV).unwrap();
+        assert!(matches!(
+            RequestedRev::classify(&pn("p"), &full40),
+            Ok(RequestedRev::FullSha(sha)) if sha.as_str() == FIXTURE_REV
+        ));
+        // 41 lowercase-hex chars is past the SHA-1 width — a `Name`, not a rev.
+        let over41 = CommitId::parse(&pn("p"), &"a".repeat(41)).unwrap();
+        assert!(matches!(
+            RequestedRev::classify(&pn("p"), &over41),
+            Ok(RequestedRev::Name(name)) if name.len() == 41
+        ));
+    }
+
+    #[test]
+    fn requested_rev_rejects_mixed_case_and_uppercase_hex() {
+        let mixed = CommitId::parse(&pn("p"), "DeadBeef").unwrap();
+        assert!(
+            RequestedRev::classify(&pn("p"), &mixed).is_err(),
+            "mixed-case hex must be rejected, not silently treated as a name"
+        );
+        let upper40 = CommitId::parse(&pn("p"), &"A".repeat(40)).unwrap();
+        assert!(
+            RequestedRev::classify(&pn("p"), &upper40).is_err(),
+            "all-uppercase hex must be rejected — a SHA is always lowercase"
+        );
+    }
+
+    #[test]
+    fn check_served_is_permissive_for_head_and_name() {
+        let served = PinnedRev::from_full_sha(&pn("p"), FIXTURE_REV).unwrap();
+        assert!(check_served(&RequestedRev::Head, &served).is_none());
+        assert!(check_served(&RequestedRev::Name("main".to_owned()), &served).is_none());
+    }
+
+    #[test]
+    fn check_served_full_sha_agrees_or_refuses() {
+        let served = PinnedRev::from_full_sha(&pn("p"), FIXTURE_REV).unwrap();
+        assert!(check_served(&RequestedRev::FullSha(served.clone()), &served).is_none());
+
+        let other_sha = "b".repeat(40);
+        let requested = PinnedRev::from_full_sha(&pn("p"), &other_sha).unwrap();
+        match check_served(&RequestedRev::FullSha(requested.clone()), &served) {
+            Some(RevMismatch::Different {
+                requested: r,
+                served: s,
+            }) => {
+                assert_eq!(r.as_str(), other_sha);
+                assert_eq!(s.as_str(), FIXTURE_REV);
+            }
+            other => panic!("expected Different, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_served_abbrev_hex_prefix_match_or_shadowed() {
+        let served = PinnedRev::from_full_sha(&pn("p"), FIXTURE_REV).unwrap();
+        let prefix = FIXTURE_REV[..6].to_owned();
+        assert!(
+            check_served(&RequestedRev::AbbrevHex(prefix), &served).is_none(),
+            "a genuine prefix of the served commit must not be flagged"
+        );
+
+        let non_prefix = "deadbe".to_owned();
+        match check_served(&RequestedRev::AbbrevHex(non_prefix.clone()), &served) {
+            Some(RevMismatch::ShadowedAbbrev {
+                requested,
+                served: s,
+            }) => {
+                assert_eq!(requested, non_prefix);
+                assert_eq!(s.as_str(), FIXTURE_REV);
+            }
+            other => panic!("expected ShadowedAbbrev, got {other:?}"),
+        }
     }
 
     // --- Entry reader refuses non-SHA rev (test plan F) ---

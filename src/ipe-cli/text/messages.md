@@ -1980,6 +1980,14 @@ package `{pkg}`: could not run `git rev-parse`: {detail}
 
 package `{pkg}`: `git rev-parse --verify {refspec}` failed — ref {rev} does not resolve to a commit in the fetched checkout
 
+## index-rev-mixed-case-hex
+
+package `{pkg}`: `rev` is hex-shaped but mixed-case, got: {raw} — a commit SHA is always lowercase; use the lowercase spelling or a distinct ref name
+
+## index-rev-served-mismatch
+
+package `{pkg}`: requested rev `{requested}` does not match the commit git served, `{served}` — a ref of the same name shadowed the full SHA; rename the ref or re-check the requested commit
+
 ## index-sha256-invalid
 
 package `{pkg}`: `sha256` is not a 64-char lowercase-hex content hash, got: {raw}
