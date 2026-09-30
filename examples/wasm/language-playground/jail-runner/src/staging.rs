@@ -563,12 +563,12 @@ mod tests {
 
     #[test]
     fn nesting_past_the_ceiling_is_refused() -> std::io::Result<()> {
-        let at_ceiling = vec!["d"; MAX_SOURCE_SEGMENTS - 1].join("/") + "/m.rs";
+        let at_ceiling = ["d"; MAX_SOURCE_SEGMENTS - 1].join("/") + "/m.rs";
         assert_eq!(
             check_project_layout(crate_with(&at_ceiling)?.path()),
             Ok(())
         );
-        let past = vec!["d"; MAX_SOURCE_SEGMENTS].join("/") + "/m.rs";
+        let past = ["d"; MAX_SOURCE_SEGMENTS].join("/") + "/m.rs";
         assert!(matches!(
             check_project_layout(crate_with(&past)?.path()),
             Err(LayoutError::TooDeep(_))

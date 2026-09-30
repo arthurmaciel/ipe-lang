@@ -211,10 +211,14 @@ mod tests {
     #[test]
     fn a_phase_with_no_budget_left_is_refused() {
         let total = wall(60);
-        let spent = total.duration() - RESERVE;
+        let spent = total.duration().saturating_sub(RESERVE);
         assert_eq!(phase_wall_after(spent, total, wall(10)), None);
         assert_eq!(
-            phase_wall_after(spent - Duration::from_millis(500), total, wall(10)),
+            phase_wall_after(
+                spent.saturating_sub(Duration::from_millis(500)),
+                total,
+                wall(10)
+            ),
             None
         );
         assert_eq!(

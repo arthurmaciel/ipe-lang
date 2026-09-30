@@ -42,7 +42,7 @@ const UNSANDBOXED_OUTPUT_CAP_BYTES: u64 = 64 * 1024;
 /// Output cap for one trusted prewarm cargo step, run `--quiet`.
 const PREWARM_OUTPUT_CAP_BYTES: u64 = 1024 * 1024;
 /// Wall for one trusted prewarm cargo step; a cold vendor+build fits well inside.
-const PREWARM_STEP_WALL: Duration = Duration::from_secs(1800);
+const PREWARM_STEP_WALL: Duration = Duration::from_mins(30);
 /// Bytes of each captured stream a phase reports, kept from the end.
 const PHASE_REPORT_BYTES: usize = 64 * 1024;
 
@@ -281,11 +281,17 @@ fn start_watchdog(total: WallSecs, project_dir: &Path) {
         // large). Children may still hold cwd entries; leftover files in that
         // race are bounded by the wall budget and harmless.
         cleanup_project(&project_dir);
-        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — watchdog expiry: process
-        // exit kills all threads while the emission latch is held, so no
-        // second document follows; --die-with-parent reaps the bwrap tree.
-        std::process::exit(2);
+        exit_holding(emitted);
     });
+}
+
+/// Exits while `latch` is still held, so no thread emits a second outcome.
+fn exit_holding(latch: MutexGuard<'static, bool>) -> ! {
+    let _held = latch;
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — watchdog expiry: process
+    // exit kills all threads while the emission latch is held, so no
+    // second document follows; --die-with-parent reaps the bwrap tree.
+    std::process::exit(2);
 }
 
 /// Best-effort removal of a staged project tree. The harness owns the
