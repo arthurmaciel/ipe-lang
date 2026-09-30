@@ -89,7 +89,7 @@ fn trivial_program(interner: &mut Interner) -> DResult<Program> {
 /// Covers pathological inputs: uppercase, spaces, leading digit.
 #[test]
 fn sanitized_name_project_cargo_builds() -> DResult<()> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return Ok(());
     }
 

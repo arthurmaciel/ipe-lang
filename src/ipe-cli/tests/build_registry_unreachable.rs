@@ -49,9 +49,7 @@ fn write_offline_cargo(dir: &Path) -> std::io::Result<std::path::PathBuf> {
 fn build_registry_unreachable_renders_ipe_e0001_not_ice() {
     const SRC: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"hi\"\n";
 
-    let Ok(runtime_dir) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime_dir = e2e_support::require_runtime().into_path_buf();
 
     let ipe_bin = env!("CARGO_BIN_EXE_ipe");
     if !Path::new(ipe_bin).exists() {

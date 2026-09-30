@@ -44,10 +44,7 @@ fn run_ipec(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        // Runtime not available in this environment — skip.
-        return None;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&entry, &out, &runtime))
 }
 

@@ -91,9 +91,7 @@ fn compile(fixture: &str, tag: &str, out: &PathBuf) -> Option<Result<(), ipe::Cl
     let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, fixture).ok()?;
     let _ = std::fs::remove_dir_all(out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return None;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&entry, out, &runtime))
 }
 
@@ -187,7 +185,7 @@ fn bare_attribute_and_element_arity_fill() {
 /// arity-filled return.
 #[test]
 fn bare_html_view_cargo_builds() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let Some(out) = emit_and_assert_bare_html_view("html_view_build") else {

@@ -55,3 +55,7 @@ e2e-support = { path = "../../../tools/e2e-support" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The e2e tier gate and existence-proven test-artifact resolvers.
+e2e-support = { path = "../../../tools/e2e-support" }

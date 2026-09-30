@@ -31,9 +31,7 @@ fn retry_policy_exact_shape_user_record_emits() {
     let entry = fixture_entry(&root);
     let out = crate::support::scratch_root().join("ipec_i979_exact_shape_emit");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
@@ -55,16 +53,14 @@ fn retry_policy_exact_shape_user_record_builds_and_runs() {
     let entry = fixture_entry(&root);
     let out = crate::support::scratch_root().join("ipec_i979_exact_shape_e2e");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "retry_policy_exact_shape_user_record: must be accepted; got: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 

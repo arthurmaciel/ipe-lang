@@ -55,9 +55,7 @@ fn assert_ipec_ok(fixture: &str, out_suffix: &str) {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable — skip silently
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
@@ -84,7 +82,7 @@ fn m3a_gate_partial_now_compiles() {
 fn a1_ctor_map_bare() {
     assert_ipec_ok("ctor_map_bare", "i147_ctor_map_bare_emit");
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 
@@ -97,9 +95,7 @@ fn a1_ctor_map_bare() {
     let out = crate::support::scratch_root().join("ipec_i147_ctor_map_bare_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = ipe::resolve_runtime();
-    assert!(runtime.is_ok(), "runtime must resolve for E2E");
-    let Ok(runtime) = runtime else { return };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
@@ -131,7 +127,7 @@ fn a1_ctor_map_bare() {
 fn a2_ctor_partial_multiarg_with_clone() {
     assert_ipec_ok("ctor_partial", "i147_ctor_partial_emit");
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 
@@ -144,9 +140,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
     let out = crate::support::scratch_root().join("ipec_i147_ctor_partial_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = ipe::resolve_runtime();
-    assert!(runtime.is_ok(), "runtime must resolve for E2E");
-    let Ok(runtime) = runtime else { return };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
@@ -178,7 +172,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
 fn a3_ctor_stored_in_record_field() {
     assert_ipec_ok("ctor_field", "i147_ctor_field_emit");
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 
@@ -191,9 +185,7 @@ fn a3_ctor_stored_in_record_field() {
     let out = crate::support::scratch_root().join("ipec_i147_ctor_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = ipe::resolve_runtime();
-    assert!(runtime.is_ok(), "runtime must resolve for E2E");
-    let Ok(runtime) = runtime else { return };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let built = ipe::build(&entry, &out, &runtime);
     assert!(

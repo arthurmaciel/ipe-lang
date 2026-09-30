@@ -41,7 +41,7 @@ use ipe_sandbox::run_jail::{
 /// the primitives separately as a hard, refuse-to-certify failure), never a
 /// silent green claim.
 fn e2e_enabled() -> bool {
-    ipe_env::var_os("IPE_E2E").is_some_and(|v| v == "1")
+    e2e_support::e2e_tier() == e2e_support::Tier::E2e
 }
 
 /// A per-test scratch under the process temp dir (NTFS on the hosted image, so

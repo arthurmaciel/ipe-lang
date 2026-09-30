@@ -27,7 +27,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn html_attributes_family_renders_and_escapes() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 
@@ -37,7 +37,7 @@ fn html_attributes_family_renders_and_escapes() {
     let out = crate::support::scratch_root().join("ipec_m7_html_attrs_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = ipe::resolve_runtime().expect("runtime must resolve for E2E");
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),

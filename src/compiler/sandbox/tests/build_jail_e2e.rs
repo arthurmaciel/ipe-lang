@@ -59,7 +59,7 @@ fn fixture_path() -> PathBuf {
 /// alone is insufficient (a runner may have `bwrap` but deny the namespace
 /// setup), so a `/bin/true` canary under the isolated profile decides once.
 fn e2e_tools() -> Option<RunJailTools> {
-    if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return None;
     }
     let caps = ipe_sandbox::probe();

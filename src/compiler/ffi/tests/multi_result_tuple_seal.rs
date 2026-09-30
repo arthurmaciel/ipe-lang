@@ -84,7 +84,7 @@ fn owned_tuple_admits_and_opaque_tuple_over_drops() {
 /// per-component coercion cargo-builds and the widened tuple round-trips.
 #[test]
 fn assembled_tuple_wrapper_builds_and_runs() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let Ok(cargo) = ipe_env::var("CARGO") else {

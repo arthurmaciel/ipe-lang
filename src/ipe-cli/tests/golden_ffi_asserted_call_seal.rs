@@ -138,9 +138,7 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 /// shim region with exact carriers, the panic boundary, and no coercion.
 #[test]
 fn asserted_call_emits_the_exact_carrier_shim() {
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable in this environment — skip silently
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let tmp = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipec_ffi_asserted_call");
     assert!(
@@ -207,9 +205,7 @@ fn asserted_call_emits_the_exact_carrier_shim() {
 /// preparation, naming the real Rust carrier — never silently clamped.
 #[test]
 fn a_clamp_requiring_assertion_is_refused() {
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let main = "module Main exposing (main)\n\
             import Ipe.Io as Io\n\
         import Rust.Ffi\n\n\
@@ -240,9 +236,7 @@ fn a_clamp_requiring_assertion_is_refused() {
 /// teachable IPE-N0038 — never silently ignored, never a confusing miss.
 #[test]
 fn a_misplaced_asserted_call_is_refused() {
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let main = "module Main exposing (main)\n\
             import Ipe.Io as Io\n\
         import Rust.Ffi\n\n\
@@ -352,12 +346,10 @@ fn analysis_entrypoints_accept_an_asserted_program() {
 /// crate — surfacing as a typed `Err`, proven by the printed branch.
 #[test]
 fn asserted_call_emitted_crate_builds_and_runs() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let tmp =
         std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipec_ffi_asserted_call_e2e");
@@ -460,9 +452,7 @@ const CONST_MAIN_IPE: &str = "module Main exposing (main)\n\
 /// `IpeResult`, no `catch_unwind`.
 #[test]
 fn const_read_emits_a_bare_infallible_shim() {
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let tmp = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipec_ffi_const_read");
     assert!(
@@ -501,9 +491,7 @@ fn const_read_emits_a_bare_infallible_shim() {
 /// — a native constant is a single infallible value.
 #[test]
 fn a_result_typed_const_is_refused() {
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let tmp =
         std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipec_ffi_const_result_refused");
@@ -534,12 +522,10 @@ fn a_result_typed_const_is_refused() {
 /// REAL foreign crate exposing the constants and runs, reading both values.
 #[test]
 fn const_read_emitted_crate_builds_and_runs() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let tmp = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipec_ffi_const_read_e2e");
     assert!(

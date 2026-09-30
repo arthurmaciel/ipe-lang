@@ -111,7 +111,7 @@ fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {
     let entry = fixture_entry(root, name);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_emit"));
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
+    let runtime = e2e_support::require_runtime().into_path_buf();
     (ipe::build(&entry, &out, &runtime), out)
 }
 
@@ -129,7 +129,7 @@ fn result_and_map_fn_payload_accepted() {
         "Ok f |> Result.andMap must be accepted: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("result_and_map_fn_payload", &out);
@@ -153,7 +153,7 @@ fn maybe_and_map_fn_payload_accepted() {
         "Just f |> Maybe.andMap must be accepted: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("maybe_and_map_fn_payload", &out);
@@ -190,7 +190,7 @@ fn let_bound_fn_payload_accepted() {
         "let f = Ok (\\x -> …) crossing a fn boundary must be accepted: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("let_bound_fn_payload", &out);
@@ -215,7 +215,7 @@ fn let_bound_maybe_fn_payload_accepted() {
         "let f = Just (\\x -> …) crossing a fn boundary must be accepted: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("let_bound_maybe_fn_payload", &out);
@@ -240,7 +240,7 @@ fn ctor_decl_fn_payload_accepted() {
         "declared fn-typed ctor payload must be accepted: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("ctor_decl_fn_payload", &out);
@@ -265,7 +265,7 @@ fn fn_extracted_called_twice_accepted() {
         "calling an extracted fn twice must be accepted: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("fn_extracted_called_twice", &out);
@@ -391,10 +391,7 @@ fn and_map_cross_module_annotated_wrapper_accepted() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("l0114_and_map_cross_module_wrapper_accepted_emit");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = crate::support::expect_runtime(
-        "and_map_cross_module_wrapper_accepted",
-        ipe::resolve_runtime(),
-    );
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
@@ -418,10 +415,7 @@ fn and_map_forwarder_curried_is_ipe_t0014() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("l0114_and_map_forwarder_curried_is_t0014_emit");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = crate::support::expect_runtime(
-        "and_map_forwarder_curried_is_t0014",
-        ipe::resolve_runtime(),
-    );
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build_loose_file(&entry, &out, &runtime);
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
@@ -471,7 +465,7 @@ fn lambda_param_call_twice_accepted() {
         "calling a lambda param twice must be accepted: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("lambda_param_call_twice_accepted", &out);
@@ -533,7 +527,7 @@ fn assert_accepted_runs(name: &str, expected_stdout: &str) {
     let (built, out) = built_code(&root, name);
     assert!(built.is_ok(), "{name}: must be accepted, got: {built:?}");
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted(name, &out);
@@ -618,10 +612,7 @@ fn and_map_cross_module_untyped_forwarder_curried_rejected() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("l0114_and_map_cross_module_untyped_forwarder_curried_emit");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = crate::support::expect_runtime(
-        "and_map_cross_module_untyped_forwarder_curried",
-        ipe::resolve_runtime(),
-    );
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build_loose_file(&entry, &out, &runtime);
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),

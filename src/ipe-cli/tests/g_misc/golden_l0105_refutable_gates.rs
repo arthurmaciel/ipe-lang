@@ -41,9 +41,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     let got = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
@@ -134,9 +132,7 @@ fn single_ctor_case_accessor_compiles() {
         .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("money_ctor_accessor_case_emit");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
@@ -159,9 +155,7 @@ fn standard_libs_ipe_t0015_money_blocker_gone() {
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("00_standard_libs_t0015_gate");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let result = ipe::build_project(&manifest, &out, &runtime);
     match &result {
         Err(ipe::CliError::Pipeline { diag, .. }) => {

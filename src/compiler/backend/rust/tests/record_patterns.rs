@@ -305,7 +305,7 @@ fn record_pattern_with_unknown_shape_fails_fast() -> DResult<()> {
 /// on `IPE_E2E=1` so the default `cargo test` stays fast and offline.
 #[test]
 fn end_to_end_builds_and_prints_seven() -> DResult<()> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return Ok(());
     }
     let Some(runtime) = seal_e2e::resolve_runtime() else {

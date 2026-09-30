@@ -18,7 +18,7 @@ mod support;
 
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    ipe::resolve_runtime().expect("runtime must resolve for color-e2e tests")
+    e2e_support::require_runtime().into_path_buf()
 }
 
 fn repo_root() -> PathBuf {
@@ -61,7 +61,7 @@ fn color_project_builds_with_no_ui_import() {
 /// whole seam from `Ipe.Color` source to a running binary.
 #[test]
 fn color_e2e_runs_and_prints_hex_and_css() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("color_e2e_run");

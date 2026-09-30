@@ -20,7 +20,7 @@ use ipe::coverage::surface::StdlibSurface;
 
 /// Whether the heavy end-to-end path is enabled.
 fn e2e_enabled() -> bool {
-    ipe_env::var("IPE_E2E").is_ok()
+    e2e_support::e2e_tier() == e2e_support::Tier::E2e
 }
 
 /// The bounded worker count for the parallel build+run sweep.

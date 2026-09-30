@@ -50,9 +50,7 @@ fn list_filter_partial_app_compiles() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i161_list_filter_partial_app_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable — skip silently
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
@@ -60,7 +58,7 @@ fn list_filter_partial_app_compiles() {
         built.err()
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 
@@ -71,9 +69,7 @@ fn list_filter_partial_app_compiles() {
     let e2e_out = crate::support::scratch_root().join("ipec_i161_list_filter_partial_app_e2e");
     let _ = std::fs::remove_dir_all(&e2e_out);
 
-    let runtime = ipe::resolve_runtime();
-    assert!(runtime.is_ok(), "runtime must resolve for E2E");
-    let Ok(runtime) = runtime else { return };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let built = ipe::build(&entry, &e2e_out, &runtime);
     assert!(

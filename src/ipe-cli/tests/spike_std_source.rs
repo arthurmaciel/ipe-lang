@@ -12,7 +12,7 @@ mod support;
 
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    ipe::resolve_runtime().expect("runtime must resolve for spike tests")
+    e2e_support::require_runtime().into_path_buf()
 }
 
 fn repo_root() -> PathBuf {
@@ -127,7 +127,7 @@ fn hostile_std_squat_is_ipe_n0025() {
 /// from Std-source to a running binary, matching the reference value.
 #[test]
 fn spike_e2e_runs_and_prints_hex() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("spike_std_source_e2e");

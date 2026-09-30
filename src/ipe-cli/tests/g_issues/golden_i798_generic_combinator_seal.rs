@@ -56,9 +56,7 @@ fn generic_combinator_emits_byte_identical() {
     let out = crate::support::scratch_root().join("ipec_i798_generic_combinator_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // resolver unavailable — skip, matches the other goldens
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
@@ -84,13 +82,11 @@ fn generic_combinator_builds_and_runs() {
     let out = crate::support::scratch_root().join("ipec_i798_generic_combinator_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "{GOLDEN} must be accepted, got: {built:?}");
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted(GOLDEN, &out);

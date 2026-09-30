@@ -64,7 +64,7 @@ fn compile(name: &str, source: &str, target: Target) -> Outcome {
         .join("negsuite-out")
         .join(name);
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let options = BuildOptions {
         target,
         ..BuildOptions::default()
@@ -84,7 +84,7 @@ fn compile_production(name: &str, source: &str) -> Outcome {
         .join("negsuite-prod-out")
         .join(name);
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let options = BuildOptions {
         production: true,
         ..BuildOptions::default()
@@ -128,7 +128,7 @@ fn compile_project(name: &str, files: &[(&str, &str)]) -> Outcome {
         .join("negsuite-proj-out")
         .join(name);
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let entry = src.join("Main.ipe");
     match ipe::build_loose_file(&entry, &out, &runtime) {
         Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
@@ -1015,7 +1015,7 @@ fn compile_with_files(name: &str, source: &str, extra: &[(&str, &str)]) -> Outco
         .join("negsuite-ce-out")
         .join(name);
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
+    let runtime = e2e_support::require_runtime().into_path_buf();
     match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
         Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
         Err(CliError::Pipeline { diag, .. }) => Outcome::Rejected(diag.code().as_str()),
@@ -1280,7 +1280,7 @@ fn custom_element_ctor_symlink_escape_rejected_at_build_gate() {
     crate::support::expect_scratch_step(name, std::fs::write(&entry, &src));
     let out = base.join("out");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let outcome = match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
         Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
         Err(CliError::Pipeline { diag, .. }) => Outcome::Rejected(diag.code().as_str()),
@@ -3218,9 +3218,7 @@ fn row_generic_in_scope_web_embed_refused_undetermined() {
         .join("negsuite-out")
         .join(name);
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
         Err(CliError::Pipeline { diag, .. }) => match *diag {
             ipe_diagnostics::Diagnostic::Name {
@@ -3291,9 +3289,7 @@ fn unpinned_msg_web_embed_refused() {
         .join("negsuite-out")
         .join(name);
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
         Err(CliError::Pipeline { diag, .. }) => match *diag {
             ipe_diagnostics::Diagnostic::Name {

@@ -41,9 +41,7 @@ fn make_do_src(n: usize) -> String {
 fn deep_do_task_bind_emit_is_linear() {
     const N: usize = 20;
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable — skip silently
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let src = make_do_src(N);
 
@@ -97,12 +95,10 @@ fn deep_do_task_bind_emit_is_linear() {
 fn deep_do_task_bind_e2e_seal() {
     const N: usize = 20;
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let src = make_do_src(N);
 
     let out_dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("deep_do_task_bind_e2e");

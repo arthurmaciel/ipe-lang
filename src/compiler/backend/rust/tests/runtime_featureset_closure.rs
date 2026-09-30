@@ -1116,7 +1116,7 @@ fn uses_email_selects_email_feature() {
 /// Gated on `IPE_E2E=1`; skipped in offline / unit-test-only runs.
 #[test]
 fn email_parse_address_only_cargo_builds() -> DResult<()> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return Ok(());
     }
     let Some(runtime) = seal_e2e::resolve_runtime() else {

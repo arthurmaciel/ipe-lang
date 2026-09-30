@@ -125,9 +125,7 @@ fn compile(fixture: &str, tag: &str, out: &PathBuf) -> Option<Result<(), ipe::Cl
     let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, fixture).ok()?;
     let _ = std::fs::remove_dir_all(out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return None;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&entry, out, &runtime))
 }
 
@@ -206,7 +204,7 @@ fn live_init_poly_var_is_rejected() {
 /// working directory mid-build.
 #[test]
 fn live_init_reads_req_path_cargo_builds() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let out = crate::support::scratch_root().join("i180_init_reads_req_path_e2e_out");

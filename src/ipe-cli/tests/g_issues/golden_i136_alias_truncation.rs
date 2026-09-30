@@ -26,9 +26,7 @@ fn assert_builds(fixture: &str) {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(fixture);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable — skip silently
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),

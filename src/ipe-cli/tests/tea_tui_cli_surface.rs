@@ -40,7 +40,7 @@ fn compile_files(
         .join(format!("tea_surface_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
-    let runtime = ipe::resolve_runtime().map_err(|e| -> BoxError { format!("{e:?}").into() })?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Ok(ipe::build_loose_file(&entry, &out_dir, &runtime))
 }
 
@@ -555,7 +555,7 @@ fn assert_builds_files(test_name: &str, files: &[(&str, &str)]) -> Result<(), Bo
     if let Err(e) = compile_files(test_name, files)? {
         return Err(format!("{test_name}: expected ipe success, got {e:?}").into());
     }
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return Ok(());
     }
     let out_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))

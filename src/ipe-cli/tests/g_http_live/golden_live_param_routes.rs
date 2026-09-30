@@ -53,9 +53,7 @@ fn compile_solo_into(out: &Path) -> Option<Result<(), CliError>> {
         .join("live_param_routes")
         .join("Main.ipe");
     let _ = std::fs::remove_dir_all(out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return None;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&entry, out, &runtime))
 }
 
@@ -68,9 +66,7 @@ fn compile_src(test_name: &str, source: &str) -> Option<Result<(), CliError>> {
     std::fs::write(&entry, source).ok()?;
     let out = crate::support::scratch_root().join(format!("param_routes_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return None;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&entry, &out, &runtime))
 }
 
@@ -248,7 +244,7 @@ fn http_get(port: u16, path: &str) -> std::io::Result<String> {
 /// captured `:param` delivered through `match_routes` into `UserPage`.
 #[test]
 fn param_route_solo_cargo_builds_and_delivers_param() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling

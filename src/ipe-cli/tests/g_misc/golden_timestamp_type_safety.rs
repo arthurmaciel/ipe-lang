@@ -28,9 +28,7 @@ fn adding_two_timestamps_is_ipe_t0001() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("timestamp_add_two_ts_rejected_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     let got_code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),

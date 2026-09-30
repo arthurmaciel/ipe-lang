@@ -45,7 +45,7 @@ fn fixture_entry_named(root: &Path, name: &str) -> PathBuf {
 fn built(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
     let entry = fixture_entry(root);
     let _ = std::fs::remove_dir_all(out);
-    let runtime = ipe::resolve_runtime().ok()?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&entry, out, &runtime))
 }
 
@@ -84,7 +84,7 @@ fn retry_policy_value_callee_builds_and_runs() {
         "retry_policy_value_callee: must be accepted, got: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("retry_policy_value_callee", &out);
@@ -118,9 +118,7 @@ fn retry_policy_shape_nearmiss_rejects() {
     let entry = fixture_entry_named(&root, "retry_policy_shape_nearmiss");
     let out = crate::support::scratch_root().join("ipec_retry_policy_shape_nearmiss");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // resolver unavailable — skip, matches the other goldens
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     let got = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),

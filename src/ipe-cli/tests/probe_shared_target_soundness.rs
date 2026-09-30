@@ -91,7 +91,7 @@ fn cargo_build_into_shared(out_dir: &Path, shared_target: &Path) -> (bool, Strin
 /// masks a broken app.
 #[test]
 fn probe_shared_target_never_masks_a_broken_emit() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let ipe = ipe_bin();
@@ -99,9 +99,7 @@ fn probe_shared_target_never_masks_a_broken_emit() {
         return;
     }
     // `ipe build` resolves the runtime itself; skip only if this host cannot.
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
+    let _runtime = e2e_support::require_runtime();
 
     let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("ipe_probe_soundness_{}", std::process::id()));

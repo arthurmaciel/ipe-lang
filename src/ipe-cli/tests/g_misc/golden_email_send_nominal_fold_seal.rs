@@ -64,9 +64,7 @@ fn concat_emitted_rs(dir: &Path, out: &mut String) {
 fn built_app_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<String>) {
     let entry = fixture_entry(root);
     let _ = std::fs::remove_dir_all(out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return (Ok(()), None);
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, out, &runtime);
     let emitted = if built.is_ok() {
         // Scan the emitted APP modules only (`src/ipe_mods/` + `src/main.rs`),
@@ -132,9 +130,7 @@ fn email_literals_emit_runtime_structs_and_provider_variant() {
 fn email_send_nominal_fold_seal_builds() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_email_send_nominal_fold_seal_e2e");
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let entry = fixture_entry(&root);
     let _ = std::fs::remove_dir_all(&out);
     let built = ipe::build(&entry, &out, &runtime);
@@ -143,7 +139,7 @@ fn email_send_nominal_fold_seal_builds() {
         "email_send_nominal_fold_seal: must be accepted (ipe-0), got: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     // The `email.send` kernel is network-effectful (no deterministic stdout

@@ -459,7 +459,7 @@ fn build_and_assert(
     slot: &str,
     expected: &str,
 ) -> DResult<()> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return Ok(());
     }
     let Some(runtime) = seal_e2e::resolve_runtime() else {

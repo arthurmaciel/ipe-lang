@@ -54,9 +54,7 @@ fn build_propagates_a_failed_emitted_cargo_build() {
     // the repo tree is unavailable (a nextest archive shipped to another host),
     // skip — the propagation primitive is also unit-covered in `toolchain.rs`
     // and `lib.rs`; this end-to-end spawn only adds value where the tree exists.
-    let Ok(runtime_dir) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime_dir = e2e_support::require_runtime().into_path_buf();
 
     let ipe_bin = env!("CARGO_BIN_EXE_ipe");
     if !Path::new(ipe_bin).exists() {

@@ -804,7 +804,7 @@ fn ipe_bin() -> PathBuf {
 #[test]
 fn publish_dry_run_computes_a_correct_entry_offline() {
     // Gated: the dry-run still runs the local audit gate, which builds the package.
-    if ipe_env::var_os("IPE_E2E").is_none() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping publish_dry_run_computes_a_correct_entry_offline (set IPE_E2E=1)");
         return;
     }

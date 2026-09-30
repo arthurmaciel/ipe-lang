@@ -94,7 +94,7 @@ pub fn write_project(dir: &Path, main: &str) -> bool {
 #[test]
 fn nonclone_handle_reused_fails_closed_before_cargo() {
     let runtime =
-        ipe::resolve_runtime().expect("runtime must resolve to prove the fail-closed refusal");
+        e2e_support::require_runtime().into_path_buf();
 
     let tmp = crate::support::scratch_root().join("ipec_ffi_nonclone_handle_reuse");
     // `w` is bound once, then read by TWO `slot_count` calls that both discard
@@ -158,9 +158,7 @@ fn nonclone_handle_reused_fails_closed_before_cargo() {
 /// under `IPE_E2E=1`.
 #[test]
 fn nonclone_handle_threaded_linearly_builds() {
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable in this environment — skip silently
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let tmp = crate::support::scratch_root().join("ipec_ffi_nonclone_handle_thread");
     // Each read consumes the world and hands the RETURNED handle to the next —
@@ -218,7 +216,7 @@ fn nonclone_handle_threaded_linearly_builds() {
 /// not published; the local path dependency stands in for it.
 #[allow(clippy::expect_used)] // fixture-setup failure must fail the seal test loudly
 pub fn provision_handle_demo(project: &Path, out: &Path) {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let handle_demo_dir = project.join("handle_demo");

@@ -166,8 +166,7 @@ fn start_watch(
     ),
     BoxError,
 > {
-    let runtime_dir = ipe::resolve_runtime()
-        .map_err(|e| -> BoxError { format!("runtime dir must resolve: {e}").into() })?;
+    let runtime_dir = e2e_support::require_runtime().into_path_buf();
     let mut opts = WatchOptions::new(entry.to_path_buf(), out_dir.to_path_buf(), runtime_dir);
     opts.port = port;
     // Forward CI's warm shared target (exported ONLY as IPE_ORACLE_SHARED_TARGET)
@@ -200,8 +199,7 @@ fn start_watch_bluegreen(
     ),
     BoxError,
 > {
-    let runtime_dir = ipe::resolve_runtime()
-        .map_err(|e| -> BoxError { format!("runtime dir must resolve: {e}").into() })?;
+    let runtime_dir = e2e_support::require_runtime().into_path_buf();
     let mut opts = WatchOptions::new(entry.to_path_buf(), out_dir.to_path_buf(), runtime_dir);
     opts.port = port;
     opts.bluegreen = true;
@@ -320,7 +318,7 @@ fn pid_is_alive(pid: u32) -> bool {
 
 #[test]
 fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -347,7 +345,7 @@ fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
 
 #[test]
 fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -390,7 +388,7 @@ fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError
 
 #[test]
 fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -449,7 +447,7 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
 #[cfg(target_os = "linux")]
 #[test]
 fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -511,7 +509,7 @@ fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Re
 #[cfg(target_os = "linux")]
 #[test]
 fn watch_does_not_bind_a_proxy_for_a_non_http_shape() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -565,7 +563,7 @@ fn watch_does_not_bind_a_proxy_for_a_non_http_shape() -> Result<(), BoxError> {
 /// not by shape (a `Server.listen` main is `Shape::Script`).
 #[test]
 fn watch_proxies_a_hardcoded_port_server_on_an_internal_port() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }

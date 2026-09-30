@@ -59,9 +59,7 @@ fn concat_emitted_rs(dir: &Path, out: &mut String) {
 fn built_app_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<String>) {
     let entry = fixture_entry(root);
     let _ = std::fs::remove_dir_all(out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return (Ok(()), None);
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, out, &runtime);
     let emitted = if built.is_ok() {
         let mut acc = std::fs::read_to_string(out.join("src").join("main.rs")).unwrap_or_default();
@@ -116,9 +114,7 @@ fn runtime_shape_literals_emit_nominal_structs() {
 fn runtime_shape_fold_seal_builds_and_runs() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_runtime_shape_fold_seal_e2e");
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let entry = fixture_entry(&root);
     let _ = std::fs::remove_dir_all(&out);
     let built = ipe::build(&entry, &out, &runtime);
@@ -127,7 +123,7 @@ fn runtime_shape_fold_seal_builds_and_runs() {
         "runtime_shape_fold_seal: must be accepted, got: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("runtime_shape_fold_seal", &out);

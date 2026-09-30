@@ -40,9 +40,7 @@ fn run_ipec(out: &Path) -> Option<Result<(), ipe::CliError>> {
         .join("Main.ipe");
     let _ = std::fs::remove_dir_all(out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return None;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&entry, out, &runtime))
 }
 
@@ -106,7 +104,7 @@ fn live_let_bound_routes_renders_route_page() {
 /// shared dependency target is reused, so the deps compile once, not per fixture.
 #[test]
 fn live_let_bound_routes_cargo_builds() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     // Emit into a PRIVATE dir this test alone owns, so a compile-only sibling

@@ -67,9 +67,7 @@ fn http_stream_open_full_emit_succeeds() {
     let out = crate::support::scratch_root().join("ipec_i148_http_stream_id_full_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let built = ipe::build(&entry, &out, &runtime);
     assert!(

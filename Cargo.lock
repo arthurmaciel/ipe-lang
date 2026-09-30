@@ -3257,6 +3257,7 @@ version = "0.3.4"
 name = "ipe_ffi"
 version = "0.3.4"
 dependencies = [
+ "e2e-support",
  "ipe_canon",
  "ipe_diagnostics",
  "ipe_env",

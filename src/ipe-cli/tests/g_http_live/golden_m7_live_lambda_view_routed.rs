@@ -70,9 +70,7 @@ fn compile(tag: &str, out: &Path) -> Option<Result<(), ipe::CliError>> {
     let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, LIVE_LAMBDA_VIEW_ROUTED).ok()?;
     let _ = std::fs::remove_dir_all(out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return None;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&entry, out, &runtime))
 }
 
@@ -107,7 +105,7 @@ fn lambda_view_routed_app_emits_web_app_routed() {
 /// core: unique package name → fresh app fingerprint, warm dep target reused).
 #[test]
 fn lambda_view_routed_app_cargo_builds() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling

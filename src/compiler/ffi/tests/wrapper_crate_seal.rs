@@ -168,7 +168,7 @@ fn a_borrowed_return_fn_over_drops_with_a_diagnostic() {
 /// the run asserts the constructor and reader round-trip through the wrapper.
 #[test]
 fn the_emitted_crate_and_wrapper_path_dep_build_and_run() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let Ok(cargo) = ipe_env::var("CARGO") else {

@@ -53,12 +53,7 @@ fn server_handler_lambda_boxes_with_arc_not_box() {
     let out = crate::support::scratch_root().join("ipec_l0114_server_handler_arc");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        // In an environment where the runtime dir can't be resolved the emit
-        // step can't run; skip rather than false-fail (mirrors the byte
-        // goldens' resolve dependency).
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
@@ -109,9 +104,7 @@ fn ws_on_error_callback_boxes_with_arc_not_box() {
     let out = crate::support::scratch_root().join("ipec_l0114_ws_onerror_arc");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let built = ipe::build(&entry, &out, &runtime);
     assert!(

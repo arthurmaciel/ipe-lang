@@ -32,7 +32,7 @@ fn fixture_dir() -> PathBuf {
 
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    ipe::resolve_runtime().expect("runtime must resolve for css_transform_ssot golden")
+    e2e_support::require_runtime().into_path_buf()
 }
 
 /// Emit-only: `ipe build` of the transform fixture must succeed.
@@ -58,7 +58,7 @@ fn css_transform_ssot_emits() {
 /// delegation), proving the helpers and the delegation are output-correct.
 #[test]
 fn css_transform_ssot_e2e_output_matches_expected() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 

@@ -181,8 +181,7 @@ fn start_watch(
     ),
     BoxError,
 > {
-    let runtime_dir = ipe::resolve_runtime()
-        .map_err(|e| -> BoxError { format!("runtime dir must resolve: {e}").into() })?;
+    let runtime_dir = e2e_support::require_runtime().into_path_buf();
     let mut opts = WatchOptions::new(entry.to_path_buf(), out_dir.to_path_buf(), runtime_dir);
     opts.port = port;
     opts.bluegreen = bluegreen;
@@ -496,7 +495,7 @@ fn run_measurement(bluegreen: bool, port: u16, tag: &str) -> Result<(), BoxError
 #[test]
 #[ignore = "measurement harness (prints a table); run explicitly with --ignored --nocapture"]
 fn measure_direct_path_tail() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -506,7 +505,7 @@ fn measure_direct_path_tail() -> Result<(), BoxError> {
 #[test]
 #[ignore = "measurement harness (prints a table); run explicitly with --ignored --nocapture"]
 fn measure_bluegreen_path_tail() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -517,7 +516,7 @@ fn measure_bluegreen_path_tail() -> Result<(), BoxError> {
 /// browser's connection, and the same socket afterwards serves the NEW binary.
 #[test]
 fn bluegreen_rebuild_keeps_the_client_connection_alive() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -610,7 +609,7 @@ fn wait_for_count_at_least(port: u16, cookie: &str, min: i64, timeout: Duration)
 /// breaking new-session init.
 #[test]
 fn bluegreen_rebuild_preserves_the_model_across_the_swap() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -687,7 +686,7 @@ fn bluegreen_rebuild_preserves_the_model_across_the_swap() -> Result<(), BoxErro
 /// `init` (`score=0`), with the server healthy throughout.
 #[test]
 fn bluegreen_rebuild_resets_cleanly_on_model_type_change() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -794,7 +793,7 @@ fn additive_ticker_fixture(marker: &str) -> String {
 /// value, without losing either old state or the new field's default.
 #[test]
 fn bluegreen_rebuild_preserves_state_on_additive_model_change() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -855,7 +854,7 @@ fn bluegreen_rebuild_preserves_state_on_additive_model_change() -> Result<(), Bo
 /// direct path drops connections on restart by design).
 #[test]
 fn flag_off_direct_path_still_swaps_the_binary() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }

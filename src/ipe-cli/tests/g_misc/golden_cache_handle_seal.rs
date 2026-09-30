@@ -45,7 +45,7 @@ fn fixture_entry(root: &Path) -> PathBuf {
 fn built(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
     let entry = fixture_entry(root);
     let _ = std::fs::remove_dir_all(out);
-    let runtime = ipe::resolve_runtime().ok()?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&entry, out, &runtime))
 }
 
@@ -80,7 +80,7 @@ fn cache_handle_seal_builds_and_runs() {
         "cache_handle_seal: must be accepted, got: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("cache_handle_seal", &out);

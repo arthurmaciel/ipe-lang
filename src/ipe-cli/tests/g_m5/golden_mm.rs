@@ -38,7 +38,7 @@ fn golden_dir(name: &str) -> PathBuf {
 // broken environment, and `expect` is the idiomatic way to express that.
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    ipe::resolve_runtime().expect("runtime must resolve for golden_mm tests")
+    e2e_support::require_runtime().into_path_buf()
 }
 
 // ---------------------------------------------------------------------------

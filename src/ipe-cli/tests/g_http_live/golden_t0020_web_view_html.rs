@@ -327,9 +327,7 @@ fn compile_src(test_name: &str, source: &str) -> Option<Result<(), CliError>> {
     std::fs::write(&entry, source).ok()?;
     let out = crate::support::scratch_root().join(format!("t0020_web_view_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return None;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&entry, &out, &runtime))
 }
 

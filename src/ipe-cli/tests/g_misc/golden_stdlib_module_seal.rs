@@ -40,7 +40,7 @@ fn write_project(dir: &Path, main: &str) -> bool {
 }
 
 fn e2e_enabled() -> bool {
-    ipe_env::var("IPE_E2E").is_ok()
+    e2e_support::e2e_tier() == e2e_support::Tier::E2e
 }
 
 /// Compile `main` (a full `Main.ipe` program) through the ipe frontend into an
@@ -56,9 +56,7 @@ fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
     // Declared at scope top (before any statement) to satisfy
     // clippy::items_after_statements.
     static PROBE_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return None; // runtime unavailable in this environment — caller skips
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let uid = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let pid = std::process::id();
     let tmp = crate::support::scratch_root().join(format!("ipec_stdlib_seal_{slug}_{pid}_{uid}"));
@@ -554,9 +552,7 @@ const PUBSUB_TOPIC_MISMATCH: &str = "module Main exposing (main)\n\
 #[test]
 fn pubsub_topic_type_mismatch_is_rejected() {
     static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable — skip
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let uid = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // Fold the PID in so two parallel test binaries never collide on the shared
     // temp_dir (the per-process counter alone restarts at 0 in each binary).

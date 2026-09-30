@@ -43,7 +43,7 @@ use ipe_sandbox::run_jail::SandboxProfile;
 /// a macOS runner is a skip here (the CI job asserts its presence separately as a
 /// hard, refuse-to-certify failure), never a silent green.
 fn e2e_enabled() -> bool {
-    if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return false;
     }
     which_sandbox_exec().is_some()

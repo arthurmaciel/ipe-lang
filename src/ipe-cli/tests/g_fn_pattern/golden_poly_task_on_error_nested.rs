@@ -65,9 +65,7 @@ fn poly_task_on_error_nested_green() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("poly_task_on_error_nested");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable — skip silently
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
@@ -98,7 +96,7 @@ fn poly_task_on_error_nested_green() {
          shape); got:\n{main_rs}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("poly_task_on_error_nested", &out);

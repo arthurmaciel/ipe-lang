@@ -31,7 +31,7 @@ fn fixture_dir() -> PathBuf {
 
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    ipe::resolve_runtime().expect("runtime must resolve for css_opacity_refinement golden")
+    e2e_support::require_runtime().into_path_buf()
 }
 
 /// Emit-only: `ipe build` of the opacity fixture must succeed.
@@ -55,7 +55,7 @@ fn css_opacity_refinement_emits() {
 /// lines match the expected values, proving clamping and NaN-guard behaviour.
 #[test]
 fn css_opacity_refinement_e2e_output_matches_expected() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 

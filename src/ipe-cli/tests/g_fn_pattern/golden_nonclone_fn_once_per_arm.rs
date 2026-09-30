@@ -39,10 +39,7 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_nonclone_fn_once_per_arm_out");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        eprintln!("SKIP nonclone_fn_once_per_arm: runtime not available");
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
@@ -59,7 +56,7 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
          skips the promotion and re-opens the per-arm double-move E0382)"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("nonclone_fn_once_per_arm", &out);

@@ -76,20 +76,13 @@ fn run_subcommand_builds_and_executes_hello_program() {
     const SRC: &str =
         "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"hello from run\"\n";
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 
     // Resolve the runtime dir (skips the test when IPE_RUNTIME_DIR is unset
     // and the walk-up also fails, which happens in CI without the repo tree).
-    let runtime = ipe::resolve_runtime();
-    assert!(
-        runtime.is_ok(),
-        "runtime must resolve for E2E test: {runtime:?}"
-    );
-    let Ok(runtime_dir) = runtime else {
-        return;
-    };
+    let runtime_dir = e2e_support::require_runtime().into_path_buf();
 
     // Write the source file into a temp directory.
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipec_run_subcommand_e2e");
@@ -159,13 +152,11 @@ fn run_subcommand_builds_and_executes_hello_program() {
 fn emitted_cargo_toml_name_matches_binary_ipe_run_will_exec() {
     const SRC: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"ok\"\n";
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 
-    let Ok(runtime_dir) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime_dir = e2e_support::require_runtime().into_path_buf();
 
     // --- Case 1: single-file build (no manifest) → name must be "ipe-app" ---
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipe_run_bin_name_e2e");
@@ -291,9 +282,7 @@ fn run_without_cargo_reports_the_missing_toolchain() {
 
     // A runtime dir is needed to reach the toolchain check (which fires after
     // emit). Skip when the repo tree is unavailable (CI without checkout).
-    let Ok(runtime_dir) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime_dir = e2e_support::require_runtime().into_path_buf();
 
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipe_run_no_cargo_e2e");
     let _ = fs::remove_dir_all(&dir);

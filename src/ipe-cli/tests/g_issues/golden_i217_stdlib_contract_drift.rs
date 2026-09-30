@@ -49,10 +49,7 @@ fn assert_ipec_accepts(name: &str) -> Option<PathBuf> {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_ipec_out"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        eprintln!("SKIP {name}: runtime not available");
-        return None;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
@@ -64,7 +61,7 @@ fn assert_ipec_accepts(name: &str) -> Option<PathBuf> {
 }
 
 fn e2e_build_and_run(name: &str, expect_stdout_contains: &str) {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let root = repo_root();
@@ -72,9 +69,7 @@ fn e2e_build_and_run(name: &str, expect_stdout_contains: &str) {
     let out = crate::support::scratch_root().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),

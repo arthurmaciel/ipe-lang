@@ -29,7 +29,7 @@ use ipe_sandbox::{CanonicalPath, JailMounts};
 /// Skip unless `IPE_E2E=1`. Absent, these tests do nothing (the CI job asserts
 /// the primitives separately as a hard, refuse-to-certify failure).
 fn e2e_enabled() -> bool {
-    ipe_env::var_os("IPE_E2E").is_some_and(|v| v == "1")
+    e2e_support::e2e_tier() == e2e_support::Tier::E2e
 }
 
 /// A per-test scratch under the process temp dir (NTFS on the hosted image, so

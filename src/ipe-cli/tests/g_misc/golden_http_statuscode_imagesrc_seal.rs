@@ -29,7 +29,7 @@ fn built_statuscode(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>
         .join("statuscode_seal")
         .join("Main.ipe");
     let _ = std::fs::remove_dir_all(out);
-    let runtime = ipe::resolve_runtime().ok()?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&entry, out, &runtime))
 }
 
@@ -40,7 +40,7 @@ fn built_imagesrc(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> 
         .join("imagesrc_seal")
         .join("Main.ipe");
     let _ = std::fs::remove_dir_all(out);
-    let runtime = ipe::resolve_runtime().ok()?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&entry, out, &runtime))
 }
 
@@ -75,7 +75,7 @@ fn statuscode_seal_builds_and_runs() {
         "statuscode_seal: must be accepted, got: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("statuscode_seal", &out);
@@ -131,7 +131,7 @@ fn imagesrc_seal_builds_and_runs() {
         "imagesrc_seal: must be accepted, got: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("imagesrc_seal", &out);

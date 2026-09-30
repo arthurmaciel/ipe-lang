@@ -72,7 +72,7 @@ fn golden_dir(name: &str) -> PathBuf {
 // broken toolchain environment should fail loudly here, not silently skip.
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    ipe::resolve_runtime().expect("runtime must resolve for golden_parser_gaps tests")
+    e2e_support::require_runtime().into_path_buf()
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +80,7 @@ fn runtime() -> PathBuf {
 // ---------------------------------------------------------------------------
 
 fn assert_single_oracle(name: &str) {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let dir = golden_dir(name);
@@ -117,7 +117,7 @@ fn blockcomment_builds_and_matches_oracle() {
 
 #[test]
 fn qualtype_project_builds_and_prints_42() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let name = "mm_qualtype";
@@ -148,7 +148,7 @@ fn qualtype_project_builds_and_prints_42() {
 
 #[test]
 fn intdiv_by_zero_aborts_exit_101() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let name = "intdiv_divzero";

@@ -62,14 +62,7 @@ fn out_dir(name: &str) -> PathBuf {
 fn assert_rejected(name: &str, entry: &Path, expected: ipe_diagnostics::Code) {
     // A refusal test proves nothing if it skips silently: a missing runtime
     // would let the fail-closed assertion pass without driving the pipeline.
-    let runtime = ipe::resolve_runtime();
-    assert!(
-        runtime.is_ok(),
-        "{name}: runtime must resolve to prove the fail-closed refusal: {runtime:?}"
-    );
-    let Ok(runtime) = runtime else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let out = out_dir(name);
     match ipe::build_loose_file(entry, &out, &runtime) {
         Err(CliError::Pipeline { diag, .. }) => assert_eq!(
@@ -95,12 +88,7 @@ fn assert_rejected(name: &str, entry: &Path, expected: ipe_diagnostics::Code) {
 /// on `None` never passes without driving the pipeline.
 #[track_caller]
 fn accepted_out(name: &str, entry: &Path) -> Option<PathBuf> {
-    let runtime = ipe::resolve_runtime();
-    assert!(
-        runtime.is_ok(),
-        "{name}: runtime must resolve to prove the program is accepted: {runtime:?}"
-    );
-    let runtime = runtime.ok()?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let out = out_dir(name);
     match ipe::build_loose_file(entry, &out, &runtime) {
         Ok(()) => Some(out),
@@ -117,7 +105,7 @@ fn accepted_out(name: &str, entry: &Path) -> Option<PathBuf> {
 /// Under `IPE_E2E`, `cargo build` + run the crate in `out` and check its stdout.
 #[track_caller]
 fn assert_runs(name: &str, out: &Path, expected_stdout: &str) {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return; // emit-only fast pass
     }
     let outcome = crate::support::build_and_run_emitted(name, out);

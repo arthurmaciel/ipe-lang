@@ -109,7 +109,7 @@ fn forwarders_and_nominals_are_admitted() {
 /// and the nullary forwarders build.
 #[test]
 fn assembled_module_tree_builds_and_runs() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let Ok(cargo) = ipe_env::var("CARGO") else {

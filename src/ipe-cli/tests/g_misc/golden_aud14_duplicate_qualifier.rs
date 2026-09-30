@@ -36,9 +36,7 @@ fn write_project(dir: &std::path::Path, files: &[(&str, &str)]) -> bool {
 /// well-typed program producing a wrong-module resolution.
 #[test]
 fn distinct_modules_sharing_an_explicit_alias_is_rejected() {
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable in this environment — skip silently
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let tmp = crate::support::scratch_root().join("ipec_aud14_duplicate_qualifier");
     let wrote = write_project(
@@ -94,9 +92,7 @@ import Ipe.Io
 /// check only rejects a clash between two DIFFERENT dep modules.
 #[test]
 fn same_module_reimported_under_same_alias_is_accepted() {
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let tmp = crate::support::scratch_root().join("ipec_aud14_duplicate_qualifier_diamond");
     let wrote = write_project(

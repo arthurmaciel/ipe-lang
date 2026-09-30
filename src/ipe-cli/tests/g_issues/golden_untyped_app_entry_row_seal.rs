@@ -195,15 +195,6 @@ fn build_fixture(name: &str, source: &str) -> Option<(Result<(), CliError>, Path
         return None;
     };
     let out = out_dir(name);
-    let runtime = match ipe::resolve_runtime() {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            assert!(
-                false_marker(),
-                "{name}: the embedded runtime could not be resolved: {err:?}"
-            );
-            return None;
-        }
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some((ipe::build(&entry, &out, &runtime), out))
 }

@@ -165,9 +165,7 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 /// and wrappers typed at the REAL foreign types.
 #[test]
 fn transparent_import_emits_the_conversion_seam() {
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable in this environment — skip silently
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let tmp =
         std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipec_ffi_transparent_import");
@@ -229,12 +227,10 @@ fn transparent_import_emits_the_conversion_seam() {
 /// from, never what the emitted code says.
 #[test]
 fn transparent_import_emitted_crate_builds_and_runs() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let tmp = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("ipec_ffi_transparent_import_e2e");

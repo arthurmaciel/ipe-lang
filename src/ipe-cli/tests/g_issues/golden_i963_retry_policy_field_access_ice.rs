@@ -43,7 +43,7 @@ fn fixture_named(root: &Path, name: &str) -> PathBuf {
 
 fn built(root: &Path, out: &Path) -> Option<Result<(), CliError>> {
     let _ = std::fs::remove_dir_all(out);
-    let runtime = ipe::resolve_runtime().ok()?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
     Some(ipe::build(&fixture(root), out, &runtime))
 }
 
@@ -55,9 +55,7 @@ fn retry_policy_nearmiss_still_rejects() {
     let entry = fixture_named(&root, "retry_policy_shape_nearmiss");
     let out = crate::support::scratch_root().join("ipec_i963_nearmiss_guard");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     let got = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
@@ -103,7 +101,7 @@ fn retry_policy_field_access_ice_builds_and_runs() {
         "RetryPolicy field access fixture must be accepted; got: {result:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 

@@ -45,7 +45,7 @@ fn emit_main_rs(slug: &str) -> Option<String> {
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("live_on_navigate_emit_{slug}"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = ipe::resolve_runtime().ok()?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
     ipe::build(&entry, &out, &runtime).expect("onNavigate routed app must ipe-compile");
     // A layout builder is compiled-source Ipê now, so a home may lower to
     // `src/ipe_mods/*.rs` — scan the WHOLE emitted Ipê-side tree.

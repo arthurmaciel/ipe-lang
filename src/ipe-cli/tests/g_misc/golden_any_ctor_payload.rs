@@ -68,9 +68,7 @@ fn any_ctor_payload_ipec_and_cargo_zero() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("l0102_any_ctor_payload_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
@@ -81,7 +79,7 @@ fn any_ctor_payload_ipec_and_cargo_zero() {
 
     // Cargo build seal: the emitted Rust must compile.
     // Gated on IPE_E2E so the default test run stays fast.
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("any_ctor_payload", &out);
@@ -107,9 +105,7 @@ fn any_ctor_payload_fail_closed() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("l0102_any_ctor_fail_closed_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let built = ipe::build(&entry, &out, &runtime);
     let got = match &built {
@@ -133,9 +129,7 @@ fn ctor_span_attr_dep_module() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("l0102_ctor_span_attr_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let result = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
@@ -144,7 +138,7 @@ fn ctor_span_attr_dep_module() {
         result.err()
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("ctor_span_attr", &out);

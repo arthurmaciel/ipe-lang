@@ -91,24 +91,6 @@ pub fn expect_scratch_entry(test_name: &str, entry: Option<PathBuf>) -> PathBuf 
     entry.unwrap_or_default()
 }
 
-/// Unwrap a refusal/acceptance test's runtime resolution, failing the test
-/// loudly when it is `Err` instead of letting the caller skip silently.
-///
-/// See [`expect_scratch_entry`] for why a silent skip here is unacceptable; the
-/// placeholder `PathBuf` returned after the assertion is unreachable.
-#[must_use]
-#[allow(dead_code)] // adopted file-by-file as refusal/acceptance tests migrate
-#[track_caller]
-pub fn expect_runtime(test_name: &str, runtime: Result<PathBuf, ipe::CliError>) -> PathBuf {
-    assert!(
-        runtime.is_ok(),
-        "{test_name}: runtime resolution failed — a refusal/acceptance test must \
-         fail loudly, never skip silently: {:?}",
-        runtime.as_ref().err()
-    );
-    runtime.unwrap_or_default()
-}
-
 /// Assert a refusal/acceptance test's scratch-dir setup step (a directory
 /// create, file write, or symlink) succeeded, failing the test loudly instead
 /// of letting the caller skip silently on an `Err`.
@@ -509,7 +491,7 @@ pub fn build_emitted(golden_name: &str, emitted_dir: &Path) -> Result<(), String
 #[track_caller]
 #[allow(dead_code)] // not every test binary exercises this helper
 pub fn assert_seal_builds(seal_name: &str, emitted_dir: &Path) {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return; // fast default gate: emit-only pass
     }
     let outcome = build_emitted(seal_name, emitted_dir);

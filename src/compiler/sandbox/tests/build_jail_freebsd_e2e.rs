@@ -29,7 +29,7 @@ use ipe_sandbox::{CanonicalPath, JailMounts};
 /// the VM; absent it, these tests do nothing — the CI job proves the primitive
 /// separately as a hard failure).
 fn e2e_enabled() -> bool {
-    if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return false;
     }
     which("jail").is_some()

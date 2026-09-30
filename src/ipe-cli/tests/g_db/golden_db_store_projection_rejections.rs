@@ -35,7 +35,7 @@ fn rejection_code(golden: &str) -> Option<ipe_diagnostics::Code> {
     let out = crate::support::scratch_root().join(format!("ipec_{golden}"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = ipe::resolve_runtime().ok()?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
     match ipe::build(&entry, &out, &runtime) {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -50,7 +50,7 @@ fn rejection_diagnostic(golden: &str) -> Option<Box<Diagnostic>> {
     let out = crate::support::scratch_root().join(format!("ipec_{golden}"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = ipe::resolve_runtime().ok()?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
     match ipe::build(&entry, &out, &runtime) {
         Err(CliError::Pipeline { diag, .. }) => Some(diag),
         _ => None,

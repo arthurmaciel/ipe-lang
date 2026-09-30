@@ -46,7 +46,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn ui_mediaquery_compiles_builds_and_renders_markers() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 
@@ -56,11 +56,7 @@ fn ui_mediaquery_compiles_builds_and_renders_markers() {
     let out = crate::support::scratch_root().join("ipec_ui_mediaquery_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = ipe::resolve_runtime();
-    assert!(runtime.is_ok(), "runtime must resolve for E2E");
-    let Ok(runtime) = runtime else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),

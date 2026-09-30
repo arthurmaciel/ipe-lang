@@ -26,18 +26,14 @@ fn compile_golden(name: &str) -> PathBuf {
     let entry = golden_dir(&root, name).join("Main.ipe");
     let out = crate::support::scratch_root().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = ipe::resolve_runtime();
-    assert!(runtime.is_ok(), "runtime must resolve for E2E");
-    let Ok(runtime) = runtime else {
-        return out;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
     out
 }
 
 fn e2e_enabled() -> bool {
-    ipe_env::var("IPE_E2E").is_ok()
+    e2e_support::e2e_tier() == e2e_support::Tier::E2e
 }
 
 /// Interpolating scalars compiles + runs (`Bool` renders lowercase, the
@@ -62,11 +58,7 @@ fn tostring_record_and_adt_are_refused() {
     let entry = golden_dir(&root, "m_tostring_composite").join("Main.ipe");
     let out = crate::support::scratch_root().join("ipec_m_tostring_composite_refused");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = ipe::resolve_runtime();
-    assert!(runtime.is_ok(), "runtime must resolve");
-    let Ok(runtime) = runtime else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let code = match ipe::build(&entry, &out, &runtime) {
         Err(ipe::CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -87,11 +79,7 @@ fn log_info_with_scalar_attrs_compiles() {
     let entry = golden_dir(&root, "m_log_with").join("Main.ipe");
     let out = crate::support::scratch_root().join("ipec_m_log_with_e2e");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = ipe::resolve_runtime();
-    assert!(runtime.is_ok(), "runtime must resolve");
-    let Ok(runtime) = runtime else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
@@ -109,11 +97,7 @@ fn tostring_on_function_is_rejected_at_typecheck() {
     let entry = golden_dir(&root, "m_tostring_fn_rejected").join("Main.ipe");
     let out = crate::support::scratch_root().join("ipec_m_tostring_fn_rejected_e2e");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = ipe::resolve_runtime();
-    assert!(runtime.is_ok(), "runtime must resolve");
-    let Ok(runtime) = runtime else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_err(),

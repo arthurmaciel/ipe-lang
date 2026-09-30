@@ -44,7 +44,7 @@ fn golden_dir() -> PathBuf {
 
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    ipe::resolve_runtime().expect("runtime must resolve for css_length_color_ssot golden")
+    e2e_support::require_runtime().into_path_buf()
 }
 
 /// Compile `tests/golden/css_length_color_ssot/Main.ipe` and assert the
@@ -76,7 +76,7 @@ fn css_length_color_ssot_emits_byte_identical() {
 /// end-to-end.
 #[test]
 fn css_length_color_ssot_e2e_output_matches_native_table() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
 

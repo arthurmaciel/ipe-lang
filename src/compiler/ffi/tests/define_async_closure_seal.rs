@@ -130,7 +130,7 @@ fn an_async_total_return_over_drops() {
 #[test]
 #[allow(clippy::too_many_lines)] // one linear E2E-crate assembly (manifest + runtime-glue stand-in + driver + build/run); splitting would scatter the fixture
 fn async_closure_adapter_builds_and_runs() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let Ok(cargo) = ipe_env::var("CARGO") else {

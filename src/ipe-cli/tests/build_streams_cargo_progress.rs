@@ -78,9 +78,7 @@ fn assert_relays_cargo_progress(subcommand: &str) {
     // The runtime dir must resolve for the emit to reach the cargo step. When the
     // repo tree is unavailable (a nextest archive shipped to another host), skip
     // — the streaming primitive is also unit-covered below.
-    let Ok(runtime_dir) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime_dir = e2e_support::require_runtime().into_path_buf();
 
     let ipe_bin = env!("CARGO_BIN_EXE_ipe");
     if !Path::new(ipe_bin).exists() {

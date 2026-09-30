@@ -47,9 +47,7 @@ fn fixture_entry(root: &Path) -> PathBuf {
 fn built_main_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<String>) {
     let entry = fixture_entry(root);
     let _ = std::fs::remove_dir_all(out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return (Ok(()), None);
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let built = ipe::build(&entry, out, &runtime);
     let main_rs = if built.is_ok() {
         std::fs::read_to_string(out.join("src").join("main.rs")).ok()
@@ -151,9 +149,7 @@ fn case_branched_entry_point_elides_task_run_to_ipetask() {
 fn tui_entry_case_taskrun_builds_and_runs() {
     let root = repo_root();
     let out = crate::support::scratch_root().join("ipec_tui_entry_case_taskrun_e2e");
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let entry = fixture_entry(&root);
     let _ = std::fs::remove_dir_all(&out);
     let built = ipe::build(&entry, &out, &runtime);
@@ -162,7 +158,7 @@ fn tui_entry_case_taskrun_builds_and_runs() {
         "tui_entry_case_taskrun: must be accepted, got: {built:?}"
     );
 
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("tui_entry_case_taskrun", &out);

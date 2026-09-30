@@ -42,9 +42,7 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fn_value_reify_typevar_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = ipe::resolve_runtime();
-    assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
-    let Ok(runtime) = runtime else { return };
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     let built = ipe::build(&entry, &out, &runtime);
 
@@ -70,7 +68,7 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
     // With proper support (an eager `Arc<dyn Fn>` coercion of the reified
     // value), the emitted crate MUST build and run with the semantically-correct
     // output. Gated on IPE_E2E so default runs stay fast.
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("fn_value_reify_typevar", &out);

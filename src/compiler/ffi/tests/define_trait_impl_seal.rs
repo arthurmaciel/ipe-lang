@@ -173,7 +173,7 @@ fn a_marked_borrowed_return_method_over_drops() {
 /// hand-written trait impl.
 #[test]
 fn the_marker_surfaces_the_type_and_the_emitted_crate_builds_and_runs() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let Ok(cargo) = ipe_env::var("CARGO") else {

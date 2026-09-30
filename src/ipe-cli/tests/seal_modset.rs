@@ -47,8 +47,7 @@ fn emit_and_build(name: &str, ipe_source: &str) -> Result<(), BoxError> {
         .join(format!("seal_modset_{name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
-    let runtime = ipe::resolve_runtime()
-        .map_err(|e| -> BoxError { format!("{name}: runtime unavailable: {e}").into() })?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     // ipe accept — a codegen bug or a rejection surfaces here.
     ipe::build(&entry, &out_dir, &runtime)
@@ -84,8 +83,7 @@ fn emit_and_build_vendored(name: &str, ipe_source: &str) -> Result<(), BoxError>
         .join(format!("seal_modset_{name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
-    let runtime = ipe::resolve_runtime()
-        .map_err(|e| -> BoxError { format!("{name}: runtime unavailable: {e}").into() })?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
 
     // Force the vendored emit model so `#[cfg(feature = "...")]` coverage in
     // the vendored runtime source is verified — the dep-model never exercises it.
@@ -103,7 +101,7 @@ fn emit_and_build_vendored(name: &str, ipe_source: &str) -> Result<(), BoxError>
 
 /// True unless `IPE_E2E` is set — the per-shape `cargo build`s are expensive.
 fn skip() -> bool {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("seal_modset: set IPE_E2E=1 to run (each shape does a cargo build)");
         return true;
     }
@@ -517,7 +515,7 @@ fn tui_app_vendored_builds() {
 /// contracted positions makes a tree move fail HERE, loudly and precisely.
 #[test]
 fn runtime_tree_resolves() {
-    let runtime = ipe::resolve_runtime().expect("runtime tree must resolve from the workspace");
+    let runtime = e2e_support::require_runtime().into_path_buf();
     let module_root = Path::new(&runtime);
     assert!(
         module_root.is_dir(),
