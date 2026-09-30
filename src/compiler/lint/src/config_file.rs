@@ -217,8 +217,8 @@ mod tests {
 
     /// A fresh, empty scratch directory for one test.
     fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("ipe-lint-wsread-{}-{name}", std::process::id()));
+        let dir = ipe_test_temp::temp_root()
+            .join(format!("ipe-lint-wsread-{}-{name}", std::process::id()));
         if dir.exists() {
             assert!(std::fs::remove_dir_all(&dir).is_ok(), "clear {dir:?}");
         }

@@ -18,5 +18,8 @@ ipe_canon = { path = "../canon" }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "0.38", features = ["fs"] }
 
+[dev-dependencies]
+ipe-test-temp = { path = "../../../tools/test-temp" }
+
 [lints]
 workspace = true
