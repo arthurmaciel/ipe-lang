@@ -4141,8 +4141,10 @@ mod tests {
         let (base, out, release) = nested_claim_setup("area_link_mid");
         let victim = base.join("victim");
         std::fs::create_dir_all(&victim).expect("make victim");
-        let (target, link) = (victim.clone(), release.clone());
-        swap_when_held(out.path().to_path_buf(), move || plant_link(&target, &link));
+        let target = victim.clone();
+        swap_when_held(out.path().to_path_buf(), move || {
+            plant_link(&target, &release);
+        });
         let claimed = out.claim_area(&[OutputArea::Release, OutputArea::Bundle]);
         super::held::set_level_hook(None);
         assert!(
