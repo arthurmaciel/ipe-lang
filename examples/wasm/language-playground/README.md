@@ -12,9 +12,11 @@ program output back.
 | Path | What it is |
 |---|---|
 | `index.html` | the three-pane UI (Ipê source \| emitted Rust \| program output) |
+| `static/app.js` | the page logic |
+| `static/vendor/ace/` | the vendored ACE editor (version, digests, and license in its `README.md`) |
 | `pkg/` | git-ignored wasm-bindgen output the page loads |
 | `setup/` | the setup program: wasm bundle, jail-runner install, offline cache warm |
-| `server/` | an `Ipe.Server.Http` app: `GET /`, `/pkg`, `GET /health`, `POST /run` |
+| `server/` | an `Ipe.Server.Http` app: `GET /`, `/pkg`, `/static`, `GET /health`, `POST /run` |
 | `jail-runner/` | a Rust workspace member: the sandboxed build+run harness |
 
 ## Prerequisites
@@ -61,6 +63,10 @@ The server listens on `127.0.0.1:8000` and prints its launch URL on stdout:
 Ipê playground: open http://127.0.0.1:8000/#t=<launch token>
 ```
 
+That URL is a per-launch secret: anyone who holds it can run code on this
+machine through the jail. Keep stdout on your terminal; do not pipe it into a
+shared log (journald, a CI log, a terminal-sharing session).
+
 Open that exact URL. The page takes the token from the fragment, removes it
 from the address bar, and keeps it in memory only, so reloading needs the
 printed URL again. Without the token the page still compiles, but Run stays
@@ -68,10 +74,14 @@ disabled. The server refuses to start unless `IPE_HTTP_BIND` is exactly
 `127.0.0.1` and `IPE_SERVER_PORT` is unset or `8000` (so a relocated port, as
 under `ipe watch`, is refused rather than guessed).
 
-`GET /` serves `index.html` with `X-Frame-Options: DENY` and
-`Content-Security-Policy: frame-ancestors 'none'`, so no other page can frame
-it. `/pkg` is served statically. Nothing else under the playground root is
-served.
+`GET /` serves `index.html` with `X-Frame-Options: DENY` and a
+`Content-Security-Policy` (`Gate.pageContentSecurityPolicy`) whose
+`frame-ancestors 'none'` stops any other page framing it, and whose
+`script-src 'self' 'wasm-unsafe-eval'` admits only same-origin scripts. The
+page holds the launch token, so it loads no third-party script: ACE is
+vendored under `static/vendor/ace/`, and `index.html` has no inline script.
+`/pkg` and `/static` are served statically. Nothing else under the playground
+root is served.
 
 | Route | Answers |
 |---|---|
@@ -110,7 +120,7 @@ Environment:
 |---|---|
 | `IPE_PLAYGROUND_JAIL_RUNNER` | absolute path of another jail runner. A relative name is refused, never looked up on `PATH`. |
 | `IPE_PLAYGROUND_WARM_DIR` | the warm cache directory |
-| `IPE_HTTP_REQUEST_TIMEOUT` | the per-request deadline in whole seconds above zero (default 30 s when unset or blank). The jail's wall-clock limit is 5 s under it, capped at the jail runner's 600 s. The server refuses to start on a value that is not digits, or on one below 15 s, since the jail must end before the request. |
+| `IPE_HTTP_REQUEST_TIMEOUT` | the per-request deadline in whole seconds above zero (default 30 s when unset or blank). The jail's wall-clock limit is 5 s under it, capped at the jail runner's 600 s. The server refuses to start on a value that is not digits, or on one below 15 s, since the jail wall must stay 5 s under the deadline (measured from handler start; the deadline runs from arrival, body read included). |
 
 `HOME` must be an absolute path: runs are staged under it.
 
@@ -144,14 +154,19 @@ staging, gate, deadline, and `/health` refusals live in `server/tests/Main.ipe`.
 
 ## Static hosting (GitHub Pages)
 
-The compiler pane needs no server. Deploy these three files, keeping their
-relative layout:
+The compiler pane needs no server. Deploy these files, keeping their relative
+layout:
 
 ```
 index.html
+static/          (app.js and vendor/ace/)
 pkg/ipe_wasm.js
 pkg/ipe_wasm_bg.wasm
 ```
+
+`index.html` carries the same policy in a `<meta>` tag (without
+`frame-ancestors`, which only a header can carry), so a static host runs only
+same-origin scripts too.
 
 All asset and endpoint URLs are relative to the page, so it works under any
 sub-path (e.g. `/compiler/playground/`). With no run server behind it, Run is

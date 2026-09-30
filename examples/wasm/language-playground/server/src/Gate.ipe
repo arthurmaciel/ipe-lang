@@ -1,4 +1,4 @@
-module Gate exposing (BindRefusal(..), Refusal(..), Token, TrustedRun, bindMessage, healthAnswer, launchUrl, mintToken, parseToken, port, refusalMessage, refusalStatus, requireLoopback, tokenText, trustHealth, trustRun, trustedBody)
+module Gate exposing (BindRefusal(..), Refusal(..), Token, TrustedRun, bindMessage, healthAnswer, launchUrl, mintToken, pageContentSecurityPolicy, parseToken, port, refusalMessage, refusalStatus, requireLoopback, tokenText, trustHealth, trustRun, trustedBody)
 
 import Ipe.Crypto as Crypto
 import Ipe.Error as Error exposing (Error)
@@ -106,6 +106,27 @@ token is not sent back in a request line, a log, or a Referer.
 launchUrl : Token -> String
 launchUrl token =
     "http://127.0.0.1:" ++ String.fromInt port ++ "/#t=" ++ tokenText token
+
+
+{-| The Content-Security-Policy `GET /` sends with the page. The page holds the
+launch token, so it runs only same-origin scripts (`'wasm-unsafe-eval'` lets
+the same-origin compiler module instantiate) and talks only to this server; no
+other site may frame it. `index.html` carries the same policy in a `<meta>`
+tag, minus `frame-ancestors`, so a static host enforces it too.
+-}
+pageContentSecurityPolicy : String
+pageContentSecurityPolicy =
+    String.join "; "
+        [ "default-src 'self'"
+        , "script-src 'self' 'wasm-unsafe-eval'"
+        , "style-src 'self' 'unsafe-inline'"
+        , "img-src 'self' data:"
+        , "connect-src 'self'"
+        , "object-src 'none'"
+        , "base-uri 'none'"
+        , "form-action 'none'"
+        , "frame-ancestors 'none'"
+        ]
 
 
 {-| Answer a `/health` request: `{"ok":true}` for an admitted one. It takes no

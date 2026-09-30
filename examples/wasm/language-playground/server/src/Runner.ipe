@@ -112,10 +112,11 @@ maxJailWallSecs =
     600
 
 
-{-| The jail's wall-clock budget, proven to end before the request that
-started it: the jail is not killed when its request times out, so a wall at or
-past the deadline would let a jail outlive its request and its concurrency
-permit.
+{-| The jail's wall-clock budget, proven to sit five seconds under the request
+deadline, measured from handler start (the deadline itself runs from the
+request's arrival, body read included). The jail is not killed when its
+request times out, so a wall at or past the deadline would let a jail outlive
+its request and its concurrency permit.
 -}
 type JailWall
     = JailWall Int
@@ -201,7 +202,7 @@ deadlineMessage refusal =
         DeadlineBelowFloor deadline ->
             "IPE_HTTP_REQUEST_TIMEOUT must be at least "
                 ++ String.fromInt (minJailWallSecs + 5)
-                ++ " seconds, so the jail ends before the request (got "
+                ++ " seconds, so the jail wall stays five seconds under the request deadline (got "
                 ++ String.fromInt deadline
                 ++ ")"
 

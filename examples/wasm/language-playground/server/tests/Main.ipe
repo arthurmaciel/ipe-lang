@@ -98,9 +98,9 @@ home =
         ]
 
 
--- The jail wall sits five seconds under the request deadline, so a jail always
--- ends before its request; a deadline too short for that, or one the runtime
--- would read differently, keeps the server from starting.
+-- The jail wall sits five seconds under the request deadline, measured from
+-- handler start; a deadline too short for that, or one the runtime would read
+-- differently, keeps the server from starting.
 wallOf : String -> Result DeadlineRefusal Int
 wallOf raw =
     Result.map Runner.wallSecs (Runner.jailWallFor raw)
@@ -289,6 +289,59 @@ tokenShape =
         ]
 
 
+-- The page holds the launch token, so its policy admits same-origin scripts
+-- alone: a remote, wildcard, or inline script source would let another
+-- origin's code read the token.
+cspDirectives : List String
+cspDirectives =
+    List.map String.trim (String.split ";" Gate.pageContentSecurityPolicy)
+
+
+cspDirective : String -> Maybe String
+cspDirective name =
+    List.head (List.filter (\directive -> String.startsWith (name ++ " ") directive) cspDirectives)
+
+
+cspPins : String -> String -> Test
+cspPins name expected =
+    Test.test (name ++ " is pinned") (\_ -> Test.equal (Just expected) (cspDirective name))
+
+
+cspNames : List String
+cspNames =
+    List.map (\directive -> Maybe.withDefault directive (List.head (String.words directive))) cspDirectives
+
+
+keepFirst : String -> List String -> List String
+keepFirst name seen =
+    if List.member name seen then
+        seen
+
+    else
+        seen ++ [ name ]
+
+
+pagePolicy : Test
+pagePolicy =
+    Test.suite "page policy"
+        [ cspPins "script-src" "script-src 'self' 'wasm-unsafe-eval'"
+        , cspPins "default-src" "default-src 'self'"
+        , cspPins "connect-src" "connect-src 'self'"
+        , cspPins "object-src" "object-src 'none'"
+        , cspPins "base-uri" "base-uri 'none'"
+        , cspPins "frame-ancestors" "frame-ancestors 'none'"
+        , Test.test
+            "no directive admits a remote or wildcard source"
+            (\_ -> Test.equal [] (List.filter (\directive -> String.contains "http" directive || String.contains "*" directive) cspDirectives))
+        , Test.test
+            "script-src admits no inline or eval script"
+            (\_ -> Test.equal (Just False) (Maybe.map (\directive -> String.contains "'unsafe-inline'" directive || String.contains "'unsafe-eval'" directive || String.contains "'strict-dynamic'" directive) (cspDirective "script-src")))
+        , Test.test
+            "no directive is repeated"
+            (\_ -> Test.equal cspNames (List.foldl keepFirst [] cspNames))
+        ]
+
+
 bindRefused : String -> BindRefusal -> { bind : String, serverPort : String } -> Test
 bindRefused name expected env =
     Test.test name (\_ -> Test.equal (Err expected) (Gate.requireLoopback env))
@@ -310,4 +363,4 @@ loopback =
 
 
 main =
-    Test.runMain [ accepted, refused, runnerPath, home, wall, gateRun, gateHealth, healthBody, launch, tokenShape, loopback ]
+    Test.runMain [ accepted, refused, runnerPath, home, wall, gateRun, gateHealth, healthBody, launch, tokenShape, pagePolicy, loopback ]

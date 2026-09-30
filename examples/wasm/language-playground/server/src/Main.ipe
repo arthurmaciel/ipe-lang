@@ -22,13 +22,14 @@ import Staging
 -- or on a request deadline too short for the jail to end inside it. At startup
 -- it prints the launch URL, which carries this launch's token in its fragment,
 -- to the operator's terminal; no route serves the token. GET / serves the page
--- (never framed), "/pkg" the wasm bundle (resolved against the process cwd,
--- "../pkg"). GET /health answers `{"ok":true}` so the page knows a run server
--- is present. POST /run takes `{"rust": <emitted crate>}` (the page's own
--- ipe-wasm emit, never Ipê source) and answers with the jailed transcript: 403
--- or 415 for a request `Gate` refuses, 413 for a body over the bound, 400 for a
--- malformed one, 422 for a crate the staging allowlist refuses, 500 when the
--- jail itself fails.
+-- (never framed, same-origin scripts only), "/pkg" the wasm bundle and
+-- "/static" the page script with its vendored editor (resolved against the
+-- process cwd, "../pkg" and "../static"). GET /health answers `{"ok":true}`
+-- so the page knows a run server is present. POST /run takes
+-- `{"rust": <emitted crate>}` (the page's own ipe-wasm emit, never Ipê source)
+-- and answers with the jailed transcript: 403 or 415 for a request `Gate`
+-- refuses, 413 for a body over the bound, 400 for a malformed one, 422 for a
+-- crate the staging allowlist refuses, 500 when the jail itself fails.
 main : Task Error ()
 main =
     do
@@ -46,10 +47,13 @@ main =
             , Server.get "/health" health
             , Server.post "/run" (handleRun wall token)
             , Server.static "/pkg" "../pkg"
+            , Server.static "/static" "../static"
             ]
 
 
-{-| The page, served so that no other site can frame it. -}
+{-| The page, served so that no other site can frame it and it runs no other
+origin's script.
+-}
 page : Server.Request -> Task Error Server.Response
 page _ =
     do
@@ -58,7 +62,7 @@ page _ =
         html
             |> Server.html
             |> Server.withHeader "X-Frame-Options" "DENY"
-            |> Server.withHeader "Content-Security-Policy" "frame-ancestors 'none'"
+            |> Server.withHeader "Content-Security-Policy" Gate.pageContentSecurityPolicy
             |> Server.withHeader "Cache-Control" "no-store"
             |> Task.succeed
 
