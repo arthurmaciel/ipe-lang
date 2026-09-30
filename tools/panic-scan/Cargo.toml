@@ -12,6 +12,9 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 # never reach past the item, arm, field, or statement it decorates.
 syn = { version = "3", default-features = false, features = ["full", "visit", "parsing"] }
 
+[dev-dependencies]
+ipe_env = { path = "../../src/compiler/env" }
+
 [lib]
 path = "src/lib.rs"
 
