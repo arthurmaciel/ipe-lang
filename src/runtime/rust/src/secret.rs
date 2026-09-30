@@ -201,7 +201,8 @@ pub fn secret_redacted(s: Secret) -> String {
     REDACTED.to_owned()
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
 

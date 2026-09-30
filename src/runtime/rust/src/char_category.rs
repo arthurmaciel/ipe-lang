@@ -64,7 +64,8 @@ pub fn char_is_alpha_num(c: char) -> bool {
     char_is_alpha(c) || char_is_digit(c)
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
 

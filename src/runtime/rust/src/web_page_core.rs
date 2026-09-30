@@ -81,7 +81,8 @@ pub fn page_shell(head_extra: &str, body_inner: &str, tail_scripts: &str) -> Str
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
 

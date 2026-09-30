@@ -630,7 +630,8 @@ pub fn file_walk_matching<E: Send + From<String> + 'static>(
 /// Test-only: seal an absolute `std::path::Path` (always a rooted, non-escaping
 /// path) into an `Ipe.Path`. Kernel call sites now take a typed `Path`, so the
 /// tests construct one through the same validated seal a real program uses.
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 fn tp(p: &std::path::Path) -> Path {
     match super::path::path_from_string::<String>(p.to_string_lossy().into_owned()) {
         IpeResult::Ok(path) => path,
@@ -638,7 +639,8 @@ fn tp(p: &std::path::Path) -> Path {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod read_ceiling_tests {
     use super::*;
 
@@ -681,7 +683,8 @@ mod read_ceiling_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod read_file_limit_tests {
     use super::*;
 
@@ -756,7 +759,8 @@ mod read_file_limit_tests {
 /// 10 MiB cap: `readFileBytes` must ERROR when a file exceeds the cap, not
 /// silently truncate at it via `take(DEFAULT_CAP).read_to_end(..)` with no
 /// post-read size check — the same class as `readFileLimit`'s TOCTOU.
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod read_file_bytes_tests {
     use super::*;
 
@@ -816,7 +820,8 @@ mod read_file_bytes_tests {
     }
 }
 
-#[cfg(all(test, feature = "tokio", not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "tokio"))]
+#[cfg(not(target_arch = "wasm32"))]
 mod spawn_blocking_tests {
     use super::*;
     use std::sync::Arc;
@@ -918,7 +923,8 @@ mod spawn_blocking_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod walk_tests {
     use super::*;
 

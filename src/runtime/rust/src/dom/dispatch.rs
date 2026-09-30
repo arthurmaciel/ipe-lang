@@ -103,7 +103,8 @@ fn walk<M: Clone>(root: &Html<M>, map: &mut HashMap<String, HashMap<String, Even
 
 // ─── tests ────────────────────────────────────────────────────────────────────
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
     use crate::assign_ipe_ids;

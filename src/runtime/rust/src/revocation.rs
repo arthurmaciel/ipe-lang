@@ -346,7 +346,8 @@ pub fn auth_revocation_is_revoked<E: From<String> + Send + 'static>(
     })
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
     use crate::principal::principal_mint;

@@ -245,7 +245,8 @@ pub fn path_is_absolute(p: Path) -> bool {
     p.0.as_bytes().first() == Some(&SEP)
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
     // Exercised only by the Windows volume-prefix tests below.

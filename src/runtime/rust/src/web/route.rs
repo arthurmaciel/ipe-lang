@@ -125,7 +125,8 @@ pub fn match_params<Page>(routes: &[Route<Page>], path: &str) -> crate::dict::Ip
     IpeDict::new()
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
 

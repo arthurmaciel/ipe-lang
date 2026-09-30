@@ -374,7 +374,8 @@ pub fn decimal_format_with(grp_sep: String, dec_sep: String, places: i64, d: Dec
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
     use std::str::FromStr;

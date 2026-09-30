@@ -75,7 +75,8 @@ pub fn keyed_row_<M: Clone>(
     )
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
     use crate::ui::element::{Attribute, Element};

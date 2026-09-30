@@ -359,10 +359,10 @@ impl<'ast> Visit<'ast> for HiddenTests {
             self.found.push(format!(
                 "`#[{name}]` nested where the walk does not count it"
             ));
-        } else if name == "cfg_attr" {
-            if let Some(why) = cfg_attr_refusal(attr) {
-                self.found.push(why);
-            }
+        } else if name == "cfg_attr"
+            && let Some(why) = cfg_attr_refusal(attr)
+        {
+            self.found.push(why);
         }
     }
 
@@ -972,7 +972,7 @@ fn feature_members(name: &str, body: &str) -> Result<Vec<String>, String> {
         .and_then(|rest| rest.strip_suffix(']'))
         .ok_or_else(|| format!("feature `{name}` is not a `[…]` list"))?;
     let pieces: Vec<&str> = inner.split('"').collect();
-    if pieces.len() % 2 == 0 {
+    if pieces.len().is_multiple_of(2) {
         return Err(format!("feature `{name}` has an unbalanced quote"));
     }
     let gaps: Vec<&str> = pieces.iter().step_by(2).map(|gap| gap.trim()).collect();

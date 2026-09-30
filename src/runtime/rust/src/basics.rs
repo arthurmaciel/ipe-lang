@@ -266,7 +266,8 @@ pub fn interpolate_to_string<T: crate::stringify::IpeInterpolate>(v: T) -> Strin
     v.ipe_interpolate()
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
 

@@ -316,7 +316,8 @@ pub fn math_remainder(x: f64, y: f64) -> f64 {
     x
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
 

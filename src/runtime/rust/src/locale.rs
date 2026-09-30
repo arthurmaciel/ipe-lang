@@ -128,7 +128,8 @@ pub fn string_to_lower_in(locale: Locale, s: String) -> String {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
 

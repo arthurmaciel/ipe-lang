@@ -1265,7 +1265,8 @@ pub fn system_load_env<E: Send + 'static>(_: ()) -> IpeTask<E, ()> {
     })
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod exit_hook_tests {
     use super::{register_exit_hook, run_exit_hook};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1291,7 +1292,8 @@ mod exit_hook_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod gutter_line_tests {
     use super::gutter_line;
 
@@ -1326,7 +1328,8 @@ mod gutter_line_tests {
 /// substring/window scan, not a real parser, is enough to catch the class of
 /// regression (a new call site hand-rolling the tag) without reimplementing a
 /// Rust parser.
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod runtime_log_emitter_tests {
     use std::path::{Path, PathBuf};
 
@@ -1415,7 +1418,8 @@ mod runtime_log_emitter_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod scrub_log_controls_tests {
     use super::{runtime_log_line, scrub_log_controls};
 
@@ -1501,7 +1505,8 @@ mod home_dir_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod parent_death_floor_tests {
     use super::harden_child_parent_death;
 
@@ -1518,7 +1523,8 @@ mod parent_death_floor_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod env_overlay_tests {
     use super::*;
 
@@ -1601,7 +1607,8 @@ mod env_overlay_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod process_run_tests {
     use super::*;
 
@@ -1717,7 +1724,8 @@ mod process_run_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod process_run_with_tests {
     use super::*;
 
@@ -1992,7 +2000,8 @@ mod process_run_in_pty_tests {
     }
 }
 
-#[cfg(all(test, feature = "tokio", not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "tokio"))]
+#[cfg(not(target_arch = "wasm32"))]
 mod process_run_spawn_blocking_tests {
     use super::*;
     use std::sync::Arc;
@@ -2043,7 +2052,8 @@ mod process_run_spawn_blocking_tests {
     }
 }
 
-#[cfg(all(test, feature = "tokio", not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "tokio"))]
+#[cfg(not(target_arch = "wasm32"))]
 mod system_load_env_spawn_blocking_tests {
     use super::*;
     use std::sync::Arc;

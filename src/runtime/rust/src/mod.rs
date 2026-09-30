@@ -800,7 +800,8 @@ const _WASI_TIME_FLOOR_SEAL: () = {
     let _ = crate::time::time_sleep::<E>;
 };
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod control_surface_absence {
     // The dev-loop control channel — the `control` module and its loopback
     // `server` accept-loop — is present ONLY under a dev-loop surface (`web`,

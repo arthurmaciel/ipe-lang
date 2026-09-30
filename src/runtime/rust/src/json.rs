@@ -1793,7 +1793,8 @@ pub fn decode_pipeline_custom<E: From<String> + 'static, T: 'static, F: 'static>
     )
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod enc_tests {
     use super::*;
 
@@ -1821,7 +1822,8 @@ mod enc_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod optional_tests {
     use super::*;
 
@@ -1873,7 +1875,8 @@ mod optional_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod key_value_pairs_tests {
     use super::*;
 
@@ -1915,7 +1918,8 @@ mod key_value_pairs_tests {
 
 // Behaviour verdicts audited against Elm's documented `elm/json` semantics.
 // Each test pins one verdict from `docs/topics/elm-coverage/behaviour-verdicts.md`.
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod elm_behaviour_verdicts {
     use super::*;
 
