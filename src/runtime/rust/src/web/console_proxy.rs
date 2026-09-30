@@ -504,21 +504,17 @@ mod tests {
 
     #[test]
     fn bin_path_none_when_absent() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var(CONSOLE_BIN_ENV, "/nonexistent/ipe-console-xyz") };
+        crate::system::locked_set_var(CONSOLE_BIN_ENV, "/nonexistent/ipe-console-xyz");
         assert!(console_bin_path().is_none());
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var(CONSOLE_BIN_ENV) };
+        crate::system::locked_remove_var(CONSOLE_BIN_ENV);
     }
 
     #[test]
     fn spawn_returns_none_without_binary() {
         // No binary at the override path → None (caller falls back), no panic.
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var(CONSOLE_BIN_ENV, "/nonexistent/ipe-console-xyz") };
+        crate::system::locked_set_var(CONSOLE_BIN_ENV, "/nonexistent/ipe-console-xyz");
         assert!(spawn_console(9931, "", false).is_none());
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var(CONSOLE_BIN_ENV) };
+        crate::system::locked_remove_var(CONSOLE_BIN_ENV);
     }
 
     #[test]

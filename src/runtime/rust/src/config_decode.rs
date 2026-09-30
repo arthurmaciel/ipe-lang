@@ -312,14 +312,12 @@ mod load_from_file_tests {
         let p = crate::scratch_core::test_temp_root()
             .join(format!("ipe_cfg_over_cap_{}.json", std::process::id()));
         std::fs::write(&p, vec![b'a'; 8192]).unwrap();
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_CONFIG_MAX_BYTES", "1024") };
+        crate::system::locked_set_var("IPE_CONFIG_MAX_BYTES", "1024");
         let res: IpeResult<String, String> = block(config_load_from_file(
             make_path(&p.to_string_lossy()),
             name_decoder(),
         ));
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_CONFIG_MAX_BYTES") };
+        crate::system::locked_remove_var("IPE_CONFIG_MAX_BYTES");
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, IpeResult::Err(_)),

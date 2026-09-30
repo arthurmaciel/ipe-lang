@@ -612,11 +612,9 @@ mod read_ceiling_tests {
         let p = crate::scratch_core::test_temp_root()
             .join(format!("ipe_rc_over_{}.txt", std::process::id()));
         std::fs::write(&p, vec![b'x'; 8192]).unwrap();
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_FILE_READ_MAX", "1024") };
+        crate::system::locked_set_var("IPE_FILE_READ_MAX", "1024");
         let res: IpeResult<String, String> = block(file_read_file(tp(&p)));
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_FILE_READ_MAX") };
+        crate::system::locked_remove_var("IPE_FILE_READ_MAX");
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, IpeResult::Err(_)),
@@ -809,8 +807,7 @@ mod spawn_blocking_tests {
         ));
         // Large enough that the read takes measurable (not instant) wall time.
         std::fs::write(&p, vec![b'x'; 64 * 1024 * 1024]).unwrap(); // 64 MiB
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_FILE_READ_MAX", (128 * 1024 * 1024).to_string()) };
+        crate::system::locked_set_var("IPE_FILE_READ_MAX", &(128 * 1024 * 1024).to_string());
         let path = super::tp(&p);
 
         let ticks = rt.block_on(async move {
@@ -828,8 +825,7 @@ mod spawn_blocking_tests {
             counter.load(Ordering::Relaxed)
         });
 
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_FILE_READ_MAX") };
+        crate::system::locked_remove_var("IPE_FILE_READ_MAX");
         let _ = std::fs::remove_file(&p);
 
         assert!(

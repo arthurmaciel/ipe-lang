@@ -47,6 +47,12 @@ edition = "2024"
 version = "0.3.4" # x-release-please-version
 license = "Apache-2.0"
 
+# `unsafe` is a build error in every member. The sanctioned sites carry a
+# per-site `#[allow(unsafe_code)]` marked `IPE-RUST-AUDIT:ACCEPTED` (see
+# AGENTS.md); `deny` rather than `forbid` so exactly those sites can opt out.
+[workspace.lints.rust]
+unsafe_code = "deny"
+
 # THE SSOT for the workspace clippy policy. Every `cargo clippy` — in CI and in
 # the docs — is just `-- -D warnings`; it inherits this set, so what is enforced
 # is changed in ONE place. Enable as much as is actionable: the broad groups

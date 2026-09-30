@@ -79,6 +79,16 @@ mod task_tests {
         task_run(task)
     }
 
+    /// Set `key` through the Ipê `System.setenv` kernel (the runtime's env overlay).
+    fn setenv(key: &str, val: &str) {
+        assert!(run(system_setenv::<IpeError>(key.to_string(), val.to_string())).is_ok());
+    }
+
+    /// Unset `key` through the Ipê `System.unsetenv` kernel (the runtime's env overlay).
+    fn unsetenv(key: &str) {
+        assert!(run(system_unsetenv::<IpeError>(key.to_string())).is_ok());
+    }
+
     fn mk_task<A: Send + 'static>(a: A) -> IpeTask<IpeError, A> {
         ipe_runtime_rust::task::task_succeed::<IpeError, A>(a)
     }
@@ -114,8 +124,7 @@ mod task_tests {
     // so a chained Task fails identically on both backends.
     #[test]
     fn system_getenv_present_is_ok() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_TEST_GETENV_PRESENT", "hello") };
+        setenv("IPE_TEST_GETENV_PRESENT", "hello");
         let t: IpeTask<IpeError, String> =
             system_getenv::<IpeError>("IPE_TEST_GETENV_PRESENT".to_string());
         assert_eq!(run(t), IpeResult::Ok("hello".to_string()));
@@ -123,8 +132,7 @@ mod task_tests {
 
     #[test]
     fn system_getenv_unset_is_err() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_TEST_GETENV_UNSET_XYZ_42") };
+        unsetenv("IPE_TEST_GETENV_UNSET_XYZ_42");
         let t: IpeTask<IpeError, String> =
             system_getenv::<IpeError>("IPE_TEST_GETENV_UNSET_XYZ_42".to_string());
         assert!(run(t).is_err());
@@ -154,12 +162,9 @@ mod task_tests {
     // and is out-of-range → Ok Nothing, never Err).
     #[test]
     fn system_getenv_int_ok_and_errs() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_TEST_INT_OK", "42") };
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_TEST_INT_BAD", "abc") };
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_TEST_INT_UNSET") };
+        setenv("IPE_TEST_INT_OK", "42");
+        setenv("IPE_TEST_INT_BAD", "abc");
+        unsetenv("IPE_TEST_INT_UNSET");
         assert_eq!(
             run(system_getenv_int::<IpeError>("IPE_TEST_INT_OK".to_string())),
             IpeResult::Ok(42)
@@ -180,14 +185,10 @@ mod task_tests {
 
     #[test]
     fn system_getenv_bool_truthy_falsy_unset() {
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_TEST_BOOL_T", "yes") };
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_TEST_BOOL_F", "0") };
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("IPE_TEST_BOOL_BAD", "maybe") };
-        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("IPE_TEST_BOOL_UNSET") };
+        setenv("IPE_TEST_BOOL_T", "yes");
+        setenv("IPE_TEST_BOOL_F", "0");
+        setenv("IPE_TEST_BOOL_BAD", "maybe");
+        unsetenv("IPE_TEST_BOOL_UNSET");
         assert_eq!(
             run(system_getenv_bool::<IpeError>(
                 "IPE_TEST_BOOL_T".to_string()

@@ -16,6 +16,10 @@ ipe_sandbox = { path = "../../src/compiler/sandbox" }
 tempfile = "3"
 ipe-test-temp = { path = "../test-temp" }
 
+[lints.rust]
+# Mirrors the workspace `unsafe_code` deny (this crate keeps its own `[lints]`).
+unsafe_code = "deny"
+
 [lints.clippy]
 # unwrap/expect/panic are used in test assertions and controlled CLI
 # exit-on-error paths; the token-level panic-scan gate governs those, not the

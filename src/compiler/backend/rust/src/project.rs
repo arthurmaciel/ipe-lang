@@ -4036,11 +4036,11 @@ fn web_cargo_toml(base: &str) -> DResult<String> {
     // `async-trait` is pulled by the runtime's `live` feature gate; the emitted
     // project vendors the runtime source directly, so it must appear as an
     // explicit `[dependencies]` entry.
-    // `libc` is NOT added here: the base manifest already declares it
-    // unconditionally under `[target.'cfg(unix)'.dependencies]` (the `Io.readSecret`
-    // termios path). The live console-proxy's `libc::prctl` is a `cfg(unix)` call,
-    // so that single cfg-gated declaration covers both needs — adding it again
-    // would emit a duplicate `libc` key and produce invalid TOML.
+    // `rustix` is NOT added here: the base manifest already declares it
+    // unconditionally under `[target.'cfg(unix)'.dependencies]` (termios, pty, and
+    // the parent-death floor the live console-proxy relies on), so that single
+    // cfg-gated declaration covers every need — adding it again would emit a
+    // duplicate `rustix` key and produce invalid TOML.
     // The `live` runtime mainline uses `tokio::signal` + `tokio::process`; the base
     // golden emits `net`+`sync` for the HTTP server, so add the two missing features.
     const TOKIO_NET_SYNC_FEATURES: &str = "\"time\", \"net\", \"sync\"]";
@@ -4056,7 +4056,7 @@ fn web_cargo_toml(base: &str) -> DResult<String> {
         "features = [\"runtime-tokio-rustls\", \"sqlite\", \"postgres\"]";
     // Versions + names from the SSOT; this is a bare `name = "ver"` dep.
     // `serde_urlencoded` is NOT appended here: it is an unconditional base
-    // manifest dep now (`dom/form.rs` is always vendored). `libc` is NOT
+    // manifest dep now (`dom/form.rs` is always vendored). `rustix` is NOT
     // appended either — see the note above.
     let web_deps = format!(
         "{} = \"{}\"\n\n",
@@ -6139,28 +6139,26 @@ mod tests {
         );
     }
 
-    /// A live/web manifest must declare `libc` exactly once. The base template
-    /// already declares it under `[target.'cfg(unix)'.dependencies]` (the
-    /// `Io.readSecret` termios path); `web_cargo_toml` must not add a second
-    /// `libc` line, which would be a duplicate-key TOML error that fails
-    /// `cargo build` for any program that is both a live/web shape and pulls the
-    /// readSecret prelude.
+    /// A live/web manifest must declare `rustix` exactly once. The base template
+    /// already declares it under `[target.'cfg(unix)'.dependencies]`;
+    /// `web_cargo_toml` must not add a second `rustix` line, which would be a
+    /// duplicate-key TOML error that fails `cargo build` for every live/web shape.
     #[test]
-    fn web_toml_declares_libc_once() {
+    fn web_toml_declares_rustix_once() {
         let server_base =
             server_cargo_toml(&async_runtime_cargo_toml(CARGO_TOML).expect("async base"))
                 .expect("server_cargo_toml must succeed");
         let out = web_cargo_toml(&server_base).expect("web_cargo_toml on non-db base must succeed");
-        let libc_lines = out
+        let rustix_lines = out
             .lines()
             .filter(|l| {
                 let t = l.trim_start();
-                t.starts_with("libc ") || t.starts_with("libc=")
+                t.starts_with("rustix ") || t.starts_with("rustix=")
             })
             .count();
         assert_eq!(
-            libc_lines, 1,
-            "a live/web manifest must declare `libc` exactly once (base template \
+            rustix_lines, 1,
+            "a live/web manifest must declare `rustix` exactly once (base template \
              cfg(unix) dep + no duplicate from web_cargo_toml):\n{out}"
         );
     }

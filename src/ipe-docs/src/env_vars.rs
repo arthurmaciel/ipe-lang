@@ -1233,7 +1233,6 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_E2E_SECRET",          // macOS jail e2e test sentinel
     "IPE_E2E_STATIC",          // CI gate for static-binary e2e tests
     "IPE_HOST_ENV_TEST_UNSET_7F3A9C21D84E", // sandbox host_env test: a name no host sets
-    "IPE_HTTP_FIXTURE_ACCEPT_MS", // http_e2e harness: fixture-server accept fail-fast deadline
     "IPE_HTTP_TEST_URL",
     "IPE_JUNCTION_AT",  // Windows junction test helper: PowerShell script input
     "IPE_JUNCTION_OUT", // Windows junction test helper: compiled helper output path
@@ -1255,7 +1254,10 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_TEST_INT_UNSET",
     "IPE_TEST_PG_URL",
     "IPE_TEST_REDIS_URL",
+    "IPE_TIME_STRING_TZ_CHILD", // runtime time test: marks the non-UTC `TZ` re-exec
     "IPE_TMP", // temp-root refusal tests: a neighbouring key that must not be refused
+    "IPE_WASI_SEAL_CHILD", // WASI seal e2e: marks the cargo-env re-exec
+    "IPE_WINDOWS_E2E_ENV_CHILD", // Windows jail e2e: marks the env-seeded re-exec
     // Deprecated IPE_LIVE_* aliases — documented in the canonical IPE_WEB_* entry.
     "IPE_LIVE_BANNER",
     "IPE_LIVE_BASE_PATH",

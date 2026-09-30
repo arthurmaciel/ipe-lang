@@ -509,6 +509,10 @@ fn start_watch(
         hard_cap: Duration::from_millis(600),
     };
     opts.on_event = Some(sink.as_callback());
+    // Arm the appearance hot-swap for this session regardless of the
+    // environment; the spawned child's `/_ipe/hot-appearance` route is armed
+    // through the `IPE_WATCH_HOT_APPEARANCE` the watch loop hands it.
+    opts.hot_appearance = true;
     // Forward CI's warm shared target (exported ONLY as IPE_ORACLE_SHARED_TARGET)
     // into the watch rebuild so it links against a pre-compiled dep tree; absent,
     // the watch stays isolated exactly as before.
@@ -557,16 +561,6 @@ fn style_edit_hot_swaps_without_rebuild_and_structural_edit_recompiles() -> Resu
     if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
-    }
-    // Enable the flag for THIS watch process (and, by inheritance, the spawned
-    // child, whose `/_ipe/hot-appearance` route needs it too). nextest isolates
-    // each test in its own process, so this does not leak to other tests. The set
-    // happens before any watch thread is spawned, so no other thread races this
-    // var — the only precondition `set_var` needs.
-    // SAFETY: single-threaded at this point (no watch thread spawned yet), and no
-    // other code in this isolated test process reads or writes this var.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
     }
 
     let (ipe_dir, out_dir) = fresh_dirs("swap")?;
@@ -670,11 +664,6 @@ fn attribute_and_text_edits_hot_swap_without_rebuild() -> Result<(), BoxError> {
     if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
-    }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
     }
 
     let (ipe_dir, out_dir) = fresh_dirs("attrtext")?;
@@ -798,11 +787,6 @@ fn numeric_weight_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
-    }
 
     let (ipe_dir, out_dir) = fresh_dirs("weight")?;
     write_main(&ipe_dir, &web_fixture_weight(400, ""))?;
@@ -895,11 +879,6 @@ fn animation_duration_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
-    }
 
     let (ipe_dir, out_dir) = fresh_dirs("animation")?;
     write_main(&ipe_dir, &web_fixture_animation(300, ""))?;
@@ -990,11 +969,6 @@ fn grid_tracks_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
-    }
 
     let (ipe_dir, out_dir) = fresh_dirs("grid")?;
     write_main(&ipe_dir, &web_fixture_grid("1fr 1fr", "auto"))?;
@@ -1083,11 +1057,6 @@ fn image_alt_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
     if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
-    }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
     }
 
     let (ipe_dir, out_dir) = fresh_dirs("image")?;
@@ -1178,11 +1147,6 @@ fn css_value_edit_hot_swaps_and_is_byte_identical() -> Result<(), BoxError> {
     if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
-    }
-    // SAFETY: single-threaded at this point (no watch thread spawned yet), and no
-    // other code in this isolated test process reads or writes this var.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
     }
 
     let (ipe_dir, out_dir) = fresh_dirs("css")?;
@@ -1280,11 +1244,6 @@ fn static_html_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(),
     if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
-    }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
     }
 
     let (ipe_dir, out_dir) = fresh_dirs("statichtml")?;
@@ -1391,11 +1350,6 @@ fn static_ui_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(), B
     if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
-    }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
     }
 
     let (ipe_dir, out_dir) = fresh_dirs("staticui")?;
@@ -1530,11 +1484,6 @@ fn static_ui_subtree_wrapper_hot_swaps_without_rebuild() -> Result<(), BoxError>
     if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
-    }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
     }
 
     let (ipe_dir, out_dir) = fresh_dirs("staticuiwrap")?;
@@ -1673,11 +1622,6 @@ fn value_hole_static_sibling_hot_swaps_without_rebuild() -> Result<(), BoxError>
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
-    }
 
     let (ipe_dir, out_dir) = fresh_dirs("valuehole")?;
     write_main(&ipe_dir, &web_fixture_value_hole("alpha", ""))?;
@@ -1790,11 +1734,6 @@ fn update_arm_step_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
     if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
-    }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
     }
 
     let (ipe_dir, out_dir) = fresh_dirs("counter")?;
@@ -1972,11 +1911,6 @@ fn non_additive_msg_change_recompiles() -> Result<(), BoxError> {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
-    }
 
     let (ipe_dir, out_dir) = fresh_dirs("msgset")?;
     write_main(&ipe_dir, &web_fixture_msg_variants(true))?;
@@ -2033,11 +1967,6 @@ fn subscriptions_interval_edit_hot_swaps_without_rebuild() -> Result<(), BoxErro
     if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
-    }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
     }
 
     let (ipe_dir, out_dir) = fresh_dirs("ticker")?;
@@ -2170,11 +2099,6 @@ fn cmd_perform_arm_composes_and_serves() -> Result<(), BoxError> {
     if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
-    }
-    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
-    // this process, so the var neither races nor leaks.
-    unsafe {
-        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
     }
 
     let (ipe_dir, out_dir) = fresh_dirs("cmdperform")?;

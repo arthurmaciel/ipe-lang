@@ -943,14 +943,10 @@ fn exclusive_mkdir(path: &Path) -> io::Result<()> {
 /// Open a new file at `path`: exclusive, never through a final symlink, mode 0600.
 #[cfg(unix)]
 fn exclusive_open(path: &Path) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let fd = rustix::fs::open(path, flags, Mode::from_raw_mode(0o600))?;
+    Ok(File::from(fd))
 }
 
 /// Open a new file at `path` exclusively, inheriting the proven-private parent's access control.
