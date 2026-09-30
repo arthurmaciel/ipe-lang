@@ -656,7 +656,7 @@ traversalPathsRejected =
                     |> Task.map (\_ -> Nothing)
                     |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
             )
-        |> Task.map (refusedFor "has a `..` segment")
+        |> Task.map (refusedFor "escapes its root via `..`")
         |> Task.andThen (\ok -> removeFileIfAny (base ++ "/index.db") |> Task.map (\_ -> ok))
 
 
@@ -709,19 +709,10 @@ refusalName err =
         MissingTag _ ->
             "missing-tag"
 
-        EmptyRelative _ ->
-            "empty"
-
-        AbsoluteRelative _ ->
-            "absolute"
-
-        TraversalRelative _ ->
-            "traversal"
-
-        InvalidRelative _ ->
+        InvalidRelative _ _ ->
             "invalid"
 
-        NotUnderRoot _ ->
+        NotUnderRoot _ _ ->
             "not-under-root"
 
 
@@ -733,6 +724,18 @@ refusedAs expected result =
 
         Err err ->
             refusalName err == expected
+
+
+-- A refusal whose caller-facing message carries `fragment` from the
+-- `Ipe.Path` error that decided it.
+refusalNames : String -> Result PathError Path.Path -> Bool
+refusalNames fragment result =
+    case result of
+        Ok _ ->
+            False
+
+        Err err ->
+            String.contains fragment (RepoPath.describe err)
 
 
 refused : Result PathError Path.Path -> Bool
@@ -781,21 +784,26 @@ storedPathRefusals =
         in
         Task.succeed
             (List.all identity
-                [ refusedAs "traversal" (RepoPath.resolve root "ipe:a/../../escape")
-                , refusedAs "traversal" (RepoPath.resolve root "ipe:../escape")
-                , refusedAs "traversal" (RepoPath.resolve root "ipe:..")
-                , refusedAs "absolute" (RepoPath.resolve root "ipe:/etc/passwd")
-                , refusedAs "empty" (RepoPath.resolve root "ipe:")
+                [ refusedAs "invalid" (RepoPath.resolve root "ipe:a/../../escape")
+                , refusedAs "invalid" (RepoPath.resolve root "ipe:../escape")
+                , refusedAs "invalid" (RepoPath.resolve root "ipe:../x")
+                , refusedAs "invalid" (RepoPath.resolve root "ipe:..")
+                , refusedAs "invalid" (RepoPath.resolve root "ipe:a\0b")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:/etc/passwd")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe://etc/passwd")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:.")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:./")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:a/..")
                 , refusedAs "missing-tag" (RepoPath.resolve root "src/Main.ipe")
                 , refusedAs "missing-tag" (RepoPath.resolve root "")
                 , refusedAs "missing-tag" (RepoPath.resolve root ":src/Main.ipe")
-                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:.")
-                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:./")
-                , refusedAs "absolute" (RepoPath.resolve root "ipe://etc/passwd")
-                , refusedAs "invalid" (RepoPath.resolve root "ipe:a\0b")
+                , refusalNames "Ipe.Path.under" (RepoPath.resolve root "ipe:/etc/passwd")
+                , refusalNames "escapes its root" (RepoPath.resolve root "ipe:../x")
                 , resolvesTo (base ++ "/src/Main.ipe") (RepoPath.resolve root "ipe:src/Main.ipe")
                 , resolvesTo (base ++ "/src/Main.ipe") (RepoPath.resolve root "ipe:./src//Main.ipe/")
                 , resolvesTo (base ++ "/a:b") (RepoPath.resolve root "ipe:a:b")
+                , resolvesTo (base ++ "/b") (RepoPath.resolve root "ipe:a/../b")
                 ]
             )
 
