@@ -223,8 +223,8 @@ fn scratch_base_verdict_accepts_only_trusted_components() -> io::Result<()> {
         );
         assert_eq!(
             base_reason(&[mode, owner, group, ME, MY_GID])?,
-            "",
-            "{mode} {owner}:{group} must carry no refusal reason"
+            "ok",
+            "{mode} {owner}:{group} must carry the positive `ok` token"
         );
     }
     Ok(())
@@ -300,6 +300,99 @@ fn scratch_base_verdict_refuses_every_untrusted_component_with_its_reason() -> i
 }
 
 #[test]
+fn scratch_base_verdict_refuses_empty_or_unexpected_reason_output() -> io::Result<()> {
+    let trusted = ["drwx------", ME, MY_GID, ME, MY_GID];
+    for (stub, why) in [
+        ("scratch_base_reason() { :; }", "empty output"),
+        ("scratch_base_reason() { return 1; }", "a failed reason"),
+        (
+            "scratch_base_reason() { echo garbage; }",
+            "an unknown token",
+        ),
+        ("scratch_base_reason() { echo; }", "a bare newline"),
+        (
+            "scratch_base_reason() { echo okay; }",
+            "a token merely starting with ok",
+        ),
+    ] {
+        let body = format!("{stub}\nscratch_base_verdict \"$@\" && echo accepted");
+        assert!(
+            helper_stdout(&body, &trusted)?.is_empty(),
+            "{why} from scratch_base_reason must refuse"
+        );
+    }
+
+    let r = root("install-reason-garbage")?;
+    let base = r.child("base");
+    mkdir_mode(&base, 0o700)?;
+    let base_arg = base.to_string_lossy().into_owned();
+    for stub in [
+        "scratch_base_reason() { :; }",
+        "scratch_base_reason() { printf 'garbage\\033[2J'; }",
+    ] {
+        let body = format!("{stub}\n{REFUSAL_REPORT}");
+        let report = String::from_utf8_lossy(&helper_stdout(&body, &[&base_arg])?).into_owned();
+        let sentence = report.lines().nth(2).unwrap_or_default();
+        for needle in ["failed the private-scratch check", "[unknown]"] {
+            assert!(
+                sentence.contains(needle),
+                "`{stub}` must refuse with `{needle}`, got `{report}`"
+            );
+        }
+        assert!(
+            !sentence.contains("garbage") && !sentence.contains('\u{1b}'),
+            "the refusal must not echo an unknown token: `{sentence}`"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn trusted_tmp_base_refuses_a_base_nested_too_deep() -> io::Result<()> {
+    let r = root("install-too-deep")?;
+    let mut deep = r.child("deep");
+    for _ in 0..300 {
+        deep.push("a");
+    }
+    std::fs::create_dir_all(&deep)?;
+    let deep_arg = deep.to_string_lossy().into_owned();
+    let report =
+        String::from_utf8_lossy(&helper_stdout(REFUSAL_REPORT, &[&deep_arg])?).into_owned();
+    let mut lines = report.lines();
+    assert!(lines.next().is_some(), "a too-deep base must be refused");
+    assert_eq!(lines.next(), Some("too-deep"));
+    let sentence = lines.next().unwrap_or_default();
+    for needle in ["nested too deep to verify", "[too-deep]"] {
+        assert!(
+            sentence.contains(needle),
+            "the refusal `{sentence}` must name `{needle}`"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn trusted_tmp_base_refuses_a_component_ls_cannot_describe() -> io::Result<()> {
+    let r = root("install-unreadable")?;
+    let base = r.child("base");
+    mkdir_mode(&base, 0o700)?;
+    let base_arg = base.to_string_lossy().into_owned();
+    let body = format!("ls() {{ return 2; }}\n{REFUSAL_REPORT}");
+    let report = String::from_utf8_lossy(&helper_stdout(&body, &[&base_arg])?).into_owned();
+    let mut lines = report.lines();
+    assert!(lines.next().is_some(), "an unlistable base must be refused");
+    assert_eq!(lines.next(), Some("unreadable"));
+    let sentence = lines.next().unwrap_or_default();
+    for needle in ["it could not be listed", "[unreadable]"] {
+        assert!(
+            sentence.contains(needle),
+            "the refusal `{sentence}` must name `{needle}`"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn trusted_tmp_base_names_the_refused_ancestor_not_the_leaf() -> io::Result<()> {
     let r = root("install-refused-ancestor")?;
     let open = r.child("open");
@@ -361,11 +454,25 @@ fn tmp_base_refusal_names_an_unmapped_owner() -> io::Result<()> {
 
 #[test]
 fn the_refusal_escapes_control_bytes_in_printed_facts() -> io::Result<()> {
-    let escaped = helper_stdout("safe_text \"$1\"", &["a\u{1b}[31mb\u{9b}c\u{7f}\u{e9}"])?;
+    let escaped = helper_stdout(
+        "safe_text \"$1\"",
+        &["a\u{1b}[31mb\u{9b}c\u{7f}\u{e9}\r\u{1}z"],
+    )?;
     assert_eq!(
         String::from_utf8_lossy(&escaped),
-        "a\\033[31mb\\302\\233c\\177\u{e9}",
-        "C0, UTF-8 C1 and DEL must print as octal escapes; other text stays"
+        "a\\033[31mb\\302\\233c\\177\\303\\251\\015\\001z",
+        "C0, DEL and every byte >= 0x80 must print as octal escapes; ASCII stays"
+    );
+    // A raw C1 byte after another high byte is CSI on a Latin-1 terminal.
+    let raw = helper_stdout("safe_text \"$(printf 'a\\240\\233[2J|\\340\\233')\"", &[])?;
+    assert_eq!(
+        String::from_utf8_lossy(&raw),
+        "a\\240\\233[2J|\\340\\233",
+        "a C1 byte must be escaped whatever byte precedes it"
+    );
+    assert!(
+        raw.iter().all(|byte| (0x20..0x7f).contains(byte)),
+        "safe_text must print printable ASCII only"
     );
 
     let r = root("install-escape")?;

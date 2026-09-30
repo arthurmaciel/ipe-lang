@@ -47,10 +47,11 @@ SCRATCH_LS
 
 # scratch_base_reason MODE OWNER GROUP ME MYGID — the rule an entry with `ls -l`
 # mode string MODE, owner uid OWNER and group gid GROUP breaks as a trusted base
-# component for uid ME (primary gid MYGID), as one token; nothing when it is
-# trusted. Trusted: a directory owned by ME or root, writable by no one else
-# unless sticky. Group-writable is allowed only for ME's own directory in group
-# MYGID with no ACL, the user-private-group layout.
+# component for uid ME (primary gid MYGID), as one token; `ok` when it is
+# trusted. Callers accept only `ok`, so empty or unexpected output (a failed
+# subshell included) refuses. Trusted: a directory owned by ME or root,
+# writable by no one else unless sticky. Group-writable is allowed only for
+# ME's own directory in group MYGID with no ACL, the user-private-group layout.
 scratch_base_reason() {
   [ -n "$4" ] || { echo unknown-identity; return 0; }
   case "$1" in
@@ -60,49 +61,50 @@ scratch_base_reason() {
     *) echo not-a-dir; return 0 ;;
   esac
   [ "$2" = "$4" ] || [ "$2" = 0 ] || { echo foreign-owner; return 0; }
-  case "$1" in d????????[tT]*) return 0 ;; esac
+  case "$1" in d????????[tT]*) echo ok; return 0 ;; esac
   case "$1" in d???????w*) echo world-writable-not-sticky; return 0 ;; esac
   case "$1" in
     # An ACL (`+`) can grant a named user write through the group mask.
     d????w*+) echo acl ;;
     d????w*)
-      [ "$2" = "$4" ] && [ -n "$5" ] && [ "$3" = "$5" ] || echo group-writable
+      if [ "$2" = "$4" ] && [ -n "$5" ] && [ "$3" = "$5" ]; then echo ok
+      else echo group-writable
+      fi
       ;;
+    *) echo ok ;;
   esac
   return 0
 }
 
-# scratch_base_verdict MODE OWNER GROUP ME MYGID — scratch_base_reason finds no
-# broken rule.
+# scratch_base_verdict MODE OWNER GROUP ME MYGID — scratch_base_reason prints
+# exactly `ok`.
 scratch_base_verdict() {
-  [ -z "$(scratch_base_reason "$@")" ]
+  [ "$(scratch_base_reason "$@")" = ok ]
 }
 
-# safe_text TEXT — TEXT with every C0 control, DEL and UTF-8-encoded C1 control
-# written as a `\ooo` octal escape, so a printed path cannot drive the terminal.
+# safe_text TEXT — TEXT with every byte outside printable ASCII (C0 controls,
+# DEL and every byte >= 0x80) written as a `\ooo` octal escape, so a printed
+# path cannot drive the terminal under any encoding (a raw 0x9B is CSI on a
+# Latin-1 terminal).
 safe_text() {
   printf '%sx' "$1" | LC_ALL=C awk '
     BEGIN { for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i; out = "" }
     {
       if (NR > 1) out = out "\\012"
-      n = length($0); prev = 0
+      n = length($0)
       for (i = 1; i <= n; i++) {
         c = substr($0, i, 1); o = ord[c]
-        if (o < 32 || o == 127) { out = out sprintf("\\%03o", o); prev = o; continue }
-        if (o == 194 && i < n) {
-          nx = ord[substr($0, i + 1, 1)]
-          if (nx >= 128 && nx < 160) { out = out sprintf("\\%03o\\%03o", o, nx); i++; prev = nx; continue }
-        }
-        if (o >= 128 && o < 160 && prev < 128) { out = out sprintf("\\%03o", o); prev = o; continue }
-        out = out c; prev = o
+        if (o < 32 || o >= 127) out = out sprintf("\\%03o", o)
+        else out = out c
       }
     }
     END { printf "%s", substr(out, 1, length(out) - 1) }'
 }
 
 # scratch_base_entry_reason DIR ME MYGID — set TMP_REFUSED_REASON to the
-# scratch_base_reason token for DIR (`unreadable` when `ls` cannot describe it),
-# and TMP_REFUSED_OWNER / TMP_REFUSED_MODE to the facts it was judged on.
+# scratch_base_reason token for DIR (`ok` when trusted, `unreadable` when `ls`
+# cannot describe it), and TMP_REFUSED_OWNER / TMP_REFUSED_MODE to the facts it
+# was judged on.
 scratch_base_entry_reason() {
   TMP_REFUSED_OWNER=''; TMP_REFUSED_MODE=''; TMP_REFUSED_REASON=unreadable
   _be_ls="$(ls -ldn -- "$1" 2>/dev/null)" || return 0
@@ -128,7 +130,7 @@ trusted_tmp_base() {
     while :; do
       TMP_REFUSED_PATH="$_tb_walk"
       scratch_base_entry_reason "$_tb_walk" "$_tb_me" "$_tb_grp"
-      [ -z "$TMP_REFUSED_REASON" ] || return 1
+      [ "$TMP_REFUSED_REASON" = ok ] || return 1
       case "$_tb_walk" in /|//) break ;; esac
       _tb_left=$((_tb_left - 1))
       [ "$_tb_left" -gt 0 ] || {
@@ -146,6 +148,7 @@ trusted_tmp_base() {
 # tmp_base_refusal — the sentence explaining the last trusted_tmp_base refusal:
 # the refused path, its owner and mode, the broken rule, and the remedy.
 tmp_base_refusal() {
+  _tr_token="$TMP_REFUSED_REASON"
   case "$TMP_REFUSED_REASON" in
     unknown-identity) _tr_rule="your user id could not be determined" ;;
     empty-mode) _tr_rule="its permissions could not be read" ;;
@@ -158,13 +161,13 @@ tmp_base_refusal() {
     world-writable-not-sticky) _tr_rule="anyone can write to it and it lacks the sticky bit" ;;
     acl) _tr_rule="it is group-writable and carries an ACL that can grant other users write" ;;
     group-writable) _tr_rule="it is writable by a group other than your own private group" ;;
-    *) _tr_rule="it failed the private-scratch check" ;;
+    *) _tr_rule="it failed the private-scratch check"; _tr_token=unknown ;;
   esac
   _tr_msg="Refusing the temp directory $(safe_text "${TMPDIR:-/tmp}"): $(safe_text "$TMP_REFUSED_PATH")"
   if [ -n "$TMP_REFUSED_OWNER$TMP_REFUSED_MODE" ]; then
     _tr_msg="$_tr_msg (owner uid $(safe_text "$TMP_REFUSED_OWNER"), mode $(safe_text "$TMP_REFUSED_MODE"))"
   fi
-  _tr_msg="$_tr_msg: $_tr_rule [$TMP_REFUSED_REASON]."
+  _tr_msg="$_tr_msg: $_tr_rule [$_tr_token]."
   case "$TMP_REFUSED_OWNER" in
     65534|nobody)
       _tr_msg="$_tr_msg Owner uid 65534 (nobody) usually means a uid unmapped in this container or user namespace."
