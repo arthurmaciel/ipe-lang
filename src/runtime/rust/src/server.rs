@@ -946,6 +946,8 @@ async fn build_request(
         return Err(RequestRejection::PayloadTooLarge);
     }
     let body = match axum::body::to_bytes(body, cap).await {
+        #[allow(clippy::disallowed_methods)]
+        // a request body reaches the handler as `String` text, not a URL component
         Ok(b) => String::from_utf8_lossy(&b).into_owned(),
         // to_bytes-with-limit fails almost exclusively on cap-exceeded; a
         // transport read error means the client is already gone so the status
@@ -1507,6 +1509,7 @@ async fn ws_loop<E: From<String> + Send + 'static>(
                     // uniform `String` for both text and binary frames; applications
                     // that need lossless binary round-trips should use a text+base64
                     // encoding at the Ipê level.
+                    #[allow(clippy::disallowed_methods)] // a binary frame reaches `onMessage` as `String` text
                     let s = String::from_utf8_lossy(&b).into_owned();
                     let _ = (cfg.onMessage)(WsHandle::WebSocketServer(id), s).await;
                 }

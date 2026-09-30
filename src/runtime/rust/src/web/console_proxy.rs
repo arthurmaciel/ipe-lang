@@ -555,7 +555,7 @@ mod tests {
                 "{method} {}{} {}",
                 uri.path(),
                 uri.query().map(|q| format!("?{q}")).unwrap_or_default(),
-                String::from_utf8_lossy(&body)
+                String::from_utf8(body.to_vec()).expect("a UTF-8 request body")
             )
         }
 
@@ -583,7 +583,7 @@ mod tests {
         let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
             .await
             .expect("read resp body");
-        let text = String::from_utf8_lossy(&bytes);
+        let text = String::from_utf8(bytes.to_vec()).expect("a UTF-8 response body");
         // Prefix stripped → child sees /_ipe/event; method, query, body preserved.
         assert_eq!(text, "POST /_ipe/event?x=1 hi", "got: {text}");
     }
@@ -691,6 +691,6 @@ mod tests {
         let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
             .await
             .expect("read resp body");
-        assert_eq!(String::from_utf8_lossy(&bytes), "/");
+        assert_eq!(bytes.as_ref(), b"/".as_slice());
     }
 }

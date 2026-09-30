@@ -8050,7 +8050,10 @@ mod emitted_router_behavior_tests {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("read body");
-        (sid, String::from_utf8_lossy(&bytes).into_owned())
+        (
+            sid,
+            String::from_utf8(bytes.to_vec()).expect("a UTF-8 body"),
+        )
     }
 
     #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
@@ -8195,7 +8198,10 @@ mod emitted_router_behavior_tests {
                 while acc.len() < 256 * 1024 {
                     match stream.next().await {
                         Some(Ok(chunk)) => {
-                            acc.push_str(&String::from_utf8_lossy(&chunk));
+                            #[allow(clippy::disallowed_methods)]
+                            // a chunk may split a UTF-8 sequence; only ASCII markers are sought
+                            let text = String::from_utf8_lossy(&chunk);
+                            acc.push_str(&text);
                             if acc.contains("event: patch") && acc.contains("data-ipe-hid") {
                                 break;
                             }

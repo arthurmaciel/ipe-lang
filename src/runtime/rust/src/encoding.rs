@@ -109,11 +109,11 @@ impl std::fmt::Display for DecodeRefusal {
 ///
 /// This is the single percent-decoder of the runtime: every URL component (a
 /// path parameter, a query key or value, `Encoding.urlDecode`,
-/// `Encoding.pathDecode`, `Http.parseQuery`) is decoded here. It is total and
-/// strict: a `%` not followed by two hex digits, decoded bytes that are not
-/// UTF-8 (overlong forms such as `%C0%AF` included), and a component longer
-/// than `MAX_URL_COMPONENT_LEN` are each a typed refusal, never a lossy or
-/// pass-through success.
+/// `Encoding.pathDecode`, `Http.parseQuery`, a database DSN part) is decoded
+/// here. It is total and strict: a `%` not followed by two hex digits, decoded
+/// bytes that are not UTF-8 (overlong forms such as `%C0%AF` included), and a
+/// component longer than `MAX_URL_COMPONENT_LEN` are each a typed refusal,
+/// never a lossy or pass-through success.
 ///
 /// # Errors
 ///
@@ -259,9 +259,7 @@ fn decode_form_query_within(
     Ok(out)
 }
 
-/// Ipê `base64Encode : String -> String` — encodes the input's UTF-8 bytes
-/// )`). Non-ASCII
-///
+/// Ipê `base64Encode : String -> String` — encodes the input's UTF-8 bytes.
 #[must_use]
 pub fn base64_encode(s: String) -> String {
     B64.encode(s.as_bytes())

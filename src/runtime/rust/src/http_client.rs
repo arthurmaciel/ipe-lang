@@ -568,7 +568,10 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
         }
         buf.extend_from_slice(&bytes);
     }
-    IpeResult::Ok(String::from_utf8_lossy(&buf).into_owned())
+    #[allow(clippy::disallowed_methods)]
+    // a response body reaches Ipê as `String` text, not a URL component
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    IpeResult::Ok(text)
 }
 
 /// Http.get : Url -> Task Error HttpResponse
@@ -853,7 +856,10 @@ async fn read_wasm_body_capped(resp: &web_sys::Response, cap: usize) -> Result<S
             break;
         }
     }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
+    #[allow(clippy::disallowed_methods)]
+    // a response body reaches Ipê as `String` text, not a URL component
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    Ok(text)
 }
 
 /// Http.get : Url -> Task Error HttpResponse (browser substitute)

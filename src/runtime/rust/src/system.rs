@@ -611,6 +611,7 @@ fn process_run_with_cap<E: Send + From<String> + 'static>(
         // panicked) doesn't need `cmd` — it's moved into the closure.
         match run_blocking(move || process_run_sync(&cmd, &args, cap)).await {
             Ok(out) => {
+                #[allow(clippy::disallowed_methods)] // process output reaches Ipê as `String` text
                 let text = String::from_utf8_lossy(&out.combined).into_owned();
                 if out.success {
                     ok_res(text)
@@ -725,12 +726,16 @@ fn process_run_with_sync(
     }
 
     let status = guard.wait().map_err(|e| format!("{cmd}: {e}"))?;
+    #[allow(clippy::disallowed_methods)] // process output reaches Ipê as `String` text
+    let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
+    #[allow(clippy::disallowed_methods)] // process output reaches Ipê as `String` text
+    let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
 
     #[allow(non_snake_case)]
     Ok(ProcessRunOutput {
         exitCode: i64::from(status.code().unwrap_or(-1)),
-        stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
-        stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
+        stdout,
+        stderr,
     })
 }
 
@@ -1036,11 +1041,13 @@ fn process_run_in_pty_sync(cfg: ProcessRunInPtyCfg, cap: u64) -> Result<ProcessP
     }
 
     let status = guard.wait().map_err(|e| format!("{cmd}: {e}"))?;
+    #[allow(clippy::disallowed_methods)] // process output reaches Ipê as `String` text
+    let output = String::from_utf8_lossy(&combined).into_owned();
 
     #[allow(non_snake_case)]
     Ok(ProcessPtyOutput {
         exitCode: i64::from(status.code().unwrap_or(-1)),
-        output: String::from_utf8_lossy(&combined).into_owned(),
+        output,
     })
 }
 
