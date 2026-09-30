@@ -38,14 +38,15 @@ use super::{IpeError, IpeResult, IpeTask, from_u8_slice, ok_res, str_err};
 // wasm32 the synchronous fallback runs even when `feature = "tokio"` is set —
 // the browser has no blocking-thread pool to offload to.
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
-async fn run_blocking<T, F>(f: F) -> Result<T, String>
+async fn run_blocking<T, Er, F>(f: F) -> Result<T, Er>
 where
-    F: FnOnce() -> Result<T, String> + Send + 'static,
+    F: FnOnce() -> Result<T, Er> + Send + 'static,
     T: Send + 'static,
+    Er: From<String> + Send + 'static,
 {
     match tokio::task::spawn_blocking(f).await {
         Ok(r) => r,
-        Err(_) => Err("background file task panicked".to_string()),
+        Err(_) => Err(Er::from("background file task panicked".to_string())),
     }
 }
 
@@ -53,10 +54,11 @@ where
 // `async` is required here to match the tokio variant's signature; callers
 // always use `.await` to work with both feature configurations uniformly.
 #[allow(clippy::unused_async)]
-async fn run_blocking<T, F>(f: F) -> Result<T, String>
+async fn run_blocking<T, Er, F>(f: F) -> Result<T, Er>
 where
-    F: FnOnce() -> Result<T, String> + Send + 'static,
+    F: FnOnce() -> Result<T, Er> + Send + 'static,
     T: Send + 'static,
+    Er: From<String> + Send + 'static,
 {
     f()
 }
@@ -186,7 +188,7 @@ pub fn file_exists<E: Send + 'static>(path: Path) -> IpeTask<E, bool> {
         // a hypothetical `JoinError` (task panicked) falls back to `false`
         // rather than propagating — there is no `Err` channel on this
         // kernel's existing `IpeTask<E, bool>` signature to propagate into.
-        let exists = run_blocking(move || Ok(std::path::Path::new(&path).exists()))
+        let exists = run_blocking(move || Ok::<_, String>(std::path::Path::new(&path).exists()))
             .await
             .unwrap_or(false);
         ok_res(exists)
@@ -403,9 +405,11 @@ pub fn file_is_dir<E: Send + 'static>(path: Path) -> IpeTask<E, bool> {
     let path = path.into_string();
     Box::pin(async move {
         // Same infallible-closure shape as `file_exists` above.
-        let is_dir = run_blocking(move || Ok(std::fs::metadata(&path).is_ok_and(|m| m.is_dir())))
-            .await
-            .unwrap_or(false);
+        let is_dir = run_blocking(move || {
+            Ok::<_, String>(std::fs::metadata(&path).is_ok_and(|m| m.is_dir()))
+        })
+        .await
+        .unwrap_or(false);
         ok_res(is_dir)
     })
 }
