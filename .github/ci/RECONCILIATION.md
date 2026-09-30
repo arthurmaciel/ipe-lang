@@ -98,11 +98,11 @@ reconciled. On a pull request it is not required; there it flags a
 required-set change the ruleset has not taken yet. `ruleset-admin-read` is a
 `nightly-gate` too, and `nightly-green` requires its latest scheduled run on
 `main` to be green and fresh on every change: a red admin read holds every
-merge until it is recovered as the admin-read recovery under "Where the set
-is enforced" states: a fix to the ruleset or its token is proven by the next
-scheduled run (a re-run keeps the run's `created_at`, so it helps only while
-the run is still fresh), and a red caused by the tree on `main` needs the
-break-glass sequence below; `ci-health` also surfaces its red.
+merge until it is recovered. A red ruleset admin read caused by the ruleset
+or its token is fixed there, and the next scheduled run proves the fix (a
+`gh run rerun` keeps the run's `created_at`, so it never makes a stale run
+fresh); one caused by main's tree needs the break-glass sequence in
+.github/ci/RECONCILIATION.md. `ci-health` also surfaces its red.
 
 `strict_required_status_checks_policy` ("require branches to be up to date")
 is pinned `false` and `do_not_enforce_on_create` is pinned `false`. The strict

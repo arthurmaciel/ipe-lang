@@ -23,7 +23,7 @@
 # by the ruleset or its token is fixed there, and the next scheduled run proves
 # the fix (a `gh run rerun` keeps the run's `created_at`, so it never makes a
 # stale run fresh); one caused by main's tree needs the break-glass sequence in
-# `.github/ci/RECONCILIATION.md`.
+# .github/ci/RECONCILIATION.md.
 name: Ruleset admin read
 
 on:
