@@ -101,10 +101,19 @@ When a lint or gate fires, fix the code — never the lint level, never the gate
 - **Escape hatch:** per-site `#[allow(lint)] // one-line why` only — never
   crate/gate-wide. Ledgered production allows carry `IPE-RUST-AUDIT:ACCEPTED`;
   `tools/panic-scan` is the inventory SSOT.
-- **`unsafe` is forbidden.** Exactly ONE sanctioned block: `prctl(PR_SET_PDEATHSIG)`
-  in `system::harden_child_parent_death` (the runtime's single parent-death floor —
-  every child-spawner, `console_proxy` and `ipe watch` alike, routes through it).
-  Every other module is `unsafe`-free.
+- **`unsafe` is forbidden** — a build error: `unsafe_code = "deny"` in root
+  `Cargo.toml` `[workspace.lints.rust]` (mirrored in each crate that keeps its own
+  `[lints]`). Syscalls go through safe typed wrappers (`rustix`, `std` `OwnedFd`);
+  tests seed the environment through the runtime env overlay, a typed option, or
+  spawn-time `Command::env`, never `std::env::set_var`. Exactly two sanctioned
+  sites, each a scoped `#[allow(unsafe_code)]` carrying `IPE-RUST-AUDIT:ACCEPTED`:
+  the `pre_exec` hook in `system::harden_child_parent_death` (the runtime's single
+  parent-death floor — every child-spawner, `console_proxy` and `ipe watch` alike,
+  routes through it), and the per-function allows in the Win32 module
+  `run_jail::windows::windows_jail`, only on the functions calling a Win32 entry
+  point no vetted safe crate wraps (the Job Object lifecycle goes through
+  `win32job`); that module denies `unsafe` everywhere else. Every other module is
+  `unsafe`-free.
 - **Edition 2024** — workspace crates and every emitted project.
 
 ## No `dyn Any` — concrete over generic

@@ -52,19 +52,6 @@ use std::time::{Duration, Instant};
 /// within milliseconds, so this window is never approached in the normal case.
 const DEFAULT_FIXTURE_ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Resolve the fixture accept deadline, honouring `IPE_HTTP_FIXTURE_ACCEPT_MS`
-/// (milliseconds) when set to a positive value; otherwise the default.
-///
-/// The override exists so the fail-fast behaviour can be proven with a short
-/// deadline in a test without a 30s wait; production runs leave it unset.
-fn fixture_accept_timeout() -> Duration {
-    ipe_env::var("IPE_HTTP_FIXTURE_ACCEPT_MS")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
-        .filter(|&ms| ms > 0)
-        .map_or(DEFAULT_FIXTURE_ACCEPT_TIMEOUT, Duration::from_millis)
-}
-
 /// Shared error type for E2E helpers: propagated via `?` so helpers and test
 /// functions never call `panic!` or `expect`.
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -131,6 +118,21 @@ fn start_fixture(
     test_name: &str,
     raw_response: &'static str,
 ) -> Result<(String, thread::JoinHandle<()>), BoxError> {
+    start_fixture_with_accept_timeout(test_name, raw_response, DEFAULT_FIXTURE_ACCEPT_TIMEOUT)
+}
+
+/// [`start_fixture`] with an explicit accept deadline, so the fail-fast
+/// behaviour can be proven with a short window instead of the default wait.
+///
+/// # Errors
+///
+/// Returns an error if the listener cannot bind or if the local address cannot
+/// be retrieved.
+fn start_fixture_with_accept_timeout(
+    test_name: &str,
+    raw_response: &'static str,
+    accept_timeout: Duration,
+) -> Result<(String, thread::JoinHandle<()>), BoxError> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| -> BoxError {
         format!("{test_name}: cannot bind fixture server: {e}").into()
     })?;
@@ -153,7 +155,7 @@ fn start_fixture(
         // deadline elapses; the running binary then produces no/short stdout
         // and the test assertion fails fast with a clear message rather than
         // hanging to the outer cap.
-        let deadline = Instant::now() + fixture_accept_timeout();
+        let deadline = Instant::now() + accept_timeout;
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
@@ -411,25 +413,19 @@ fn http_ssrf_deny_loopback() -> Result<(), BoxError> {
 /// fixture thread must exit promptly once the deadline elapses rather than
 /// blocking forever (which would spin to the outer per-test cap).
 ///
-/// A short `IPE_HTTP_FIXTURE_ACCEPT_MS` override makes the proof fast. This test
-/// needs no compiled binary, so it runs without `IPE_E2E`.
+/// A short explicit deadline makes the proof fast. This test needs no compiled
+/// binary, so it runs without `IPE_E2E`.
 ///
 /// # Errors
 ///
 /// Propagates a fixture-bind failure.
 #[test]
 fn fixture_accept_deadline_fires_when_no_client_connects() -> Result<(), BoxError> {
-    // SAFETY: `set_var` mutates process-global env. This test is self-contained
-    // (no other test reads this var) and the `cwd-mutating`/`heavy-server-e2e`
-    // groups already serialize env-sensitive members; the short window here does
-    // not overlap a fixture that expects the default deadline.
-    unsafe {
-        std::env::set_var("IPE_HTTP_FIXTURE_ACCEPT_MS", "200");
-    }
     let started = Instant::now();
-    let (_url, handle) = start_fixture(
+    let (_url, handle) = start_fixture_with_accept_timeout(
         "fixture_accept_deadline",
         "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        Duration::from_millis(200),
     )?;
     // Never connect. The thread must exit near the 200ms deadline, well under
     // any outer cap; join it and assert it returned promptly.
@@ -437,9 +433,6 @@ fn fixture_accept_deadline_fires_when_no_client_connects() -> Result<(), BoxErro
         .join()
         .map_err(|_| -> BoxError { "fixture thread panicked".into() })?;
     let elapsed = started.elapsed();
-    unsafe {
-        std::env::remove_var("IPE_HTTP_FIXTURE_ACCEPT_MS");
-    }
     assert!(
         elapsed < Duration::from_secs(5),
         "the accept deadline must fire fast (no-connect), took {elapsed:?}"

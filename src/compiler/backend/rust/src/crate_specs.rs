@@ -50,14 +50,14 @@ pub const ASYNC_TRAIT: CrateSpec = CrateSpec {
     name: "async-trait",
     version: "0.1",
 };
-// `libc` is declared directly in the base `Cargo.toml` template (under
-// `[target.'cfg(unix)'.dependencies]`, for the `Io.readSecret` termios path and
-// the live console-proxy's `libc::prctl`), not by a surgery function — so this
-// spec is consulted only by the drift guard, which walks `ALL` under `cfg(test)`.
+// `rustix` is declared directly in the base `Cargo.toml` template (under
+// `[target.'cfg(unix)'.dependencies]`, for the vendored runtime's termios / pty /
+// parent-death syscalls), not by a surgery function — so this spec is consulted
+// only by the drift guard, which walks `ALL` under `cfg(test)`.
 #[cfg(test)]
-pub const LIBC: CrateSpec = CrateSpec {
-    name: "libc",
-    version: "0.2",
+pub const RUSTIX: CrateSpec = CrateSpec {
+    name: "rustix",
+    version: "1",
 };
 pub const CROSSTERM: CrateSpec = CrateSpec {
     name: "crossterm",
@@ -195,7 +195,7 @@ pub const ALL: &[CrateSpec] = &[
     TOWER_HTTP,
     TOWER,
     ASYNC_TRAIT,
-    LIBC,
+    RUSTIX,
     CROSSTERM,
     UNICODE_WIDTH,
     WRY,

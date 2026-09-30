@@ -174,19 +174,37 @@ fn a_child_spawn_is_denied_under_a_subprocess_withholding_job_but_succeeds_under
 
 // ── env ──────────────────────────────────────────────────────────────────────
 
+/// Set only on the env test's re-exec of this binary, whose environment carries
+/// the seeded variables from spawn.
+const ENV_CHILD_MARKER: &str = "IPE_WINDOWS_E2E_ENV_CHILD";
+
 #[test]
 fn a_non_allowlisted_env_var_is_absent_from_the_jailed_child_but_present_under_control() {
     if !e2e_enabled() {
         return;
     }
-    let scratch = scratch_dir("env");
-    // The launcher scrubs the environment: only the allowlist re-enters. Set a
-    // secret in this process so it would be inherited if the scrub were bypassed.
-    // SAFETY: single-threaded test setup mutating this process's environment.
-    unsafe {
-        std::env::set_var("IPE_SECRET_E2E", "leak");
-        std::env::set_var("IPE_ALLOWED_E2E", "ok");
+    // The launcher scrubs the environment: only the allowlist re-enters. The
+    // secret must be in THIS process's environment so it would be inherited if
+    // the scrub were bypassed. The environment is set at spawn time on a re-exec
+    // of this test binary (running only this test), never mutated in-process;
+    // the re-exec must actually run and pass this test, never match nothing.
+    if ipe_env::var_os(ENV_CHILD_MARKER).is_none() {
+        let rerun = e2e_support::rerun_this_test_exact(
+            "a_non_allowlisted_env_var_is_absent_from_the_jailed_child_but_present_under_control",
+            |cmd| {
+                cmd.arg("--nocapture")
+                    .env(ENV_CHILD_MARKER, "1")
+                    .env("IPE_SECRET_E2E", "leak")
+                    .env("IPE_ALLOWED_E2E", "ok");
+            },
+        );
+        assert!(
+            rerun.is_ok(),
+            "the env-seeded re-exec did not pass: {rerun:?}"
+        );
+        return;
     }
+    let scratch = scratch_dir("env");
     // Print 1 iff the var is present, else 0.
     let probe = |name: &str| {
         format!(
@@ -206,11 +224,6 @@ fn a_non_allowlisted_env_var_is_absent_from_the_jailed_child_but_present_under_c
     let secret_absent = run_jailed(&profile, &scratch, &coded("IPE_SECRET_E2E"));
     let allowed_present = run_jailed(&profile, &scratch, &coded("IPE_ALLOWED_E2E"));
     let _ = std::fs::remove_dir_all(&scratch);
-    // SAFETY: single-threaded test teardown.
-    unsafe {
-        std::env::remove_var("IPE_SECRET_E2E");
-        std::env::remove_var("IPE_ALLOWED_E2E");
-    }
     assert_eq!(
         secret_absent,
         Some(0),

@@ -28,14 +28,17 @@
 //! exit, signal, or ambiguous state decodes to a non-`Clean` outcome.
 
 use std::ffi::OsString;
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "x86_64", target_arch = "aarch64")
-))]
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use crate::JailMounts;
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+))]
+use crate::run_jail::JailArgv;
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -354,36 +357,41 @@ pub fn build_in_jail(
         };
     };
     let bytes = seccomp::program_bytes(&program);
-    let seccomp_fd = match crate::run_jail::write_seccomp_memfd(&bytes) {
-        Ok(fd) => fd,
-        Err(defect) => return JailOutcome::Unavailable { defect },
-    };
-    // Own the memfd so it is closed when this function returns. bwrap reads the
+    // The memfd is owned so it is closed when this function returns. bwrap reads the
     // seccomp filter by fd number during jail setup — before the child runs — so
     // closing it after the child is waited on is safe. Unlike the run jail
     // (which `exec`s and never returns), this build jail RETURNS and is called
     // once per axis in the audit tightening loop; a raw fd would leak one memfd
-    // per call in the long-lived audit/CI process.
-    let seccomp_owned = unsafe { OwnedFd::from_raw_fd(seccomp_fd) };
+    // per call in the long-lived audit/CI process. It is sealed and born
+    // close-on-exec; clearing the flag only now, right before the spawn, lets
+    // bwrap inherit it. A failure refuses rather than run the build unfiltered.
+    let seccomp_owned = match crate::run_jail::write_seccomp_memfd(&bytes) {
+        Ok(fd) => fd,
+        Err(defect) => return JailOutcome::Unavailable { defect },
+    };
+    // Known limit: between this close-on-exec clear and the spawn, a sibling child
+    // forked by another thread inherits the same open file description. The seal
+    // blocks writes, not a shared-offset `lseek`/`read`, so this fd must reach only
+    // its one child.
+    let seccomp_fd = match seccomp_owned.make_inheritable() {
+        Ok(fd) => fd,
+        Err(e) => {
+            return JailOutcome::Unavailable {
+                defect: RunJailDefect::Spawn {
+                    detail: format!("clearing close-on-exec on the seccomp memfd failed: {e}"),
+                },
+            };
+        }
+    };
 
     let host_env = crate::host_env::granted;
-    let argv = run_jail_argv(
-        tools,
-        profile,
-        mounts,
-        Some(seccomp_owned.as_raw_fd()),
-        &host_env,
-        payload,
-    );
+    let argv = run_jail_argv(tools, profile, mounts, Some(seccomp_fd), &host_env, payload);
 
     // The Linux jail's env is scrubbed inside the bwrap argv (`--clearenv` +
     // allowlisted re-export), so no launcher-side env override is needed here.
-    let outcome = spawn_and_decode(&argv, None);
-    // `seccomp_owned` drops here (after the child has been waited on inside
-    // `spawn_and_decode`), closing the memfd. Keep it explicit so the ordering
-    // is not subject to a future reorder.
-    drop(seccomp_owned);
-    outcome
+    // `argv` borrows `seccomp_owned`, so the memfd stays open until the child is
+    // waited on inside `spawn_and_decode` and closes when this function returns.
+    spawn_and_decode(&argv, None)
 }
 
 /// Run `payload` inside a `sandbox-exec` Seatbelt jail lowered from `profile`,
@@ -454,6 +462,7 @@ pub fn build_in_jail(
     argv.push("-p".into());
     argv.push(sbpl.into());
     argv.extend(payload.iter().cloned());
+    let argv = JailArgv::fd_free(argv);
 
     // Enforce the `env` axis in the launcher (Seatbelt cannot scrub env),
     // mirroring the run jail and the Linux build jail's bwrap `--clearenv`, so a
@@ -679,10 +688,10 @@ pub fn build_in_jail(
     target_os = "macos"
 ))]
 fn spawn_and_decode(
-    argv: &[OsString],
+    argv: &JailArgv<'_>,
     env_override: Option<&[(OsString, OsString)]>,
 ) -> JailOutcome {
-    let Some((program, rest)) = argv.split_first() else {
+    let Some((program, rest)) = argv.args().split_first() else {
         return JailOutcome::Unavailable {
             defect: RunJailDefect::Spawn {
                 detail: "empty jail argv".to_owned(),
