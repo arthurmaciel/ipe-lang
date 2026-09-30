@@ -368,7 +368,7 @@ app code.
 | `Math` | `Ipe.Math` | abs, min, max; sqrt, pow, cbrt, hypot; exp, exp2, log, log2, log10; floor, ceil, round, trunc; sin, cos, tan; asin, acos, atan, atan2; sinh, cosh, tanh, asinh, acosh, atanh; mod, remainder; pi, e, phi, sqrt2, inf, nan |
 | `Regex` | `Ipe.Regex` | match, find, findAll, replace, split |
 | `Char` | `Ipe.Char` | isAlpha, isDigit, isLower, isUpper, toUpper, toLower |
-| `Path` | `Ipe.Path` | base, dir, ext, isAbsolute |
+| `Path` | `Ipe.Path` | base, dir, ext, isAbsolute, under (join a relative child beneath a root; never concatenate path strings), absolute |
 | `Net` | `Ipe.Net` | opaque `Port` (range-validated TCP/UDP port). `fromInt : Int -> Result Error Port` (rejects outside `1..65535`, incl. `0`), `toInt`, `min`/`max`. Used by `Email.withSmtpPort` + `Db.Dsn.build`. |
 | `Duration` | `Ipe.Duration` | opaque, unit-explicit time span. `millis`/`seconds`/`minutes : Int -> Duration` (clamp negatives to 0), `zero`, `toMillis`. Used by `Time.sleep`/`Time.every`, `WebSocket.withTimeout`/`withPingInterval`, `Task.withBaseMs`, `Cache.withTTL`. |
 | `ByteSize` | `Ipe.ByteSize` | opaque, unit-explicit byte quantity. `bytes`/`kib`/`mib : Int -> ByteSize` (binary units; clamp negatives to 0), `zero`, `toBytes`. Used by `Cache.withMaxBytes`. |

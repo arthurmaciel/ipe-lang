@@ -1222,13 +1222,15 @@ mod registry_phase_c_tests {
             K::RegexFindAll,
             K::RegexReplace,
             K::RegexSplit,
-            // ── Ipe.Path (6) ──────────────────────────────────────
+            // ── Ipe.Path (8) ──────────────────────────────────────
             K::PathFromString,
             K::PathToString,
             K::PathBase,
             K::PathDir,
             K::PathExt,
             K::PathIsAbsolute,
+            K::PathUnder,
+            K::PathAbsolute,
             // ── Ipe.Trace (3) ──────────────────────────────────────────
             K::TraceSpan,
             K::TraceEvent,

@@ -7,7 +7,7 @@ construction, and no file operation re-checks it.
 
 ## The mental model
 
-Three knots.
+Four knots.
 
 - **`Path` is opaque — `fromString` is the only door, and it rejects.** The single
   constructor is `Path.fromString`, which normalises separators and returns `Err`
@@ -22,6 +22,15 @@ Three knots.
   take a `Path`, and `Ipe.Process.runWith` takes a `Path` for its working
   directory. So the traversal check moves to the boundary where a raw string
   enters the program, and everything downstream holds an already-safe value.
+- **Compose with `under`, never with `++`.** `Path.under root child` joins a
+  relative `child` beneath `root` and returns `Err` when the child is empty,
+  absolute, carries a `..` element, or the join would not lie below the root —
+  `/repo2/x` is not under `/repo`, because containment is checked per component,
+  not as a string prefix. `Path.absolute` resolves a relative path against the
+  working directory through the same join (a `filesystem` read). Both are
+  lexical: they never follow or forbid a symlink, so a link below the root can
+  still point outside it; confining a program against links is the capability
+  jail's job.
 
 ## A worked example: parsing upload paths
 
@@ -78,7 +87,7 @@ harder to trace back to its source.
 ## References
 
 - **Per-symbol reference:** `ipe doc Ipe.Path` — `fromString`, `toString`, `base`,
-  `dir`, `ext`, `isAbsolute`, and the opaque `Path` type.
+  `dir`, `ext`, `isAbsolute`, `under`, `absolute`, and the opaque `Path` type.
 - **Sibling guides:** [Files](file.md) — the effectful read/write side that takes a
   `Path`. [Subprocesses](process.md) — `runWith` takes a `Path` for the child's
   working directory. [Results](result.md) — what `fromString` returns.

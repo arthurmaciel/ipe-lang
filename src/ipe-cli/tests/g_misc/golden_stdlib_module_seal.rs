@@ -185,6 +185,45 @@ fn path_builds_and_runs() {
     seal_module("path", PATH_MAIN, "c.txt /a/b .txt ABS");
 }
 
+// `Path.under` joins a relative child beneath a root and fails closed on the
+// typed `Err` channel for an absolute, empty (`.`), or `..`-escaping child
+// (the last refused by the seal itself); `Path.absolute` roots a relative path.
+
+const PATH_UNDER_MAIN: &str = "module Main exposing (main)\n\
+    import Ipe.Task as Task\n\
+    import Ipe.Io as Io\n\
+    import Ipe.Path as Path\n\n\
+    join : String -> String -> String\n\
+    join r c =\n\
+    \x20   case (Path.fromString r, Path.fromString c) of\n\
+    \x20       (Ok rootP, Ok childP) ->\n\
+    \x20           (case Path.under rootP childP of\n\
+    \x20               Ok p -> Path.toString p\n\
+    \x20               Err _ -> \"REFUSED\")\n\
+    \x20       _ -> \"SEAL\"\n\n\
+    joins : String\n\
+    joins = join \"/repo\" \"src/Main.ipe\" ++ \" \" ++ join \"/repo/\" \"a/\" ++ \" \" ++ join \"/repo\" \"/etc/passwd\" ++ \" \" ++ join \"/repo\" \".\" ++ \" \" ++ join \"/repo\" \"../etc\"\n\n\
+    main =\n\
+    \x20   case Path.fromString \"a/b\" of\n\
+    \x20       Ok rel ->\n\
+    \x20           Path.absolute rel\n\
+    \x20               |> Task.andThen (\\p -> Io.println (joins ++ \" \" ++ (if Path.isAbsolute p then \"ABS\" else \"REL\")))\n\
+    \x20       Err _ -> Io.println \"PATH_ERR\"\n";
+
+#[test]
+fn path_under_resolves_and_emits() {
+    let _ = compile_module_probe("path_under", PATH_UNDER_MAIN);
+}
+
+#[test]
+fn path_under_builds_and_runs() {
+    seal_module(
+        "path_under",
+        PATH_UNDER_MAIN,
+        "/repo/src/Main.ipe /repo/a REFUSED REFUSED SEAL ABS",
+    );
+}
+
 // ── Ipe.Url — typed, validated URLs (parse-don't-validate) ─────────
 // A valid URL parses and its typed accessors read back; an unparseable /
 // relative URL surfaces as a typed `Err` (NOT a silent accept); the builder
