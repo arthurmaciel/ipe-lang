@@ -189,6 +189,11 @@ pub mod random;
 // Its Ipê-facing helpers return `IpeTask`/`IpeResult` (defined in `core`, no
 // tokio dependency) and otherwise use only std, so it compiles without tokio.
 pub mod system;
+// `terminal_access` is always compiled (std-only, no crossterm): it is the one
+// typed "is an interactive terminal available" probe, shared by the `tui`
+// runtime guard (`TuiGuard::enter*`) and by `ipe-cli`'s pre-build gate over
+// `Shape::Tui`. Neither depends on the `tui` feature's crossterm/tokio stack.
+pub mod terminal_access;
 // wasm32: the pure future-combinator half of `Task.*` (`map`/`andThen`/
 // `mapError`/`succeed`/`fail`/`fromResult`/`andThenResult`/`onError`/`lazy`/
 // `sequence`) compiles + runs unchanged — no tokio dependency. The

@@ -355,6 +355,23 @@ impl From<&str> for IpeError {
     }
 }
 
+/// A generic `E: From<String>` error sink (as `tui_app`/`tui_app_ui` take)
+/// that can ALSO classify a refusal as `Unavailable` — the retryable kind —
+/// instead of folding every string into `Unexpected` through the blanket
+/// `From<String>` bridge above. Implemented only for `IpeError`: no call site
+/// instantiates those generic functions with any other `E`, so the extra
+/// bound costs nothing while keeping the "no terminal" refusal correctly
+/// kinded for the one type that ever carries it.
+pub trait FromUnavailable {
+    fn from_unavailable(message: String) -> Self;
+}
+
+impl FromUnavailable for IpeError {
+    fn from_unavailable(message: String) -> Self {
+        Self::unavailable(message)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

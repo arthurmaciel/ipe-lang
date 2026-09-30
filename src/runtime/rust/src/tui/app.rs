@@ -8,7 +8,9 @@
 //!
 //! No panic vectors: a `TuiGuard` restores the TTY (cooked mode, cursor, main
 //! screen) on Drop — normal exit AND panic unwind — so no path leaves the
-//! terminal wedged. Raw-mode failure returns `Err`; `TERM=dumb` is refused.
+//! terminal wedged. Missing an interactive terminal (piped stdio, `TERM=dumb`,
+//! no controlling terminal) is a typed, `Unavailable`-kinded refusal from
+//! `terminal_access::probe()`, checked before raw mode is ever entered.
 
 use super::super::core::{IpeResult, IpeTask, ok_res};
 #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
@@ -71,18 +73,64 @@ fn tui_teardown() {
 /// never panics.
 struct TuiGuard;
 
+/// Why `TuiGuard::enter*` refused to start a Tui session — typed so a caller
+/// can classify a "no terminal" refusal as `Unavailable` instead of folding
+/// every failure into `Unexpected` through a bare `String`.
+enum TuiEnterError {
+    /// `terminal_access::probe()` already named which fact failed, before any
+    /// raw-mode syscall ran.
+    NoTerminal(crate::terminal_access::NoTerminal),
+    /// A residual `enable_raw_mode` failure the probe did not predict; kept
+    /// with its raw OS context.
+    RawMode(std::io::Error),
+}
+
+impl TuiEnterError {
+    fn into_task_error<E: From<String> + crate::FromUnavailable>(self) -> E {
+        match self {
+            Self::NoTerminal(reason) => E::from_unavailable(reason.text().to_owned()),
+            Self::RawMode(e) => format!("Tui: enable raw mode: {e}").into(),
+        }
+    }
+}
+
+/// Classify a residual `enable_raw_mode` failure the probe did not catch.
+/// `ENXIO` ("no such device or address") means the OS found no controlling
+/// terminal post hoc, the same fact `NoControllingTerminal` names — so it maps
+/// to that typed refusal rather than staying an opaque `Unexpected`.
+#[cfg(unix)]
+fn classify_raw_mode_error(e: std::io::Error) -> TuiEnterError {
+    if e.raw_os_error() == rustix::io::Errno::NXIO.raw_os_error() {
+        TuiEnterError::NoTerminal(crate::terminal_access::NoTerminal::NoControllingTerminal)
+    } else {
+        TuiEnterError::RawMode(e)
+    }
+}
+
+#[cfg(not(unix))]
+fn classify_raw_mode_error(e: std::io::Error) -> TuiEnterError {
+    TuiEnterError::RawMode(e)
+}
+
 impl TuiGuard {
     /// String-view driver (`tui_app`, the raw-cell path) — no mouse reporting.
-    fn enter() -> Result<Self, String> {
+    fn enter() -> Result<Self, TuiEnterError> {
         Self::enter_with(false)
     }
     /// Element-view driver (`tui_app_ui` / `Tui.tea`) — enables mouse reporting
     /// for focus-click + wheel scroll.
-    fn enter_mouse() -> Result<Self, String> {
+    fn enter_mouse() -> Result<Self, TuiEnterError> {
         Self::enter_with(true)
     }
-    fn enter_with(mouse: bool) -> Result<Self, String> {
-        crossterm::terminal::enable_raw_mode().map_err(|e| format!("Tui: enable raw mode: {e}"))?;
+    fn enter_with(mouse: bool) -> Result<Self, TuiEnterError> {
+        if let crate::terminal_access::TerminalAccess::Refused(reason) =
+            crate::terminal_access::probe()
+        {
+            return Err(TuiEnterError::NoTerminal(reason));
+        }
+        if let Err(e) = crossterm::terminal::enable_raw_mode() {
+            return Err(classify_raw_mode_error(e));
+        }
         TUI_MOUSE.store(mouse, Ordering::SeqCst);
         TUI_RESTORE_ACTIVE.store(true, Ordering::SeqCst);
         // Register the teardown so a `System.exit` quit restores the terminal even
@@ -102,6 +150,87 @@ impl TuiGuard {
 impl Drop for TuiGuard {
     fn drop(&mut self) {
         tui_teardown();
+    }
+}
+
+// A `NoTerminal` refusal must surface as `Unavailable` (the runtime's
+// caller-should-retry-elsewhere kind), carrying the probe's own text
+// verbatim — never folded into `Unexpected` through the bare-`String`
+// `From` bridge a plain `format!(...).into()` would take.
+#[cfg(test)]
+mod tui_enter_error_tests {
+    use super::{TuiEnterError, classify_raw_mode_error};
+    use crate::error::{IpeError, IpeErrorKind};
+    use crate::terminal_access::NoTerminal;
+
+    #[test]
+    fn a_no_terminal_refusal_is_unavailable_with_the_probes_exact_text() {
+        for reason in [
+            NoTerminal::DumbTerm,
+            NoTerminal::NoStdoutTty,
+            NoTerminal::NoControllingTerminal,
+        ] {
+            let err: IpeError = TuiEnterError::NoTerminal(reason).into_task_error();
+            let IpeError::Error(kind, info) = err;
+            assert_eq!(
+                kind,
+                IpeErrorKind::Unavailable,
+                "{reason:?} must be Unavailable, not folded into Unexpected"
+            );
+            assert_eq!(
+                info.message,
+                reason.text(),
+                "the runtime error message must be exactly terminal_access's \
+                 refusal text — the CLI gate and the runtime guard show the \
+                 SAME text, so neither may restate or truncate it"
+            );
+        }
+    }
+
+    // The residual (non-terminal) raw-mode failure stays `Unexpected`: it is
+    // not a fact `terminal_access::probe()` predicted, so it keeps its raw OS
+    // context instead of being reclassified as a terminal refusal.
+    #[test]
+    fn a_residual_raw_mode_failure_stays_unexpected() {
+        let io_err = std::io::Error::other("boom");
+        let err: IpeError = TuiEnterError::RawMode(io_err).into_task_error();
+        let IpeError::Error(kind, info) = err;
+        assert_eq!(kind, IpeErrorKind::Unexpected);
+        assert!(
+            info.message.contains("enable raw mode"),
+            "got: {}",
+            info.message
+        );
+    }
+
+    // `classify_raw_mode_error` is exercised directly on non-unix targets
+    // (where ENXIO cannot be constructed): every residual error stays
+    // `RawMode`, never silently reclassified.
+    #[cfg(not(unix))]
+    #[test]
+    fn non_unix_raw_mode_errors_are_never_reclassified() {
+        let io_err = std::io::Error::other("boom");
+        assert!(matches!(
+            classify_raw_mode_error(io_err),
+            TuiEnterError::RawMode(_)
+        ));
+    }
+
+    // On unix, an ENXIO raw-mode failure is reclassified as the same
+    // `NoControllingTerminal` refusal the pre-check would have raised — the
+    // residual-failure path and the probe path converge on one fact.
+    #[cfg(unix)]
+    #[test]
+    fn unix_enxio_raw_mode_error_is_reclassified_as_no_controlling_terminal() {
+        let io_err = std::io::Error::from_raw_os_error(
+            rustix::io::Errno::NXIO
+                .raw_os_error()
+                .expect("NXIO carries a raw errno"),
+        );
+        assert!(matches!(
+            classify_raw_mode_error(io_err),
+            TuiEnterError::NoTerminal(NoTerminal::NoControllingTerminal)
+        ));
     }
 }
 
@@ -377,7 +506,7 @@ pub fn tui_app<Model, Msg, E, FInit, FUpdate, FView, FSubs>(
     subscriptions: FSubs,
 ) -> IpeTask<E, ()>
 where
-    E: Send + From<String> + 'static,
+    E: Send + From<String> + crate::FromUnavailable + 'static,
     Model: Clone + Send + 'static,
     Msg: Clone + Send + IpeStringify + 'static,
     FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
@@ -391,16 +520,9 @@ where
     // non-debugger build path (Arc<F>: Fn(...) when F: Fn(...)).
     let update = std::sync::Arc::new(update);
     Box::pin(async move {
-        if crate::system::read_env_var("TERM").as_deref() == Ok("dumb") {
-            return IpeResult::Err(
-                "Tui: TERM=dumb is not an interactive terminal"
-                    .to_string()
-                    .into(),
-            );
-        }
         let _guard = match TuiGuard::enter() {
             Ok(g) => g,
-            Err(e) => return IpeResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(e.into_task_error()),
         };
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CliEvent<Msg>>();
@@ -997,7 +1119,7 @@ pub fn tui_app_ui<Model, Msg, E, FInit, FUpdate, FView, FSubs>(
     subscriptions: FSubs,
 ) -> IpeTask<E, ()>
 where
-    E: Send + From<String> + 'static,
+    E: Send + From<String> + crate::FromUnavailable + 'static,
     Model: Clone + Send + 'static,
     Msg: Clone + Send + IpeStringify + 'static,
     FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
@@ -1008,16 +1130,9 @@ where
     // Wrap update in Arc — same rationale as tui_app.
     let update = std::sync::Arc::new(update);
     Box::pin(async move {
-        if crate::system::read_env_var("TERM").as_deref() == Ok("dumb") {
-            return IpeResult::Err(
-                "Tui: TERM=dumb is not an interactive terminal"
-                    .to_string()
-                    .into(),
-            );
-        }
         let _guard = match TuiGuard::enter_mouse() {
             Ok(g) => g,
-            Err(e) => return IpeResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(e.into_task_error()),
         };
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CliEvent<Msg>>();
