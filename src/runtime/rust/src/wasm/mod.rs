@@ -1229,3 +1229,31 @@ fn sync_dom_property(el: &web_sys::Element, key: &str, val: &str) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod routed_mount_tests {
+    use super::*;
+    use crate::web::route::Route;
+
+    /// A malformed literal in the route table refuses the mount before any DOM
+    /// access, naming the pattern, exactly as the server refuses to start.
+    #[test]
+    fn malformed_route_table_refuses_mount() {
+        let result = mount_app_routed(
+            |_req: WebReq| (0_i64, IpeCmd::<String>::None),
+            |_msg: String, model: i64| (model, IpeCmd::None),
+            |_model: i64| Html::<String>::HText(String::new()),
+            |_model: i64| IpeSub::<String>::None,
+            vec![
+                Route::new("/", |_| Some(())),
+                Route::new("/%zz", |_| Some(())),
+            ],
+            (),
+            |_page: (), model: i64| model,
+        );
+        assert!(
+            matches!(&result, Err(message) if message.contains("route pattern `/%zz` is malformed")),
+            "a malformed route table must refuse the mount: {result:?}"
+        );
+    }
+}
