@@ -95,10 +95,20 @@ When a lint or gate fires, fix the code — never the lint level, never the gate
 - **Escape hatch:** per-site `#[allow(lint)] // one-line why` only — never
   crate/gate-wide. Ledgered production allows carry `IPE-RUST-AUDIT:ACCEPTED`;
   `tools/panic-scan` is the inventory SSOT.
-- **`unsafe` is forbidden.** Exactly ONE sanctioned block: `prctl(PR_SET_PDEATHSIG)`
-  in `system::harden_child_parent_death` (the runtime's single parent-death floor —
-  every child-spawner, `console_proxy` and `ipe watch` alike, routes through it).
-  Every other module is `unsafe`-free.
+- **The use of `unsafe` is forbidden** (allowed exceptions are in the Ipê sandbox
+  and the runtime's two OS-boundary sites below). Every other module is
+  `unsafe`-free; a new block anywhere else is a violation.
+  - `src/compiler/sandbox` — the OS jails: `run_jail/linux.rs` (seccomp and sealed
+    memfds, fd flags), `run_jail/windows.rs` (Win32 job objects, restricted tokens,
+    SIDs, handles), `lib.rs` (seccomp fd, `pre_exec` fd inheritance for `bwrap`),
+    `build_jail.rs` (owning the seccomp fd).
+  - `src/runtime/rust/src/system.rs` — `prctl(PR_SET_PDEATHSIG)` in
+    `harden_child_parent_death`, the single parent-death floor every
+    child-spawner (`console_proxy`, `ipe watch`) routes through.
+  - `src/runtime/rust/src/io.rs` — terminal echo suppression for secret prompts
+    (`isatty`/`tcgetattr`/`tcsetattr`, feature `secret`, Unix only).
+  - Tests only: Edition 2024's `unsafe` `std::env::set_var`/`remove_var`, and
+    pty/pipe calls in `io.rs` tests.
 - **Edition 2024** — workspace crates and every emitted project.
 
 ## No `dyn Any` — concrete over generic
