@@ -1,6 +1,7 @@
-# Trust-root diff: an outside contributor's PR that touches a trust root
-# (any path `.github/CODEOWNERS` owns) fails until a code owner approves the
-# PR's current commit.
+# Trust-root diff: a PR that touches a trust root (any path
+# `.github/CODEOWNERS` owns) fails until a code owner approves the PR's current
+# commit, unless a code owner opened it from a branch of this repository and
+# authored every commit (a code owner cannot approve their own PR).
 #
 # `pull_request_target` runs THIS file from the base branch with a read-only
 # token, so a PR cannot rewrite the check that judges it. The job never checks

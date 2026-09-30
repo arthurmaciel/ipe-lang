@@ -14,9 +14,19 @@ typed refusal, never a silently different match.
 `check` (run by `.github/workflows/trust-root-diff.yml` on
 `pull_request_target` and `merge_group`) never sees head code: it reads the
 event payload GitHub wrote, then the PR, its file list, and its reviews over
-the REST API. A PR whose head lives outside this repository and that touches
-a trust root fails unless a code owner's latest decisive review APPROVES the
-PR's current head commit. Every ambiguity (a file list the API truncated, a
+the REST API. A PR that touches a trust root fails unless a code owner's latest
+decisive review APPROVES the PR's current head commit. A code owner cannot
+approve their own PR, so one PR passes without that review: a code owner's
+(GitHub `User` named in CODEOWNERS), from a branch of this repository, whose
+complete commit list ends at the head and whose every commit a code owner or
+this repository's workflow bot authored.
+
+LIMIT: the API links a commit to an account by its email, which any account
+with write access can set, and the workflow bot and `web-flow` stand for any
+write principal (a workflow granted `contents: write`, an API caller naming
+any author). The exemption therefore trusts every write principal alike; it
+separates owners from forks and from outside accounts, not from collaborators.
+Keep write access to the code owners. Every ambiguity (a file list the API truncated, a
 PR that moved since the event, an unparseable merge-queue ref, an HTTP error)
 fails closed.
 
@@ -216,6 +226,75 @@ def _sha(obj: object, *keys: str) -> str:
     return v
 
 
+@dataclass(frozen=True)
+class Owner:
+    """A code owner: a GitHub `User` whose login CODEOWNERS names."""
+
+    login: str
+
+
+@dataclass(frozen=True)
+class Other:
+    """Any other author: a collaborator, a fork, or a bot."""
+
+    login: str
+
+
+Author = Owner | Other
+
+_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}(?:\[bot\])?$")
+# The API caps a PR's commit listing at this many; past it the list is partial.
+MAX_PR_COMMITS = 250
+# `github-actions[bot]` authors and commits with a workflow token of this
+# repository (release-please's fallback token). Any write principal can produce
+# such a commit (a workflow granted `contents: write`, or a local git email), so
+# admitting it trusts write access, not the owners alone (see the LIMIT above).
+_WORKFLOW_BOT = "github-actions[bot]"
+# `web-flow` commits what an account does through GitHub's UI or API; the
+# caller chooses the author, so it too stands for any write principal.
+_TRUSTED_COMMITTERS = frozenset({"web-flow", _WORKFLOW_BOT})
+
+
+def parse_author(pr: dict, owners: frozenset[str]) -> Author:
+    """The PR author, read once from `user.login` + `user.type`. A missing or
+    malformed field is a refusal, never an `Other` that might later pass."""
+    login = _field(pr, "user", "login")
+    kind = _field(pr, "user", "type")
+    if not isinstance(login, str) or not _LOGIN_RE.match(login) or not isinstance(kind, str):
+        raise Refused("PR author has a malformed `user.login` or `user.type`")
+    if kind == "User" and login.casefold() in owners:
+        return Owner(login)
+    return Other(login)
+
+
+def _commit_login(commit: object, role: str) -> str | None:
+    """The GitHub account the API linked to a commit's author or committer,
+    or `None` when it linked none (an email no account claims)."""
+    user = commit.get(role) if isinstance(commit, dict) else None
+    login = user.get("login") if isinstance(user, dict) else None
+    return login.casefold() if isinstance(login, str) else None
+
+
+def commits_by_owners(pr: dict, commits: list, owners: frozenset[str]) -> bool:
+    """True iff the API listed every commit of the PR, the last is the PR's
+    head, and each one's author is a code owner or this repository's workflow
+    bot and its committer one of those or `web-flow`."""
+    expected = _int(pr, "commits")
+    if expected < 1 or expected > MAX_PR_COMMITS or len(commits) != expected:
+        return False
+    last = commits[-1]
+    if not isinstance(last, dict) or last.get("sha") != _sha(pr, "head", "sha"):
+        return False
+    authors = owners | {_WORKFLOW_BOT}
+    committers = owners | _TRUSTED_COMMITTERS
+    for c in commits:
+        author = _commit_login(c, "author")
+        committer = _commit_login(c, "committer")
+        if author is None or author not in authors or committer is None or committer not in committers:
+            return False
+    return True
+
+
 def is_outside(pr: dict) -> bool:
     """True unless the head branch provably lives in the base repository. A
     deleted head repository (`head.repo: null`) counts as outside."""
@@ -266,7 +345,7 @@ def owner_approved(reviews: list, owners: frozenset[str], head_sha: str) -> bool
     return any(r["state"] == "APPROVED" and r.get("commit_id") == head_sha for r in latest.values())
 
 
-def decide(roots: TrustRoots, pr: dict, files: list, reviews: list) -> str:
+def decide(roots: TrustRoots, pr: dict, files: list, reviews: list, commits: list) -> str:
     """Return a pass reason, or raise `Refused`."""
     head_sha = _sha(pr, "head", "sha")
     if _field(pr, "state") != "open":
@@ -274,14 +353,15 @@ def decide(roots: TrustRoots, pr: dict, files: list, reviews: list) -> str:
     touched = sorted(p for p in changed_paths(pr, files) if roots.is_trust_root(p))
     if not touched:
         return "no trust root touched"
-    if not is_outside(pr):
-        return f"{len(touched)} trust root(s) touched from a branch of this repository (ruleset review applies)"
+    author = parse_author(pr, roots.owners)
+    if isinstance(author, Owner) and not is_outside(pr) and commits_by_owners(pr, commits, roots.owners):
+        return f"{len(touched)} trust root(s) touched by code owner {author.login}"
     if owner_approved(reviews, roots.owners, head_sha):
         return f"{len(touched)} trust root(s) touched; code owner approved {head_sha}"
     shown = ", ".join(touched[:20]) + (" ..." if len(touched) > 20 else "")
     raise Refused(
-        f"PR from outside the repository touches trust root(s) [{shown}] without a code owner's "
-        f"approval of head {head_sha}; after that approval, re-run this job"
+        f"PR touches trust root(s) [{shown}] without a code owner's approval of head {head_sha}; "
+        f"after that approval, re-run this job"
     )
 
 
@@ -388,12 +468,13 @@ def run_check(roots: TrustRoots, event_name: str, event: dict, api: Api) -> str:
         raise Refused(f"PR head moved from {event_head} to {head_sha}; the newer run decides")
     files = api.get_all(f"pulls/{number}/files")
     reviews = api.get_all(f"pulls/{number}/reviews")
-    # The file list and reviews are read after the PR: a push in between
+    commits = api.get_all(f"pulls/{number}/commits")
+    # The file list, reviews, and commits are read after the PR: a push in between
     # would pair the older head (and an approval of it) with newer files.
     after = _sha(api.get(f"pulls/{number}"), "head", "sha")
     if after != head_sha:
         raise Refused(f"PR head moved from {head_sha} to {after} while it was read; the newer run decides")
-    return decide(roots, pr, files, reviews)
+    return decide(roots, pr, files, reviews, commits)
 
 
 def main(argv: list[str] | None = None) -> int:

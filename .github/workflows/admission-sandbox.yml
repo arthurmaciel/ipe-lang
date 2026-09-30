@@ -47,8 +47,11 @@ on:
   merge_group:
   workflow_dispatch: {}
 
+# A push run is keyed by its commit: GitHub replaces a queued run (and
+# cancel-in-progress cancels a running one) when a newer run joins its group,
+# so a per-ref push group would let one main commit go unbuilt.
 concurrency:
-  group: admission-sandbox-${{ github.ref }}
+  group: admission-sandbox-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 permissions:

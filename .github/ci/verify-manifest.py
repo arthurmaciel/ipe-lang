@@ -22,44 +22,38 @@ Checks performed
      nightly-gate's ancestors must surface in a gate or nightly-gate.  A
      status context produced by two jobs is refused outright — a required
      context must resolve to exactly one producer.
-  4. Required-set reconciliation (best-effort, non-fatal by default): every
-     manifest `gate` context should be in the branch-protection required set and
-     vice-versa.  Run with `--ruleset FILE` (a JSON dump of the ruleset's
-     required contexts) to make mismatches fatal; without it the manifest is the
-     SSOT and the check is skipped with a note.
+  4. Required-set derivation: `check_required_set.derive` accepts the
+     manifest (a `gate-external` names its `integration_id`; no other entry
+     does) and `ci/required-set.json` is exactly the derived
+     `{context, integration_id}` set.  The live ruleset is compared by
+     `check_required_set.py --fetch` (see `ci/RECONCILIATION.md`).
   5. `ci/deterministic-checks.json` — the SSOT of (job, check step) pairs
      consumed by ci.yml's `cancel-on-cheap-red` watcher — is well-formed (exact keys, non-empty strings with
      no surrounding whitespace, no duplicate job), its job set equals the
      watcher's `needs:`, and each pair's step is a `name:` of that job's steps
      in ci.yml.
-  6. sccache wiring: the ONLY sanctioned way a job gets sccache is
-     `uses: ./.github/actions/sccache`, a composite action that installs
-     `mozilla-actions/sccache-action` and writes RUSTC_WRAPPER/
-     SCCACHE_GHA_ENABLED to `$GITHUB_ENV` itself, so the wrapper can never
-     exist in a job without the binary that backs it. Every local `./` `uses:`
-     (step or composite step) is resolved on disk (action.yml, then
-     action.yaml) under a normalized, byte-exact id; an unresolved, ambiguous,
-     case-variant, non-composite, cyclic, or over-deep local action is
-     refused, as is a job-level `uses:` (reusable workflow). Outside the
-     composite this refuses: a raw `mozilla-actions/sccache-action` reference;
-     an `env:` key naming a rustc wrapper, a rustc replacement, or SCCACHE_*
-     at any scope; and any `env:` value, `run:`, `shell:`,
+  6. rustc wiring and cache hygiene: no job wraps or replaces rustc, so
+     every build compiles with the pinned toolchain's own rustc and no cache
+     stands between the source and the artifact a gate vouches for. Every
+     local `./` `uses:` (step or composite step) is resolved on disk
+     (action.yml, then action.yaml) under a normalized, byte-exact id; an
+     unresolved, ambiguous, case-variant, non-composite, cyclic, or
+     over-deep local action is refused, as is a job-level `uses:` (reusable
+     workflow). Refused anywhere: an `env:` key naming a rustc wrapper or a
+     rustc replacement at any scope; any `env:` value, `run:`, `shell:`,
      `defaults.run.shell`, or `with:` text naming one (or cargo's
      `rustc-wrapper` config spelling), or assembling its target through a
      GitHub Actions expression function (`format(`, `join(`, `toJSON(`, or
      `fromJSON(` over a literal; any letter case) instead of naming it
-     literally. Every workflow, manifest, and local
-     action is loaded through `strict_yaml` (see that module), so a
-     duplicate mapping key, a `<<` merge key, an anchor/alias, or an
-     explicit tag — each
-     legal to a plain YAML loader but resolved differently, or not at all,
-     from what GitHub Actions runs — is refused rather than silently
-     resolved. A job that reaches the composite,
-     directly or through local actions, may not own a step named in
-     `ci/deterministic-checks.json` (sccache's cache backend does network I/O
-     a deterministic check must never risk). The composite itself must equal
-     one canonical structure exactly. Malformed shapes are refused, never
-     skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
+     literally; and a `Swatinem/rust-cache` step whose `with.save-if` is not
+     exactly `RUST_CACHE_SAVE_IF`, so only `main` writes the dependency cache
+     and a pull request run restores it without evicting it. Every workflow,
+     manifest, and local action is loaded through `strict_yaml` (see that
+     module), so a duplicate mapping key, a `<<` merge key, an anchor/alias,
+     or an explicit tag — each legal to a plain YAML loader but resolved
+     differently, or not at all, from what GitHub Actions runs — is refused
+     rather than silently resolved. Malformed shapes are refused, never
+skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
      installed only through `./.github/actions/mold`, which checks the pinned
      release digest; a raw `rui314/setup-mold` reference is refused.
   7. CI inputs and runner command files, over the same traversal as check 6:
@@ -184,6 +178,80 @@ Checks performed
       assembled at run time, is not seen, and check 7's head-free exemption
       rests on the same audit); a hostile edit to a workflow is a
       `.github/**` change, which (b) makes code-owned.
+  13. Push concurrency: GitHub keeps at most one queued run per concurrency
+      group and replaces it when a newer run joins, whatever
+      `cancel-in-progress` says, so a group two pushes to one branch share
+      lets a newer commit discard an older one's run before it starts.  Every
+      push-triggered workflow's workflow- and job-level `group` is evaluated
+      for two pushes to the same branch (distinct `github.sha` and
+      `github.run_id`) and must differ.  The evaluator reads string, boolean
+      and null literals and a closed set of `github` properties with `==`,
+      `!=`, `&&`, `||` and `!`; any other context, function, number literal
+      or mixed-type comparison is refused.  `LATEST_WINS_PUSH_GROUPS` names the workflows whose run acts on the
+      branch head it reads at run time, each with its reason, and every entry
+      must be a push-triggered workflow.
+  14. One lock per dependency graph: a tracked `Cargo.lock` other than the
+      root one may resolve no path package (a workspace member or a path
+      dependency) the root `Cargo.lock` also resolves, since two locks over
+      one graph drift apart the first time an update rewrites only one of
+      them.  Every Dependabot `cargo` directory is a literal path (no glob)
+      holding a tracked `Cargo.lock` that passes that rule, and `/` is one of
+      them, so every update lands in the lock that governs the graph.
+  15. One `ipe` build: in ci.yml only `IPE_BUILD_PRODUCER` compiles the `ipe`
+      package.  Every cargo command a job runs (its `run:` steps and those of
+      each local composite action it `uses`) is read by
+      `cargo_invocation`: its directory follows `working-directory`, job and
+      workflow `defaults`, `cd`, subshells and `-C`; its selection is
+      `-p`/`--package`, `--bin`, `--manifest-path`, `--workspace`/`--all`, or
+      the package the directory holds (the virtual root, which has no
+      `default-members`, selects every member).  A
+      `build`/`run`/`rustc`/`install` selecting `ipe` in any other job is
+      refused, as is a command this check cannot read (an unknown flag or
+      subcommand, a package glob, `cargo` under an unread wrapper).  The
+      producer must build it and upload `IPE_BUILD_ARTIFACTS`; a job that
+      downloads one of them must list the producer in its own `needs:`.
+      LIMIT: after a `cd` to a run-time path (a variable, `cd -`), or in a
+      directory the checkout does not hold whose `Cargo.toml` its ignore
+      rules reserve for build output (an emitted crate), the manifest is not
+      known statically, so a command there that selects nothing by name is
+      not attributed.
+  16. Path-scoped coverage: a job whose `if:` reads a narrow
+      `needs.changes.outputs.<scope>` (a `change_class.SCOPES` scope other
+      than `code`) may skip on a PR only where that skip is proven harmless.
+      Every package its cargo commands select (read as in check 15: by name,
+      or by the member directory the command runs in or names) is closed
+      over its path dependencies in the root `Cargo.lock` (dev ones
+      included), and every tracked file under those crates' directories —
+      plus every existing path a `../` string literal in them reaches — must
+      force one of the job's scopes.  A scoped job that selects the whole
+      workspace, selects by `--bin` alone, or runs a command or package spec
+      this check cannot resolve, is refused.  Both `.yml` and `.yaml`
+      workflows are read.  LIMIT: a path built at run time (a bare `"../.."`
+      ancestor joined to a computed name, or no `../` literal at all), and a
+      cargo command after a `cd` to a run-time path, are not seen.
+  17. Drift checks see new files: no `run:` of a workflow (`.yml` or
+      `.yaml`) or of a local composite action, and no manifest `local:`
+      command, asserts regenerated output with a
+      `git diff`/`diff-index`/`diff-files` carrying `--exit-code` or
+      `--quiet`, which is blind to a file the generator writes that git does
+      not track yet; `tools/scripts/generated-unchanged.sh` (tracked changes
+      plus untracked files) is the one drift assertion.  Both spellings are
+      read by `drift_assertion.parse`, the parser the PROSE guard shares.
+      LIMIT: a `git diff` reached through an alias or a script is not seen.
+  18. Dependabot PR budget: every `updates` entry declares its own integer
+      `open-pull-requests-limit` of at least 1 (Dependabot's implicit
+      default is 5, and 0 silently disables the ecosystem), and the limits
+      summed over every entry's directories stay within
+      `DEPENDABOT_OPEN_PR_BUDGET`, so update PRs cannot crowd the open-PR
+      budget the merge queue is sized for.  LIMIT: security-update PRs obey
+      Dependabot's own fixed ceiling, not this key, and are not bounded here.
+  19. Workspace inheritance: every root `[workspace] members` entry (a
+      literal path, no glob) sets `edition.workspace = true` and a `[lints]`
+      table of only `workspace = true`, so the root edition and clippy policy
+      govern it.  `WORKSPACE_INHERIT_EXEMPT` names the members that keep
+      their own, each with its reason; an exempt member's literal edition
+      must equal the workspace edition and it must carry its own `[lints]`
+      table, and an entry that is no member or inherits anyway is refused.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
 `git ls-files` locally to list tracked paths.
@@ -204,6 +272,11 @@ import sys
 from dataclasses import dataclass, replace
 
 try:
+    import tomllib
+except ImportError:  # pragma: no cover - Python < 3.11; CI runs 3.11+
+    import tomli as tomllib  # type: ignore[no-redef]
+
+try:
     import yaml
 except ImportError:  # pragma: no cover - CI always has PyYAML
     print("verify-manifest: PyYAML is required (pip install pyyaml)", file=sys.stderr)
@@ -213,7 +286,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import strict_yaml  # noqa: E402  # the shared strict loader, SSOT for every YAML load below
 import gha_expr  # noqa: E402  # the one GitHub Actions expression parser
 import shell_lex  # noqa: E402  # the one quote-removing shell lexer
+import change_class  # noqa: E402  # the path-scope classifier, SSOT for every scope's patterns
 import trust_roots  # noqa: E402  # the CODEOWNERS trust-root parser, shared with trust-root-diff.yml
+import drift_assertion  # noqa: E402  # the one drift-assertion parser, shared with change_class
+import cargo_invocation  # noqa: E402  # the one cargo-invocation reader, checks 15 and 16
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Both extensions: a workflow (or, for check 6, a local composite action) is a
@@ -236,9 +312,10 @@ HEAVY_SHARD_ARTIFACT = "nextest-archive"
 _STATUS_FN = re.compile(r"\b(always|failure|cancelled)\s*\(", re.IGNORECASE)
 CANCEL_WATCHER_JOB_ID = "cancel-on-cheap-red"
 
-SCCACHE_ACTION_REPO = "mozilla-actions/sccache-action"
-SCCACHE_ACTION_PREFIX = SCCACHE_ACTION_REPO + "@"
-SCCACHE_COMPOSITE_USES = "./.github/actions/sccache"
+# The dependency cache is written from `main` only: a pull request run
+# restores it and never evicts it with a branch-local save.
+RUST_CACHE_REPO = "Swatinem/rust-cache"
+RUST_CACHE_SAVE_IF = "${{ github.ref == 'refs/heads/main' }}"
 # mold is installed only by the local composite, which pins the release digest.
 RAW_MOLD_ACTION_REPO = "rui314/setup-mold"
 MOLD_COMPOSITE_USES = "./.github/actions/mold"
@@ -253,71 +330,36 @@ MOLD_INSTALL_WORD_RE = re.compile(r"(?:^|[|;&(]\s*|(?<![A-Za-z0-9_-])sudo\s+)(?:
 # `/` (a subpath), so `owner/repo/sub@ref` names the same action as
 # `owner/repo@ref`.
 USES_REPO_RE = re.compile(r"([^/@]+/[^/@]+)(?=[/@])")
-# Identity of a local action: its repo-root-relative path, normalized
-# (`./x/`, `./x`, `./a/../x` are one path) and byte-exact. Two paths that are
-# case-fold-equal but not byte-equal are refused outright (macOS and Windows
-# runners resolve them to one directory), so identity never needs folding.
-SCCACHE_COMPOSITE_ID = posixpath.normpath(SCCACHE_COMPOSITE_USES[2:])
-SCCACHE_WRAPPER_VAR = "RUSTC_WRAPPER"
-SCCACHE_GHA_VAR = "SCCACHE_GHA_ENABLED"
-# SSOT: every env-var name that hands rustc a wrapper.
-SCCACHE_WRAPPER_KEY_NAMES = (
-    SCCACHE_WRAPPER_VAR,
+# No job wraps or replaces rustc. SSOT: every env-var name that hands rustc a
+# wrapper.
+RUSTC_WRAPPER_VAR = "RUSTC_WRAPPER"
+RUSTC_WRAPPER_KEY_NAMES = (
+    RUSTC_WRAPPER_VAR,
     "CARGO_BUILD_RUSTC_WRAPPER",
     "RUSTC_WORKSPACE_WRAPPER",
     "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
 )
 # SSOT: every env-var name that replaces rustc itself.
 RUSTC_REPLACING_KEY_NAMES = ("RUSTC", "CARGO_BUILD_RUSTC")
-SCCACHE_ENV_KEYS = {k.casefold() for k in SCCACHE_WRAPPER_KEY_NAMES + RUSTC_REPLACING_KEY_NAMES} | {
-    SCCACHE_GHA_VAR.casefold()
-}
-# Any wrapper-shaped key above, OR a generic SCCACHE_* key.
-SCCACHE_KEY_RE = re.compile(
-    "(?:" + "|".join(re.escape(k) for k in SCCACHE_WRAPPER_KEY_NAMES) + r"|SCCACHE_[A-Z0-9_]*)",
-    re.IGNORECASE,
-)
+RUSTC_WIRING_ENV_KEYS = frozenset(k.casefold() for k in RUSTC_WRAPPER_KEY_NAMES + RUSTC_REPLACING_KEY_NAMES)
 # Loose refusal predicate over free text (`run:`, `shell:`, `defaults.run.
-# shell`, `with:` and `env:` values): any wrapper/sccache-shaped key; cargo's
-# own `rustc-wrapper`/`rustc-workspace-wrapper` config spelling (`cargo
-# --config build.rustc-wrapper=...`, a written `.cargo/config.toml`); a
-# rustc-replacing key (`CARGO_BUILD_RUSTC` in any case, `RUSTC` as an
-# upper-case word, `rustc` in any case and after any character — a printf
-# `\n` escape included — directly followed by `=` or `:`). No `$GITHUB_ENV`
-# is required — an inline `KEY=v cmd`, an `export`, a `shell: env KEY=v bash
-# {0}`, or an `env:` value a `run:` later expands into a write wires rustc
-# just as well. Over-strict by design: a refused false positive is cheap, a
-# missed wiring is not.
-SCCACHE_WIRING_TEXT_RE = re.compile(
-    SCCACHE_KEY_RE.pattern
+# shell`, `with:` and `env:` values): any wrapper key above; cargo's own
+# `rustc-wrapper`/`rustc-workspace-wrapper` config spelling (`cargo --config
+# build.rustc-wrapper=...`, a written `.cargo/config.toml`); a rustc-replacing
+# key (`CARGO_BUILD_RUSTC` in any case, `RUSTC` as an upper-case word, `rustc`
+# in any case and after any character — a printf `\n` escape included —
+# directly followed by `=` or `:`). No `$GITHUB_ENV` is required — an inline
+# `KEY=v cmd`, an `export`, a `shell: env KEY=v bash {0}`, or an `env:` value a
+# `run:` later expands into a write wires rustc just as well. Over-strict by
+# design: a refused false positive is cheap, a missed wiring is not.
+RUSTC_WIRING_TEXT_RE = re.compile(
+    "(?:" + "|".join(re.escape(k) for k in RUSTC_WRAPPER_KEY_NAMES) + ")"
     + r"|rustc[-_](?:workspace[-_])?wrapper"
     + r"|CARGO_BUILD_RUSTC"
     + r"|(?-i:(?<![A-Za-z0-9_])RUSTC(?![A-Za-z0-9_]))"
     + r"|rustc\s*[=:]",
     re.IGNORECASE,
 )
-# The sanctioned composite is exactly ONE canonical structure: an install
-# step `{uses: mozilla-actions/sccache-action@<40-hex commit sha>}`, then `SCCACHE_WIRE_STEP`
-# byte-exact. Its wiring is proven by equality, never by pattern.
-SCCACHE_INSTALL_USES_RE = re.compile(re.escape(SCCACHE_ACTION_PREFIX) + r"[0-9a-f]{40}\Z")
-# The cache is an accelerator, never a gate: sccache refuses every compile when
-# its server cannot start (the backend's startup read failing), so rustc is
-# wired through it only once the server is up, and a server that never idles
-# out cannot be restarted into that failure mid-job. Past startup, a backend
-# I/O error compiles locally instead of failing the build.
-SCCACHE_WIRE_RUN = (
-    "set -euo pipefail\n"
-    f"if {SCCACHE_GHA_VAR}=true SCCACHE_IDLE_TIMEOUT=0 sccache --start-server; then\n"
-    f'  echo "{SCCACHE_WRAPPER_VAR}=sccache" >> "$GITHUB_ENV"\n'
-    f'  echo "{SCCACHE_GHA_VAR}=true" >> "$GITHUB_ENV"\n'
-    '  echo "SCCACHE_IDLE_TIMEOUT=0" >> "$GITHUB_ENV"\n'
-    '  echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "$GITHUB_ENV"\n'
-    "else\n"
-    '  echo "::warning::sccache server did not start; building without the compile cache"\n'
-    "fi\n"
-)
-SCCACHE_WIRE_STEP = {"name": "Wire rustc through sccache", "shell": "bash", "run": SCCACHE_WIRE_RUN}
-SCCACHE_COMPOSITE_DOC_KEYS = frozenset({"name", "description", "runs"})
 # Check 7 — a third-party input is identified by content, never by a movable
 # name: an action by its full commit SHA (a tag or branch can be re-pointed
 # upstream), a docker image by its sha256 digest.
@@ -515,7 +557,7 @@ LEGACY_COMMAND_RE = re.compile(r"::\s*(?:set-env|add-path|save-state|set-output)
 STRING_SCALAR_DEPTH_LIMIT = 64
 
 # Bound on local-action nesting; a chain deeper than this is refused, never
-# assumed not to reach the sccache composite.
+# assumed closed.
 LOCAL_ACTION_DEPTH_LIMIT = 20
 
 
@@ -761,14 +803,14 @@ def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
 def _refuse_shape(loc: str, what: str, expected: str, got: object, errors: list[str]) -> None:
     errors.append(
         f"{loc}: {what} is not {expected} (got {type(got).__name__}: {got!r}) — "
-        "cannot verify it carries no sccache wiring; refused fail-closed"
+        "cannot be audited; refused fail-closed"
     )
 
 
 @dataclass(frozen=True)
 class Step:
     """One workflow (or composite action) step, typed just enough for the
-    sccache-wiring checks: `uses:`/`name:`/`run:`/`shell:` are read nowhere
+    step checks: `uses:`/`name:`/`run:`/`shell:` are read nowhere
     else in this module via raw `.get()`.
     """
 
@@ -806,7 +848,7 @@ class Step:
 def _typed_steps(container: dict, loc: str, errors: list[str]) -> list[Step]:
     """`steps:` of a job or composite `runs:` as typed steps. Absent is empty;
     present but not a list, or an entry that is not a mapping, is refused —
-    an unreadable step cannot be proven free of sccache wiring."""
+    an unreadable step cannot be audited."""
     if "steps" not in container:
         return []
     raw = container["steps"]
@@ -844,18 +886,18 @@ class Workspace(enum.Enum):
 
 
 @dataclass(frozen=True)
-class SccacheWorkflow:
+class Workflow:
     fname: str
     doc: dict
     jobs: list[WorkflowJob]
     workspace: Workspace
 
 
-def _load_sccache_workflows(root: str, errors: list[str]) -> list[SccacheWorkflow]:
+def _load_workflows(root: str, errors: list[str]) -> list[Workflow]:
     """Every workflow (`*.yml` and `*.yaml`), typed. A document that is not a
     mapping, a `jobs:` that is not a non-empty mapping, or a job that is not a
     mapping is refused, never skipped."""
-    out: list[SccacheWorkflow] = []
+    out: list[Workflow] = []
     paths = sorted(
         p
         for pattern in ("*.yml", "*.yaml")
@@ -884,7 +926,7 @@ def _load_sccache_workflows(root: str, errors: list[str]) -> list[SccacheWorkflo
             else:
                 _refuse_shape(f"{fname}: job {str(jid)!r}", "the job", "a mapping", j, errors)
         workspace = Workspace.NONE if head_free(doc, text) else Workspace.CHECKOUT
-        out.append(SccacheWorkflow(fname, doc, jobs, workspace))
+        out.append(Workflow(fname, doc, jobs, workspace))
     return out
 
 
@@ -1463,6 +1505,844 @@ def check_pull_request_target(errors: list[str], root: str = REPO_ROOT) -> None:
             errors.append(f"{fname}: a pull_request_target workflow {v}")
 
 
+# Push workflows whose group is deliberately one per workflow: each run acts
+# on the branch head it reads at run time, so a newer push's run supersedes an
+# older queued one without losing any commit's outcome.
+LATEST_WINS_PUSH_GROUPS = {
+    "release-please.yml": "recomputes the release PR from the head of main",
+    "docs-pages.yml": "deploys the head of main to Pages",
+}
+
+# The `github` properties a concurrency group may read, as two distinct pushes
+# to the same branch see them; any other context or property is refused.
+_PUSH_CONTEXTS = tuple(
+    {
+        "event_name": "push",
+        "ref": "refs/heads/main",
+        "ref_name": "main",
+        "head_ref": "",
+        "base_ref": "",
+        "repository": "o/r",
+        "workflow": "w",
+        "sha": sha,
+        "run_id": run_id,
+    }
+    for sha, run_id in (("a" * 40, "1"), ("b" * 40, "2"))
+)
+
+
+class _Unevaluable(Exception):
+    pass
+
+
+def _truthy(v: object) -> bool:
+    return v not in (False, None, "")
+
+
+def _as_text(v: object) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v)
+
+
+def _eval_push(e: gha_expr.Expr, ctx: dict[str, str]) -> object:
+    """Evaluate `e` under one push context: literals, the `github` properties
+    of `_PUSH_CONTEXTS`, `==`/`!=` on same-typed operands (strings compared
+    without case), `&&`/`||` with the Actions value semantics, and `!`.
+    Anything else raises `_Unevaluable`."""
+    if isinstance(e, gha_expr.Literal):
+        if not e.is_string and isinstance(e.value, str):
+            raise _Unevaluable("uses a number literal, whose coercion this check does not evaluate")
+        return e.value
+    if isinstance(e, gha_expr.ContextRef):
+        if (
+            e.ctx.casefold() != "github"
+            or len(e.path) != 1
+            or not isinstance(e.path[0], gha_expr.Prop)
+            or e.path[0].name.casefold() not in ctx
+        ):
+            raise _Unevaluable("reads a context this check cannot resolve for a push")
+        return ctx[e.path[0].name.casefold()]
+    if isinstance(e, gha_expr.Unary) and e.op == "!":
+        return not _truthy(_eval_push(e.operand, ctx))
+    if isinstance(e, gha_expr.Binary) and e.op in ("&&", "||"):
+        left = _eval_push(e.left, ctx)
+        if _truthy(left) == (e.op == "||"):
+            return left
+        return _eval_push(e.right, ctx)
+    if isinstance(e, gha_expr.Binary) and e.op in ("==", "!="):
+        left, right = _eval_push(e.left, ctx), _eval_push(e.right, ctx)
+        if type(left) is not type(right):
+            raise _Unevaluable("compares operands of different types")
+        if isinstance(left, str) and isinstance(right, str):
+            same = left.casefold() == right.casefold()
+        else:
+            same = left == right
+        return same == (e.op == "==")
+    raise _Unevaluable("uses an operator or function this check does not evaluate")
+
+
+def _push_group(text: str, ctx: dict[str, str]) -> str:
+    parsed = gha_expr.parse_template(text)
+    if isinstance(parsed, gha_expr.Refusal):
+        raise _Unevaluable(parsed.why)
+    out: list[str] = []
+    at = 0
+    for e, (start, end) in zip(parsed.exprs, parsed.spans):
+        out.append(text[at:start])
+        out.append(_as_text(_eval_push(e, ctx)))
+        at = end
+    out.append(text[at:])
+    return "".join(out)
+
+
+def check_push_concurrency(errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 13 (see the module docstring). Unparseable workflows are refused
+    by check 6."""
+    seen: set[str] = set()
+    for path in sorted(p for pattern in ("*.yml", "*.yaml") for p in glob.glob(os.path.join(root, "workflows", pattern))):
+        fname = os.path.basename(path)
+        try:
+            with open(path) as f:
+                doc = strict_yaml.safe_load(f)
+        except yaml.YAMLError:
+            continue
+        if not isinstance(doc, dict):
+            continue
+        triggers = _triggers(doc)
+        if triggers is None:
+            errors.append(f"{fname}: `on:` has no recognised shape; check 13 cannot tell whether it runs on push")
+            continue
+        if "push" not in triggers:
+            continue
+        seen.add(fname)
+        if fname in LATEST_WINS_PUSH_GROUPS:
+            continue
+        jobs = doc.get("jobs")
+        sites = [("workflow", doc.get("concurrency"))] + [
+            (f"job {jid!r}", job.get("concurrency"))
+            for jid, job in (jobs.items() if isinstance(jobs, dict) else ())
+            if isinstance(job, dict)
+        ]
+        for where, conc in sites:
+            if conc is None:
+                continue
+            group = conc.get("group") if isinstance(conc, dict) else conc
+            if not isinstance(group, str):
+                errors.append(f"{fname}: {where} `concurrency:` has no string `group`")
+                continue
+            try:
+                a, b = (_push_group(group, ctx) for ctx in _PUSH_CONTEXTS)
+            except _Unevaluable as why:
+                errors.append(f"{fname}: {where} concurrency group {group!r} {why}; check 13 cannot prove each push commit gets its own group")
+                continue
+            if a == b:
+                errors.append(
+                    f"{fname}: {where} concurrency group {group!r} is the same for two pushes to one branch — "
+                    "a newer push replaces the older commit's queued run, so that commit never reports; "
+                    "key push groups by `github.sha`"
+                )
+    for fname in sorted(set(LATEST_WINS_PUSH_GROUPS) - seen):
+        errors.append(f"check 13: LATEST_WINS_PUSH_GROUPS names {fname}, which is not a push-triggered workflow")
+
+
+_LOCK_PACKAGE = re.compile(r"^\[\[package\]\]\s*$", re.M)
+_LOCK_FIELD = re.compile(r'^(name|source) = "([^"]*)"\s*$', re.M)
+
+
+def _lock_path_packages(text: str) -> set[str] | str:
+    """The path packages (no `source`) a `Cargo.lock` resolves, or why the
+    text is refused as a lock."""
+    blocks = _LOCK_PACKAGE.split(text)
+    if len(blocks) < 2:
+        return "declares no [[package]]"
+    names: set[str] = set()
+    for i, block in enumerate(blocks[1:], 1):
+        body = block.split("\n[", 1)[0]
+        fields: dict[str, list[str]] = {}
+        for m in _LOCK_FIELD.finditer(body):
+            fields.setdefault(m.group(1), []).append(m.group(2))
+        name = fields.get("name", [])
+        if len(name) != 1 or len(fields.get("source", [])) > 1:
+            return f"[[package]] #{i} has no single name/source"
+        if not fields.get("source"):
+            names.add(name[0])
+    return names
+
+
+def check_one_lock_per_graph(
+    errors: list[str], root: str = REPO_ROOT, tracked: list[str] | None = None
+) -> None:
+    """Check 14 (see the module docstring). `tracked` defaults to the
+    repository's `git ls-files`."""
+    repo = os.path.dirname(root)
+    if tracked is None:
+        tracked = _tracked_paths(repo)
+        if tracked is None:
+            errors.append("check 14: `git ls-files` failed; cannot prove one lock per dependency graph")
+            return
+    tracked_set = set(tracked)
+    locks = sorted(p for p in tracked if posixpath.basename(p) == "Cargo.lock")
+    if "Cargo.lock" not in locks:
+        errors.append("check 14: the root Cargo.lock is not tracked — the workspace graph has no lock")
+        return
+    packages: dict[str, set[str]] = {}
+    for lock in locks:
+        try:
+            with open(os.path.join(repo, lock), encoding="utf-8") as f:
+                parsed = _lock_path_packages(f.read())
+        except (OSError, UnicodeDecodeError) as e:
+            parsed = f"unreadable ({e})"
+        if isinstance(parsed, str):
+            errors.append(f"check 14: {lock}: {parsed}; refused")
+            continue
+        packages[lock] = parsed
+    root_pkgs = packages.get("Cargo.lock")
+    if root_pkgs is None:
+        return
+    authoritative = {"Cargo.lock"}
+    for lock, pkgs in packages.items():
+        if lock == "Cargo.lock":
+            continue
+        shared = sorted(pkgs.intersection(root_pkgs))
+        if shared:
+            errors.append(
+                f"check 14: {lock} resolves {', '.join(shared)}, which the root Cargo.lock "
+                "also resolves — one dependency graph with two locks drifts the first "
+                "time an update rewrites only one; make the crate a workspace member "
+                "and delete this lock"
+            )
+        else:
+            authoritative.add(lock)
+
+    path = os.path.join(root, "dependabot.yml")
+    try:
+        with open(path) as f:
+            doc = strict_yaml.safe_load(f)
+    except FileNotFoundError:
+        errors.append("check 14: .github/dependabot.yml is missing — nothing proposes updates to the root Cargo.lock")
+        return
+    except (OSError, yaml.YAMLError) as e:
+        errors.append(f"check 14: .github/dependabot.yml refused: {e}")
+        return
+    updates = doc.get("updates") if isinstance(doc, dict) else None
+    if not isinstance(updates, list):
+        errors.append("check 14: .github/dependabot.yml has no `updates` list; refused")
+        return
+    dirs: list[object] = []
+    for i, u in enumerate(updates):
+        if not isinstance(u, dict):
+            errors.append(f"check 14: .github/dependabot.yml updates[{i}] is not a mapping; refused")
+            continue
+        if u.get("package-ecosystem") != "cargo":
+            continue
+        one, many = u.get("directory"), u.get("directories")
+        if (one is None) == (many is None) or (many is not None and not isinstance(many, list)):
+            errors.append(
+                f"check 14: .github/dependabot.yml updates[{i}] (cargo) needs exactly one of "
+                "`directory` or a `directories` list; refused"
+            )
+            continue
+        dirs.extend([one] if many is None else many)
+    for d in dirs:
+        if not isinstance(d, str) or not d.startswith("/") or any(c in d for c in "*?[{"):
+            errors.append(
+                f"check 14: .github/dependabot.yml cargo directory {d!r} is not a literal "
+                "absolute path; refused"
+            )
+            continue
+        rel = d.strip("/")
+        lock = posixpath.join(posixpath.normpath(rel), "Cargo.lock") if rel else "Cargo.lock"
+        if lock not in tracked_set:
+            errors.append(
+                f"check 14: .github/dependabot.yml cargo directory {d!r} holds no tracked "
+                "Cargo.lock — its updates would rewrite a manifest no lock of its own governs"
+            )
+        elif lock not in authoritative:
+            errors.append(
+                f"check 14: .github/dependabot.yml cargo directory {d!r} updates {lock}, a "
+                "second lock over the root workspace graph; refused"
+            )
+    if "/" not in dirs:
+        errors.append("check 14: .github/dependabot.yml proposes no cargo update for the root Cargo.lock")
+
+
+# The most Dependabot version-update PRs open at once, over every ecosystem:
+# the repository keeps at most three PRs open, so update PRs may hold all of
+# that budget only when nothing else is in flight.
+DEPENDABOT_OPEN_PR_BUDGET = 3
+
+
+def check_dependabot_pr_budget(errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 18 (see the module docstring)."""
+    path = os.path.join(root, "dependabot.yml")
+    try:
+        with open(path) as f:
+            doc = strict_yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as e:
+        errors.append(f"check 18: .github/dependabot.yml refused: {e}")
+        return
+    updates = doc.get("updates") if isinstance(doc, dict) else None
+    if not isinstance(updates, list):
+        errors.append("check 18: .github/dependabot.yml has no `updates` list; refused")
+        return
+    total = 0
+    for i, u in enumerate(updates):
+        eco = u.get("package-ecosystem") if isinstance(u, dict) else None
+        limit = u.get("open-pull-requests-limit") if isinstance(u, dict) else None
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            errors.append(
+                f"check 18: .github/dependabot.yml updates[{i}] ({eco}) needs an integer "
+                f"`open-pull-requests-limit` of at least 1, not {limit!r} — an absent limit "
+                "means 5 and 0 disables its updates; refused"
+            )
+            continue
+        many = u.get("directories")
+        total += limit * (len(many) if isinstance(many, list) and many else 1)
+    if total > DEPENDABOT_OPEN_PR_BUDGET:
+        errors.append(
+            f"check 18: .github/dependabot.yml allows {total} open update PRs over its "
+            f"directories, more than DEPENDABOT_OPEN_PR_BUDGET ({DEPENDABOT_OPEN_PR_BUDGET}); "
+            "lower an `open-pull-requests-limit`"
+        )
+
+
+# Check 19: the workspace members that keep their own edition and lint table,
+# each with its reason. Every other member inherits both from the root.
+WORKSPACE_INHERIT_EXEMPT = {
+    "src/runtime/rust": (
+        "vendored verbatim into every emitted project, where no workspace root "
+        "exists to inherit from; it carries its own stricter runtime lint table"
+    ),
+    "tools/ipe-ffi-inspector": (
+        "a CLI whose exit-on-error paths use unwrap/expect/panic under the "
+        "token-level panic-scan gate, so its own table relaxes those three lints"
+    ),
+}
+
+
+def _load_toml(path: str) -> dict[str, object] | str:
+    """`path` parsed as TOML, or the reason it cannot be."""
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        return "is missing"
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        return f"is unreadable ({e})"
+
+
+def check_workspace_inheritance(errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 19 (see the module docstring)."""
+    repo = os.path.dirname(root)
+    top = _load_toml(os.path.join(repo, "Cargo.toml"))
+    if isinstance(top, str):
+        errors.append(f"check 19: the root Cargo.toml {top}; refused")
+        return
+    ws = top.get("workspace")
+    members = ws.get("members") if isinstance(ws, dict) else None
+    pkg = ws.get("package") if isinstance(ws, dict) else None
+    edition = pkg.get("edition") if isinstance(pkg, dict) else None
+    lints = ws.get("lints") if isinstance(ws, dict) else None
+    if not isinstance(members, list) or not isinstance(edition, str) or not isinstance(lints, dict) or not lints:
+        errors.append(
+            "check 19: the root Cargo.toml needs a `[workspace] members` list, a "
+            "`[workspace.package] edition` and a `[workspace.lints]` table; refused"
+        )
+        return
+    seen: set[str] = set()
+    for m in members:
+        if not isinstance(m, str) or not m or any(c in m for c in "*?[{") or posixpath.normpath(m) != m:
+            errors.append(f"check 19: workspace member {m!r} is not a literal normalized path; refused")
+            continue
+        seen.add(m)
+        where = f"{m}/Cargo.toml"
+        doc = _load_toml(os.path.join(repo, m, "Cargo.toml"))
+        if isinstance(doc, str):
+            errors.append(f"check 19: {where} {doc}; refused")
+            continue
+        package = doc.get("package")
+        own_edition = package.get("edition") if isinstance(package, dict) else None
+        own_lints = doc.get("lints")
+        if m in WORKSPACE_INHERIT_EXEMPT:
+            if own_edition == {"workspace": True} and own_lints == {"workspace": True}:
+                errors.append(
+                    f"check 19: WORKSPACE_INHERIT_EXEMPT names {m!r}, which inherits the "
+                    "workspace edition and lints anyway; drop the stale exemption"
+                )
+            elif own_edition != edition:
+                errors.append(
+                    f"check 19: {where} is exempt from inheriting, so its literal edition "
+                    f"must equal the workspace's {edition!r}, not {own_edition!r}"
+                )
+            elif not isinstance(own_lints, dict) or not own_lints or "workspace" in own_lints:
+                errors.append(f"check 19: {where} is exempt from inheriting, so it must carry its own `[lints]` table")
+            continue
+        if own_edition != {"workspace": True}:
+            errors.append(
+                f"check 19: {where} sets edition {own_edition!r}; a workspace member "
+                "inherits it (`edition.workspace = true`)"
+            )
+        if own_lints != {"workspace": True}:
+            errors.append(
+                f"check 19: {where} does not inherit the workspace lint policy; it needs "
+                "`[lints]` with only `workspace = true`"
+            )
+    for m in sorted(set(WORKSPACE_INHERIT_EXEMPT) - seen):
+        errors.append(f"check 19: WORKSPACE_INHERIT_EXEMPT names {m!r}, which is not a workspace member; drop it")
+
+
+IPE_BUILD_PRODUCER = "build-tools"
+IPE_BUILD_ARTIFACTS = frozenset({"ci-ipe-release", "ci-build-tools"})
+IPE_RELEASE_ARTIFACT = "ci-ipe-release"
+IPE_PACKAGE = "ipe"
+IPE_PACKAGE_DIR = "src/ipe-cli"
+# Cargo subcommands that compile the selected package's binary.
+_CARGO_COMPILES = frozenset({"build", "run", "rustc", "install"})
+# Nesting bound for a composite action whose steps use another local action.
+LOCAL_ACTION_DEPTH_LIMIT = 4
+WORKFLOW_PATTERNS = ("*.yml", "*.yaml")
+
+
+def _workflow_files(root: str) -> list[str]:
+    """Every workflow file under `root`, both extensions."""
+    return sorted(f for pat in WORKFLOW_PATTERNS for f in glob.glob(os.path.join(root, "workflows", pat)))
+
+
+def _local_action_files(root: str) -> list[str]:
+    """Every local composite action definition under `root`, both extensions."""
+    return sorted(
+        f for name in ("action.yml", "action.yaml") for f in glob.glob(os.path.join(root, "actions", "*", name))
+    )
+
+
+def _names_ipe_dir(path: str) -> bool:
+    """`path` (a manifest or a crate directory) is the `ipe` package's."""
+    p = posixpath.normpath(path.removesuffix("/Cargo.toml") if path.endswith("/Cargo.toml") else path)
+    return p == IPE_PACKAGE_DIR or p.endswith("/" + IPE_PACKAGE_DIR)
+
+
+def _default_wd(container: dict) -> str | None:
+    defaults = container.get("defaults")
+    run = defaults.get("run") if isinstance(defaults, dict) else None
+    wd = run.get("working-directory") if isinstance(run, dict) else None
+    return wd if isinstance(wd, str) else None
+
+
+def _steps_cargo(
+    steps: object, repo: str, wd: str | None, depth: int = 0
+) -> list[cargo_invocation.Found]:
+    """Every cargo invocation `steps` run, each with its directory: every
+    `run:` (here-document bodies included) from its `working-directory` (else
+    `wd`), and the steps of each local composite action a step `uses`."""
+    out: list[cargo_invocation.Found] = []
+    for st in steps if isinstance(steps, list) else []:
+        if not isinstance(st, dict):
+            continue
+        uses = st.get("uses")
+        if isinstance(uses, str) and uses.startswith("./"):
+            target = posixpath.normpath(uses.split("@", 1)[0])
+            found = [os.path.join(repo, target, n) for n in ("action.yml", "action.yaml")]
+            found = [f for f in found if os.path.isfile(f)]
+            if depth >= LOCAL_ACTION_DEPTH_LIMIT or len(found) != 1:
+                why = "nests local actions too deep" if found else "has no single action.yml/action.yaml"
+                out.append(cargo_invocation.Found(uses, f"local action {uses!r} {why}", None))
+                continue
+            try:
+                with open(found[0]) as f:
+                    action = strict_yaml.safe_load(f)
+            except (OSError, yaml.YAMLError) as e:
+                out.append(cargo_invocation.Found(uses, f"local action {uses!r} is unreadable: {e}", None))
+                continue
+            runs = action.get("runs") if isinstance(action, dict) else None
+            if isinstance(runs, dict) and runs.get("using") == "composite":
+                out.extend(_steps_cargo(runs.get("steps"), repo, None, depth + 1))
+            continue
+        run = st.get("run")
+        if not isinstance(run, str):
+            continue
+        step_wd = st.get("working-directory")
+        where = step_wd if isinstance(step_wd, str) else wd
+        cwd = "" if where is None else cargo_invocation.resolve("", where)
+        for text in _shell_texts(run):
+            out.extend(cargo_invocation.in_shell(text, cwd))
+    return out
+
+
+def _job_cargo(job: dict, repo: str, doc: object) -> list[cargo_invocation.Found]:
+    """Every cargo invocation of `job` (see `_steps_cargo`); its default
+    directory is the job's `defaults.run.working-directory`, else the
+    workflow's."""
+    wd = _default_wd(job)
+    if wd is None and isinstance(doc, dict):
+        wd = _default_wd(doc)
+    return _steps_cargo(job.get("steps"), repo, wd)
+
+
+def _workspace_layout(repo: str, tracked: list[str] | None) -> cargo_invocation.Layout | str:
+    """The root workspace `Layout`, or why it cannot be read."""
+    if tracked is None:
+        tracked = _tracked_paths(repo)
+        if tracked is None:
+            return "`git ls-files` failed"
+    top = _load_toml(os.path.join(repo, "Cargo.toml"))
+    if isinstance(top, str):
+        return f"root Cargo.toml {top}"
+    return cargo_invocation.layout(top, tracked, lambda d: _ignored(repo, posixpath.join(d, "Cargo.toml")))
+
+
+def _ignored(repo: str, path: str) -> bool:
+    """`path` matches the checkout's ignore rules; False when git cannot say
+    (so a directory is never taken for build output without proof)."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", repo, "check-ignore", "-q", "--no-index", "--", path], capture_output=True, timeout=60
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def _ipe_build(found: cargo_invocation.Found, layout: cargo_invocation.Layout) -> bool | str:
+    """Whether one invocation compiles the `ipe` package, or why that cannot
+    be read."""
+    inv = found.invocation
+    if isinstance(inv, str):
+        return inv
+    if inv.subcommand not in _CARGO_COMPILES:
+        return False
+    if inv.subcommand == "install":
+        if any(c.split("@", 1)[0] == IPE_PACKAGE for c in inv.install_crates):
+            return True
+        if inv.install_path is None:
+            return False
+        path = cargo_invocation.resolve(found.cwd, inv.install_path)
+        return path == IPE_PACKAGE_DIR or _names_ipe_dir(inv.install_path)
+    for spec in inv.packages:
+        if any(c in spec for c in "*?["):
+            return f"package spec {spec!r} is a pattern this check cannot resolve"
+        name = spec.rsplit("#", 1)[-1].split("@", 1)[0]
+        if name == IPE_PACKAGE or ("#" in spec and _names_ipe_dir(spec.split("#", 1)[0].split("://", 1)[-1])):
+            return True
+    if IPE_PACKAGE in inv.bins:
+        return True
+    if inv.manifest_path is not None and _names_ipe_dir(inv.manifest_path):
+        return True
+    sel = cargo_invocation.select(inv, found.cwd, layout)
+    if isinstance(sel, str):
+        return sel
+    # `--workspace` where the manifest is unknown may be the root's: fail closed.
+    return sel.whole_workspace or IPE_PACKAGE_DIR in sel.dirs or (inv.workspace and not sel.known)
+
+
+def _builds_ipe(job: dict, repo: str, layout: cargo_invocation.Layout, doc: object = None) -> list[str]:
+    """Each cargo command of `job` that compiles `ipe`, or a refusal for one
+    this check cannot read."""
+    hits: list[str] = []
+    for found in _job_cargo(job, repo, doc):
+        got = _ipe_build(found, layout)
+        if got is True:
+            hits.append(found.line)
+        elif isinstance(got, str):
+            hits.append(f"{found.line} (unreadable: {got})")
+    return hits
+
+
+def _artifact_steps(job: dict, action: str) -> set[str]:
+    out: set[str] = set()
+    for st in job.get("steps") or []:
+        if not isinstance(st, dict):
+            continue
+        uses, with_ = st.get("uses"), st.get("with")
+        if isinstance(uses, str) and uses.startswith(f"actions/{action}-artifact@"):
+            name = with_.get("name") if isinstance(with_, dict) else None
+            out.add(name if isinstance(name, str) else "")
+    return out
+
+
+def check_one_ipe_build(errors: list[str], root: str = REPO_ROOT, tracked: list[str] | None = None) -> None:
+    """Check 15 (see the module docstring). Refuses, never skips, a shape it
+    cannot read."""
+    repo = os.path.dirname(root)
+    layout = _workspace_layout(repo, tracked)
+    if isinstance(layout, str):
+        errors.append(f"check 15: {layout}; cannot tell what a cargo command builds")
+        return
+    where = os.path.join(root, "workflows", FAST_GATE_WORKFLOW)
+    try:
+        with open(where) as f:
+            doc = strict_yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as e:
+        errors.append(f"check 15: cannot read {where}: {e}")
+        return
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    if not isinstance(jobs, dict):
+        errors.append(f"check 15: {FAST_GATE_WORKFLOW} has no `jobs:` mapping")
+        return
+    producer = jobs.get(IPE_BUILD_PRODUCER)
+    if not isinstance(producer, dict):
+        errors.append(f"check 15: producer {IPE_BUILD_PRODUCER!r} is not a job of {FAST_GATE_WORKFLOW}")
+    else:
+        if not any("unreadable" not in h for h in _builds_ipe(producer, repo, layout, doc)):
+            errors.append(f"check 15: producer {IPE_BUILD_PRODUCER!r} does not build the `ipe` package")
+        if IPE_RELEASE_ARTIFACT not in _artifact_steps(producer, "upload"):
+            errors.append(f"check 15: producer {IPE_BUILD_PRODUCER!r} does not upload {IPE_RELEASE_ARTIFACT!r}")
+    for jid, job in jobs.items():
+        if not isinstance(job, dict):
+            errors.append(f"check 15: job {jid!r} is not a mapping; refused")
+            continue
+        if jid != IPE_BUILD_PRODUCER:
+            for hit in _builds_ipe(job, repo, layout, doc):
+                errors.append(
+                    f"check 15: job {jid!r} compiles `ipe` ({hit!r}); only {IPE_BUILD_PRODUCER!r} "
+                    f"builds it — download {IPE_RELEASE_ARTIFACT!r} instead"
+                )
+        downloads = _artifact_steps(job, "download")
+        # A download with no literal `name` (all artifacts, or a `pattern`)
+        # may fetch the producer's, so it needs the producer too.
+        wanted = sorted(downloads.intersection(IPE_BUILD_ARTIFACTS) | ({"<unnamed>"} if "" in downloads else set()))
+        if wanted:
+            needs = _needs_list(job)
+            if needs is None or IPE_BUILD_PRODUCER not in needs:
+                errors.append(
+                    f"check 15: job {jid!r} downloads {wanted} without `needs: {IPE_BUILD_PRODUCER}`; "
+                    "it could start before the artifact exists"
+                )
+
+
+DRIFT_ASSERTION = drift_assertion.SCRIPT
+
+
+def _untracked_blind_diffs(lines: list[str]) -> list[str]:
+    """The drift assertions among the quote-removed commands in `lines` that
+    are blind to a file git does not track yet (`drift_assertion.parse`)."""
+    return [a.command for line in lines for a in drift_assertion.parse(line.split()) if not a.sees_untracked]
+
+
+def check_drift_sees_untracked(errors: list[str], root: str = REPO_ROOT, manifest: str | None = None) -> None:
+    """Check 17 (see the module docstring). Refuses, never skips, a file it
+    cannot read."""
+    fix = f"assert with {DRIFT_ASSERTION}, which also fails on untracked output"
+    for wf in _workflow_files(root) + _local_action_files(root):
+        name = os.path.relpath(wf, root)
+        try:
+            with open(wf) as f:
+                doc = strict_yaml.safe_load(f)
+        except (OSError, yaml.YAMLError) as e:
+            errors.append(f"check 17: cannot read {wf}: {e}")
+            continue
+        if not isinstance(doc, dict):
+            errors.append(f"check 17: {name} is not a mapping; refused")
+            continue
+        jobs = doc.get("jobs")
+        runs_ = doc.get("runs")
+        groups = (
+            [(f"job {jid!r}", job.get("steps") if isinstance(job, dict) else None) for jid, job in jobs.items()]
+            if isinstance(jobs, dict)
+            else [("composite steps", runs_.get("steps"))] if isinstance(runs_, dict) else []
+        )
+        for what, steps in groups:
+            runs = [st["run"] for st in steps or [] if isinstance(st, dict) and isinstance(st.get("run"), str)]
+            for line in _untracked_blind_diffs(_quote_removed(runs)):
+                errors.append(f"check 17: {name} {what} runs `{line}`, blind to new generated files; {fix}")
+    where = manifest or os.path.join(root, "ci", "check-manifest.yml")
+    try:
+        with open(where) as f:
+            mdoc = strict_yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as e:
+        errors.append(f"check 17: cannot read {where}: {e}")
+        return
+    checks = mdoc.get("checks") if isinstance(mdoc, dict) else None
+    if not isinstance(checks, list):
+        errors.append(f"check 17: {where} has no `checks:` list")
+        return
+    for entry in checks:
+        local = entry.get("local") if isinstance(entry, dict) else None
+        run = local.get("run") if isinstance(local, dict) else None
+        cmds = [c.get("cmd") if isinstance(c, dict) else c for c in run or []]
+        texts = [c for c in cmds if isinstance(c, str)]
+        for line in _untracked_blind_diffs(_quote_removed(texts)):
+            errors.append(f"check 17: manifest context {entry.get('context')!r} runs `{line}` locally, blind to new generated files; {fix}")
+
+
+_SCOPE_REF = re.compile(r"needs\.changes\.outputs\.([A-Za-z_][A-Za-z0-9_-]*)")
+_LOCK_DEPS = re.compile(r"^dependencies = \[(.*?)^\]", re.M | re.S)
+_MANIFEST_PACKAGE_NAME = re.compile(r'^\[package\][^\[]*?^name\s*=\s*"([^"]+)"', re.M | re.S)
+# A `../` literal that names something past its parents (`"../x"`, not `"../.."`).
+_PARENT_LITERAL = re.compile(r'"(/?(?:\.\./)+[^"\\/.][^"\\]*)"')
+# Cargo subcommands whose selection names packages to compile and run.
+_CARGO_SELECTING = cargo_invocation.COMPILING - {"install", "package", "publish"}
+
+
+def _lock_graph(text: str) -> dict[str, set[str]] | str:
+    """Each path package of a `Cargo.lock` mapped to the path packages it
+    depends on, or why the text is refused."""
+    blocks = _LOCK_PACKAGE.split(text)
+    if len(blocks) < 2:
+        return "declares no [[package]]"
+    deps: dict[str, list[str]] = {}
+    for i, block in enumerate(blocks[1:], 1):
+        name = re.search(r'^name = "([^"]+)"\s*$', block, re.M)
+        if name is None:
+            return f"[[package]] #{i} has no name"
+        if re.search(r"^source = ", block, re.M):
+            continue
+        m = _LOCK_DEPS.search(block)
+        listed = re.findall(r'"([^"]+)"', m.group(1)) if m else []
+        deps.setdefault(name.group(1), []).extend(d.split(" ", 1)[0] for d in listed)
+    return {n: {d for d in ds if d in deps} for n, ds in deps.items()}
+
+
+def _selected_packages(
+    job: dict, repo: str, layout: cargo_invocation.Layout, doc: object = None
+) -> tuple[list[str], list[str]] | str:
+    """The package names and member directories `job`'s cargo commands
+    select, or why that selection cannot be read."""
+    names: list[str] = []
+    dirs: list[str] = []
+    for found in _job_cargo(job, repo, doc):
+        inv = found.invocation
+        if isinstance(inv, str):
+            return f"`{found.line}` is unreadable: {inv}"
+        if inv.subcommand not in _CARGO_SELECTING:
+            continue
+        sel = cargo_invocation.select(inv, found.cwd, layout)
+        if isinstance(sel, str):
+            return sel
+        if sel.whole_workspace:
+            return f"`{found.line}` selects the whole workspace"
+        if sel.bins and not sel.packages and not sel.dirs:
+            return f"`{found.line}` selects by `--bin` alone; name its package with `-p`"
+        for val in sel.packages:
+            if not val or any(c in val for c in "*?[#") or "://" in val:
+                return f"`{found.line}` has a package spec this check cannot resolve"
+            names.append(val.split("@", 1)[0])
+        dirs.extend(sel.dirs)
+    return names, dirs
+
+
+def check_scoped_package_coverage(
+    errors: list[str], root: str = REPO_ROOT, tracked: list[str] | None = None
+) -> None:
+    """Check 16 (see the module docstring). Refuses, never skips, a shape it
+    cannot read."""
+    repo = os.path.dirname(root)
+    if tracked is None:
+        tracked = _tracked_paths(repo)
+        if tracked is None:
+            errors.append("check 16: `git ls-files` failed; cannot prove scoped jobs cover their packages")
+            return
+    layout = _workspace_layout(repo, tracked)
+    if isinstance(layout, str):
+        errors.append(f"check 16: {layout}; cannot tell what a cargo command compiles")
+        return
+    narrow = set(change_class.SCOPES) - {"code"}
+    scoped: list[tuple[str, str, list[str], list[str], list[str]]] = []
+    for wf in _workflow_files(root):
+        name = os.path.basename(wf)
+        try:
+            with open(wf) as f:
+                doc = strict_yaml.safe_load(f)
+        except (OSError, yaml.YAMLError) as e:
+            errors.append(f"check 16: cannot read {wf}: {e}")
+            continue
+        jobs = doc.get("jobs") if isinstance(doc, dict) else None
+        if not isinstance(jobs, dict):
+            continue
+        for jid, job in jobs.items():
+            if not isinstance(job, dict) or not isinstance(job.get("if"), str):
+                continue
+            scopes = sorted(set(_SCOPE_REF.findall(job["if"])).intersection(narrow))
+            if not scopes:
+                continue
+            got = _selected_packages(job, repo, layout, doc)
+            if isinstance(got, str):
+                errors.append(f"check 16: {name} job {jid!r} is scoped on {scopes} but {got}; refused")
+                continue
+            pkgs, pkg_dirs = got
+            if pkgs or pkg_dirs:
+                scoped.append((name, str(jid), scopes, pkgs, pkg_dirs))
+    if not scoped:
+        return
+
+    try:
+        with open(os.path.join(repo, "Cargo.lock"), encoding="utf-8") as f:
+            graph = _lock_graph(f.read())
+    except (OSError, UnicodeDecodeError) as e:
+        graph = f"unreadable ({e})"
+    if isinstance(graph, str):
+        errors.append(f"check 16: root Cargo.lock: {graph}; refused")
+        return
+    dirs: dict[str, str] = {}
+    for m in sorted(p for p in tracked if posixpath.basename(p) == "Cargo.toml"):
+        try:
+            with open(os.path.join(repo, m), encoding="utf-8") as f:
+                found = _MANIFEST_PACKAGE_NAME.search(f.read())
+        except (OSError, UnicodeDecodeError):
+            found = None
+        if found is None or found.group(1) not in graph:
+            continue
+        if found.group(1) in dirs:
+            errors.append(f"check 16: package {found.group(1)!r} is declared by two manifests; refused")
+            continue
+        dirs[found.group(1)] = posixpath.dirname(m)
+
+    by_dir = {d: n for n, d in dirs.items()}
+    for wf, jid, scopes, pkgs, pkg_dirs in scoped:
+        closure: set[str] = set()
+        stack = list(pkgs)
+        for d in pkg_dirs:
+            if d not in by_dir:
+                errors.append(f"check 16: {wf} job {jid!r} compiles {d!r}, not a path package of the root workspace")
+                continue
+            stack.append(by_dir[d])
+        while stack:
+            n = stack.pop()
+            if n in closure:
+                continue
+            if n not in graph or n not in dirs:
+                errors.append(f"check 16: {wf} job {jid!r} selects {n!r}, not a path package of the root workspace")
+                closure.add(n)
+                continue
+            closure.add(n)
+            stack.extend(graph[n])
+        crate_dirs = sorted({dirs[n] for n in closure if n in dirs})
+        reached: set[str] = set()
+        for d in crate_dirs:
+            prefix = d + "/" if d else ""
+            for f in tracked:
+                if not f.startswith(prefix):
+                    continue
+                reached.add(f)
+                if not f.endswith(change_class.CODE_SUFFIXES):
+                    continue
+                try:
+                    with open(os.path.join(repo, f), encoding="utf-8") as fh:
+                        text = fh.read()
+                except (OSError, UnicodeDecodeError):
+                    continue
+                for lit in _PARENT_LITERAL.findall(text):
+                    for base in (d, posixpath.dirname(f)):
+                        target = change_class._norm(posixpath.join(base, lit.lstrip("/")))
+                        if target is None:
+                            continue
+                        under = target + "/" if target else ""
+                        reached.update(t for t in tracked if t == target or t.startswith(under))
+        # PROSE is proven unreachable by `change_class.guard()`, so it never counts.
+        missed = sorted(
+            f for f in reached if not change_class.is_prose(f) and not any(change_class.forces(sc, f) for sc in scopes)
+        )
+        if missed:
+            shown = ", ".join(missed[:5]) + (f" (+{len(missed) - 5} more)" if len(missed) > 5 else "")
+            errors.append(
+                f"check 16: {wf} job {jid!r} skips unless {scopes} runs, yet it compiles or reads "
+                f"{len(missed)} file(s) no such scope forces: {shown} — extend the scope in "
+                ".github/ci/change_class.py"
+            )
+
+
 def _tracked_paths(repo: str) -> list[str] | None:
     try:
         out = subprocess.run(
@@ -1545,7 +2425,7 @@ def _scoped_env(container: dict, loc: str, errors: list[str]) -> dict:
     """Extract an `env:` mapping at one scope (workflow/job/step/container/
     service), failing CLOSED when `env:` is present but not a plain mapping
     (e.g. `env: ${{ fromJSON(vars.E) }}`) — such a value's keys cannot be
-    determined statically, so "it does not set an sccache-wiring key" cannot
+    determined statically, so "it does not set a rustc-wiring key" cannot
     be proven and must never be assumed (PRINCIPLES §1: fail closed absent
     proof of safety). A missing `env:` is simply empty, not an error.
     """
@@ -1556,7 +2436,7 @@ def _scoped_env(container: dict, loc: str, errors: list[str]) -> dict:
         return e
     errors.append(
         f"{loc}: env: is not a plain mapping (got {type(e).__name__}: {e!r}) — "
-        "cannot verify it does not set an sccache-wiring key; refused fail-closed"
+        "cannot verify it does not set a rustc-wiring key; refused fail-closed"
     )
     return {}
 
@@ -1581,8 +2461,8 @@ def _github_env_key_refusal(key: str) -> str | None:
     """Why `key` may never be an allowlisted env-file key, or None."""
     if not GITHUB_ENV_KEY_RE.match(key):
         return "is not a CI_JOB_-prefixed upper-case identifier"
-    if SCCACHE_WIRING_TEXT_RE.search(key):
-        return f"is rustc/sccache wiring, owned by {SCCACHE_COMPOSITE_USES}"
+    if RUSTC_WIRING_TEXT_RE.search(key):
+        return "wraps or replaces rustc"
     if key in GITHUB_ENV_KEY_EXACT_REFUSED or key.startswith(GITHUB_ENV_KEY_REFUSED_PREFIXES):
         return "steers the runner, a toolchain, a loader, or an interpreter"
     return None
@@ -2186,25 +3066,21 @@ def _refuse_unpinned_image(image: object, loc: str, errors: list[str]) -> None:
 
 def _refuse_env_keys(env: dict, loc: str, errors: list[str]) -> None:
     """Rule (b) over the keys; their text is scanned with every other scalar."""
-    for key in sorted(_env_keys_folded(env) & SCCACHE_ENV_KEYS):
-        errors.append(
-            f"{loc} env sets {key!r} — sccache wiring must come only from "
-            f"{SCCACHE_COMPOSITE_USES}, never a hand-set env:"
-        )
+    for key in sorted(_env_keys_folded(env) & RUSTC_WIRING_ENV_KEYS):
+        errors.append(f"{loc} env sets {key!r} — no job wraps or replaces rustc; refused")
 
 
 def _refuse_wiring_text(text: str, loc: str, what: str, errors: list[str]) -> None:
-    """Rule (c): free text outside the sanctioned composite that names any
-    wrapper/sccache-shaped key or cargo's `rustc-wrapper` spelling — or that
+    """Rule (c): free text that names any rustc wrapper or replacement key or
+    cargo's `rustc-wrapper` spelling — or that
     assembles its target from a GitHub Actions expression function instead of
     naming it literally, which would otherwise dodge the scan above."""
-    m = SCCACHE_WIRING_TEXT_RE.search(text)
+    m = RUSTC_WIRING_TEXT_RE.search(text)
     if m:
         errors.append(
-            f"{loc} {what} writes {SCCACHE_WRAPPER_VAR}/rustc-wrapper/SCCACHE_*-shaped "
-            f"wiring ({m.group(0)!r}: inline env, export, $GITHUB_ENV, `cargo "
-            f"--config`, or a cargo config file) outside {SCCACHE_COMPOSITE_USES} — "
-            "the composite is the one sanctioned setter"
+            f"{loc} {what} writes {RUSTC_WRAPPER_VAR}/rustc-wrapper-shaped wiring "
+            f"({m.group(0)!r}: inline env, export, $GITHUB_ENV, `cargo --config`, or a "
+            "cargo config file) — no job wraps or replaces rustc; refused"
         )
     expr_error = strict_yaml.refuse_expression_assembly(text, f"{loc} {what}")
     if expr_error:
@@ -2260,14 +3136,24 @@ def _uses_repo(st: Step, owner_repo: str) -> bool:
     return m is not None and m[1] == owner_repo.casefold()
 
 
-def _audit_step(st: Step, loc: str, policy: StepPolicy, errors: list[str]) -> None:
-    """Rules (a)/(b)/(c)/(e)/(f)/(g) for one step outside the sanctioned composite."""
-    _refuse_unpinned_uses(st, loc, errors)
-    if _uses_repo(st, SCCACHE_ACTION_REPO):
+def _refuse_rust_cache_save(st: Step, loc: str, errors: list[str]) -> None:
+    """Rule (a): a `Swatinem/rust-cache` step saves only on `main` — its
+    `with.save-if` is exactly `RUST_CACHE_SAVE_IF`. Absent, the action saves
+    from every ref, so pull request runs evict the `main` cache they restore."""
+    w = st.raw.get("with")
+    got = w.get("save-if") if isinstance(w, dict) else None
+    if got != RUST_CACHE_SAVE_IF:
         errors.append(
-            f"{loc} runs the raw {SCCACHE_ACTION_REPO} action directly — use "
-            f"{SCCACHE_COMPOSITE_USES} instead, the one place it may run"
+            f"{loc} uses {RUST_CACHE_REPO} with save-if {got!r} — it must be exactly "
+            f"{RUST_CACHE_SAVE_IF!r}, so only main writes the cache; refused"
         )
+
+
+def _audit_step(st: Step, loc: str, policy: StepPolicy, errors: list[str]) -> None:
+    """Rules (a)/(b)/(c)/(e)/(f)/(g) for one step."""
+    _refuse_unpinned_uses(st, loc, errors)
+    if _uses_repo(st, RUST_CACHE_REPO):
+        _refuse_rust_cache_save(st, loc, errors)
     if _uses_repo(st, RAW_MOLD_ACTION_REPO):
         errors.append(
             f"{loc} runs the raw {RAW_MOLD_ACTION_REPO} action directly — use "
@@ -2821,7 +3707,7 @@ class ToolJob:
 
     @staticmethod
     def parse(
-        wf: SccacheWorkflow, job: WorkflowJob, steps: list[Step], jloc: str, root: str
+        wf: Workflow, job: WorkflowJob, steps: list[Step], jloc: str, root: str
     ) -> ToolJob | list[str] | None:
         """The job as a `ToolJob`, its refusals, or None when no step names
         the tree (the job is then not a tool job).
@@ -2951,7 +3837,7 @@ class ToolJob:
 
 
 def _check_tool_job(
-    wf: SccacheWorkflow, job: WorkflowJob, steps: list[Step], jloc: str, root: str, errors: list[str]
+    wf: Workflow, job: WorkflowJob, steps: list[Step], jloc: str, root: str, errors: list[str]
 ) -> None:
     """The ordering rule of check 7 for one job: a job naming `.github/ci/**`
     must parse as a `ToolJob` (closed steps up to its last tree reference, a
@@ -2964,9 +3850,12 @@ def _check_tool_job(
 
 @dataclass(frozen=True)
 class LocalAction:
-    """A resolved local composite action: `id` is its identity (see
-    `SCCACHE_COMPOSITE_ID`), `display` the path as written for messages,
-    `doc` the parsed action document."""
+    """A resolved local composite action. `id` is its identity: the
+    repo-root-relative path, normalized (`./x/`, `./x`, `./a/../x` are one
+    path) and byte-exact — two paths case-fold-equal but not byte-equal are
+    refused outright (macOS and Windows runners resolve them to one
+    directory), so identity never needs folding. `display` is the path as
+    written for messages, `doc` the parsed action document."""
 
     id: str
     display: str
@@ -2989,7 +3878,7 @@ class LocalActions:
     the way GitHub does (repo root, then `action.yml`, then `action.yaml`).
     Resolution is the graph: nothing is discovered by glob, so no reference
     can point at an action this pass never read. Anything it cannot read as
-    a composite is refused, never taken to not reach sccache."""
+    a composite is refused, never taken to be clean."""
 
     def __init__(self, root: str, policy: StepPolicy, errors: list[str]):
         self.root = root
@@ -2997,7 +3886,7 @@ class LocalActions:
         self.errors = errors
         self._by_id: dict[str, LocalAction | None] = {}
         self._folded: dict[str, str] = {}
-        self._reach: dict[str, bool] = {}
+        self._closed: set[str] = set()
 
     def disk_dir(self, rel: str) -> str:
         # `root` is the `.github` directory; the repository root is its parent.
@@ -3066,7 +3955,7 @@ class LocalActions:
             return None
         action = self._load(rel, uses or rel, loc)
         self._by_id[rel] = action
-        if action is not None and rel != SCCACHE_COMPOSITE_ID:
+        if action is not None:
             outside_steps = {k: v for k, v in action.doc.items() if k != "runs"}
             outside_steps["runs"] = {k: v for k, v in action.doc["runs"].items() if k != "steps"}
             _audit_scalars(outside_steps, f"{action.display}/action.yml:", self.policy, self.errors, step=False)
@@ -3089,7 +3978,7 @@ class LocalActions:
         if not found:
             self.errors.append(
                 f"{loc}: local action {shown!r} does not exist (no action.yml/action.yaml "
-                f"at {d}) — an unresolved action cannot be proven sccache-free; refused"
+                f"at {d}) — an unresolved action cannot be audited; refused"
             )
             return None
         if len(found) > 1:
@@ -3121,81 +4010,28 @@ class LocalActions:
         display = "./" + rel
         return LocalAction(rel, display, _typed_steps(runs, path, self.errors), doc)
 
-    def reaches_sccache(self, action: LocalAction, loc: str) -> bool:
-        """Whether `action` is, or transitively `uses:`, the sanctioned
-        composite. A cycle or a chain past `LOCAL_ACTION_DEPTH_LIMIT` is
-        recorded as a refusal and answered True (fail closed)."""
-        return self._walk(action, loc, 0, frozenset())
+    def close(self, action: LocalAction, loc: str) -> None:
+        """Resolve, and so audit, every local action `action` transitively
+        `uses:`. A cycle or a chain past `LOCAL_ACTION_DEPTH_LIMIT` is refused."""
+        self._walk(action, loc, 0, frozenset())
 
-    def _walk(self, action: LocalAction, loc: str, depth: int, stack: frozenset[str]) -> bool:
-        if action.id == SCCACHE_COMPOSITE_ID:
-            return True
-        if action.id in self._reach:
-            return self._reach[action.id]
+    def _walk(self, action: LocalAction, loc: str, depth: int, stack: frozenset[str]) -> None:
+        if action.id in self._closed:
+            return
         if action.id in stack:
             self.errors.append(f"{loc}: local action cycle through {action.display}; refused")
-            return True
+            return
         if depth >= LOCAL_ACTION_DEPTH_LIMIT:
             self.errors.append(
                 f"{loc}: local action nesting exceeds {LOCAL_ACTION_DEPTH_LIMIT} levels at "
-                f"{action.display} — reach of {SCCACHE_COMPOSITE_USES} cannot be decided; refused"
+                f"{action.display} — the chain cannot be audited; refused"
             )
-            return True
-        hit = False
+            return
         for st in action.steps:
             child = self.resolve(st.uses, f"{action.display}/action.yml: step {st.label!r}")
-            if child is not None and self._walk(child, loc, depth + 1, stack | {action.id}):
-                hit = True
-        self._reach[action.id] = hit
-        return hit
-
-
-def _check_sccache_composite(actions: LocalActions, errors: list[str]) -> None:
-    """The composite action is the one sanctioned place `sccache-action` may
-    run and `$GITHUB_ENV` may be written, so a job trusting `uses:
-    ./.github/actions/sccache` must get a real wrapper. Proof is equality:
-    the document holds only `SCCACHE_COMPOSITE_DOC_KEYS`, `runs:` is exactly
-    `{using: composite, steps: [install, wire]}`, the install step is exactly
-    `{uses: mozilla-actions/sccache-action@<40-hex commit sha>}`, and the wiring step equals
-    `SCCACHE_WIRE_STEP`. Any other shape — a condition, an extra or reordered
-    step, a nested local `uses:`, an extra key — is refused.
-    """
-    action = actions.resolve(SCCACHE_COMPOSITE_USES, "sccache composite self-check")
-    if action is None:
-        return
-    where = f"{action.display}/action.yml"
-    extra = sorted(str(k) for k in action.doc if k not in SCCACHE_COMPOSITE_DOC_KEYS)
-    if extra:
-        errors.append(f"{where}: keys {extra} are outside the canonical composite; refused")
-    runs = action.doc["runs"]
-    if set(runs) != {"using", "steps"}:
-        errors.append(
-            f"{where}: `runs:` keys must be exactly ['steps', 'using'] (got "
-            f"{sorted(str(k) for k in runs)}); refused"
-        )
-    steps = runs.get("steps")
-    if not isinstance(steps, list) or len(steps) != 2:
-        errors.append(
-            f"{where}: the canonical composite has exactly two steps (install, then "
-            f"wire), got {steps!r}; refused"
-        )
-        return
-    install, wire = steps
-    if not (
-        isinstance(install, dict)
-        and set(install) == {"uses"}
-        and isinstance(install["uses"], str)
-        and SCCACHE_INSTALL_USES_RE.match(install["uses"])
-    ):
-        errors.append(
-            f"{where}: step 1 must be exactly {{'uses': '{SCCACHE_ACTION_PREFIX}<40-hex commit sha>'}} "
-            f"(got {install!r}); refused"
-        )
-    if wire != SCCACHE_WIRE_STEP:
-        errors.append(
-            f"{where}: step 2 is not the canonical wiring step {SCCACHE_WIRE_STEP!r} "
-            f"(got {wire!r}) — any other shape can leave rustc unwired; refused"
-        )
+            if child is not None:
+                self._walk(child, loc, depth + 1, stack | {action.id})
+        self._closed.add(action.id)
 
 
 def _check_mold_composite(actions: LocalActions, repo: str, errors: list[str]) -> None:
@@ -3241,7 +4077,7 @@ def _check_mold_composite(actions: LocalActions, repo: str, errors: list[str]) -
 def _job_sub_env_scopes(job_raw: dict, loc: str, errors: list[str]) -> list[tuple[str, dict]]:
     """(scope-name, raw-container) pairs for a job's `container:` and each
     `services.<id>:` sub-scope — each may carry its own `env:` a
-    sccache-wiring key could hide in, same as the job's own `env:`. A
+    rustc-wiring key could hide in, same as the job's own `env:`. A
     string `container:` (image only) has no env; any other non-mapping
     shape is refused."""
     scopes: list[tuple[str, dict]] = []
@@ -3271,28 +4107,23 @@ def _job_sub_env_scopes(job_raw: dict, loc: str, errors: list[str]) -> list[tupl
 def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
     """Checks 6 and 7 over every step of every workflow and reachable local action.
 
-    The only sanctioned way a job gets sccache is `uses:
-    ./.github/actions/sccache` (see `_check_sccache_composite`), so a wrapper
-    never exists in a job without the binary that backs it. Refused:
-      (a) a raw `mozilla-actions/sccache-action` reference (case-folded) in a
-          workflow or any other reachable local action;
-      (b) an `env:` key naming a wrapper var, a rustc-replacing var
-          (`RUSTC`, `CARGO_BUILD_RUSTC`), or SCCACHE_GHA_ENABLED (case-folded)
-          at workflow, job, container, service, or step scope, in a workflow
-          or any other reachable local action; an `env:` that is present but
-          not a plain mapping is refused outright;
-      (c) free text naming a wrapper var, a rustc-replacing var, an SCCACHE_*
-          key, or cargo's `rustc-wrapper` spelling in any string key or value
-          of a workflow, job, step, or local action's metadata (`run:`,
-          `shell:`, `env:`, `with:`, `name:`, `if:`, `strategy.matrix`,
-          `on.*.inputs`, `defaults.run.shell`, any nesting up to
-          STRING_SCALAR_DEPTH_LIMIT) — any syntax, `$GITHUB_ENV` or not (YAML
-          comments are not values and are never read);
-      (d) a job that reaches the sccache composite — directly or through any
-          chain of local actions — while owning a step named in
-          `ci/deterministic-checks.json` (sccache's GitHub Actions cache
-          backend does network I/O); an unreadable deterministic-checks file
-          is itself refused, since the step set cannot be established;
+    No job wraps or replaces rustc, and only `main` saves the dependency
+    cache. Refused:
+      (a) a `Swatinem/rust-cache` step (case-folded, any ref or subpath) in a
+          workflow or reachable local action whose `with.save-if` is not
+          exactly `RUST_CACHE_SAVE_IF`;
+      (b) an `env:` key naming a wrapper var or a rustc-replacing var
+          (`RUSTC`, `CARGO_BUILD_RUSTC`) (case-folded) at workflow, job,
+          container, service, or step scope, in a workflow or any reachable
+          local action; an `env:` that is present but not a plain mapping is
+          refused outright;
+      (c) free text naming a wrapper var, a rustc-replacing var, or cargo's
+          `rustc-wrapper` spelling in any string key or value of a workflow,
+          job, step, or local action's metadata (`run:`, `shell:`, `env:`,
+          `with:`, `name:`, `if:`, `strategy.matrix`, `on.*.inputs`,
+          `defaults.run.shell`, any nesting up to STRING_SCALAR_DEPTH_LIMIT)
+          — any syntax, `$GITHUB_ENV` or not (YAML comments are not values
+          and are never read);
       (e) a third-party `uses:` not pinned to a 40-hex commit SHA, a
           `docker://` `uses:` or a job `container:`/`services:` image not
           pinned to a sha256 digest;
@@ -3355,14 +4186,15 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
     composite (node/docker), cyclic, or over-deep (> LOCAL_ACTION_DEPTH_LIMIT)
     reference is refused. Identity is the normalized, byte-exact path: a
     reference, or any entry under `.github/actions/` referenced or not, that
-    is case-fold-equal to another path but not byte-equal is refused, so the
-    composite's exemption from (a)-(c) holds only for its exact path. A
+    is case-fold-equal to another path but not byte-equal is refused. A
     job-level `uses:` (reusable workflow, local or remote) is refused. A
     malformed shape (`jobs:`, `steps:`, a job, a step, `env:`, `defaults:`,
     `container:`, `services:`) is refused, never skipped.
 
     LIMIT — static YAML cannot see, and this check does NOT prove absent:
-      - a third-party action that itself exports a wrapper into the job;
+      - a third-party action that itself exports a wrapper into the job, or
+        a cache action other than `Swatinem/rust-cache` that saves from a
+        pull request ref;
       - a repo script or interpreter snippet invoked from `run:` (`run:
         tools/ci/wire.sh`, `python -c ...`) that writes a wrapper or the env
         file under a name it assembles at run time, or a package manager
@@ -3428,19 +4260,7 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
         load_github_env_allowlist(errors, root), os.path.dirname(os.path.abspath(root)), Workspace.CHECKOUT
     )
     actions = LocalActions(root, policy, errors)
-    _check_sccache_composite(actions, errors)
     _check_mold_composite(actions, os.path.dirname(os.path.abspath(root)), errors)
-
-    det_errors: list[str] = []
-    pairs = load_deterministic_checks(det_errors, root)
-    if pairs is None:
-        errors.append(
-            "check 6 cannot establish the deterministic check steps "
-            f"({det_errors[0] if det_errors else 'unreadable'}) — refused fail-closed"
-        )
-        deterministic_steps: set[str] = set()
-    else:
-        deterministic_steps = {step for _, step in pairs}
 
     # Defence in depth: every action on disk under `.github/actions/` is
     # audited even when nothing references it yet. Reachability never relies
@@ -3452,7 +4272,7 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
             actions.resolve(f"./.github/{rel}", "local action audit")
 
     base_policy = policy
-    for wf in _load_sccache_workflows(root, errors):
+    for wf in _load_workflows(root, errors):
         policy = replace(base_policy, workspace=wf.workspace)
         wloc = f"{wf.fname}: workflow-level"
         _refuse_env_keys(_scoped_env(wf.doc, f"{wloc} env", errors), wloc, errors)
@@ -3472,27 +4292,13 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
                     "are outside this check; refused"
                 )
             steps = _typed_steps(job.raw, jloc, errors)
-            via: str | None = None
-            reaches = False
             for st in steps:
                 stloc = f"{jloc} step {st.label!r}"
                 _audit_step(st, stloc, policy, errors)
                 action = actions.resolve(st.uses, stloc)
-                if action is not None and actions.reaches_sccache(action, stloc):
-                    reaches = True
-                    if via is None and action.id != SCCACHE_COMPOSITE_ID:
-                        via = action.display
+                if action is not None:
+                    actions.close(action, stloc)
             _check_tool_job(wf, job, steps, jloc, root, errors)
-            if reaches:
-                hit = sorted({st.name for st in steps if st.name is not None} & deterministic_steps)
-                if hit:
-                    via_note = f" (via {via})" if via else ""
-                    errors.append(
-                        f"{jloc} uses {SCCACHE_COMPOSITE_USES}{via_note} but also owns "
-                        f"deterministic check step(s) {hit} — sccache's GitHub Actions "
-                        "cache backend does network I/O inside a step that must be "
-                        "network-free (ci/deterministic-checks.json)"
-                    )
 
     # One defect reached from several sites is reported once.
     own = list(dict.fromkeys(errors[start:]))
@@ -3510,12 +4316,7 @@ def load_manifest() -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--ruleset",
-        help="JSON file: a list of required status-check context strings. "
-        "When given, gate<->required mismatches are fatal.",
-    )
-    args = ap.parse_args()
+    ap.parse_args()
 
     manifest = load_manifest()
     entries = manifest["checks"]
@@ -3595,7 +4396,7 @@ def main() -> int:
     # ---- 5. ci/deterministic-checks.json vs the watcher + ci.yml steps ----
     check_deterministic_set(jobs, errors)
 
-    # ---- 6+7. sccache wiring; pinned CI inputs + env-file writes ----
+    # ---- 6+7. rustc wiring + cache saves; pinned CI inputs + env-file writes ----
     check_workflow_steps(errors)
 
     # ---- 8. merge queue: gate producers trigger on it; its runs stay secret-free ----
@@ -3622,6 +4423,27 @@ def main() -> int:
     # ---- 12. gate integrity: pull_request_target runs no head code; trust roots live ----
     check_pull_request_target(errors)
     check_trust_roots(errors)
+
+    # ---- 13. push runs: every push commit gets its own concurrency group ----
+    check_push_concurrency(errors)
+
+    # ---- 14. one lock per dependency graph; Dependabot updates that lock ----
+    check_one_lock_per_graph(errors)
+
+    # ---- 15. one `ipe` build in ci.yml; its consumers need the producer ----
+    check_one_ipe_build(errors)
+
+    # ---- 16. a path-scoped job's scope covers every file it compiles ----
+    check_scoped_package_coverage(errors)
+
+    # ---- 17. a drift check also sees untracked generated files ----
+    check_drift_sees_untracked(errors)
+
+    # ---- 18. Dependabot's open update PRs fit the open-PR budget ----
+    check_dependabot_pr_budget(errors)
+
+    # ---- 19. Every workspace member inherits the workspace edition and lints ----
+    check_workspace_inheritance(errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:
@@ -3685,26 +4507,22 @@ def main() -> int:
 
     local_gate.check_local_dispositions(entries, errors)
 
-    # ---- 4. required-set reconciliation ----
-    # gate-external contexts are required by the ruleset even though no CI
-    # workflow produces them; include them alongside plain gate entries.
-    gate_ctxs = {c for c, e in by_context.items() if e["disposition"] in ("gate", "gate-external")}
-    if args.ruleset:
-        required = set(json.load(open(args.ruleset)))
-        missing_from_ruleset = gate_ctxs - required
-        extra_in_ruleset = required - gate_ctxs
-        for c in sorted(missing_from_ruleset):
-            errors.append(f"gate {c!r} is NOT in the required set (add it to the ruleset)")
-        for c in sorted(extra_in_ruleset):
-            errors.append(
-                f"required context {c!r} is not a manifest `gate` "
-                "(remove from the ruleset or re-classify)"
-            )
+    # ---- 4. the committed required set is the manifest's derived set ----
+    import check_required_set  # noqa: PLC0415  # sibling module; SSOT of the derivation
+
+    try:
+        derived = check_required_set.derive(manifest)
+        with open(check_required_set.REQUIRED_SET, encoding="utf-8") as f:
+            on_disk = check_required_set.parse_pairs(json.load(f), "ci/required-set.json")
+    except (check_required_set.Refused, OSError, UnicodeDecodeError, ValueError) as e:
+        errors.append(f"check 4: {e}")
     else:
-        print(
-            "verify-manifest: no --ruleset given; skipping live required-set "
-            "reconciliation. The manifest is the SSOT; see ci/RECONCILIATION.md "
-            "for the intended required set."
+        errors.extend(
+            f"check 4: {line}"
+            for line in check_required_set.diff(
+                derived, on_disk, "ci/required-set.json",
+                "regenerate it: python3 .github/ci/check_required_set.py --write",
+            )
         )
 
     if errors:

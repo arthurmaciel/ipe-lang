@@ -119,6 +119,10 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
 /// `raw_response` must be a complete, valid HTTP/1.1 response including the
 /// final `\r\n\r\n` header terminator and body — the fixture sends it verbatim.
 ///
+/// The accept deadline runs from this call, so start the fixture only once the
+/// client binary is built: a build slower than the deadline would otherwise
+/// leave the client nothing to connect to.
+///
 /// # Errors
 ///
 /// Returns an error if the listener cannot bind or if the local address cannot
@@ -278,12 +282,12 @@ fn http_get_fixture() -> Result<(), BoxError> {
         return Ok(());
     }
 
+    let exe = compile_and_build("http_get_fixture", IPE_HTTP_GET_PROGRAM)?;
+
     let (url, _server) = start_fixture(
         "http_get_fixture",
         "HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nhello get",
     )?;
-
-    let exe = compile_and_build("http_get_fixture", IPE_HTTP_GET_PROGRAM)?;
 
     let out = Command::new(&exe)
         .env("IPE_HTTP_TEST_URL", &url)
@@ -319,12 +323,12 @@ fn http_post_fixture() -> Result<(), BoxError> {
         return Ok(());
     }
 
+    let exe = compile_and_build("http_post_fixture", IPE_HTTP_POST_PROGRAM)?;
+
     let (url, _server) = start_fixture(
         "http_post_fixture",
         "HTTP/1.1 201 Created\r\nContent-Length: 10\r\nConnection: close\r\n\r\nhello post",
     )?;
-
-    let exe = compile_and_build("http_post_fixture", IPE_HTTP_POST_PROGRAM)?;
 
     let out = Command::new(&exe)
         .env("IPE_HTTP_TEST_URL", &url)
@@ -370,6 +374,8 @@ fn http_ssrf_deny_loopback() -> Result<(), BoxError> {
         return Ok(());
     }
 
+    let exe = compile_and_build("http_ssrf_deny_loopback", IPE_HTTP_SSRF_PROGRAM)?;
+
     // Web loopback fixture: an open, reachable port. Excludes connection-refused
     // as an alternative explanation for the DENIED result — only the SSRF guard
     // can produce it. The fixture would answer `200 hi` if the guard let the
@@ -378,8 +384,6 @@ fn http_ssrf_deny_loopback() -> Result<(), BoxError> {
         "http_ssrf_deny_loopback",
         "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi",
     )?;
-
-    let exe = compile_and_build("http_ssrf_deny_loopback", IPE_HTTP_SSRF_PROGRAM)?;
 
     let out = Command::new(&exe)
         .env("IPE_HTTP_DENY_PRIVATE", "1")

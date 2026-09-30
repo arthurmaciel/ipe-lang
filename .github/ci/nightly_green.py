@@ -68,9 +68,12 @@ def _parse_time(text: object) -> datetime:
 
 
 def latest_run(listing: object) -> dict | None:
-    """Return the newest-created run of a `.../runs` listing, or None when it lists none.
+    """Return the newest-created completed run of a `.../runs` listing, or None when it lists none.
 
-    The listing's order is not trusted: the newest run is chosen by `created_at`.
+    Neither the listing's order nor its filters are trusted: the API's
+    `status=completed` filter drops recent runs, so the listing is unfiltered and
+    a run still queued or in progress is skipped here; the newest remaining run
+    is chosen by `created_at`.
     """
     runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
     if not isinstance(runs, list):
@@ -79,6 +82,8 @@ def latest_run(listing: object) -> dict | None:
     for run in runs:
         if not isinstance(run, dict):
             raise NightlyError("run listing entry is not an object")
+        if run.get("status") != "completed":
+            continue
         created = _parse_time(run.get("created_at"))
         if newest is None or created > newest[0]:
             newest = (created, run)
@@ -176,7 +181,7 @@ def _gh_json(path: str) -> object:
 def _runs_path(repo: str, query: str) -> str:
     return (
         f"repos/{repo}/actions/workflows/ci.yml/runs"
-        f"?event={NIGHTLY_EVENT}&status=completed&per_page={LISTING_PAGE}&{query}"
+        f"?event={NIGHTLY_EVENT}&per_page={LISTING_PAGE}&{query}"
     )
 
 

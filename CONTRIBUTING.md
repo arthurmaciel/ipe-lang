@@ -34,7 +34,7 @@ both before opening a pull request, then follow the steps below:
    ```bash
    cargo build --release --manifest-path tools/panic-scan/Cargo.toml
    find src -name '*.rs' -not -path '*/tests/*' -not -path '*/templates/*' -print0 \
-     | xargs -0 tools/panic-scan/target/release/panic-scan
+     | xargs -0 target/release/panic-scan
    ```
 
 6. **Test — including the SEAL** (ipe-accepts ⇒ cargo-builds). Add `-p <crate>`

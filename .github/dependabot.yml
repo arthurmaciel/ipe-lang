@@ -5,6 +5,10 @@
 # to be yanked first. Updates land through the same required checks and
 # code-owner review as any PR (this file is under `/.github/` in CODEOWNERS).
 #
+# The open-PR limits sum to the repository's open-PR budget (verify-manifest
+# check 18): the grouped actions batch needs one slot; cargo gets two, one for
+# its patch batch and one for a breaking update under review.
+#
 # Cargo treats a `0.x` minor bump as breaking, but Dependabot calls it `minor`,
 # so the cargo group holds only patch updates; minor and major ones each get a
 # PR of their own.
@@ -16,7 +20,7 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     groups:
       actions:
         patterns: ["*"]
@@ -25,14 +29,14 @@ updates:
       prefix: ci
 
   - package-ecosystem: cargo
-    directories:
-      - /
-      - /tools/panic-scan
+    # The one lock that resolves the workspace graph; verify-manifest check 14
+    # refuses a directory that holds no lock of its own graph.
+    directory: /
     schedule:
       interval: weekly
     cooldown:
       default-days: 7
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 2
     groups:
       cargo:
         patterns: ["*"]

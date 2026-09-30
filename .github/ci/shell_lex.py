@@ -16,7 +16,9 @@ a command (a backtick in a comment or in single quotes starts none). A
 and is skipped; a command fed one carries `heredoc`, a command fed a
 here-string (`<<<`) carries `herestring`, and a command on the right of a
 pipe (`|` or `|&`, never `||`) carries in `pipe_source` the words of the
-command feeding it.
+command feeding it. Each command carries in `subshell` the subshells open
+around it (`(`, `$(`, a backtick), outermost first, each a number unique to
+its lexing, so a `cd` inside one is seen not to reach a command outside it.
 Unterminated quotes run to the end of the text — the lexer never raises, it
 only ever sees more text as one word.
 """
@@ -36,6 +38,7 @@ class Command:
     heredoc: bool = False
     herestring: bool = False
     pipe_source: list[str] | None = None
+    subshell: tuple[int, ...] = ()
 
 
 # The characters bash's parser splits words on (`blank` in bash(1)): space and
@@ -52,22 +55,41 @@ def _substitutions(text: str, lo: int, hi: int, subs: list[int] | None) -> None:
     quotes do not delimit it)."""
     if subs is None:
         return
+    opening = True
     for j in range(lo, hi):
         if text[j] == "`":
-            subs.append(j + 1)
+            # Backticks pair up: only an opening one starts a substitution.
+            if opening:
+                subs.append(j + 1)
+            opening = not opening
         elif text.startswith("$(", j):
             subs.append(j + 2)
 
 
 def _lex(
     text: str, bodies: list[tuple[int, int]] | None = None, subs: list[int] | None = None,
+    closer: str | None = None,
 ) -> list[Command]:
+    """The commands of `text`; with `closer` (`)` or a backtick), `text` is
+    the inside of a substitution and lexing stops at its unmatched closer."""
     cmds: list[Command] = []
     cur = Command()
     buf: list[str] | None = None
     pending: str | None = None  # "write" | "read" | "herestring" | "heredoc"
     heredocs: list[tuple[str, bool]] = []
+    scope: list[int] = []
+    opened = 0
+    in_backtick = False
     i, n = 0, len(text)
+
+    def open_subshell() -> None:
+        nonlocal opened
+        opened += 1
+        scope.append(opened)
+
+    def close_subshell() -> None:
+        if scope:
+            scope.pop()
 
     def end_word() -> None:
         nonlocal buf, pending
@@ -92,6 +114,7 @@ def _lex(
         # An empty command (`a |` then a newline) hands its pipe source on.
         carry = cur.pipe_source
         if cur.words or cur.writes or cur.heredoc or cur.herestring:
+            cur.subshell = tuple(scope)
             cmds.append(cur)
             carry = None
         if piped:
@@ -124,6 +147,7 @@ def _lex(
             continue
         if c == "$" and text.startswith("$(", i):
             end_command()
+            open_subshell()
             i += 2
             continue
         if c == "|":
@@ -138,6 +162,20 @@ def _lex(
         if c in _SEPARATORS:
             end_command()
             cur.pipe_source = None
+            if c == "(":
+                open_subshell()
+            elif c == ")":
+                if not scope and closer == ")":
+                    return cmds
+                close_subshell()
+            elif c == "`":
+                if closer == "`" and not in_backtick:
+                    return cmds
+                if in_backtick:
+                    close_subshell()
+                else:
+                    open_subshell()
+                in_backtick = not in_backtick
             i += 1
             continue
         if c in "<>":
@@ -216,13 +254,20 @@ def split_commands(text: str) -> list[Command]:
     """Every simple command in `text`, command substitutions included: the
     text is lexed from its start and again from the start of every
     substitution the lexer finds inside double quotes or a here-document
-    body (each offset once, so at most `len(text) + 1` passes)."""
+    body (each offset once, so at most `len(text) + 1` passes). A command
+    of such a substitution sits in a subshell numbered `-offset`, outside
+    every subshell its own lexing opens; its lexing ends at the substitution's
+    own closer, so the text after it is never read from inside the quotes."""
     out: list[Command] = []
     todo, seen = [0], {0}
     while todo:
         start = todo.pop()
         found: list[int] = []
-        out.extend(_lex(text[start:], None, found))
+        closer = None if not start else ("`" if text[start - 1] == "`" else ")")
+        for cmd in _lex(text[start:], None, found, closer):
+            if start:
+                cmd.subshell = (-start, *cmd.subshell)
+            out.append(cmd)
         for off in found:
             if start + off not in seen:
                 seen.add(start + off)

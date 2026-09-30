@@ -116,8 +116,8 @@ pub fn parse_manifest(src: &str) -> Result<ManifestTargets, ManifestError> {
 enum Value {
     Str(String),
     Bool(bool),
-    Array(Vec<Value>),
-    Table(Vec<(Vec<String>, Value)>),
+    Array(Vec<Self>),
+    Table(Vec<(Vec<String>, Self)>),
     /// A number, date, or other bare scalar.
     Scalar,
 }

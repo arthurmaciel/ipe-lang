@@ -6,7 +6,7 @@
 # RustSec advisory-db against Cargo.lock), and deny additionally covers
 # licenses / bans / sources in one pass — so this is the single supply-chain
 # gate. It is lockfile/metadata-only (no compilation), so it runs in seconds
-# and needs no sccache/target caching.
+# and needs no target caching.
 #
 # On the REQUIRED PR gate: `cargo-deny` is one of the fast checks branch
 # protection requires (fmt/clippy/test/cargo-deny/seal-smoke). It also runs on
@@ -42,8 +42,11 @@ on:
 permissions:
   contents: read
 
+# A push run is keyed by its commit: GitHub replaces a queued run (and
+# cancel-in-progress cancels a running one) when a newer run joins its group,
+# so a per-ref push group would let one main commit go unbuilt.
 concurrency:
-  group: security-${{ github.ref }}
+  group: security-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 env:
