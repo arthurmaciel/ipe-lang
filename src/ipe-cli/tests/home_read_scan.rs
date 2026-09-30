@@ -54,7 +54,7 @@ const RUNTIME_ROOT: &str = "src/runtime/rust/";
 /// sandbox home reader, the jail passthrough); the dev-only temp-root test
 /// reader; and in the runtime crate, which has its own `clippy.toml`, the build
 /// script, the recursion-limit trip, the temp-root owner and its test reader,
-/// the environment accessor's readers, and an integration test with no
+/// the environment accessor's readers, and two integration tests with no
 /// crate-private accessor.
 const ESCAPE_HATCH_SITES: &[(&str, usize)] = &[
     ("src/compiler/env/src/lib.rs", 3),
@@ -66,6 +66,7 @@ const ESCAPE_HATCH_SITES: &[(&str, usize)] = &[
     ("src/runtime/rust/src/scratch_core.rs", 2),
     ("src/runtime/rust/src/system.rs", 5),
     ("src/runtime/rust/tests/debug_behavior.rs", 1),
+    ("src/runtime/rust/tests/parent_death_spawner.rs", 1),
 ];
 
 /// The sandbox crate's sources: the only callers of the crate-private raw

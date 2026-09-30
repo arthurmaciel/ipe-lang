@@ -512,9 +512,12 @@ pub enum SpawnRefusal {
     /// The spawner thread is gone: its job queue or the reply was disconnected.
     SpawnerGone,
     /// The spawner neither accepted nor answered the request within
-    /// `SPAWN_REPLY_CEILING`; the spawner kills and reaps any child it forks
-    /// for the abandoned request.
+    /// `SPAWN_REPLY_CEILING`; the spawner kills any child it forks for the
+    /// abandoned request.
     ReplyTimedOut,
+    /// The spawn job panicked on the spawner thread, which caught it and lives
+    /// on; no child was handed out.
+    SpawnPanicked,
     /// `spawn_hardened_tokio` was called outside a tokio runtime.
     #[cfg(all(feature = "web", not(target_arch = "wasm32")))]
     NoRuntime,
@@ -530,6 +533,7 @@ impl std::fmt::Display for SpawnRefusal {
             }
             Self::SpawnerGone => f.write_str("the process spawner thread is gone"),
             Self::ReplyTimedOut => f.write_str("the process spawner did not answer in time"),
+            Self::SpawnPanicked => f.write_str("the spawn panicked on the process spawner thread"),
             #[cfg(all(feature = "web", not(target_arch = "wasm32")))]
             Self::NoRuntime => f.write_str("no tokio runtime is active on the spawning thread"),
             Self::Spawn(e) => write!(f, "spawn failed ({})", e.kind()),
@@ -600,8 +604,9 @@ fn spawner() -> Result<&'static std::sync::mpsc::SyncSender<SpawnJob>, SpawnRefu
 
 /// Run every job `queue` yields, until it disconnects.
 ///
-/// A panicking job is contained so the spawner outlives it: the unwind drops
-/// that job's reply sender, and its requester sees `SpawnerGone`.
+/// A panicking job is contained so the spawner outlives it. A job's spawn
+/// panic is answered inside the job as `SpawnPanicked`; this containment is
+/// the backstop for a panic anywhere else in a job.
 fn run_spawn_jobs(queue: &std::sync::mpsc::Receiver<SpawnJob>) {
     while let Ok(job) = queue.recv() {
         let _unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
@@ -611,7 +616,9 @@ fn run_spawn_jobs(queue: &std::sync::mpsc::Receiver<SpawnJob>) {
 /// Run `spawn` on the spawner behind `jobs` and hand its child back.
 ///
 /// A child whose requester is no longer waiting is passed to `discard` on the
-/// spawner thread, so an abandoned request never leaves a child running.
+/// spawner thread, so an abandoned request never leaves a child running. A
+/// panic out of `spawn` is caught on the spawner thread and answered as
+/// `SpawnPanicked`.
 fn request_spawn<T: Send + 'static>(
     jobs: &std::sync::mpsc::SyncSender<SpawnJob>,
     ceiling: std::time::Duration,
@@ -626,9 +633,14 @@ fn request_spawn<T: Send + 'static>(
     // child sent just after the requester timed out, and dropping the receiver
     // would then drop that child unkilled; with no slot the late `send` fails
     // and `discard` reclaims the child on the spawner thread.
-    let (reply, answer) = std::sync::mpsc::sync_channel::<std::io::Result<T>>(0);
+    let (reply, answer) = std::sync::mpsc::sync_channel::<Result<T, SpawnRefusal>>(0);
     let mut job: SpawnJob = Box::new(move || {
-        if let Err(SendError(Ok(child))) = reply.send(spawn()) {
+        let spawned = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(spawn)) {
+            Ok(Ok(child)) => Ok(child),
+            Ok(Err(e)) => Err(SpawnRefusal::Spawn(e)),
+            Err(_payload) => Err(SpawnRefusal::SpawnPanicked),
+        };
+        if let Err(SendError(Ok(child))) = reply.send(spawned) {
             discard(child);
         }
     });
@@ -646,7 +658,7 @@ fn request_spawn<T: Send + 'static>(
         }
     }
     match answer.recv_timeout(ceiling.saturating_sub(start.elapsed())) {
-        Ok(spawned) => spawned.map_err(SpawnRefusal::Spawn),
+        Ok(spawned) => spawned,
         Err(RecvTimeoutError::Timeout) => Err(SpawnRefusal::ReplyTimedOut),
         Err(RecvTimeoutError::Disconnected) => Err(SpawnRefusal::SpawnerGone),
     }
@@ -698,7 +710,14 @@ fn spawn_hardened_on(
 ///
 /// The child is registered with the caller's tokio runtime (the spawner enters
 /// the caller's runtime handle to spawn it), so it is awaited like any tokio
-/// child, and the caller's `kill_on_drop` still applies.
+/// child, and the caller's `kill_on_drop` still applies. A child abandoned by
+/// a timed-out requester is killed; tokio's orphan queue reaps it when the
+/// runtime next handles `SIGCHLD`.
+///
+/// Registering a child needs the runtime's IO and signal drivers, and tokio
+/// panics when they are absent. On Unix the spawner claims a `SIGCHLD`
+/// listener before it forks, so a runtime built without `enable_io` is refused
+/// as `SpawnPanicked` with no child forked.
 ///
 /// # Errors
 ///
@@ -715,6 +734,8 @@ pub fn spawn_hardened_tokio(
         SPAWN_REPLY_CEILING,
         move || {
             let _runtime = handle.enter();
+            #[cfg(unix)]
+            let _drivers = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())?;
             harden_child_parent_death(cmd.as_std_mut());
             cmd.spawn()
         },
@@ -1918,6 +1939,59 @@ mod parent_death_floor_tests {
         let next = seen.recv_timeout(Duration::from_secs(10));
         runner.join().expect("the spawner loop must not unwind");
         assert_eq!(next, Ok(()), "the job after an unwind must still run");
+    }
+
+    /// A spawn that panics on the spawner is refused as `SpawnPanicked`, never
+    /// relabelled `SpawnerGone`, and the spawner runs the next request.
+    #[test]
+    fn a_panicking_spawn_is_refused_as_spawn_panicked() {
+        use super::request_spawn;
+        let (jobs, queue) = std::sync::mpsc::sync_channel::<SpawnJob>(1);
+        let runner = std::thread::spawn(move || run_spawn_jobs(&queue));
+        let refused = request_spawn(
+            &jobs,
+            Duration::from_secs(10),
+            || -> std::io::Result<()> { std::panic::resume_unwind(Box::new(())) },
+            |(): ()| {},
+        );
+        let next = request_spawn(&jobs, Duration::from_secs(10), || Ok(()), |(): ()| {});
+        drop(jobs);
+        runner.join().expect("the spawner loop must not unwind");
+        assert!(
+            matches!(refused, Err(SpawnRefusal::SpawnPanicked)),
+            "{refused:?}"
+        );
+        assert!(next.is_ok(), "{next:?}");
+    }
+
+    /// A tokio runtime without its IO driver is refused before the fork: the
+    /// command never runs, and the refusal is `SpawnPanicked`.
+    #[cfg(all(feature = "web", unix))]
+    #[test]
+    fn a_runtime_without_io_refuses_before_forking() {
+        use super::spawn_hardened_tokio;
+        let marker = crate::scratch_core::test_temp_root()
+            .join(format!("ipe-spawner-no-io-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let mut cmd = tokio::process::Command::new("/bin/sh");
+        cmd.arg("-c")
+            .arg(": > \"$1\"")
+            .arg("sh")
+            .arg(&marker)
+            .kill_on_drop(true);
+        let refused = rt.block_on(async { spawn_hardened_tokio(cmd) });
+        assert!(
+            matches!(refused, Err(SpawnRefusal::SpawnPanicked)),
+            "{refused:?}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            !marker.exists(),
+            "a refused spawn must never run the command"
+        );
     }
 
     /// A spawner that drops a request without answering it is reported gone.

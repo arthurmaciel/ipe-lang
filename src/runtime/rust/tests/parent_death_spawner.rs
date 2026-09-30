@@ -10,11 +10,15 @@
 #![cfg(target_os = "linux")]
 
 use ipe_runtime_rust::system::spawn_hardened;
+use std::io::BufRead as _;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Names the file the re-executed probe writes its hardened child's pid to.
-const PROBE_PID_FILE_ENV: &str = "IPE_PDEATH_PROBE_PID_FILE";
+/// Set on the re-executed probe; its presence selects probe mode.
+const PROBE_MODE_ENV: &str = "IPE_PDEATH_PROBE";
+
+/// Prefix of the stdout line on which the probe reports its hardened child's pid.
+const PROBE_PID_PREFIX: &str = "ipe-pdeath-probe-pid=";
 
 /// How long a child must outlive its requesting thread to count as alive.
 const OUTLIVE: Duration = Duration::from_millis(300);
@@ -24,7 +28,10 @@ const POLL_CEILING: Duration = Duration::from_secs(10);
 
 fn sleep_30() -> Command {
     let mut cmd = Command::new("/bin/sleep");
-    cmd.arg("30").stdin(Stdio::null());
+    cmd.arg("30")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     cmd
 }
 
@@ -58,53 +65,47 @@ fn proc_state(pid: u32) -> Option<char> {
 #[test]
 fn a_hardened_child_dies_with_its_killed_parent() {
     #[allow(clippy::disallowed_methods)] // an integration test has no crate-private env accessor
-    let probe_pid_file = std::env::var_os(PROBE_PID_FILE_ENV);
-    if let Some(pid_file) = probe_pid_file {
-        // Probe mode: spawn the hardened grandchild, publish its pid, then block
-        // on it until the outer test SIGKILLs this probe.
+    let probe_mode = std::env::var_os(PROBE_MODE_ENV).is_some();
+    if probe_mode {
+        // Probe mode: spawn the hardened grandchild, report its pid on stdout,
+        // then block on it until the outer test SIGKILLs this probe.
         let mut child = spawn_hardened(sleep_30()).expect("probe hardened spawn");
-        let staged = std::path::PathBuf::from(&pid_file).with_extension("staged");
-        std::fs::write(&staged, child.id().to_string()).expect("stage pid");
-        std::fs::rename(&staged, &pid_file).expect("publish pid");
+        println!("{PROBE_PID_PREFIX}{}", child.id());
         let _ = child.wait();
         return;
     }
 
-    #[allow(clippy::disallowed_methods)]
-    // an integration test has no crate-private temp-root accessor
-    let pid_file =
-        std::env::temp_dir().join(format!("ipe-pdeath-probe-{}.pid", std::process::id()));
-    let _ = std::fs::remove_file(&pid_file);
     let mut probe = Command::new(std::env::current_exe().expect("test binary"))
         .args([
             "a_hardened_child_dies_with_its_killed_parent",
             "--exact",
             "--nocapture",
         ])
-        .env(PROBE_PID_FILE_ENV, &pid_file)
+        .env(PROBE_MODE_ENV, "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("re-exec probe");
+    let stdout = probe.stdout.take().expect("probe stdout pipe");
 
-    let started = Instant::now();
-    let grandchild = loop {
-        if let Some(pid) = std::fs::read_to_string(&pid_file)
-            .ok()
-            .and_then(|s| s.trim().parse::<u32>().ok())
-        {
-            break Some(pid);
+    // The reader ends at EOF: the probe is killed below, and the grandchild
+    // holds no copy of the pipe.
+    let (pid_tx, pid_rx) = std::sync::mpsc::channel::<u32>();
+    let reader = std::thread::spawn(move || {
+        let reported = std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+            .find_map(|line| line.strip_prefix(PROBE_PID_PREFIX)?.trim().parse().ok());
+        if let Some(pid) = reported {
+            let _ = pid_tx.send(pid);
         }
-        if started.elapsed() >= POLL_CEILING {
-            break None;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
+    });
+    let grandchild = pid_rx.recv_timeout(POLL_CEILING).ok();
     let _ = probe.kill();
     let _ = probe.wait();
-    let _ = std::fs::remove_file(&pid_file);
-    let grandchild = grandchild.expect("the probe must publish its hardened child's pid");
+    reader.join().expect("probe stdout reader");
+    let grandchild = grandchild.expect("the probe must report its hardened child's pid");
 
     let killed = Instant::now();
     let died = loop {
