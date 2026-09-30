@@ -84,6 +84,10 @@ under : Path -> Path -> Result Error Path
 `under root child` — join the relative `child` beneath `root`. Returns
 `Err` when `child` is empty, absolute, contains a `..` element, or the
 join would not lie below `root`; otherwise `Ok` the cleaned joined `Path`.
+On Windows, a `child` element containing `:` (a drive or an alternate data
+stream), made only of dots and spaces (which Windows strips to `.` or
+`..`), or naming a reserved device (`CON`, `NUL`, `COM1`, `nul.txt`, ...)
+is refused too.
 
 ## `absolute`
 
@@ -92,6 +96,9 @@ absolute : Path -> Task Error Path
 ```
 
 `absolute path` — resolve `path` against the working directory. A path
-that is already absolute is returned unchanged; a relative one is joined
-beneath the working directory with `under`, so it inherits every refusal.
+rooted with its own volume is returned re-sealed. On Windows, a path rooted
+without a volume (`\x`) takes the working directory's volume, and is refused
+when the working directory names no complete volume. A relative path is joined beneath the
+working directory with `under`, so it inherits every refusal (including a
+drive-relative `C:x`). A working directory that is not UTF-8 is refused.
 
