@@ -2,7 +2,6 @@ module Lib.RepoPath exposing (PathError(..), Root, absolutize, describe, parseRo
 
 import Ipe.Error as Error
 import Ipe.File as File
-import Ipe.List as List
 import Ipe.Path as Path exposing (Path)
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
@@ -18,14 +17,12 @@ type Root
 
 
 -- Why a stored `tag:relative` index path was refused. Each variant carries the
--- stored path as it came off the index.
+-- stored path as it came off the index; the path refusals also carry the
+-- `Ipe.Path` error that decided them, so the rules live in `Ipe.Path` alone.
 type PathError
     = MissingTag String
-    | EmptyRelative String
-    | AbsoluteRelative String
-    | TraversalRelative String
-    | InvalidRelative String
-    | NotUnderRoot String
+    | InvalidRelative String Error
+    | NotUnderRoot String Error
 
 
 rootPath : Root -> Path
@@ -39,7 +36,10 @@ rootPath root =
 -- relative one is resolved against the working directory. The result is a
 -- sealed `Path`, so a NUL byte is refused and `..` segments are cleaned
 -- against the absolute prefix instead of reaching a later join as a leading
--- `..`.
+-- `..`. This is resolution of operator configuration, not a containment
+-- join: a relative value may climb above the working directory (which
+-- `Path.absolute` refuses) exactly as an absolute value may name any
+-- directory, so nothing here is confined and `Path.under` does not apply.
 absolutize : String -> Task.Task Error Path
 absolutize raw =
     if String.startsWith "/" raw then
@@ -85,11 +85,12 @@ rootRefusal raw problem =
 
 
 -- A stored `tag:relative` path joined under the root. The first `:`-segment is
--- the repo tag; the rest is the relative path. Refused: no tag or an empty
--- one, an empty or absolute relative path, any `..` segment, a path `Ipe.Path`
--- rejects, and a join that does not land strictly below the root. The check is
--- lexical: a symlink under the root is followed by the read that uses the
--- result.
+-- the repo tag; the rest is the relative path, sealed by `Path.fromString`
+-- and joined by `Path.under`, which alone decide every path refusal: a NUL
+-- byte or a `..` climbing out of the path is `InvalidRelative`; an empty,
+-- `.`, or absolute path, or a join not strictly below the root, is
+-- `NotUnderRoot`. The check is lexical: a symlink under the root is followed
+-- by the read that uses the result.
 resolve : Root -> String -> Result PathError Path
 resolve root stored =
     case String.split ":" stored of
@@ -104,59 +105,18 @@ resolve root stored =
                 Err (MissingTag stored)
 
             else
-                resolveRelative root stored (String.join ":" rest)
+                joinUnder root stored (String.join ":" rest)
 
 
-resolveRelative : Root -> String -> String -> Result PathError Path
-resolveRelative root stored rel =
-    if rel == "" then
-        Err (EmptyRelative stored)
+joinUnder : Root -> String -> String -> Result PathError Path
+joinUnder root stored rel =
+    case Path.fromString rel of
+        Err e ->
+            Err (InvalidRelative stored e)
 
-    else if String.startsWith "/" rel then
-        Err (AbsoluteRelative stored)
-
-    else if List.member ".." (String.split "/" rel) then
-        Err (TraversalRelative stored)
-
-    else
-        case Path.fromString rel of
-            Err _ ->
-                Err (InvalidRelative stored)
-
-            Ok relPath ->
-                if Path.isAbsolute relPath then
-                    Err (AbsoluteRelative stored)
-
-                else
-                    joinUnder root stored relPath
-
-
--- The single join of a relative `Path` onto the root. Both operands are sealed
--- `Path`s; the joined text is re-sealed through `Path.fromString`, then must
--- sit strictly below the root's directory prefix.
-joinUnder : Root -> String -> Path -> Result PathError Path
-joinUnder root stored relPath =
-    let
-        base =
-            Path.toString (rootPath root)
-
-        prefix =
-            if String.endsWith "/" base then
-                base
-
-            else
-                base ++ "/"
-    in
-    case Path.fromString (prefix ++ Path.toString relPath) of
-        Err _ ->
-            Err (InvalidRelative stored)
-
-        Ok joined ->
-            if String.startsWith prefix (Path.toString joined) && Path.toString joined /= base then
-                Ok joined
-
-            else
-                Err (NotUnderRoot stored)
+        Ok relPath ->
+            Path.under (rootPath root) relPath
+                |> Result.mapError (\e -> NotUnderRoot stored e)
 
 
 describe : PathError -> String
@@ -165,20 +125,11 @@ describe err =
         MissingTag stored ->
             "index path \"" ++ stored ++ "\" has no `tag:` prefix"
 
-        EmptyRelative stored ->
-            "index path \"" ++ stored ++ "\" has an empty relative path"
+        InvalidRelative stored e ->
+            "index path \"" ++ stored ++ "\" is not a valid relative path (" ++ Error.message e ++ ")"
 
-        AbsoluteRelative stored ->
-            "index path \"" ++ stored ++ "\" is absolute; index paths are relative to IPE_INDEX_ROOT"
-
-        TraversalRelative stored ->
-            "index path \"" ++ stored ++ "\" has a `..` segment and could escape IPE_INDEX_ROOT"
-
-        InvalidRelative stored ->
-            "index path \"" ++ stored ++ "\" is not a valid path"
-
-        NotUnderRoot stored ->
-            "index path \"" ++ stored ++ "\" does not join to a path under IPE_INDEX_ROOT"
+        NotUnderRoot stored e ->
+            "index path \"" ++ stored ++ "\" does not join to a path under IPE_INDEX_ROOT (" ++ Error.message e ++ ")"
 
 
 toError : PathError -> Error
