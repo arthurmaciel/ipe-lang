@@ -6,7 +6,9 @@
 //! accessible directory, a non-sticky world-writable base, and a tag file that
 //! is a planted symlink (whose target must stay untouched). The pure verdicts
 //! are driven with synthetic `ls -l` facts, so the foreign-owner and
-//! foreign-group refusals need no second account.
+//! foreign-group refusals need no second account. Every refusal also pins the
+//! reason token the installer's diagnostic names, and that the printed facts are
+//! terminal-safe.
 #![cfg(unix)]
 
 use std::io;
@@ -63,6 +65,29 @@ fn verdict_accepts(function: &str, args: &[&str]) -> io::Result<bool> {
         .status()?;
     Ok(status.success())
 }
+
+/// The stdout of `sh` running `body` after the helper block, with `args` as `$@`.
+fn helper_stdout(body: &str, args: &[&str]) -> io::Result<Vec<u8>> {
+    let script = format!("{}\n{body}\n", helpers()?);
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .arg("sh")
+        .args(args)
+        .output()?;
+    Ok(output.stdout)
+}
+
+/// The reason token `scratch_base_reason` prints for the literal `args`.
+fn base_reason(args: &[&str]) -> io::Result<String> {
+    let stdout = helper_stdout("scratch_base_reason \"$@\"", args)?;
+    Ok(String::from_utf8_lossy(&stdout).trim_end().to_owned())
+}
+
+/// Prints the refused path, reason token and refusal sentence `trusted_tmp_base`
+/// leaves for `$1`, one per line; nothing when `$1` is trusted.
+const REFUSAL_REPORT: &str = "trusted_tmp_base \"$1\" >/dev/null || \
+     { printf '%s\\n%s\\n' \"$TMP_REFUSED_PATH\" \"$TMP_REFUSED_REASON\"; tmp_base_refusal; }";
 
 /// A test root under the per-binary target temp dir.
 fn root(label: &str) -> io::Result<ScratchDir> {
@@ -160,7 +185,8 @@ fn the_installer_routes_its_scratch_through_the_helpers() -> io::Result<()> {
     let script = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../install.sh"))?;
     for needle in [
         "tag_file_ok \"$TAG_FILE\"",
-        "trusted_tmp_base \"${TMPDIR:-/tmp}\"",
+        "trusted_tmp_base \"${TMPDIR:-/tmp}\" >/dev/null || die \"$(tmp_base_refusal)\"",
+        "scratch_base=\"$TMP_TRUSTED_BASE\"",
         "mktemp -d \"$scratch_base/ipe-install.XXXXXX\"",
         "private_dir_ok \"$tmp\"",
         "mktemp \"$IPE_HOME/.env.XXXXXX\"",
@@ -195,56 +221,169 @@ fn scratch_base_verdict_accepts_only_trusted_components() -> io::Result<()> {
             verdict_accepts("scratch_base_verdict", &[mode, owner, group, ME, MY_GID])?,
             "{mode} {owner}:{group} must be accepted"
         );
+        assert_eq!(
+            base_reason(&[mode, owner, group, ME, MY_GID])?,
+            "",
+            "{mode} {owner}:{group} must carry no refusal reason"
+        );
     }
     Ok(())
 }
 
 #[test]
-fn scratch_base_verdict_refuses_every_untrusted_component() -> io::Result<()> {
-    for (mode, owner, group, why) in [
-        ("drwxr-xr-x", "1001", "1001", "a foreign owner"),
+fn scratch_base_verdict_refuses_every_untrusted_component_with_its_reason() -> io::Result<()> {
+    for (mode, owner, group, reason, why) in [
+        (
+            "drwxr-xr-x",
+            "1001",
+            "1001",
+            "foreign-owner",
+            "a foreign owner",
+        ),
         (
             "drwxrwxr-x",
             "0",
             MY_GID,
+            "group-writable",
             "a group-writable root-owned directory",
         ),
         (
             "drwxrwxr-x",
             ME,
             "1001",
+            "group-writable",
             "a group-writable directory in a foreign group",
         ),
         (
             "drwxrwxr-x+",
             ME,
             MY_GID,
+            "acl",
             "an own-group-writable directory carrying an ACL",
         ),
         (
             "drwxrwxrwx",
             ME,
             MY_GID,
+            "world-writable-not-sticky",
             "a non-sticky world-writable directory",
         ),
         (
             "drwxrwxrwx",
             "0",
             "0",
+            "world-writable-not-sticky",
             "a non-sticky world-writable root directory",
         ),
-        ("-rw-------", ME, MY_GID, "a regular file"),
-        ("lrwxrwxrwx", ME, MY_GID, "a symlink"),
-        ("", ME, MY_GID, "an empty mode"),
+        ("-rw-------", ME, MY_GID, "not-a-dir", "a regular file"),
+        ("lrwxrwxrwx", ME, MY_GID, "symlink", "a symlink"),
+        ("", ME, MY_GID, "empty-mode", "an empty mode"),
     ] {
+        let args = [mode, owner, group, ME, MY_GID];
         assert!(
-            !verdict_accepts("scratch_base_verdict", &[mode, owner, group, ME, MY_GID])?,
+            !verdict_accepts("scratch_base_verdict", &args)?,
             "{why} ({mode} {owner}:{group}) must be refused"
         );
+        assert_eq!(
+            base_reason(&args)?,
+            reason,
+            "{why} ({mode} {owner}:{group}) must be refused as {reason}"
+        );
     }
+    let unknown = ["drwx------", "", "", "", ""];
     assert!(
-        !verdict_accepts("scratch_base_verdict", &["drwx------", "", "", "", ""])?,
+        !verdict_accepts("scratch_base_verdict", &unknown)?,
         "an unknown identity must be refused"
+    );
+    assert_eq!(base_reason(&unknown)?, "unknown-identity");
+    Ok(())
+}
+
+#[test]
+fn trusted_tmp_base_names_the_refused_ancestor_not_the_leaf() -> io::Result<()> {
+    let r = root("install-refused-ancestor")?;
+    let open = r.child("open");
+    mkdir_mode(&open, 0o777)?;
+    let leaf = open.join("leaf");
+    mkdir_mode(&leaf, 0o700)?;
+    let leaf_arg = leaf.to_string_lossy().into_owned();
+    let report =
+        String::from_utf8_lossy(&helper_stdout(REFUSAL_REPORT, &[&leaf_arg])?).into_owned();
+    let open_physical = std::fs::canonicalize(&open)?.to_string_lossy().into_owned();
+    let mut lines = report.lines();
+    assert_eq!(
+        lines.next(),
+        Some(open_physical.as_str()),
+        "the refused path must be the non-sticky ancestor"
+    );
+    assert_eq!(lines.next(), Some("world-writable-not-sticky"));
+    let sentence = lines.next().unwrap_or_default();
+    for needle in [
+        open_physical.as_str(),
+        "mode drwxrwxrwx",
+        "lacks the sticky bit",
+        "[world-writable-not-sticky]",
+        "Set TMPDIR to a directory you own with mode 700.",
+    ] {
+        assert!(
+            sentence.contains(needle),
+            "the refusal `{sentence}` must name `{needle}`"
+        );
+    }
+
+    let missing = r.child("missing").to_string_lossy().into_owned();
+    let report = String::from_utf8_lossy(&helper_stdout(REFUSAL_REPORT, &[&missing])?).into_owned();
+    assert_eq!(report.lines().nth(1), Some("unresolvable"));
+
+    let sticky = r.child("sticky");
+    mkdir_mode(&sticky, 0o1777)?;
+    let sticky_arg = sticky.to_string_lossy().into_owned();
+    assert!(
+        helper_stdout(REFUSAL_REPORT, &[&sticky_arg])?.is_empty(),
+        "a trusted base must leave no refusal"
+    );
+    Ok(())
+}
+
+#[test]
+fn tmp_base_refusal_names_an_unmapped_owner() -> io::Result<()> {
+    let body = "TMP_REFUSED_PATH=/tmp TMP_REFUSED_OWNER=65534 TMP_REFUSED_MODE=drwxrwxrwt \
+                TMP_REFUSED_REASON=foreign-owner; tmp_base_refusal";
+    let sentence = String::from_utf8_lossy(&helper_stdout(body, &[])?).into_owned();
+    for needle in ["owner uid 65534", "[foreign-owner]", "user namespace"] {
+        assert!(
+            sentence.contains(needle),
+            "the refusal `{sentence}` must name `{needle}`"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn the_refusal_escapes_control_bytes_in_printed_facts() -> io::Result<()> {
+    let escaped = helper_stdout("safe_text \"$1\"", &["a\u{1b}[31mb\u{9b}c\u{7f}\u{e9}"])?;
+    assert_eq!(
+        String::from_utf8_lossy(&escaped),
+        "a\\033[31mb\\302\\233c\\177\u{e9}",
+        "C0, UTF-8 C1 and DEL must print as octal escapes; other text stays"
+    );
+
+    let r = root("install-escape")?;
+    let hostile = r.child("open\u{1b}[31m");
+    mkdir_mode(&hostile, 0o777)?;
+    let hostile_arg = hostile.to_string_lossy().into_owned();
+    let report = helper_stdout(REFUSAL_REPORT, &[&hostile_arg])?;
+    let sentence = report
+        .split(|byte| *byte == b'\n')
+        .nth(2)
+        .unwrap_or_default();
+    assert!(
+        !sentence.contains(&0x1b),
+        "the refusal must not carry a raw ESC byte"
+    );
+    assert!(
+        String::from_utf8_lossy(sentence).contains("open\\033[31m"),
+        "the refusal must print the ESC byte escaped"
     );
     Ok(())
 }

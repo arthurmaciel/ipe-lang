@@ -45,50 +45,132 @@ SCRATCH_LS
   scratch_private_verdict "$_sp_mode" "$_sp_uid" "$(id -u)" "$2"
 }
 
-# scratch_base_verdict MODE OWNER GROUP ME MYGID — an entry with `ls -l` mode
-# string MODE, owner uid OWNER and group gid GROUP is a trusted base component
-# for uid ME (primary gid MYGID): a directory owned by ME or root, writable by no
-# one else unless sticky. Group-writable is allowed only for ME's own directory
-# in group MYGID with no ACL, the user-private-group layout.
-scratch_base_verdict() {
-  [ -n "$4" ] || return 1
-  case "$1" in d*) ;; *) return 1 ;; esac
-  [ "$2" = "$4" ] || [ "$2" = 0 ] || return 1
+# scratch_base_reason MODE OWNER GROUP ME MYGID — the rule an entry with `ls -l`
+# mode string MODE, owner uid OWNER and group gid GROUP breaks as a trusted base
+# component for uid ME (primary gid MYGID), as one token; nothing when it is
+# trusted. Trusted: a directory owned by ME or root, writable by no one else
+# unless sticky. Group-writable is allowed only for ME's own directory in group
+# MYGID with no ACL, the user-private-group layout.
+scratch_base_reason() {
+  [ -n "$4" ] || { echo unknown-identity; return 0; }
+  case "$1" in
+    '') echo empty-mode; return 0 ;;
+    l*) echo symlink; return 0 ;;
+    d*) ;;
+    *) echo not-a-dir; return 0 ;;
+  esac
+  [ "$2" = "$4" ] || [ "$2" = 0 ] || { echo foreign-owner; return 0; }
   case "$1" in d????????[tT]*) return 0 ;; esac
-  case "$1" in d???????w*) return 1 ;; esac
+  case "$1" in d???????w*) echo world-writable-not-sticky; return 0 ;; esac
   case "$1" in
     # An ACL (`+`) can grant a named user write through the group mask.
-    d????w*+) return 1 ;;
-    d????w*) [ "$2" = "$4" ] && [ -n "$5" ] && [ "$3" = "$5" ] || return 1 ;;
+    d????w*+) echo acl ;;
+    d????w*)
+      [ "$2" = "$4" ] && [ -n "$5" ] && [ "$3" = "$5" ] || echo group-writable
+      ;;
   esac
   return 0
 }
 
-# scratch_base_entry_ok DIR ME MYGID — DIR passes scratch_base_verdict.
-scratch_base_entry_ok() {
-  _be_ls="$(ls -ldn -- "$1" 2>/dev/null)" || return 1
+# scratch_base_verdict MODE OWNER GROUP ME MYGID — scratch_base_reason finds no
+# broken rule.
+scratch_base_verdict() {
+  [ -z "$(scratch_base_reason "$@")" ]
+}
+
+# safe_text TEXT — TEXT with every C0 control, DEL and UTF-8-encoded C1 control
+# written as a `\ooo` octal escape, so a printed path cannot drive the terminal.
+safe_text() {
+  printf '%sx' "$1" | LC_ALL=C awk '
+    BEGIN { for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i; out = "" }
+    {
+      if (NR > 1) out = out "\\012"
+      n = length($0); prev = 0
+      for (i = 1; i <= n; i++) {
+        c = substr($0, i, 1); o = ord[c]
+        if (o < 32 || o == 127) { out = out sprintf("\\%03o", o); prev = o; continue }
+        if (o == 194 && i < n) {
+          nx = ord[substr($0, i + 1, 1)]
+          if (nx >= 128 && nx < 160) { out = out sprintf("\\%03o\\%03o", o, nx); i++; prev = nx; continue }
+        }
+        if (o >= 128 && o < 160 && prev < 128) { out = out sprintf("\\%03o", o); prev = o; continue }
+        out = out c; prev = o
+      }
+    }
+    END { printf "%s", substr(out, 1, length(out) - 1) }'
+}
+
+# scratch_base_entry_reason DIR ME MYGID — set TMP_REFUSED_REASON to the
+# scratch_base_reason token for DIR (`unreadable` when `ls` cannot describe it),
+# and TMP_REFUSED_OWNER / TMP_REFUSED_MODE to the facts it was judged on.
+scratch_base_entry_reason() {
+  TMP_REFUSED_OWNER=''; TMP_REFUSED_MODE=''; TMP_REFUSED_REASON=unreadable
+  _be_ls="$(ls -ldn -- "$1" 2>/dev/null)" || return 0
   read -r _be_mode _be_links _be_uid _be_gid _be_rest <<SCRATCH_LS
 $_be_ls
 SCRATCH_LS
-  scratch_base_verdict "$_be_mode" "$_be_uid" "$_be_gid" "$2" "$3"
+  TMP_REFUSED_OWNER="$_be_uid"; TMP_REFUSED_MODE="$_be_mode"
+  TMP_REFUSED_REASON="$(scratch_base_reason "$_be_mode" "$_be_uid" "$_be_gid" "$2" "$3")"
 }
 
-# trusted_tmp_base BASE — print BASE's physical (symlink-free) path when it and
-# every ancestor pass scratch_base_entry_ok; fail otherwise.
+# trusted_tmp_base BASE — print BASE's physical (symlink-free) path and set
+# TMP_TRUSTED_BASE to it when it and every ancestor pass scratch_base_reason;
+# fail otherwise, recording the refused component in TMP_REFUSED_PATH,
+# TMP_REFUSED_OWNER, TMP_REFUSED_MODE and TMP_REFUSED_REASON. Call it in the
+# current shell (not `$(...)`) to read those variables back.
 trusted_tmp_base() {
+  TMP_TRUSTED_BASE=''; TMP_REFUSED_PATH="$1"; TMP_REFUSED_OWNER=''
+  TMP_REFUSED_MODE=''; TMP_REFUSED_REASON=unresolvable
   _tb_dir="$(cd -P -- "$1" 2>/dev/null && pwd -P)" || return 1
   [ -n "$_tb_dir" ] || return 1
   if [ "$SCRATCH_POSIX_MODES" = 1 ]; then
     _tb_me="$(id -u)"; _tb_grp="$(id -g)"; _tb_walk="$_tb_dir"; _tb_left=256
     while :; do
-      scratch_base_entry_ok "$_tb_walk" "$_tb_me" "$_tb_grp" || return 1
+      TMP_REFUSED_PATH="$_tb_walk"
+      scratch_base_entry_reason "$_tb_walk" "$_tb_me" "$_tb_grp"
+      [ -z "$TMP_REFUSED_REASON" ] || return 1
       case "$_tb_walk" in /|//) break ;; esac
       _tb_left=$((_tb_left - 1))
-      [ "$_tb_left" -gt 0 ] || return 1
+      [ "$_tb_left" -gt 0 ] || {
+        TMP_REFUSED_OWNER=''; TMP_REFUSED_MODE=''; TMP_REFUSED_REASON=too-deep
+        return 1
+      }
       _tb_walk="$(dirname -- "$_tb_walk")"
     done
   fi
+  TMP_REFUSED_PATH=''; TMP_REFUSED_OWNER=''; TMP_REFUSED_MODE=''
+  TMP_REFUSED_REASON=''; TMP_TRUSTED_BASE="$_tb_dir"
   printf '%s\n' "$_tb_dir"
+}
+
+# tmp_base_refusal — the sentence explaining the last trusted_tmp_base refusal:
+# the refused path, its owner and mode, the broken rule, and the remedy.
+tmp_base_refusal() {
+  case "$TMP_REFUSED_REASON" in
+    unknown-identity) _tr_rule="your user id could not be determined" ;;
+    empty-mode) _tr_rule="its permissions could not be read" ;;
+    unreadable) _tr_rule="it could not be listed" ;;
+    unresolvable) _tr_rule="it does not exist or cannot be entered" ;;
+    too-deep) _tr_rule="it is nested too deep to verify" ;;
+    symlink) _tr_rule="it is a symbolic link" ;;
+    not-a-dir) _tr_rule="it is not a directory" ;;
+    foreign-owner) _tr_rule="it is owned by another user (neither you nor root)" ;;
+    world-writable-not-sticky) _tr_rule="anyone can write to it and it lacks the sticky bit" ;;
+    acl) _tr_rule="it is group-writable and carries an ACL that can grant other users write" ;;
+    group-writable) _tr_rule="it is writable by a group other than your own private group" ;;
+    *) _tr_rule="it failed the private-scratch check" ;;
+  esac
+  _tr_msg="Refusing the temp directory $(safe_text "${TMPDIR:-/tmp}"): $(safe_text "$TMP_REFUSED_PATH")"
+  if [ -n "$TMP_REFUSED_OWNER$TMP_REFUSED_MODE" ]; then
+    _tr_msg="$_tr_msg (owner uid $(safe_text "$TMP_REFUSED_OWNER"), mode $(safe_text "$TMP_REFUSED_MODE"))"
+  fi
+  _tr_msg="$_tr_msg: $_tr_rule [$TMP_REFUSED_REASON]."
+  case "$TMP_REFUSED_OWNER" in
+    65534|nobody)
+      _tr_msg="$_tr_msg Owner uid 65534 (nobody) usually means a uid unmapped in this container or user namespace."
+      ;;
+  esac
+  printf '%s Set TMPDIR to a directory you own with mode 700.\n' "$_tr_msg"
 }
 
 # private_dir_ok DIR — DIR is a real directory owned by us with mode 0700 bits.
@@ -477,8 +559,8 @@ if [ "$have_bin" != 1 ]; then
 fi
 
 # ── Download the binary with a friendly progress display ─────────────────────
-scratch_base="$(trusted_tmp_base "${TMPDIR:-/tmp}")" \
-  || die "Refusing the temp directory ${TMPDIR:-/tmp}: it (or a parent) is writable or owned by another user."
+trusted_tmp_base "${TMPDIR:-/tmp}" >/dev/null || die "$(tmp_base_refusal)"
+scratch_base="$TMP_TRUSTED_BASE"
 tmp="$(mktemp -d "$scratch_base/ipe-install.XXXXXX")" \
   || die "Could not create a private temp directory under $scratch_base."
 trap 'rm -rf "$tmp"' EXIT
