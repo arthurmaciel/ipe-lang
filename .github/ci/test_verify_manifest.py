@@ -2434,6 +2434,7 @@ def _with_rules(*swap: tuple[str, object]) -> dict:
 
 _ENV_MAIN_ONLY = {
     "name": "ruleset-admin-read",
+    "can_admins_bypass": False,
     "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True},
 }
 _POLICIES_MAIN = {"total_count": 1, "branch_policies": [{"id": 1, "name": "main", "type": "branch"}]}
@@ -2695,8 +2696,8 @@ class TestSsotOutputTools(unittest.TestCase):
                 self.assertNotIn(sentinel, stderr)
 
     def test_check_required_set_fetch_admin_refuses_an_environment_not_confined_to_main(self) -> None:
-        def env_with(policy: object, name: str = "ruleset-admin-read") -> dict:
-            return {"name": name, "deployment_branch_policy": policy}
+        def env_with(policy: object, name: str = "ruleset-admin-read", **extra: object) -> dict:
+            return {"name": name, "can_admins_bypass": False, "deployment_branch_policy": policy, **extra}
 
         def policies(*items: dict, total: int | None = None) -> dict:
             return {"total_count": len(items) if total is None else total, "branch_policies": list(items)}
@@ -2708,6 +2709,12 @@ class TestSsotOutputTools(unittest.TestCase):
             (None, None),
             ([], None),
             (env_with(custom, name="prod"), _POLICIES_MAIN),
+            # Administrators may bypass the branch policy, or the flag is not the bool `False`.
+            (env_with(custom, can_admins_bypass=True), _POLICIES_MAIN),
+            (env_with(custom, can_admins_bypass=None), _POLICIES_MAIN),
+            (env_with(custom, can_admins_bypass=0), _POLICIES_MAIN),
+            (env_with(custom, can_admins_bypass="false"), _POLICIES_MAIN),
+            ({"name": "ruleset-admin-read", "deployment_branch_policy": custom}, _POLICIES_MAIN),
             # Every branch may deploy.
             (env_with(None), None),
             (env_with("all"), None),

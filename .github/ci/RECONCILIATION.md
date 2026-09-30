@@ -68,7 +68,9 @@ An owner does this once, before the first scheduled run:
 
 1. Create the environment `ruleset-admin-read` (Settings → Environments) with
    deployment branches set to selected branches, with one branch rule naming
-   exactly `main` (the protected-branches setting is refused).
+   exactly `main` (the protected-branches setting is refused), and with
+   "Allow administrators to bypass configured protection rules" unchecked
+   (an administrator bypass is refused).
 2. Add `RULESET_READ_TOKEN` to it as an environment secret: a fine-grained
    token on this repository with the repository permissions Administration:
    read (the ruleset, `bypass_actors` included) and Actions: read (the

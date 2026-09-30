@@ -287,9 +287,10 @@ def diff(expected: list[Pair], actual: list[Pair], what: str, fix: str) -> list[
 @dataclass(frozen=True)
 class CustomMainOnly:
     """The one deployment-branch policy `ADMIN_READ_ENVIRONMENT` may carry:
-    custom branch policies that are exactly the branch `main`. Protected-
-    branches mode is not admitted: with no classic protection rule on the
-    repository, GitHub lets every branch deploy under it."""
+    custom branch policies that are exactly the branch `main`, with no
+    administrator bypass. Protected-branches mode is not admitted: with no
+    classic protection rule on the repository, GitHub lets every branch deploy
+    under it. An administrator bypass would let an admin deploy any branch."""
 
 
 EnvPolicy = CustomMainOnly
@@ -308,6 +309,10 @@ def parse_env_policy(env: object, fetch_policies: Callable[[], object]) -> EnvPo
     where = f"environment {ADMIN_READ_ENVIRONMENT!r}"
     if not isinstance(env, dict) or env.get("name") != ADMIN_READ_ENVIRONMENT:
         raise Refused(f"{where}: the API returned no environment of that name — {ENV_POLICY_FIX}")
+    try:
+        _pin(env.get("can_admins_bypass"), False, f"{where} can_admins_bypass")
+    except Refused as e:
+        raise Refused(f"{e}; administrators must not bypass its branch policy — {ENV_POLICY_FIX}") from e
     policy = env.get("deployment_branch_policy")
     if policy is None:
         raise Refused(f"{where}: no deployment-branch policy, so every branch may deploy — {ENV_POLICY_FIX}")
