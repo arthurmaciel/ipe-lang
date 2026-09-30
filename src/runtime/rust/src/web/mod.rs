@@ -1921,8 +1921,8 @@ where
             }
             // A mount has no task-error channel (it yields a `Router`, not an
             // `IpeTask`), so an unhonourable store config fails closed as a
-            // router that answers every path with 503 + the operator message —
-            // never a silent downgrade to a different backend and never a mount
+            // router that answers every path with the fixed 503 body (the
+            // operator detail goes to the runtime log) — never a silent downgrade to a different backend and never a mount
             // that quietly serves real sessions on the wrong store.
             let store = match store::choose_store::<Model, Msg>(
                 &store_kind,
@@ -1933,7 +1933,7 @@ where
             .await
             {
                 Ok(s) => s,
-                Err(e) => return fail_closed_router(format!("session store misconfigured: {e}")),
+                Err(e) => return fail_closed_router(&StartupRefusal::SessionStore(e)),
             };
             let state = WebState {
                 store,
@@ -1950,6 +1950,7 @@ where
             // The router is E-free (E only surfaces on the standalone
             // `serve_web` task's result), so `build_web_router` carries no `E`.
             build_web_router::<Model, Msg, FInit, FUpdate, FView, FSubs>(state, false)
+                .unwrap_or_else(|cause| fail_closed_router(&cause))
         }) as std::pin::Pin<Box<dyn std::future::Future<Output = axum::Router> + Send>>
     })
 }
@@ -2013,7 +2014,7 @@ where
             }
             // A malformed route pattern refuses the mount, never a dead route.
             if let Err(refusal) = route::check_route_table(&routes) {
-                return fail_closed_router(refusal.to_string());
+                return fail_closed_router(&StartupRefusal::RouteTable(refusal));
             }
             // Routed resolvers — identical construction to `web_app_routed`; only
             // the terminal `build_web_router` (vs `serve_web`) differs.
@@ -2040,7 +2041,7 @@ where
             .await
             {
                 Ok(s) => s,
-                Err(e) => return fail_closed_router(format!("session store misconfigured: {e}")),
+                Err(e) => return fail_closed_router(&StartupRefusal::SessionStore(e)),
             };
             let state = WebState {
                 store,
@@ -2055,6 +2056,7 @@ where
                 watch_build_status: Arc::new(Mutex::new(None)),
             };
             build_web_router::<Model, Msg, FInit, FUpdate, FView, FSubs>(state, false)
+                .unwrap_or_else(|cause| fail_closed_router(&cause))
         }) as std::pin::Pin<Box<dyn std::future::Future<Output = axum::Router> + Send>>
     })
 }
@@ -2216,19 +2218,69 @@ where
     crate::tea::WebApp(crate::tea::WebAppKind::Mountable { serve, router })
 }
 
-/// A router that answers EVERY path with `503 Service Unavailable` + a plain
-/// message naming the startup fault. Used when a mounted `Web.embed` cannot
-/// start as declared — an unhonourable store config, or a route table holding
-/// a malformed pattern (fail-closed): the mount stays reachable enough to
-/// report the fault, but never serves a real session on a silently-degraded
-/// store or a silently-dead route. The startup fault
-/// is logged once here too, so an operator sees it even without hitting a path.
-#[cfg(feature = "web")]
-fn fail_closed_router(message: String) -> axum::Router {
-    crate::system::emit_runtime_log("live", &format!("mounted web app disabled: {message}"));
-    axum::Router::new().fallback(move || {
-        let message = message.clone();
-        async move { (axum::http::StatusCode::SERVICE_UNAVAILABLE, message) }
+/// Why a live web app refused to start as declared. The `Display` text is the
+/// operator detail: it goes to the runtime log (a mount) or to the local task
+/// error (a standalone app), never into a response body.
+#[cfg(feature = "server")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StartupRefusal {
+    /// The route table holds a literal pattern that does not decode.
+    RouteTable(route::RoutePatternRefusal),
+    /// The session store config cannot be honoured.
+    SessionStore(store::StoreConfigError),
+    /// The base path (`IPE_WEB_BASE_PATH` / the mount prefix) does not decode.
+    BasePath {
+        base: String,
+        refusal: crate::encoding::DecodeRefusal,
+    },
+}
+
+#[cfg(feature = "server")]
+impl std::fmt::Display for StartupRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RouteTable(refusal) => write!(f, "{refusal}"),
+            Self::SessionStore(e) => write!(f, "session store misconfigured: {e}"),
+            Self::BasePath { base, refusal } => {
+                write!(f, "web base path `{base}` is malformed: {refusal}")
+            }
+        }
+    }
+}
+
+/// The fixed public body of a fail-closed mount's 503. One constant for every
+/// [`StartupRefusal`], so a response never carries the operator detail.
+#[cfg(feature = "server")]
+pub(crate) const FAIL_CLOSED_BODY: &str =
+    "Service Unavailable: this app could not start. The server log names the fault.";
+
+/// Parse the normalised base path once into the [`route::DecodedPath`] the
+/// SSE reconnect strips from a client route. The empty base is the root.
+///
+/// # Errors
+///
+/// [`StartupRefusal::BasePath`] for a base that is not a well-formed path.
+#[cfg(feature = "server")]
+fn parse_route_base(base: &str) -> Result<route::DecodedPath, StartupRefusal> {
+    route::DecodedPath::parse(base).map_err(|refusal| StartupRefusal::BasePath {
+        base: base.to_string(),
+        refusal,
+    })
+}
+
+/// A router that answers EVERY path with `503 Service Unavailable` and the
+/// fixed [`FAIL_CLOSED_BODY`]. Used when a mounted `Web.embed` cannot start as
+/// declared (fail-closed): the mount stays reachable enough to report that it
+/// is down, but never serves a real session on a silently-degraded store or a
+/// silently-dead route. The cause is logged once here, server-side only.
+#[cfg(feature = "server")]
+fn fail_closed_router(cause: &StartupRefusal) -> axum::Router {
+    crate::system::emit_runtime_log("live", &format!("mounted web app disabled: {cause}"));
+    axum::Router::new().fallback(|| async {
+        (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            FAIL_CLOSED_BODY,
+        )
     })
 }
 
@@ -2437,7 +2489,8 @@ fn static_noise_mime(ext: &str) -> &'static str {
 /// touched. A value that is not a bare path (no leading `/`, or carrying a `?`
 /// or `#`) names nothing to reconcile (`Ok(None)`).
 ///
-/// A non-empty `base` (the normalised `IPE_WEB_BASE_PATH`) is stripped on a
+/// `base` is the normalised `IPE_WEB_BASE_PATH`, parsed once when the router
+/// is built (the root when unset, which strips nothing). It is stripped on a
 /// whole-segment boundary ([`route::DecodedPath::strip_base`]): base `/app`
 /// strips `/app/x` to `/x` and `/app` to `/`, and never touches `/apple`. A
 /// path not under the base is matched whole, since the base is process-wide
@@ -2450,19 +2503,14 @@ fn static_noise_mime(ext: &str) -> &'static str {
 #[cfg(feature = "server")]
 fn client_route_path(
     raw: &str,
-    base: &str,
+    base: &route::DecodedPath,
 ) -> Result<Option<route::DecodedPath>, crate::server::RequestRejection> {
     let path =
         route::DecodedPath::parse(raw).map_err(|_| crate::server::RequestRejection::BadRequest)?;
     if !raw.starts_with('/') || raw.contains('?') || raw.contains('#') {
         return Ok(None);
     }
-    if base.is_empty() {
-        return Ok(Some(path));
-    }
-    let under_base = route::DecodedPath::parse(base)
-        .ok()
-        .and_then(|b| path.strip_base(&b));
+    let under_base = path.strip_base(base);
     Ok(Some(under_base.unwrap_or(path)))
 }
 
@@ -2747,6 +2795,7 @@ mod handlers {
         State(st): State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
         uri: axum::http::Uri,
         headers: axum::http::HeaderMap,
+        base: Arc<route::DecodedPath>,
     ) -> Response
     where
         Model: Clone + Send + 'static,
@@ -2766,7 +2815,7 @@ mod handlers {
         // one gets the fixed 400 before any session is touched.
         let client_route = match qs
             .get("path")
-            .map(|p| client_route_path(p.trim(), &web_base_path()))
+            .map(|p| client_route_path(p.trim(), &base))
             .transpose()
         {
             Ok(route) => route.flatten(),
@@ -4413,8 +4462,13 @@ where
     #[cfg(not(feature = "http_client"))]
     let console_proxy_flag = false;
 
-    let app =
-        build_web_router::<Model, Msg, FInit, FUpdate, FView, FSubs>(state, console_proxy_flag);
+    let app = match build_web_router::<Model, Msg, FInit, FUpdate, FView, FSubs>(
+        state,
+        console_proxy_flag,
+    ) {
+        Ok(app) => app,
+        Err(cause) => return IpeResult::Err(cause.to_string().into()),
+    };
 
     // IPE_WEB_PORT: default 8000. Resolved through the shared fail-closed
     // helper (same precedence as `Ipe.Http.Server`'s `IPE_SERVER_PORT`): a
@@ -4470,7 +4524,7 @@ pub(crate) fn build_web_router<Model, Msg, FInit, FUpdate, FView, FSubs>(
     // Read only when `http_client` is active (the console-proxy arm); the
     // in-process console path ignores it, so it is unused without that feature.
     #[cfg_attr(not(feature = "http_client"), allow(unused_variables))] use_console_proxy: bool,
-) -> axum::Router
+) -> Result<axum::Router, StartupRefusal>
 where
     // IpeStringify: required by inspect_handler for the live-datum GET.
     // Generated Model types always satisfy this bound.
@@ -4494,6 +4548,23 @@ where
 {
     use axum::Router;
     use axum::routing::{get, post};
+
+    // The base the SSE reconnect strips from a client route, parsed once here:
+    // a malformed base refuses the router rather than a per-request re-parse
+    // that silently matches the unstripped path.
+    let sse_base = Arc::new(parse_route_base(&web_base_path())?);
+    let sse_route = get(
+        move |st: axum::extract::State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
+              uri: axum::http::Uri,
+              headers: axum::http::HeaderMap| {
+            handlers::sse_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>(
+                st,
+                uri,
+                headers,
+                Arc::clone(&sse_base),
+            )
+        },
+    );
 
     // Body-size cap on /_ipe/event. axum's DefaultBodyLimit applies
     // before the handler sees the bytes, so an over-sized payload is
@@ -4546,10 +4617,7 @@ where
     }
 
     let router = Router::new()
-        .route(
-            "/_ipe/sse",
-            get(handlers::sse_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>),
-        )
+        .route("/_ipe/sse", sse_route)
         .route("/_ipe/event", event_route)
         .route("/_ipe/port", port_route)
         .route(&client_js_route_path, get(serve_client_js));
@@ -4870,7 +4938,7 @@ where
         .with_state(state);
 
     pubsub::mark_web_running();
-    app
+    Ok(app)
 }
 
 /// Read the session cookie from request headers. Uses the base-path-aware
@@ -5503,6 +5571,7 @@ mod sse_reconnect_reconcile_tests {
     //! 6. Sub-app base-path prefix is stripped before matching, on a
     //!    segment boundary (`/app` never strips `/apple`).
     //! 7. A malformed `?path=` is refused as `BadRequest`.
+    //! 8. A malformed base path is refused once, when the router is built.
 
     use super::*;
     use crate::web::route::{Route, match_routes, matches_any};
@@ -5595,9 +5664,20 @@ mod sse_reconnect_reconcile_tests {
         client_path: &str,
         base: &str,
     ) {
-        if let Ok(Some(path)) = client_route_path(client_path, base) {
+        if let Ok(Some(path)) = route_path(client_path, base) {
             reconcile_session_route(entry, route_matched, route_resolver, &**view, &path);
         }
+    }
+
+    /// `client_route_path` under `base`, parsed the way `build_web_router`
+    /// parses it (once, through `parse_route_base`).
+    #[allow(clippy::expect_used)] // test helper: every base passed here is well-formed
+    fn route_path(
+        raw: &str,
+        base: &str,
+    ) -> Result<Option<route::DecodedPath>, crate::server::RequestRejection> {
+        let base = parse_route_base(base).expect("well-formed test base");
+        client_route_path(raw, &base)
     }
 
     /// Helper: read the current rendered text from the session's `last_view`.
@@ -5799,18 +5879,18 @@ mod sse_reconnect_reconcile_tests {
     #[test]
     fn base_strip_is_segment_bounded() {
         let dp = |p: &str| route::DecodedPath::parse(p).ok();
-        assert_eq!(client_route_path("/app/x", "/app").ok().flatten(), dp("/x"));
-        assert_eq!(client_route_path("/app", "/app").ok().flatten(), dp("/"));
-        assert_eq!(client_route_path("/app/", "/app").ok().flatten(), dp("/"));
+        assert_eq!(route_path("/app/x", "/app").ok().flatten(), dp("/x"));
+        assert_eq!(route_path("/app", "/app").ok().flatten(), dp("/"));
+        assert_eq!(route_path("/app/", "/app").ok().flatten(), dp("/"));
         assert_eq!(
-            client_route_path("/apple", "/app").ok().flatten(),
+            route_path("/apple", "/app").ok().flatten(),
             dp("/apple"),
             "/apple is not under base /app"
         );
         // Stripping compares decoded segments: an encoded base segment is the
         // same segment.
         assert_eq!(
-            client_route_path("/%61pp/items/5", "/app").ok().flatten(),
+            route_path("/%61pp/items/5", "/app").ok().flatten(),
             dp("/items/5")
         );
 
@@ -5834,7 +5914,7 @@ mod sse_reconnect_reconcile_tests {
         for bad in ["/items/%zz", "/%", "/items/%C0%AF"] {
             assert!(
                 matches!(
-                    client_route_path(bad, ""),
+                    route_path(bad, ""),
                     Err(crate::server::RequestRejection::BadRequest)
                 ),
                 "{bad} must be refused"
@@ -5842,10 +5922,34 @@ mod sse_reconnect_reconcile_tests {
         }
         for skip in ["items/1", "/?a=b", "/#x"] {
             assert!(
-                matches!(client_route_path(skip, ""), Ok(None)),
+                matches!(route_path(skip, ""), Ok(None)),
                 "{skip} names no route path"
             );
         }
+    }
+
+    /// A base path that does not decode is refused when the router is built,
+    /// as the typed `StartupRefusal::BasePath` naming the base; the empty base
+    /// is the root, which strips nothing.
+    #[test]
+    fn malformed_base_path_is_refused_at_build() {
+        for bad in ["/%zz", "/app/%", "/%C0%AF"] {
+            assert!(
+                matches!(
+                    parse_route_base(bad),
+                    Err(StartupRefusal::BasePath { ref base, .. }) if base == bad
+                ),
+                "base {bad} must be refused"
+            );
+        }
+        assert_eq!(
+            parse_route_base(""),
+            Ok(route::DecodedPath::parse("/").unwrap())
+        );
+        assert_eq!(
+            route_path("/items/5", "").ok().flatten(),
+            route::DecodedPath::parse("/items/5").ok()
+        );
     }
 }
 
@@ -8106,6 +8210,7 @@ mod emitted_router_behavior_tests {
     /// disabled for the test the SAME way the socket `live_e2e` tests do it
     /// (`IPE_CSRF=off`), so a raw POST exercises the full handler chain without
     /// cookie plumbing.
+    #[allow(clippy::expect_used)] // test helper: the test process sets no base path
     fn make_router(store: Arc<Store>) -> axum::Router {
         build_web_router::<
             Model,
@@ -8115,6 +8220,7 @@ mod emitted_router_behavior_tests {
             fn(Model) -> Html<Msg>,
             fn(Model) -> IpeSub<Msg>,
         >(make_state(store), false)
+        .expect("the unset test base parses")
     }
 
     /// `data-ipe-hid` on the nearest element start-tag that directly wraps the
@@ -8376,6 +8482,7 @@ mod emitted_router_behavior_tests {
     /// The production router over a state whose route matcher counts its runs:
     /// every page and SSE-reconcile request consults it first, so a zero count
     /// proves no handler logic ran.
+    #[allow(clippy::expect_used)] // test helper: the test process sets no base path
     fn make_counting_router(store: Arc<Store>, runs: Arc<AtomicUsize>) -> axum::Router {
         let mut state = make_state(store);
         state.route_matched = Arc::new(move |p: &crate::web::route::DecodedPath| {
@@ -8390,6 +8497,7 @@ mod emitted_router_behavior_tests {
             fn(Model) -> Html<Msg>,
             fn(Model) -> IpeSub<Msg>,
         >(state, false)
+        .expect("the unset test base parses")
     }
 
     #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
@@ -8451,6 +8559,143 @@ mod emitted_router_behavior_tests {
                 );
             }
         });
+    }
+
+    /// A route table naming a malformed literal pattern.
+    fn malformed_routes() -> Vec<crate::web::route::Route<()>> {
+        vec![
+            crate::web::route::Route::new("/", |_| Some(())),
+            crate::web::route::Route::new("/%zz", |_| Some(())),
+        ]
+    }
+
+    /// GET `/` against a mount, returning the status and body text.
+    #[allow(clippy::expect_used)] // test helper: request build / body read failure is a test environment issue
+    async fn mounted_get(router: axum::Router) -> (StatusCode, String) {
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("build GET"),
+            )
+            .await
+            .expect("router responds");
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let body = String::from_utf8(bytes.to_vec()).expect("the body is UTF-8");
+        (status, body)
+    }
+
+    #[allow(clippy::expect_used)] // test helper: runtime build failure is a test environment issue
+    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(fut)
+    }
+
+    /// A standalone routed app whose table holds a malformed pattern refuses to
+    /// start: the task resolves to an error naming the pattern, before any
+    /// store is chosen or port bound.
+    #[test]
+    fn standalone_routed_app_refuses_malformed_route_table() {
+        let result = block_on(web_app_routed::<String, Model, Msg, (), _, _, _, _, _>(
+            init,
+            update,
+            view,
+            subs,
+            malformed_routes(),
+            (),
+            |_page: (), model: Model| model,
+            "memory".to_string(),
+            String::new(),
+            [0u8; 32],
+        ));
+        assert!(
+            matches!(
+                &result,
+                IpeResult::Err(message) if message.contains("route pattern `/%zz` is malformed")
+            ),
+            "a malformed route table must refuse to start, naming the pattern: {result:?}"
+        );
+    }
+
+    /// A mounted routed app whose table holds a malformed pattern answers every
+    /// path with the fixed 503 body; the pattern stays in the server log.
+    #[test]
+    fn mounted_routed_app_fails_closed_on_malformed_route_table() {
+        let builder = web_embed_router_routed(
+            init,
+            update,
+            view,
+            subs,
+            malformed_routes(),
+            (),
+            |_page: (), model: Model| model,
+            "memory".to_string(),
+            String::new(),
+            [0u8; 32],
+        );
+        let (status, body) =
+            block_on(async move { mounted_get(builder(String::new()).await).await });
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body, FAIL_CLOSED_BODY);
+        assert!(!body.contains("%zz"), "the 503 must not echo the refusal");
+    }
+
+    /// A mounted app whose store config this build cannot honour answers every
+    /// path with the fixed 503 body, never the store detail.
+    #[cfg(not(feature = "redis_store"))]
+    #[test]
+    fn mounted_app_fails_closed_on_unhonourable_store() {
+        let builder = web_embed_router(
+            init,
+            update,
+            view,
+            subs,
+            "redis".to_string(),
+            String::new(),
+            [0u8; 32],
+        );
+        let (status, body) =
+            block_on(async move { mounted_get(builder(String::new()).await).await });
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body, FAIL_CLOSED_BODY);
+        assert!(
+            !body.contains("redis"),
+            "the 503 must not echo the store refusal"
+        );
+    }
+
+    /// Every startup cause answers with the one fixed body: no route pattern, no
+    /// store detail (a connection URL included), no base path reaches it.
+    #[test]
+    fn fail_closed_body_is_fixed_for_every_cause() {
+        let causes = [
+            StartupRefusal::RouteTable(
+                crate::web::route::check_route_table(&malformed_routes())
+                    .expect_err("the table is malformed"),
+            ),
+            StartupRefusal::SessionStore(store::StoreConfigError(
+                "IPE_WEB_STORE=postgres refused at connect (postgres://user:hunter2@db.internal/app)"
+                    .to_string(),
+            )),
+            parse_route_base("/%zz").expect_err("the base is malformed"),
+        ];
+        for cause in causes {
+            let detail = cause.to_string();
+            let (status, body) = block_on(mounted_get(fail_closed_router(&cause)));
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{detail}");
+            assert_eq!(body, FAIL_CLOSED_BODY, "{detail}");
+            for leak in ["%zz", "hunter2", "postgres", "malformed"] {
+                assert!(!body.contains(leak), "{leak} leaked from {detail}");
+            }
+        }
     }
 
     /// Happy path: a well-formed page GET and SSE reconnect reach the handler.
