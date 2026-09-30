@@ -1,10 +1,17 @@
-//! Names every path the runtime `clippy.toml` denies.
+//! Names every path the runtime `clippy.toml` denies, so rustc resolves each.
 //!
 //! An entry marked `allow-invalid` is skipped by clippy without a word once its
 //! path stops resolving, so each one is spelled here under the feature that
-//! brings its crate in: a renamed or removed path breaks the `--all-targets`
-//! build instead of quietly disabling its lint. The `lenient_decode_scan` test
-//! asserts this file names exactly the `clippy.toml` set.
+//! brings its crate in: a renamed or removed path is an unresolved-path error in
+//! the `--all-targets` build instead of a silently dropped entry. The
+//! `lenient_decode_scan` test asserts this file names exactly the `clippy.toml`
+//! set.
+//!
+//! What this proves is resolution only: each spelling names a live item under
+//! its feature. It does not prove that clippy's ban fires on a use of that item
+//! — the `#[allow]` on each block silences the lint whether or not it fires,
+//! and nothing here checks that clippy maps the configured path to the same
+//! definition rustc resolved.
 
 #[allow(deprecated, clippy::disallowed_methods)] // naming each denied path, never calling it, is the point
 const _STD: () = {

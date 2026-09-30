@@ -7,14 +7,16 @@
 //! axum's lenient `Query`/`Form` extractors and lossy UTF-8; this scan pins that
 //! set independently: no runtime source names a lenient percent decoder or a
 //! lenient extractor at all, no runtime source glob-imports a module holding
-//! one, and each lenient query reader and lossy UTF-8 conversion appears only at
-//! the inventoried sites below.
+//! one or re-exports a denied path, and each lenient query reader and lossy
+//! UTF-8 conversion appears only at the inventoried sites below.
 //!
 //! A path counts however it is spelled: through a nested `use` group, an `as`
-//! alias, a crate-root re-export, a module alias, or a bare call to an imported
-//! function. `src/clippy_paths_resolve.rs` names every denied path on purpose
-//! (so a stale `clippy.toml` path breaks the build) and is checked against the
-//! config instead of scanned.
+//! alias, a crate-root re-export, a module alias, a bare call to an imported
+//! function, or a `pub use` / `pub(…) use` re-export (a site in its own file,
+//! and refused, since the calls it enables elsewhere name no denied path).
+//! `src/clippy_paths_resolve.rs` names every denied path on purpose (so a stale
+//! `clippy.toml` path is an unresolved-path build error) and is checked against
+//! the config instead of scanned.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -605,6 +607,73 @@ fn refused_globs(code: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether the `use` at `at` carries a visibility (`pub`, `pub(crate)`,
+/// `pub(super)`, `pub(in path)`), so it re-exports what it imports.
+fn is_re_export(stream: &[Token], at: usize) -> bool {
+    let Some(before) = at.checked_sub(1) else {
+        return false;
+    };
+    if is_word(stream.get(before), "pub") {
+        return true;
+    }
+    if stream.get(before) != Some(&Token::Punct(')')) {
+        return false;
+    }
+    let open = stream
+        .iter()
+        .take(before)
+        .rposition(|tok| *tok == Token::Punct('('));
+    open.and_then(|open| open.checked_sub(1))
+        .is_some_and(|kw| is_word(stream.get(kw), "pub"))
+}
+
+/// Whether the denied `path` is a method, named `Type::method`: its owner
+/// segment is a type (upper camel case). A method is matched by name at every
+/// site, so re-exporting its type launders nothing.
+fn is_denied_method(path: &str) -> bool {
+    let segs = segments(path);
+    segs.len()
+        .checked_sub(2)
+        .and_then(|owner| segs.get(owner))
+        .and_then(|owner| owner.chars().next())
+        .is_some_and(char::is_uppercase)
+}
+
+/// Every re-export in `code` (a `pub use` / `pub(…) use` leaf, any alias) of a
+/// denied path or a lenient extractor, or of a module holding a denied free
+/// item, resolved.
+///
+/// A re-export gives a denied item a crate-internal name that another file can
+/// call without naming the denied path, so each one is a site in its own file
+/// (`named_sites` counts the leaf) and is refused outright: no other file's scan
+/// would see the calls it enables.
+fn denied_re_exports(code: &str) -> Vec<String> {
+    let stream = tokens(code);
+    let scope = Scope::of(&stream);
+    let mut out = Vec::new();
+    for (at, tok) in stream.iter().enumerate() {
+        if !is_word(Some(tok), "use") || !is_re_export(&stream, at) {
+            continue;
+        }
+        let mut leaves = Vec::new();
+        use_tree(&stream, at + 1, &[], &mut leaves);
+        for leaf in leaves {
+            let Import::Name { path, .. } = leaf else {
+                continue;
+            };
+            let resolved = scope.resolve(&path);
+            let denied = DENIED_PATHS.iter().chain(LENIENT_EXTRACTORS).any(|denied| {
+                names_path(&resolved, denied)
+                    || (!is_denied_method(denied) && holds_path(&resolved, denied))
+            });
+            if denied {
+                out.push(resolved.join("::"));
+            }
+        }
+    }
+    out
+}
+
 /// The number of whole-identifier occurrences of `word` in `code`.
 fn word_count(code: &str, word: &str) -> usize {
     code.match_indices(word)
@@ -972,4 +1041,93 @@ fn a_planted_driver_parity_call_is_counted() {
          let q = crate::ssrf::DriverParityQuery::of(v); fn of() {} // DriverParityQuery::of(w)",
     );
     assert_eq!(driver_parity_calls(&code), 2);
+}
+
+#[test]
+fn no_runtime_source_re_exports_a_denied_path() {
+    let offenders: Vec<_> = scanned_code()
+        .into_iter()
+        .flat_map(|(rel, code)| {
+            denied_re_exports(&code)
+                .into_iter()
+                .map(move |path| format!("{rel}: {path}"))
+        })
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "a re-export gives a denied path a name other files call unscanned; call \
+         the strict core instead: {offenders:?}"
+    );
+}
+
+#[test]
+fn a_planted_re_export_of_a_denied_path_is_a_refused_site() {
+    // Each visibility, with and without an alias, counts as a site.
+    assert_eq!(
+        named_sites(
+            &code_of("pub(crate) use serde_urlencoded::from_str as lenient;"),
+            LENIENT_QUERY_FUNCTIONS
+        ),
+        BTreeMap::from([("serde_urlencoded::from_str", 1)])
+    );
+    assert!(names_lenient_extractor("pub use axum::extract::Query;"));
+    assert!(names_lenient_extractor(
+        "pub(in crate::web) use axum::extract::{State, Form as F};"
+    ));
+    // And is refused, however spelled.
+    assert_eq!(
+        denied_re_exports(&code_of("pub use axum::extract::Query;")),
+        ["axum::extract::Query"]
+    );
+    assert_eq!(
+        denied_re_exports(&code_of(
+            "pub(crate) use serde_urlencoded::from_str as lenient;"
+        )),
+        ["serde_urlencoded::from_str"]
+    );
+    assert_eq!(
+        denied_re_exports(&code_of(
+            "pub(super) use ::percent_encoding::{percent_decode_str as pd, utf8_percent_encode};"
+        )),
+        ["percent_encoding::percent_decode_str"]
+    );
+    assert_eq!(
+        denied_re_exports(&code_of("pub(in crate::web) use axum::Form as F;")),
+        ["axum::Form"]
+    );
+    // Through a private module alias.
+    assert_eq!(
+        denied_re_exports(&code_of(
+            "use url::form_urlencoded as fu; pub(crate) use fu::parse as p;"
+        )),
+        ["url::form_urlencoded::parse"]
+    );
+    // A module holding a denied free item, re-exported whole.
+    assert_eq!(
+        denied_re_exports(&code_of("pub use url::form_urlencoded::{self as fu};")),
+        ["url::form_urlencoded"]
+    );
+    assert_eq!(
+        denied_re_exports(&code_of("pub use serde_urlencoded as su;")),
+        ["serde_urlencoded"]
+    );
+    // Neighbours that are not denied re-exports.
+    for clean in [
+        "use serde_urlencoded::from_str;",
+        "pub struct S; use axum::extract::Query;",
+        "pub fn f() {} use url::form_urlencoded::parse;",
+        "pub use crate::encoding::decode_component;",
+        "pub use axum::extract::{State, RawQuery};",
+        "pub mod url; pub use url::form_urlencoded::parse;",
+        "pub use serde_urlencoded::to_string;",
+        // A denied method's owner type: the method is matched by name anywhere.
+        "pub use url::Url;",
+        "pub(crate) use std::string::String as S;",
+        "let s = \"pub use axum::extract::Query;\"; // pub use axum::Form;",
+    ] {
+        assert!(
+            denied_re_exports(&code_of(clean)).is_empty(),
+            "not a denied re-export: {clean}"
+        );
+    }
 }

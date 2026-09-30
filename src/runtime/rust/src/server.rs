@@ -833,31 +833,45 @@ fn parse_query(q: Option<&str>) -> Result<HashMap<String, String>, crate::encodi
     q.map_or_else(|| Ok(HashMap::new()), crate::encoding::decode_form_query)
 }
 
-/// Refuse a request path that is not a well-formed RFC 3986 path.
-///
-/// Every raw segment must decode through `decode_component` under the path
-/// grammar (`decode_path_segments`, the same split-then-decode the Ipe.Web
-/// route matcher reads its segments from, so the gate and the matcher refuse
-/// the same paths). This is what makes the Ipe.Server path parameters sound:
-/// the router hands back each parameter already percent-decoded once by a
-/// lenient decoder, and on a path that passes this check that decoding is
-/// byte-for-byte the strict one. The parameters are therefore used as handed
-/// back and never decoded again (a second decode would turn `%2541` into `A`).
-pub(crate) fn check_path(path: &str) -> Result<(), crate::encoding::DecodeRefusal> {
-    crate::encoding::decode_path_segments(path).map(drop)
+/// A request URI parsed once by the strict core: its path split and decoded
+/// segment by segment, its query decoded under the form grammar.
+pub(crate) struct StrictUrl {
+    /// The decoded request path; every route matcher reads this, never the raw
+    /// path text.
+    pub(crate) path: crate::encoding::DecodedPath,
+    /// The decoded query.
+    pub(crate) query: HashMap<String, String>,
 }
 
-/// Refuse a request URI whose path or query is not well-formed, and hand back
-/// the query decoded once by the strict core.
+/// Parse a request URI once, refusing it whole when its path or query is not
+/// well-formed.
+///
+/// The path must be a well-formed RFC 3986 path: every raw segment decodes
+/// through `decode_component` under the path grammar (`DecodedPath::parse`,
+/// the parse the Ipe.Web route matcher reads its segments from, so the gate and
+/// the matcher refuse the same paths). This is also what makes the Ipe.Server
+/// path parameters sound: the router hands back each parameter already
+/// percent-decoded once by a lenient decoder, and on a path that passes this
+/// parse that decoding is byte-for-byte the strict one. The parameters are
+/// therefore used as handed back and never decoded again (a second decode
+/// would turn `%2541` into `A`).
 ///
 /// This is the one gate every HTTP entry point (Ipe.Server handlers, every
 /// Ipe.Web route, the static file mounts) passes before any handler or file
 /// service sees the URI.
+pub(crate) fn strict_url(uri: &axum::http::Uri) -> Result<StrictUrl, RequestRejection> {
+    let path = crate::encoding::DecodedPath::parse(uri.path())
+        .map_err(|_| RequestRejection::BadRequest)?;
+    let query = parse_query(uri.query()).map_err(|_| RequestRejection::BadRequest)?;
+    Ok(StrictUrl { path, query })
+}
+
+/// [`strict_url`], keeping only the decoded query, for an entry point that
+/// never matches on the path.
 pub(crate) fn strict_url_query(
     uri: &axum::http::Uri,
 ) -> Result<HashMap<String, String>, RequestRejection> {
-    check_path(uri.path()).map_err(|_| RequestRejection::BadRequest)?;
-    parse_query(uri.query()).map_err(|_| RequestRejection::BadRequest)
+    strict_url(uri).map(|url| url.query)
 }
 
 /// Middleware answering the fixed 400 `Bad Request` for a malformed request
@@ -944,7 +958,7 @@ async fn build_request(
         }
     }
     let (mut parts, body) = req.into_parts();
-    // `check_path` has already proved the raw path strict, so the router's
+    // `strict_url` has already proved the raw path strict, so the router's
     // single decode of each parameter is the strict decode: used as-is. A
     // router refusal (a parameter it could not decode, or no parameter table at
     // all) is a malformed request, never an empty table.

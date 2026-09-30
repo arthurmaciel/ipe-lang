@@ -685,18 +685,22 @@ fn value_to_string(v: &serde_json::Value) -> String {
     }
 }
 
-/// Boxed route resolver: a freshly-`init`'d model + GET path → the model whose
-/// `page` field reflects the matched route.
+/// Boxed route resolver: a freshly-`init`'d model + decoded GET path → the
+/// model whose `page` field reflects the matched route.
+///
+/// Every resolver takes the path the request boundary already parsed once
+/// (`server::strict_url`), so no resolver re-parses or re-decodes raw text.
 #[cfg(feature = "server")]
-type RouteResolver<Model> = Arc<dyn Fn(Model, &str) -> Model + Send + Sync>;
-/// Boxed param resolver: a GET path → the matched route's `:name`→value params.
+type RouteResolver<Model> = Arc<dyn Fn(Model, &route::DecodedPath) -> Model + Send + Sync>;
+/// Boxed param resolver: a decoded GET path → the matched route's
+/// `:name`→value params.
 #[cfg(feature = "server")]
-type ParamResolver = Arc<dyn Fn(&str) -> crate::dict::IpeDict<String> + Send + Sync>;
-/// Boxed route predicate: does a GET path match a declared route?
+type ParamResolver = Arc<dyn Fn(&route::DecodedPath) -> crate::dict::IpeDict<String> + Send + Sync>;
+/// Boxed route predicate: does a decoded GET path match a declared route?
 /// Gates the page handler's browser-noise 404 and the
 /// unrouted-GET-against-a-live-session 404 — see `page`.
 #[cfg(feature = "server")]
-type RouteMatched = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+type RouteMatched = Arc<dyn Fn(&route::DecodedPath) -> bool + Send + Sync>;
 
 /// Shared axum state: the session store + Arc'd TEA callbacks.
 #[cfg(feature = "server")]
@@ -1846,7 +1850,7 @@ where
             route_resolver: Arc::new(|m, _path| m),
             param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
             // No route table: only `/` is a page URL.
-            route_matched: Arc::new(|path| path == "/"),
+            route_matched: Arc::new(|path: &route::DecodedPath| path.is_root()),
             session_count: Arc::new(AtomicUsize::new(0)),
             watch_build_status: Arc::new(Mutex::new(None)),
         };
@@ -1929,7 +1933,7 @@ where
             .await
             {
                 Ok(s) => s,
-                Err(e) => return fail_closed_router(e.to_string()),
+                Err(e) => return fail_closed_router(format!("session store misconfigured: {e}")),
             };
             let state = WebState {
                 store,
@@ -1939,7 +1943,7 @@ where
                 subs: Arc::new(subscriptions),
                 route_resolver: Arc::new(|m, _path| m),
                 param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
-                route_matched: Arc::new(|path| path == "/"),
+                route_matched: Arc::new(|path: &route::DecodedPath| path.is_root()),
                 session_count: Arc::new(AtomicUsize::new(0)),
                 watch_build_status: Arc::new(Mutex::new(None)),
             };
@@ -2007,6 +2011,10 @@ where
             if !base.is_empty() {
                 crate::system::locked_set_var("IPE_WEB_BASE_PATH", &base);
             }
+            // A malformed route pattern refuses the mount, never a dead route.
+            if let Err(refusal) = route::check_route_table(&routes) {
+                return fail_closed_router(refusal.to_string());
+            }
             // Routed resolvers — identical construction to `web_app_routed`; only
             // the terminal `build_web_router` (vs `serve_web`) differs.
             let routes = Arc::new(routes);
@@ -2032,7 +2040,7 @@ where
             .await
             {
                 Ok(s) => s,
-                Err(e) => return fail_closed_router(e.to_string()),
+                Err(e) => return fail_closed_router(format!("session store misconfigured: {e}")),
             };
             let state = WebState {
                 store,
@@ -2209,21 +2217,18 @@ where
 }
 
 /// A router that answers EVERY path with `503 Service Unavailable` + a plain
-/// message. Used when a mounted `Web.embed` cannot honour its store config
-/// (fail-closed): the mount stays reachable enough to report the fault, but
-/// never serves a real session on a silently-degraded store. The startup fault
+/// message naming the startup fault. Used when a mounted `Web.embed` cannot
+/// start as declared — an unhonourable store config, or a route table holding
+/// a malformed pattern (fail-closed): the mount stays reachable enough to
+/// report the fault, but never serves a real session on a silently-degraded
+/// store or a silently-dead route. The startup fault
 /// is logged once here too, so an operator sees it even without hitting a path.
 #[cfg(feature = "web")]
 fn fail_closed_router(message: String) -> axum::Router {
     crate::system::emit_runtime_log("live", &format!("mounted web app disabled: {message}"));
     axum::Router::new().fallback(move || {
         let message = message.clone();
-        async move {
-            (
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                format!("session store misconfigured: {message}"),
-            )
-        }
+        async move { (axum::http::StatusCode::SERVICE_UNAVAILABLE, message) }
     })
 }
 
@@ -2282,6 +2287,10 @@ where
     FSetPage: Fn(Page, Model) -> Model + Send + Sync + 'static,
 {
     Box::pin(async move {
+        // A malformed route pattern refuses to start, never a dead route.
+        if let Err(refusal) = route::check_route_table(&routes) {
+            return IpeResult::Err(refusal.to_string().into());
+        }
         let routes = Arc::new(routes);
         let not_found = Arc::new(not_found);
         let set_page = Arc::new(set_page);
@@ -2419,6 +2428,74 @@ fn static_noise_mime(ext: &str) -> &'static str {
     }
 }
 
+/// Where an SSE reconnect's `?path=` lands in this app's route table.
+///
+/// The client sends its raw `location.pathname`, which includes any
+/// reverse-proxy or mount prefix. The path is parsed once into a
+/// [`route::DecodedPath`] (each segment decoded once by the strict core): a
+/// malformed one is the fixed `BadRequest`, answered before any session is
+/// touched. A value that is not a bare path (no leading `/`, or carrying a `?`
+/// or `#`) names nothing to reconcile (`Ok(None)`).
+///
+/// A non-empty `base` (the normalised `IPE_WEB_BASE_PATH`) is stripped on a
+/// whole-segment boundary ([`route::DecodedPath::strip_base`]): base `/app`
+/// strips `/app/x` to `/x` and `/app` to `/`, and never touches `/apple`. A
+/// path not under the base is matched whole, since the base is process-wide
+/// and an unmounted app sharing the process owns the paths outside it.
+///
+/// # Errors
+///
+/// `RequestRejection::BadRequest` for a `path` that is not a well-formed
+/// RFC 3986 path.
+#[cfg(feature = "server")]
+fn client_route_path(
+    raw: &str,
+    base: &str,
+) -> Result<Option<route::DecodedPath>, crate::server::RequestRejection> {
+    let path =
+        route::DecodedPath::parse(raw).map_err(|_| crate::server::RequestRejection::BadRequest)?;
+    if !raw.starts_with('/') || raw.contains('?') || raw.contains('#') {
+        return Ok(None);
+    }
+    if base.is_empty() {
+        return Ok(Some(path));
+    }
+    let under_base = route::DecodedPath::parse(base)
+        .ok()
+        .and_then(|b| path.strip_base(&b));
+    Ok(Some(under_base.unwrap_or(path)))
+}
+
+/// Reconcile a live session to the route its browser is displaying.
+///
+/// Only a path that matches a declared route is applied; any other leaves
+/// the session untouched. The re-rendered tree is id-stamped and its handler
+/// index rebuilt exactly as the page and update render paths do, so the
+/// resync frame's handlers resolve.
+#[cfg(feature = "server")]
+fn reconcile_session_route<Model, Msg, V>(
+    entry: &store::SessionHandle<Model, Msg>,
+    route_matched: &RouteMatched,
+    route_resolver: &RouteResolver<Model>,
+    view: &V,
+    path: &route::DecodedPath,
+) where
+    Model: Clone,
+    Msg: Clone,
+    V: Fn(Model) -> Html<Msg> + ?Sized,
+{
+    if !route_matched(path) {
+        return;
+    }
+    let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
+    g.model = route_resolver(g.model.clone(), path);
+    let mut tree = view(g.model.clone());
+    assign_ipe_ids(&mut tree, "r");
+    style_inject::apply_style_injections(&mut tree);
+    g.index = build_index(&tree);
+    g.last_view = tree;
+}
+
 #[cfg(feature = "server")]
 mod handlers {
     use super::*;
@@ -2448,9 +2525,11 @@ mod handlers {
     {
         // The router's URL gate already refused a malformed path or query;
         // this is the second, independent boundary before any session work.
-        if let Err(rejection) = crate::server::strict_url_query(&uri) {
-            return rejection.status_and_reason().into_response();
-        }
+        // The path is parsed here once; every route resolver below reads it.
+        let path = match crate::server::strict_url(&uri) {
+            Ok(url) => url.path,
+            Err(rejection) => return rejection.status_and_reason().into_response(),
+        };
         // Cookie-based session lifecycle:
         //   * Web hit  → reuse the in-process session; re-apply routing for
         //                 this GET's path + re-render (no new driver).
@@ -2470,7 +2549,7 @@ mod handlers {
         // serve from the static root) BEFORE any session work — they must
         // never run `init` (double-init race against the real `GET /`) and
         // never touch an existing session (see the routed guards below).
-        let routed = (st.route_matched)(uri.path());
+        let routed = (st.route_matched)(&path);
         if !routed && is_browser_noise_path(uri.path()) {
             if let Some(resp) = serve_noise_from_static_root(uri.path()).await {
                 return resp;
@@ -2493,7 +2572,7 @@ mod handlers {
         // retyped field), corrupt / oversized body, or pre-`v2` row falls back
         // to the clean re-init the store's flat miss always produced.
         let make_init = || {
-            let params = (st.param_resolver)(uri.path());
+            let params = (st.param_resolver)(&path);
             let req = req::web_req(&method, &uri, &headers, params);
             let (m, _cmd) = (st.init)(req);
             m
@@ -2534,7 +2613,7 @@ mod handlers {
                 #[cfg_attr(not(feature = "debugger"), allow(unused_variables))]
                 let (body, history_labels, history_total) = {
                     let mut e = handle.lock().unwrap_or_else(|e| e.into_inner());
-                    e.model = (st.route_resolver)(e.model.clone(), uri.path());
+                    e.model = (st.route_resolver)(e.model.clone(), &path);
                     let mut tree = (st.view)(e.model.clone());
                     assign_ipe_ids(&mut tree, "r");
                     style_inject::apply_style_injections(&mut tree);
@@ -2567,7 +2646,7 @@ mod handlers {
                 // volume, so NOT rejected; but count its driver so the slot it
                 // gets below is paired (decremented on the driver's exit).
                 st.session_count.fetch_add(1, Ordering::SeqCst);
-                (sid, (st.route_resolver)(m, uri.path()), IpeCmd::None)
+                (sid, (st.route_resolver)(m, &path), IpeCmd::None)
             }
             None => {
                 // Admission control (cookieless = brand-new session = the
@@ -2590,14 +2669,14 @@ mod handlers {
                 // Build the request context (params from routing — empty when
                 // unrouted) and init a fresh model. The param_resolver is
                 // model-independent, breaking the init↔routing cycle.
-                let params = (st.param_resolver)(uri.path());
+                let params = (st.param_resolver)(&path);
                 let req = req::web_req(&method, &uri, &headers, params);
                 let (m, c) = (st.init)(req);
                 // Session fixation guard: a store MISS means this sid is NOT a
                 // known session, so NEVER adopt the client-supplied cookie value
                 // — always mint a fresh sid. (A HIT path keeps cookie_sid.)
                 let s = new_sid();
-                (s, (st.route_resolver)(m, uri.path()), c)
+                (s, (st.route_resolver)(m, &path), c)
             }
         };
 
@@ -2683,17 +2762,15 @@ mod handlers {
             Ok(qs) => qs,
             Err(rejection) => return rejection.status_and_reason().into_response(),
         };
-        // `?path=` names a browser path the route matcher reads through
-        // `route::DecodedPath` (each segment decoded once by the strict core);
-        // `check_path` refuses exactly the paths that parse refuses, so a
-        // malformed one gets the same fixed 400 before any session is touched.
-        let client_path = match qs.get("path").map(String::as_str).map(str::trim) {
-            Some(p) if crate::server::check_path(p).is_err() => {
-                return crate::server::RequestRejection::BadRequest
-                    .status_and_reason()
-                    .into_response();
-            }
-            other => other,
+        // `?path=` is parsed once into the route path it names; a malformed
+        // one gets the fixed 400 before any session is touched.
+        let client_route = match qs
+            .get("path")
+            .map(|p| client_route_path(p.trim(), &web_base_path()))
+            .transpose()
+        {
+            Ok(route) => route.flatten(),
+            Err(rejection) => return rejection.status_and_reason().into_response(),
         };
         let sid = sid_from_cookie(&headers);
         let entry = match &sid {
@@ -2735,46 +2812,21 @@ mod handlers {
         // resolver applied to the already-matching route is a no-op.
         //
         // Sub-app base-path trimming: the client sends the raw
-        // `location.pathname` which includes any reverse-proxy prefix; strip the
-        // base before matching so mounted sub-apps reconcile against their
-        // own route table, not the root path.
-        if let Some(client_path) = client_path {
-            // Sanitise: accept only paths (must start with `/`), reject anything
-            // with `?` or `#` to avoid confusing the route matcher with query
-            // strings or fragments the client should not be sending here.
-            let is_valid_path = client_path.starts_with('/')
-                && !client_path.contains('?')
-                && !client_path.contains('#');
-            if is_valid_path {
-                let base = web_base_path();
-                // Strip the sub-app base prefix so the remaining path is
-                // root-relative within this app's own route table.
-                let route_path = if base.is_empty() {
-                    client_path
-                } else {
-                    client_path.strip_prefix(&base).unwrap_or(client_path)
-                };
-                // Only reconcile when the path matches a declared route —
-                // unknown paths (404 territory) fall through unchanged.
-                if (st.route_matched)(route_path) {
-                    let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
-                    g.model = (st.route_resolver)(g.model.clone(), route_path);
-                    // Keep last_view in sync with the reconciled model so the
-                    // resync render below reflects the correct page. The tree
-                    // MUST carry ipe-ids: the resync frame replaces the whole
-                    // DOM on the client, and an unstamped tree renders every
-                    // event element without `ipe-id`/`data-ipe-hid`, so each
-                    // click posts an empty handlerId the server can't resolve.
-                    // Stamp + rebuild the handler index exactly as the page and
-                    // update render paths do, so ids stay consistent across all
-                    // three render sites.
-                    let mut tree = (st.view)(g.model.clone());
-                    assign_ipe_ids(&mut tree, "r");
-                    style_inject::apply_style_injections(&mut tree);
-                    g.index = build_index(&tree);
-                    g.last_view = tree;
-                }
-            }
+        // `location.pathname` which includes any reverse-proxy prefix;
+        // `client_route_path` strips the base on a segment boundary so mounted
+        // sub-apps reconcile against their own route table, not the root path.
+        // The resync tree MUST carry ipe-ids: the resync frame replaces the
+        // whole DOM on the client, and an unstamped tree renders every event
+        // element without `ipe-id`/`data-ipe-hid`, so each click would post an
+        // empty handlerId the server can't resolve.
+        if let Some(route_path) = &client_route {
+            reconcile_session_route(
+                &entry,
+                &st.route_matched,
+                &st.route_resolver,
+                &*st.view,
+                route_path,
+            );
         }
 
         let (tx, rx) = sse::channel();
@@ -3828,7 +3880,11 @@ mod handlers {
         // Build a fresh init model from the current request context — the same
         // path the clean-reinit miss takes — so the reset session holds exactly
         // what a cold-start visit would have produced.
-        let params = (st.param_resolver)(uri.path());
+        let path = match crate::server::strict_url(&uri) {
+            Ok(url) => url.path,
+            Err(rejection) => return rejection.status_and_reason().into_response(),
+        };
+        let params = (st.param_resolver)(&path);
         let req = req::web_req(&method, &uri, &headers, params);
         let (init_model, _cmd) = (st.init)(req);
         {
@@ -3957,7 +4013,11 @@ mod handlers {
         // Derive the init model the same way reset_handler does: build a
         // WebReq from the current request context so route-aware apps get the
         // correct initial state.
-        let params = (st.param_resolver)(uri.path());
+        let path = match crate::server::strict_url(&uri) {
+            Ok(url) => url.path,
+            Err(rejection) => return rejection.status_and_reason().into_response(),
+        };
+        let params = (st.param_resolver)(&path);
         let req = req::web_req(&method, &uri, &headers, params);
         let (init_model, _cmd) = (st.init)(req);
 
@@ -5440,7 +5500,9 @@ mod sse_reconnect_reconcile_tests {
     //!    is rejected — session state untouched.
     //! 5. An unroutable path (not declared in the route table) is skipped —
     //!    session state untouched.
-    //! 6. Sub-app base-path prefix is stripped before matching.
+    //! 6. Sub-app base-path prefix is stripped before matching, on a
+    //!    segment boundary (`/app` never strips `/apple`).
+    //! 7. A malformed `?path=` is refused as `BadRequest`.
 
     use super::*;
     use crate::web::route::{Route, match_routes, matches_any};
@@ -5511,8 +5573,9 @@ mod sse_reconnect_reconcile_tests {
         (entry, route_resolver, route_matched, view)
     }
 
-    /// Apply the exact reconciliation block from `sse_handler`, extracted here
-    /// for unit-testing without spinning up an axum server.
+    /// Drive the handler's reconcile path exactly: `client_route_path` then
+    /// `reconcile_session_route` (the functions `sse_handler` calls), with no
+    /// base path.
     fn reconcile(
         entry: &SessionHandle<TestPage, ()>,
         route_matched: &RouteMatched,
@@ -5520,19 +5583,20 @@ mod sse_reconnect_reconcile_tests {
         view: &Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync>,
         client_path: &str,
     ) {
-        // Mirrors sse_handler's reconciliation block (IPE_WEB_BASE_PATH is
-        // empty in tests so base = "").
-        let is_valid_path = client_path.starts_with('/')
-            && !client_path.contains('?')
-            && !client_path.contains('#');
-        if is_valid_path && route_matched(client_path) {
-            let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
-            g.model = route_resolver(g.model.clone(), client_path);
-            let mut tree = (view)(g.model.clone());
-            assign_ipe_ids(&mut tree, "r");
-            style_inject::apply_style_injections(&mut tree);
-            g.index = build_index(&tree);
-            g.last_view = tree;
+        reconcile_under(entry, route_matched, route_resolver, view, client_path, "");
+    }
+
+    /// [`reconcile`] under a sub-app base path.
+    fn reconcile_under(
+        entry: &SessionHandle<TestPage, ()>,
+        route_matched: &RouteMatched,
+        route_resolver: &RouteResolver<TestPage>,
+        view: &Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync>,
+        client_path: &str,
+        base: &str,
+    ) {
+        if let Ok(Some(path)) = client_route_path(client_path, base) {
+            reconcile_session_route(entry, route_matched, route_resolver, &**view, &path);
         }
     }
 
@@ -5717,50 +5781,71 @@ mod sse_reconnect_reconcile_tests {
 
     #[test]
     fn sub_app_base_prefix_is_stripped_before_matching() {
-        // Simulate a sub-app mounted at "/app": the client sends "/app/items/5"
-        // (its full location.pathname) but the route table has "/items/:id".
-        // The reconciler must strip "/app" before matching.
-        let (entry, _resolver, _matched, _view) = make_session(TestPage::Home);
-
-        // Build sub-app-aware closures with base="/app".
-        let routes: Vec<Route<TestPage>> = vec![
-            Route::new("/", |_| Some(TestPage::Home)),
-            Route::new("/items/:id", |p| Some(TestPage::Detail(p[0].clone()))),
-        ];
-        let routes_arc = Arc::new(routes.clone());
-        let routes_arc2 = routes_arc.clone();
-        let nf = TestPage::Home;
-        let route_resolver: RouteResolver<TestPage> =
-            Arc::new(move |_model, path| match_routes(&routes_arc, &nf, path));
-        let route_matched: RouteMatched = Arc::new(move |path| matches_any(&routes_arc2, path));
-        let view: Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync> = Arc::new(|p| {
-            Html::HText(match p {
-                TestPage::Home => "home-page".to_string(),
-                TestPage::Detail(id) => format!("detail-{id}"),
-            })
-        });
-
-        // Manually apply the sub-app base-stripping logic (mirrors sse_handler).
-        let base = "/app";
-        let client_path = "/app/items/5";
-        let route_path = client_path.strip_prefix(base).unwrap_or(client_path);
-        // route_path is now "/items/5" — must match the declared route.
-        assert!(
-            route_matched(route_path),
-            "stripped path must match route table"
-        );
-        if route_matched(route_path) {
-            let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
-            g.model = route_resolver(g.model.clone(), route_path);
-            g.last_view = (view)(g.model.clone());
-        }
-
+        // A sub-app mounted at "/app": the client sends "/app/items/5" (its
+        // full location.pathname) but the route table has "/items/:id". The
+        // reconciler strips "/app" on a segment boundary before matching.
+        let (entry, resolver, matched, view) = make_session(TestPage::Home);
+        reconcile_under(&entry, &matched, &resolver, &view, "/app/items/5", "/app");
         let g = entry.lock().unwrap();
         assert_eq!(
             g.model,
             TestPage::Detail("5".into()),
             "sub-app base must be stripped before route matching"
         );
+    }
+
+    /// The base is a path prefix, not a string prefix: `/app` strips `/app/x`
+    /// to `/x` and `/app` to `/`, and leaves `/apple` whole.
+    #[test]
+    fn base_strip_is_segment_bounded() {
+        let dp = |p: &str| route::DecodedPath::parse(p).ok();
+        assert_eq!(client_route_path("/app/x", "/app").ok().flatten(), dp("/x"));
+        assert_eq!(client_route_path("/app", "/app").ok().flatten(), dp("/"));
+        assert_eq!(client_route_path("/app/", "/app").ok().flatten(), dp("/"));
+        assert_eq!(
+            client_route_path("/apple", "/app").ok().flatten(),
+            dp("/apple"),
+            "/apple is not under base /app"
+        );
+        // Stripping compares decoded segments: an encoded base segment is the
+        // same segment.
+        assert_eq!(
+            client_route_path("/%61pp/items/5", "/app").ok().flatten(),
+            dp("/items/5")
+        );
+
+        // End to end: `/apple/items/5` under base `/app` is never read as
+        // `le/items/5` or `/items/5`; it is matched whole and names no route.
+        let (entry, resolver, matched, view) = make_session(TestPage::Home);
+        let before = rendered_text(&entry);
+        reconcile_under(&entry, &matched, &resolver, &view, "/apple/items/5", "/app");
+        assert_eq!(entry.lock().unwrap().model, TestPage::Home);
+        assert_eq!(rendered_text(&entry), before);
+        // `/app` itself reconciles to the sub-app's root route.
+        let (entry, resolver, matched, view) = make_session(TestPage::Detail("9".into()));
+        reconcile_under(&entry, &matched, &resolver, &view, "/app", "/app");
+        assert_eq!(entry.lock().unwrap().model, TestPage::Home);
+    }
+
+    /// A malformed `?path=` is the fixed `BadRequest`, answered before any
+    /// session is touched; a non-path value names nothing to reconcile.
+    #[test]
+    fn malformed_client_path_is_bad_request() {
+        for bad in ["/items/%zz", "/%", "/items/%C0%AF"] {
+            assert!(
+                matches!(
+                    client_route_path(bad, ""),
+                    Err(crate::server::RequestRejection::BadRequest)
+                ),
+                "{bad} must be refused"
+            );
+        }
+        for skip in ["items/1", "/?a=b", "/#x"] {
+            assert!(
+                matches!(client_route_path(skip, ""), Ok(None)),
+                "{skip} names no route path"
+            );
+        }
     }
 }
 
@@ -5995,14 +6080,14 @@ mod watch_status_handler_tests {
     fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
         IpeSub::None
     }
-    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
+    fn test_route_resolver(m: TestModel, _path: &crate::web::route::DecodedPath) -> TestModel {
         m
     }
-    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+    fn test_param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
-    fn test_route_matched(p: &str) -> bool {
-        p == "/"
+    fn test_route_matched(p: &crate::web::route::DecodedPath) -> bool {
+        p.is_root()
     }
 
     fn make_state(store: Arc<TestStore>) -> TestWebState {
@@ -6647,14 +6732,14 @@ mod hot_transition_handler_tests {
     fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
         IpeSub::None
     }
-    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
+    fn test_route_resolver(m: TestModel, _path: &crate::web::route::DecodedPath) -> TestModel {
         m
     }
-    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+    fn test_param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
-    fn test_route_matched(p: &str) -> bool {
-        p == "/"
+    fn test_route_matched(p: &crate::web::route::DecodedPath) -> bool {
+        p.is_root()
     }
 
     fn make_router() -> Router {
@@ -6883,16 +6968,16 @@ mod hot_init_session_scoping_tests {
         IpeSub::None
     }
 
-    fn test_route_resolver(m: Counter, _path: &str) -> Counter {
+    fn test_route_resolver(m: Counter, _path: &crate::web::route::DecodedPath) -> Counter {
         m
     }
 
-    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+    fn test_param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
 
-    fn test_route_matched(p: &str) -> bool {
-        p == "/"
+    fn test_route_matched(p: &crate::web::route::DecodedPath) -> bool {
+        p.is_root()
     }
 
     // ── Type aliases ─────────────────────────────────────────────────────────
@@ -7151,14 +7236,14 @@ mod hot_msg_handler_tests {
     fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
         IpeSub::None
     }
-    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
+    fn test_route_resolver(m: TestModel, _path: &crate::web::route::DecodedPath) -> TestModel {
         m
     }
-    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+    fn test_param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
-    fn test_route_matched(p: &str) -> bool {
-        p == "/"
+    fn test_route_matched(p: &crate::web::route::DecodedPath) -> bool {
+        p.is_root()
     }
 
     fn make_router() -> Router {
@@ -7364,14 +7449,14 @@ mod hot_init_handler_tests {
     fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
         IpeSub::None
     }
-    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
+    fn test_route_resolver(m: TestModel, _path: &crate::web::route::DecodedPath) -> TestModel {
         m
     }
-    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+    fn test_param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
-    fn test_route_matched(p: &str) -> bool {
-        p == "/"
+    fn test_route_matched(p: &crate::web::route::DecodedPath) -> bool {
+        p.is_root()
     }
 
     fn make_router() -> Router {
@@ -7581,14 +7666,14 @@ mod hot_wiring_handler_tests {
     fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
         IpeSub::None
     }
-    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
+    fn test_route_resolver(m: TestModel, _path: &crate::web::route::DecodedPath) -> TestModel {
         m
     }
-    fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+    fn test_param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
-    fn test_route_matched(p: &str) -> bool {
-        p == "/"
+    fn test_route_matched(p: &crate::web::route::DecodedPath) -> bool {
+        p.is_root()
     }
 
     fn make_router() -> Router {
@@ -7992,14 +8077,14 @@ mod emitted_router_behavior_tests {
         fn(Model) -> IpeSub<Msg>,
     >;
 
-    fn route_resolver(m: Model, _path: &str) -> Model {
+    fn route_resolver(m: Model, _path: &crate::web::route::DecodedPath) -> Model {
         m
     }
-    fn param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+    fn param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
-    fn route_matched(p: &str) -> bool {
-        p == "/"
+    fn route_matched(p: &crate::web::route::DecodedPath) -> bool {
+        p.is_root()
     }
 
     fn make_state(store: Arc<Store>) -> State {
@@ -8293,7 +8378,7 @@ mod emitted_router_behavior_tests {
     /// proves no handler logic ran.
     fn make_counting_router(store: Arc<Store>, runs: Arc<AtomicUsize>) -> axum::Router {
         let mut state = make_state(store);
-        state.route_matched = Arc::new(move |p: &str| {
+        state.route_matched = Arc::new(move |p: &crate::web::route::DecodedPath| {
             runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             route_matched(p)
         });
