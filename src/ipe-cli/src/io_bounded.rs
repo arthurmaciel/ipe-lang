@@ -310,7 +310,8 @@ mod tests {
     use super::*;
 
     fn write_temp(name: &str, content: &[u8]) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!("ipe_iob_{name}_{}.bin", std::process::id()));
+        let p =
+            ipe_test_temp::temp_root().join(format!("ipe_iob_{name}_{}.bin", std::process::id()));
         std::fs::write(&p, content).expect("write temp");
         p
     }
@@ -371,7 +372,8 @@ mod tests {
     /// A scratch directory unique to this test process.
     #[allow(clippy::expect_used)] // test fixture: an unwritable temp dir IS the failure
     fn scratch_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("ipe_iob_dir_{name}_{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipe_iob_dir_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create scratch dir");
         dir

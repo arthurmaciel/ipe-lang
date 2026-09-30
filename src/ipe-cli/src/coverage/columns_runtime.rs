@@ -24,6 +24,16 @@ fn scratch_dir() -> Result<crate::scratch::ScratchDir, String> {
     crate::scratch::ScratchDir::new("ipe-coverage-probe").map_err(|e| e.to_string())
 }
 
+/// `name` inside `scratch`, or a hole cell when `name` is not a plain leaf name.
+fn scratch_child(
+    scratch: &crate::scratch::ScratchDir,
+    name: &str,
+) -> Result<std::path::PathBuf, Cell> {
+    crate::scratch::LeafName::new(name)
+        .map(|leaf| scratch.child(&leaf))
+        .map_err(|e| Cell::Hole(format!("scratch entry `{name}` refused: {e}")))
+}
+
 /// A filesystem-safe, per-symbol scratch subdirectory key — injective by
 /// construction: distinct symbols always produce distinct keys.
 ///
@@ -111,7 +121,10 @@ impl AspectCheck<StdlibSymbol> for LowersColumn {
             Ok(s) => s,
             Err(reason) => return unavailable_cell(&reason),
         };
-        let snippet = scratch.child("Main.ipe");
+        let snippet = match scratch_child(scratch, "Main.ipe") {
+            Ok(path) => path,
+            Err(cell) => return cell,
+        };
         // The seam is "type-checks but does not lower": a probe that does not
         // type-check is a point-free-reference limitation for this symbol, not a
         // lowering gap.
@@ -217,7 +230,10 @@ impl AspectCheck<StdlibSymbol> for ComposesColumn {
             Ok(s) => s,
             Err(reason) => return unavailable_cell(&reason),
         };
-        let snippet = scratch.child("Main.ipe");
+        let snippet = match scratch_child(scratch, "Main.ipe") {
+            Ok(path) => path,
+            Err(cell) => return cell,
+        };
         // A nested probe that does not type-check is a generator limitation for
         // this symbol's shape, not a lowering gap: report it inapplicable so it
         // is not a false hole.
@@ -322,7 +338,10 @@ impl AspectCheck<StdlibSymbol> for BuildRunColumn {
         // symbols on distinct threads) never clobbers a sibling's snippet. The
         // module is `Main`, so the file must be named `Main.ipe`; the per-symbol
         // parent is what keeps it unique.
-        let snippet = scratch.child(&symbol_scratch_key(sym)).join("Main.ipe");
+        let snippet = match scratch_child(scratch, &symbol_scratch_key(sym)) {
+            Ok(dir) => dir.join("Main.ipe"),
+            Err(cell) => return cell,
+        };
         // The point-free reference program can fail to compile for a reason that
         // is a property of the probe FORM, not a build gap: a value the language
         // refuses point-free, a fully-polymorphic unused binding, or a lowerer ICE

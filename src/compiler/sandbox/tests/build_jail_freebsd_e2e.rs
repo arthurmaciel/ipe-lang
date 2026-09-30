@@ -49,7 +49,8 @@ fn fixture_path() -> PathBuf {
 
 /// A per-test scratch dir under the system temp root.
 fn scratch_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ipe-build-fb-e2e-{}-{}", tag, std::process::id()));
+    let dir =
+        ipe_test_temp::temp_root().join(format!("ipe-build-fb-e2e-{}-{}", tag, std::process::id()));
     std::fs::create_dir_all(&dir).expect("scratch");
     dir
 }

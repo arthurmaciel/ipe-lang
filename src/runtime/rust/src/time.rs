@@ -632,7 +632,7 @@ mod time_string_tests {
     fn time_string_is_utc_regardless_of_tz() {
         // A fixed instant whose UTC wall-clock time is 15:30:45.
         assert_eq!(time_time_string(1_615_735_845_000), "15:30:45");
-        if std::env::var_os(TZ_CHILD_MARKER).is_some() {
+        if crate::system::read_env_var(TZ_CHILD_MARKER).is_ok() {
             return;
         }
         rerun_under_non_utc_zones();

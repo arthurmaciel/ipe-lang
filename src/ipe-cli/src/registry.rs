@@ -212,7 +212,7 @@ mod tests {
     const FIXTURE_SHA: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
     fn temp_index(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe-registry-test-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()

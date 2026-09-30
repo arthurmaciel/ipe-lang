@@ -367,8 +367,8 @@ fn write_frozen_memfd(
 /// # use ipe_sandbox::{CanonicalPath, JailMounts};
 /// # fn stale() -> Option<usize> {
 /// # let tools = RunJailTools { bwrap: "bwrap".into(), prlimit: "prlimit".into(), timeout: None };
-/// # let tmp = CanonicalPath::resolve(Path::new("/tmp")).ok()?;
-/// # let mounts = JailMounts::of_invoker(tmp.clone(), tmp, Vec::new()).ok()?;
+/// # let root = CanonicalPath::resolve(Path::new("/")).ok()?;
+/// # let mounts = JailMounts::of_invoker(root.clone(), root, Vec::new()).ok()?;
 /// # let no_env = |_: &str| None;
 /// let sealed = write_seccomp_memfd(b"filter").ok()?;
 /// let argv = run_jail_argv(

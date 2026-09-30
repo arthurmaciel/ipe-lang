@@ -151,7 +151,8 @@ fn main() {{
 "#
     );
 
-    let dir = std::env::temp_dir().join(format!("ipe_ffi_forwarder_seal_{}", std::process::id()));
+    let dir =
+        ipe_test_temp::temp_root().join(format!("ipe_ffi_forwarder_seal_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).expect("mkdir");
     std::fs::write(

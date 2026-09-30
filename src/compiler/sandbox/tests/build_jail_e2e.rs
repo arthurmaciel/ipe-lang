@@ -101,7 +101,7 @@ fn jail_can_establish(tools: &RunJailTools) -> bool {
 /// A fresh per-test scratch dir under the system temp root (the one writable
 /// mount inside the jail).
 fn fresh_scratch(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = ipe_test_temp::temp_root().join(format!(
         "ipe-build-jail-e2e-{tag}-{}-{:?}",
         std::process::id(),
         std::thread::current().id()

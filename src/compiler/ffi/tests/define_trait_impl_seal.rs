@@ -94,7 +94,7 @@ fn a_marked_trait_impl_type_binds_its_symbols_and_depends_by_path() {
     // The relative wrapper path is jailed to the project root at load and
     // rendered as its canonical absolute directory.
     let project =
-        std::env::temp_dir().join(format!("ipe-sprite-wrap-dep-line-{}", std::process::id()));
+        ipe_test_temp::temp_root().join(format!("ipe-sprite-wrap-dep-line-{}", std::process::id()));
     std::fs::create_dir_all(project.join("wrappers/sprite")).expect("scratch wrapper dir");
     std::fs::write(
         project.join("wrappers/sprite/Cargo.toml"),
@@ -188,7 +188,8 @@ fn the_marker_surfaces_the_type_and_the_emitted_crate_builds_and_runs() {
         return; // inspector not built in this environment — skip
     };
 
-    let root = std::env::temp_dir().join(format!("ipe_ffi_define_seal_{}", std::process::id()));
+    let root =
+        ipe_test_temp::temp_root().join(format!("ipe_ffi_define_seal_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
 
     // 1-2. Write the marked wrapper crate and run the REAL inspector over it,

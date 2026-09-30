@@ -1029,7 +1029,8 @@ mod tests {
 
     #[test]
     fn a_www_dir_without_index_html_is_refused() {
-        let dir = std::env::temp_dir().join(format!("ipe-mobile-test-{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipe-mobile-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mk tmp");
         std::fs::write(dir.join("boot.js"), b"x").expect("write");
@@ -1040,7 +1041,7 @@ mod tests {
 
     #[test]
     fn a_www_dir_collects_its_files_sorted() {
-        let dir = std::env::temp_dir().join(format!("ipe-mobile-ok-{}", std::process::id()));
+        let dir = ipe_test_temp::temp_root().join(format!("ipe-mobile-ok-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("pkg")).expect("mk tmp");
         std::fs::write(dir.join("index.html"), b"<html>").expect("write");

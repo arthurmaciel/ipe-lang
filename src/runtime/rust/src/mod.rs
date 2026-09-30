@@ -126,7 +126,7 @@ pub mod ct_eq;
 
 // The cryptographic floor: the entropy pair, the SHA-2 hash/HMAC family, the RSA
 // sign/verify pair, the typed `Key`/`Mac` newtypes and the constant-time compare.
-// Behind the `crypto-core` feature (`sha2`/`hmac`/`subtle`/`getrandom`): a
+// Behind the `crypto-core` feature (`sha2`/`hmac`/`subtle`): a
 // program that reaches no crypto-floor kernel — and no crypto/jwt/db/web/webview/
 // email/server surface that reaches the floor (each of those features implies
 // `crypto-core`) — drops the module and its subtree. The heavy RSA arms inside
@@ -175,9 +175,8 @@ pub mod file;
 pub mod log;
 // `Ipe.Random` non-cryptographic PRNG. Behind the `random` feature: a program
 // that reaches no `Ipe.Random` kernel drops the module. The feature gates only
-// this module. `getrandom` (the entropy source shared with `crypto_core` and
-// with this module's wasm seed arm) is enabled by `random || crypto-core`, so
-// gating `random` alone never removes `getrandom`.
+// this module. `getrandom` (the entropy source shared with `crypto_core`,
+// `scratch_core`, and this module's seed) is always present.
 #[cfg(feature = "random")]
 pub mod random;
 // `system` is always compiled (not tokio-gated): it owns the process-local env
@@ -232,6 +231,14 @@ pub mod path_core;
 // as `mod ipe_runtime` into an emitted app; `system` reaches it via
 // `super::home_core::…`.
 pub mod home_core;
+
+// The private scratch primitive — the SINGLE source of truth shared with the
+// compiler sandbox (`ipe_sandbox::scratch` `include!`s this exact file). Every
+// runtime temporary path is created through it. `scratch_host` supplies this
+// host's entropy source and profile lookup; both are sibling modules so they
+// also resolve when the runtime is vendored as `mod ipe_runtime`.
+pub mod scratch_core;
+pub mod scratch_host;
 
 pub mod path;
 pub use path::*;

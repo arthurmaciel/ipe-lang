@@ -240,7 +240,8 @@ fn the_fail_closed_opaque_representation_builds() {
     let slug = "demo";
     let ffi_body = format!("pub mod {slug} {{\n{bindings}}}\npub use {slug}::*;\n");
 
-    let dir = std::env::temp_dir().join(format!("ipe_ffi_fixpoint_seal_{}", std::process::id()));
+    let dir =
+        ipe_test_temp::temp_root().join(format!("ipe_ffi_fixpoint_seal_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).expect("mkdir");
     std::fs::write(

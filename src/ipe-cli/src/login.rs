@@ -825,7 +825,7 @@ mod tests {
 
     #[test]
     fn an_unsupported_token_store_writes_no_token() {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe-login-unsupported-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -974,7 +974,7 @@ mod tests {
     fn token_file_created_with_owner_only_mode() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe-login-test-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -1012,7 +1012,7 @@ mod tests {
     fn existing_loose_mode_token_file_is_tightened_before_write() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe-login-relogin-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -1109,7 +1109,7 @@ mod tests {
     fn write_token_is_crash_atomic_and_leaves_no_temp() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe-login-atomic-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -1151,7 +1151,7 @@ mod tests {
     fn an_exposed_stored_token_is_refused_and_an_owner_only_one_is_read() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe-login-exposed-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -1223,7 +1223,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_symlinked_token_dir_is_reported_as_a_link_not_an_exposed_token() {
-        let base = std::env::temp_dir()
+        let base = ipe_test_temp::temp_root()
             .canonicalize()
             .expect("canonical temp dir")
             .join(format!(
@@ -1259,7 +1259,7 @@ mod tests {
     fn an_untrusted_token_dir_is_reported_as_the_dir_not_an_exposed_file() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let base = std::env::temp_dir()
+        let base = ipe_test_temp::temp_root()
             .canonicalize()
             .expect("canonical temp dir")
             .join(format!(
@@ -1309,7 +1309,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_dangling_token_symlink_is_reported_and_removed_alike() {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe-login-dangling-{}-{:?}",
             std::process::id(),
             std::thread::current().id()

@@ -1240,7 +1240,8 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_LOAD_ENV_PROBE_VAR",
     "IPE_ORACLE_SHARED_TARGET",
     "IPE_RUN_WITH_TEST_VAR",
-    "IPE_SECRET_E2E", // Windows jail e2e test sentinel
+    "IPE_SECRET_E2E",                   // Windows jail e2e test sentinel
+    "IPE_TEMP_ROOT_ENV_TEST_NEIGHBOUR", // temp-root refusal test: a key that only contains a temp-root name
     "IPE_TEST_BOOL_BAD",
     "IPE_TEST_BOOL_F",
     "IPE_TEST_BOOL_T",
@@ -1254,7 +1255,8 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_TEST_PG_URL",
     "IPE_TEST_REDIS_URL",
     "IPE_TIME_STRING_TZ_CHILD", // runtime time test: marks the non-UTC `TZ` re-exec
-    "IPE_WASI_SEAL_CHILD",      // WASI seal e2e: marks the cargo-env re-exec
+    "IPE_TMP", // temp-root refusal tests: a neighbouring key that must not be refused
+    "IPE_WASI_SEAL_CHILD", // WASI seal e2e: marks the cargo-env re-exec
     "IPE_WINDOWS_E2E_ENV_CHILD", // Windows jail e2e: marks the env-seeded re-exec
     // Deprecated IPE_LIVE_* aliases — documented in the canonical IPE_WEB_* entry.
     "IPE_LIVE_BANNER",

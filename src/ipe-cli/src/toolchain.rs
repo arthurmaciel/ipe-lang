@@ -266,7 +266,8 @@ mod tests {
     impl ProbeDir {
         /// Create a fresh directory containing an executable named `cargo`.
         fn with_cargo(tag: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("ipe_tc_{tag}_{}", std::process::id()));
+            let dir =
+                ipe_test_temp::temp_root().join(format!("ipe_tc_{tag}_{}", std::process::id()));
             let created = std::fs::create_dir_all(&dir);
             assert!(created.is_ok(), "create probe dir: {created:?}");
             let cargo = dir.join(CARGO_EXE);

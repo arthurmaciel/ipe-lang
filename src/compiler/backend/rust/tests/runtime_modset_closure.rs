@@ -1259,7 +1259,7 @@ mod tests {
 }
 ";
     // Write to a temp file and scan it.
-    let dir = std::env::temp_dir();
+    let dir = ipe_test_temp::temp_root();
     let path: PathBuf = dir.join("ipe_modset_closure_cfg_test_regression.rs");
     std::fs::write(&path, src).expect("write temp file");
     let mut deps = BTreeSet::new();

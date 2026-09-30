@@ -1220,8 +1220,7 @@ pub(crate) struct EmitCtx<'a> {
     /// `true` when the program reaches an `Ipe.Random` kernel. The `random`
     /// runtime feature gates the `random.rs` module declaration; this flag alone
     /// selects it (`random` is a standalone leaf). It does NOT gate the
-    /// `getrandom` crate alone — `getrandom` is enabled by `random || crypto-core`,
-    /// shared with the crypto floor.
+    /// `getrandom` crate, which every runtime carries.
     pub(crate) uses_random: bool,
     /// `true` when the program reaches an `Ipe.Log` kernel. The `log` runtime
     /// feature gates the `log.rs` module and — via `log = ["dep:chrono"]` — the
@@ -1260,10 +1259,8 @@ pub(crate) struct EmitCtx<'a> {
     /// or a `Key`/`Mac` newtype kernel). Folded with the heavy-crypto / jwt / db /
     /// web / webview / email / server surfaces in [`Self::reaches_crypto_core`],
     /// which selects the `crypto-core` runtime feature (`crypto_core.rs` plus
-    /// `sha2` + `hmac` + `subtle` + `getrandom`). A program reaching none of these
-    /// drops the module and those crates — and, since `getrandom` is enabled only
-    /// by `random || crypto-core`, a bare synchronous Program finally drops
-    /// `getrandom` too.
+    /// `sha2` + `hmac` + `subtle`). A program reaching none of these drops the
+    /// module and those crates.
     pub(crate) uses_crypto_core: bool,
     /// `true` when the program uses at least one `Ipe.Secret` kernel or holds a
     /// `Secret`-typed value. Selects the `secret` runtime feature (`secret.rs`
@@ -2141,7 +2138,7 @@ impl<'a> EmitCtx<'a> {
         let uses_crypto = program.modules.iter().any(|m| m.uses_crypto);
 
         // detect crypto-FLOOR usage (gates `crypto_core.rs` + sha2 + hmac +
-        // subtle + getrandom via the `crypto-core` feature). Folded with the
+        // subtle via the `crypto-core` feature). Folded with the
         // crypto/jwt/db/web/webview/email/server surfaces in
         // [`Self::reaches_crypto_core`], not here.
         let uses_crypto_core = program.modules.iter().any(|m| m.uses_crypto_core);
@@ -2658,7 +2655,7 @@ impl<'a> EmitCtx<'a> {
 
     /// `true` when the emitted crate reaches the `crypto_core.rs` FLOOR — so
     /// `project::assemble_project_files` selects the `crypto-core` feature
-    /// (`sha2` + `hmac` + `subtle` + `getrandom`) and, in the prelude, keeps the
+    /// (`sha2` + `hmac` + `subtle`) and, in the prelude, keeps the
     /// `crypto_random_bytes`/`crypto_random_token` wrapper block. This is the
     /// single source of truth shared by the manifest feature selection, the
     /// prelude-section gate ([`crate::project::native_runtime_bindings`]), and the
@@ -2675,9 +2672,8 @@ impl<'a> EmitCtx<'a> {
     /// HMAC-SHA-256s the SMTP auth; `server.rs` ([`Self::uses_server`])
     /// constant-time compares session ids through `subtle`. Each consumer is
     /// verified against the runtime source. FAIL-CLOSED — any uncertain consumer
-    /// keeps the floor on. Because `getrandom` is enabled only by `random ||
-    /// crypto-core`, a program that reaches none of these (and no `Ipe.Random`
-    /// kernel) is the first to drop `getrandom` and the whole SHA-2/HMAC subtree.
+    /// keeps the floor on. A program that reaches none of these drops the whole
+    /// SHA-2/HMAC subtree.
     pub(crate) const fn reaches_crypto_core(&self) -> bool {
         self.uses_crypto_core
             || self.uses_crypto

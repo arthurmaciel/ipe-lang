@@ -5,13 +5,16 @@
 //! through [`var`] / [`var_os`] here (or carries a per-site
 //! `#[allow(clippy::disallowed_methods)]` in a file the `home_read_scan` test
 //! pins as audited). The two readers mirror their `std` namesakes except that a
-//! home variable is never returned: the invoking user's home is attacker-
-//! reachable input that decides where caches and scratch roots live, and its
-//! one validated reader is `ipe_sandbox::home::home_dir` (absolute or nothing).
-//! A home read through this crate — by literal, by a constant, or by a key
-//! computed at runtime — is refused, so no spelling of the key reaches the raw
-//! value. There is no whole-environment iterator: an iteration would hand the
-//! home value out under its own name.
+//! home or temp-root variable is never returned. The invoking user's home is
+//! attacker-reachable input that decides where caches and scratch roots live,
+//! and its one validated reader is `ipe_sandbox::home::home_dir` (absolute or
+//! nothing). The temp root (`TMPDIR`, `TMP`, `TEMP`) names a base other users
+//! can write, and its one reader is the scratch primitive, which verifies the
+//! base and creates entries exclusively under it. A refused read through this
+//! crate — by literal, by a constant, or by a key computed at runtime — answers
+//! as unset, so no spelling of the key reaches the raw value. There is no
+//! whole-environment iterator: an iteration would hand a refused value out
+//! under its own name.
 
 use std::env::VarError;
 use std::ffi::{OsStr, OsString};
@@ -24,6 +27,13 @@ use std::ffi::{OsStr, OsString};
 /// value as `HOME` there.
 pub const HOME_NAMES: [&str; 4] = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"];
 
+/// Variables that name the OS temp root, a base other local users can write.
+///
+/// Compared like [`HOME_NAMES`]. Only the scratch primitive resolves the temp
+/// root, through the standard library's own lookup behind its ownership and
+/// exclusive-create checks.
+pub const TEMP_ROOT_NAMES: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
+
 /// `c` folded onto the ASCII letter its uppercase or lowercase mapping starts
 /// with, or `c` itself when neither mapping reaches ASCII.
 fn ascii_fold(c: char) -> char {
@@ -34,41 +44,59 @@ fn ascii_fold(c: char) -> char {
         .unwrap_or(c)
 }
 
-/// Whether `key` names a home variable this crate refuses to read.
+/// Whether `key` spells one of `names` under any case mapping.
 ///
-/// Fails closed: a key is refused when its per-character ASCII fold or its full
-/// Unicode uppercase equals a home name, ASCII case ignored.
-#[must_use]
-pub fn is_home_key(key: &OsStr) -> bool {
+/// Fails closed: a key matches when its per-character ASCII fold or its full
+/// Unicode uppercase equals a name, ASCII case ignored.
+fn spells_any(key: &OsStr, names: &[&str]) -> bool {
     let key = key.to_string_lossy();
     let folded: String = key.chars().map(ascii_fold).collect();
     let upper = key.to_uppercase();
-    HOME_NAMES
+    names
         .iter()
-        .any(|h| h.eq_ignore_ascii_case(&folded) || h.eq_ignore_ascii_case(&upper))
+        .any(|n| n.eq_ignore_ascii_case(&folded) || n.eq_ignore_ascii_case(&upper))
 }
 
-/// The UTF-8 value of `key`, as `std::env::var` — `NotPresent` for a home key.
+/// Whether `key` names a home variable this crate refuses to read.
+#[must_use]
+pub fn is_home_key(key: &OsStr) -> bool {
+    spells_any(key, &HOME_NAMES)
+}
+
+/// Whether `key` names a temp-root variable this crate refuses to read.
+#[must_use]
+pub fn is_temp_root_key(key: &OsStr) -> bool {
+    spells_any(key, &TEMP_ROOT_NAMES)
+}
+
+/// Whether this crate refuses to read `key`: a home or a temp-root variable.
+#[must_use]
+pub fn is_refused_key(key: &OsStr) -> bool {
+    is_home_key(key) || is_temp_root_key(key)
+}
+
+/// The UTF-8 value of `key`, as `std::env::var` — `NotPresent` for a refused key.
 ///
 /// # Errors
 ///
-/// `VarError::NotPresent` when `key` is unset or names a home variable, and
+/// `VarError::NotPresent` when `key` is unset or is refused
+/// ([`is_refused_key`]), and
 /// `VarError::NotUnicode` when its value is not valid UTF-8.
-#[allow(clippy::disallowed_methods)] // the audited reader: home keys refused first
+#[allow(clippy::disallowed_methods)] // the audited reader: refused keys answered first
 pub fn var<K: AsRef<OsStr>>(key: K) -> Result<String, VarError> {
     let key = key.as_ref();
-    if is_home_key(key) {
+    if is_refused_key(key) {
         return Err(VarError::NotPresent);
     }
     std::env::var(key)
 }
 
-/// The raw value of `key`, as `std::env::var_os` — `None` for a home key.
+/// The raw value of `key`, as `std::env::var_os` — `None` for a refused key.
 #[must_use]
-#[allow(clippy::disallowed_methods)] // the audited reader: home keys refused first
+#[allow(clippy::disallowed_methods)] // the audited reader: refused keys answered first
 pub fn var_os<K: AsRef<OsStr>>(key: K) -> Option<OsString> {
     let key = key.as_ref();
-    if is_home_key(key) {
+    if is_refused_key(key) {
         return None;
     }
     std::env::var_os(key)
@@ -116,6 +144,42 @@ mod tests {
         let computed: String = ["HO", "ME"].concat();
         assert_eq!(var_os(&computed), None);
         assert_eq!(var(OsString::from(computed)), Err(VarError::NotPresent));
+    }
+
+    #[test]
+    fn every_spelling_of_a_temp_root_key_is_refused() {
+        for key in [
+            "TMPDIR", "tmpdir", "TmpDir", "TMP", "tmp", "TEMP", "Temp", "temp",
+        ] {
+            assert!(is_temp_root_key(OsStr::new(key)), "{key:?}");
+            assert!(is_refused_key(OsStr::new(key)), "{key:?}");
+            assert_eq!(var_os(key), None, "{key:?}");
+            assert_eq!(var(key), Err(VarError::NotPresent), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn a_temp_root_key_held_in_a_constant_or_runtime_value_is_refused() {
+        const K: &str = "TMPDIR";
+        assert_eq!(var_os(K), None);
+        assert_eq!(var_os(OsStr::new(K)), None);
+        let computed: String = ["TM", "PDIR"].concat();
+        assert_eq!(var_os(&computed), None);
+        assert_eq!(var(OsString::from(computed)), Err(VarError::NotPresent));
+    }
+
+    #[test]
+    fn a_neighbouring_temp_key_is_not_refused() {
+        for key in [
+            "TMPDIR_",
+            "IPE_TMP",
+            "TEMPLATE",
+            "CARGO_TARGET_TMPDIR",
+            "TM",
+        ] {
+            assert!(!is_temp_root_key(OsStr::new(key)), "{key:?}");
+            assert!(!is_refused_key(OsStr::new(key)), "{key:?}");
+        }
     }
 
     #[test]

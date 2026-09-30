@@ -458,7 +458,7 @@ mod copy_tests {
 
     #[test]
     fn reseeding_never_corrupts_the_warm_source() -> std::io::Result<()> {
-        let base = tempfile::tempdir()?;
+        let base = tempfile::tempdir_in(ipe_test_temp::temp_root())?;
         let warm = base.path().join("warm");
         let entry_dir = warm
             .join("registry")
@@ -569,7 +569,7 @@ mod tests {
 
     /// A host layout with `cargo/bin` and a disjoint `rustup`, canonicalized.
     fn toolchain_tree() -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = tempfile::tempdir_in(ipe_test_temp::temp_root()).expect("tempdir");
         let root = dir.path().canonicalize().expect("canonical tempdir");
         std::fs::create_dir_all(root.join("cargo").join("bin")).expect("cargo/bin");
         std::fs::create_dir_all(root.join("rustup")).expect("rustup");

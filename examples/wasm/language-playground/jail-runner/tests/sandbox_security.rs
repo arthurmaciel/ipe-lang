@@ -116,7 +116,7 @@ impl Staged {
 /// pre-warm + seed the offline dependency cache — leaving a crate ready to build
 /// offline in the jail.
 fn stage_ipe(source: &str) -> Staged {
-    let scratch = tempfile::TempDir::new().expect("scratch");
+    let scratch = tempfile::TempDir::new_in(ipe_test_temp::temp_root()).expect("scratch");
     // `--out` names the output root, kept apart from the source; the emitted
     // crate is its `rust/` area.
     let out_root = scratch.path().join("out");
@@ -163,7 +163,7 @@ fn stage_adversarial_rust(main_rs: &str) -> Staged {
 /// The canonical crate scaffold (manifest + vendored runtime) from a trivial
 /// emit, warmed and seeded — but the caller replaces `main.rs`.
 fn stage_scaffold_only() -> Staged {
-    let scratch = tempfile::TempDir::new().expect("scratch");
+    let scratch = tempfile::TempDir::new_in(ipe_test_temp::temp_root()).expect("scratch");
     // `--out` names the output root, kept apart from the source; the emitted
     // crate is its `rust/` area.
     let out_root = scratch.path().join("out");
@@ -230,7 +230,7 @@ fn warm_and_seed(crate_dir: &Path) {
 /// once). Under the sanctioned cache root by default.
 fn warm_root() -> PathBuf {
     ipe_env::var_os("IPE_PLAYGROUND_WARM_TARGET").map_or_else(
-        || std::env::temp_dir().join("ipe-playground-test-warm"),
+        || ipe_test_temp::temp_root().join("ipe-playground-test-warm"),
         PathBuf::from,
     )
 }

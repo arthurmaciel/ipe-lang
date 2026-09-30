@@ -1,0 +1,14 @@
+[package]
+name = "ipe-test-temp"
+description = "The OS temp root for test code: the one test-support reader of the shared temp base"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "ipe_test_temp"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

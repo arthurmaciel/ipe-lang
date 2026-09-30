@@ -3728,7 +3728,7 @@ mod tests {
     /// user who opts out always gets the machine's normal build configuration.
     #[test]
     fn opt_out_chooses_machine_default() {
-        let dir = std::env::temp_dir();
+        let dir = ipe_test_temp::temp_root();
         assert!(
             matches!(
                 choose_build_accel(&dir, None, true),
@@ -3744,7 +3744,7 @@ mod tests {
     /// core so it is independent of the `CARGO_TARGET_DIR` the test harness sets.
     #[test]
     fn target_warmth_tracks_dep_rlibs() {
-        let target = std::env::temp_dir().join(format!(
+        let target = ipe_test_temp::temp_root().join(format!(
             "ipe_warmth_{}_{}",
             std::process::id(),
             RESOLVE_RETRY_DELAY.as_nanos()
@@ -4061,7 +4061,7 @@ mod tests {
 
     /// A fresh scratch directory unique to this test run.
     fn loose_scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe_loose_watch_{tag}_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -4160,7 +4160,7 @@ mod tests {
     #[cfg(unix)]
     fn fake_cargo(name: &str, body: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt as _;
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe_watch_fake_cargo_{name}_{}",
             std::process::id()
         ));
@@ -4264,7 +4264,8 @@ mod tests {
     /// A crate swapped while cargo built it fails the build, its binary unstarted.
     #[test]
     fn a_green_build_whose_crate_was_replaced_is_refused() {
-        let base = std::env::temp_dir().join(format!("ipe-watch-green-{}", std::process::id()));
+        let base =
+            ipe_test_temp::temp_root().join(format!("ipe-watch-green-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("scratch base");
         let crate_path = base.join("crate");

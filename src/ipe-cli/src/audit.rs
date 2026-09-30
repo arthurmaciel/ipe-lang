@@ -62,7 +62,7 @@ use crate::cli_args::OutputFormat;
 use crate::project::{self, ProjectManifest};
 use crate::published_version::PublishedVersion;
 use crate::publisher::{BlessedPublisher, BlessingRefusal, SelfDeclaredPublisher};
-use crate::scratch::ScratchDir;
+use crate::scratch::{LeafName, ScratchDir};
 use crate::text;
 
 /// The package-gate checks, in the fixed order [`run_audit`] runs them. Naming
@@ -275,7 +275,10 @@ fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
         path: PathBuf::from("ipe-tier2-fixture"),
         source: e,
     })?;
-    let path = scratch.child(name);
+    let path = scratch.child(&LeafName::new(name).map_err(|e| CliError::Io {
+        path: PathBuf::from(name),
+        source: e.into(),
+    })?);
     std::fs::write(&path, bytes).map_err(|e| CliError::Io {
         path: path.clone(),
         source: e,
@@ -2368,7 +2371,7 @@ mod tests {
     /// Build a unique throwaway directory under the OS temp root for a test.
     /// Returns the path; the caller must remove it when done.
     fn make_test_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe-audit-test-{tag}-{}-{}",
             std::process::id(),
             // A per-call counter keeps multiple calls in the same test from

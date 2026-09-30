@@ -7769,7 +7769,7 @@ mod reset_state_tests {
         // by cargo nextest for unit tests). If it IS set, the test would wrongly
         // pass regardless of our logic — that is acceptable: the gate's behaviour
         // when set is correct by construction and the env is not unit-test-owned.
-        if std::env::var("IPE_WEB_RESET_STATE").is_ok() {
+        if crate::system::read_env_var("IPE_WEB_RESET_STATE").is_ok() {
             return; // env is present — skip this particular assertion
         }
         assert!(

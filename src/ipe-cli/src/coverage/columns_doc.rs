@@ -223,9 +223,12 @@ impl AspectCheck<StdlibSymbol> for DocExampleColumn {
             }
         };
 
+        let snippet = match crate::scratch::LeafName::new("Main.ipe") {
+            Ok(leaf) => scratch.child(&leaf),
+            Err(e) => return Cell::Hole(format!("scratch entry `Main.ipe` refused: {e}")),
+        };
         for (index, body) in examples.iter().enumerate() {
             let module_src = synthesize_example_module(body, &dotted, module_imports);
-            let snippet = scratch.child("Main.ipe");
             if let Err(e) = std::fs::write(&snippet, &module_src) {
                 return Cell::Hole(format!(
                     "could not write {}.{}'s example {} to type-check it: {e}",
