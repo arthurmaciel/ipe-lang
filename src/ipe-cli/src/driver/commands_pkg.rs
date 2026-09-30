@@ -1094,6 +1094,11 @@ pub fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<PathBuf, Cl
     Ok(main)
 }
 
+/// The directory name a governing manifest's test tree lives under, relative
+/// to the project root — the one spelling [`resolve_analysis_target`] and
+/// [`run_project_tests_with`] both key off, so the two can never drift apart.
+pub(crate) const TESTS_DIR_NAME: &str = "tests";
+
 /// The analysis an `ipe type-check`-family `<path>` argument resolved to.
 ///
 /// A FILE argument is always analysed as itself — [`Self::File`], or
@@ -1107,9 +1112,18 @@ pub enum AnalysisTarget {
     /// A directory (or omitted) argument: the project's own entry file, from
     /// [`analysis_root_of`].
     Project(PathBuf),
-    /// A file argument outside any governing manifest's `tests/` tree:
-    /// analysed as itself, never substituted.
-    File(PathBuf),
+    /// A file argument: analysed as itself, never substituted.
+    File {
+        /// The named file.
+        file: PathBuf,
+        /// The governing manifest's `src/` root, when `file` lies under it —
+        /// so the file's own imports resolve against the project's real
+        /// source tree rather than its own (possibly nested) directory.
+        /// `None` for a file no manifest governs, or one outside its
+        /// `src_root`, which falls back to the loose sibling closure rooted
+        /// at the file's own directory.
+        src_root: Option<PathBuf>,
+    },
     /// A file argument under a governing manifest's `tests/` tree: analysed as
     /// itself, over the `tests ∪ src` module set `collect_test_sources` builds.
     TestFile {
@@ -1118,6 +1132,11 @@ pub enum AnalysisTarget {
         /// The governing manifest's `src/` root, unioned in alongside `file`'s
         /// own `tests/` tree.
         src_root: PathBuf,
+        /// The governing manifest's `tests/` root (`<project_root>/tests`),
+        /// passed explicitly rather than re-derived from `file`'s own parent,
+        /// so a nested test file (`tests/Support/Helpers.ipe`) still widens
+        /// against the whole `tests/` tree, not just its own directory.
+        tests_root: PathBuf,
     },
 }
 
@@ -1137,7 +1156,17 @@ fn lexically_normalize(path: &Path) -> PathBuf {
         match component {
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
-                if !out.pop() {
+                // Only cancel a `Normal` component already pushed — popping a
+                // `RootDir`/`Prefix`/another `ParentDir` would silently climb
+                // past the path's own root or swallow a leading `..`, turning
+                // `../a` into `a` or `/..` into `/`.
+                let cancels_normal = matches!(
+                    out.components().next_back(),
+                    Some(std::path::Component::Normal(_))
+                );
+                if cancels_normal {
+                    out.pop();
+                } else {
                     out.push(component);
                 }
             }
@@ -1165,18 +1194,38 @@ pub fn resolve_analysis_target(path: &Path) -> Result<AnalysisTarget, CliError> 
         return Ok(AnalysisTarget::Project(resolve_analysis_entry(path)?));
     }
     let Some(manifest_path) = discover_manifest(path)? else {
-        return Ok(AnalysisTarget::File(path.to_path_buf()));
+        return Ok(AnalysisTarget::File {
+            file: path.to_path_buf(),
+            src_root: None,
+        });
     };
     let parsed = project::parse_manifest(&manifest_path)?;
     let project_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    let tests_root = lexically_normalize(&project_root.join("tests"));
-    if lexically_normalize(path).starts_with(&tests_root) {
+    let tests_root = lexically_normalize(&project_root.join(TESTS_DIR_NAME));
+    let normalized_path = lexically_normalize(path);
+    if normalized_path.starts_with(&tests_root) {
         return Ok(AnalysisTarget::TestFile {
             file: path.to_path_buf(),
             src_root: parsed.src_root,
+            tests_root,
         });
     }
-    Ok(AnalysisTarget::File(path.to_path_buf()))
+    // A manifest-governed file under its `src/` root is analysed against the
+    // SAME src-rooted module set the build uses (`discover_modules`), so a
+    // nested file importing by its full module path (`Api.Handlers` importing
+    // `Api.Types`) resolves — not the loose closure rooted at the file's own
+    // directory, which only sees siblings one level below ITSELF.
+    let normalized_src_root = lexically_normalize(&parsed.src_root);
+    if normalized_path.starts_with(&normalized_src_root) {
+        return Ok(AnalysisTarget::File {
+            file: path.to_path_buf(),
+            src_root: Some(parsed.src_root),
+        });
+    }
+    Ok(AnalysisTarget::File {
+        file: path.to_path_buf(),
+        src_root: None,
+    })
 }
 
 /// `ipe type-check [<path>]` — type-check a program and stop. Runs the same
@@ -1385,7 +1434,8 @@ pub fn run_project_tests_with(
         (root, src_root)
     };
 
-    let test_entry = project_root.join("tests").join("Main.ipe");
+    let tests_root = project_root.join(TESTS_DIR_NAME);
+    let test_entry = tests_root.join("Main.ipe");
     if !test_entry.is_file() {
         // No test entry — there is nothing to run.
         return Ok(TestOutcome::NoTestEntry);
@@ -1420,6 +1470,7 @@ pub fn run_project_tests_with(
     // spawn error, or a normal run — not only the success path.
     let outcome = build_and_run_test_entry(
         &project_src_root,
+        &tests_root,
         &test_entry,
         &out_dir,
         &runtime_dir,
@@ -1445,6 +1496,7 @@ pub fn run_project_tests_with(
 /// non-zero (a failing case, or a crash/signal with no exit code).
 pub fn build_and_run_test_entry(
     project_src_root: &Path,
+    tests_root: &Path,
     test_entry: &Path,
     out_dir: &Path,
     runtime_dir: &Path,
@@ -1453,7 +1505,7 @@ pub fn build_and_run_test_entry(
 ) -> Result<TestOutcome, CliError> {
     let out = OutTarget::Path(out_dir);
     let crate_dir = if project_src_root.is_dir() {
-        build_test_into(project_src_root, test_entry, out, runtime_dir)?
+        build_test_into(project_src_root, tests_root, test_entry, out, runtime_dir)?
     } else {
         build_loose_file_into(test_entry, out, runtime_dir, BuildOptions::from_env())?
     };
@@ -3576,6 +3628,73 @@ mod capability_fold_tests {
         assert!(
             matches!(&verdict, Ok(set) if *set == expected),
             "expected the union {expected:?}, got {verdict:?}"
+        );
+    }
+}
+
+// ── `lexically_normalize` unit tests ─────────────────────────────────────────
+//
+// `resolve_analysis_target` trusts this normalisation to decide whether a file
+// argument lies under a manifest's `src_root` or `tests_root`; a `..` that
+// climbs past where it should stop (or fails to climb where it should) would
+// silently misclassify a file argument's target.
+
+#[cfg(test)]
+mod lexical_normalize_tests {
+    use super::*;
+
+    #[test]
+    fn drops_current_dir_components() {
+        assert_eq!(
+            lexically_normalize(Path::new("./a/./b/./c")),
+            Path::new("a/b/c")
+        );
+    }
+
+    #[test]
+    fn parent_dir_cancels_the_preceding_normal_component() {
+        assert_eq!(lexically_normalize(Path::new("a/b/../c")), Path::new("a/c"));
+        assert_eq!(lexically_normalize(Path::new("a/../b")), Path::new("b"));
+    }
+
+    #[test]
+    fn a_leading_parent_dir_on_a_relative_path_is_kept_not_popped() {
+        // There is no preceding `Normal` component to cancel, so `..` must be
+        // kept literally rather than popped into an empty (and then wrong)
+        // path.
+        assert_eq!(lexically_normalize(Path::new("../a")), Path::new("../a"));
+        assert_eq!(
+            lexically_normalize(Path::new("../../a/b")),
+            Path::new("../../a/b")
+        );
+    }
+
+    #[test]
+    fn a_parent_dir_past_an_absolute_root_is_kept_not_popped() {
+        // Popping here would climb past `/`, silently producing a relative
+        // path (`a`) from an absolute one (`/..`) — `lexically_normalize`
+        // never crosses the root.
+        assert_eq!(lexically_normalize(Path::new("/..")), Path::new("/.."));
+        assert_eq!(lexically_normalize(Path::new("/../a")), Path::new("/../a"));
+    }
+
+    #[test]
+    fn mixed_relative_and_absolute_paths_normalize_lexically() {
+        assert_eq!(
+            lexically_normalize(Path::new("/a/./b/../c")),
+            Path::new("/a/c")
+        );
+        assert_eq!(
+            lexically_normalize(Path::new("a/b/c/../../d")),
+            Path::new("a/d")
+        );
+    }
+
+    #[test]
+    fn a_path_with_no_dot_components_is_unchanged() {
+        assert_eq!(
+            lexically_normalize(Path::new("src/Api/Handlers.ipe")),
+            Path::new("src/Api/Handlers.ipe")
         );
     }
 }

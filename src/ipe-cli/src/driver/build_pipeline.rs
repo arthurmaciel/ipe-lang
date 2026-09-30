@@ -455,13 +455,14 @@ pub fn build_loose_file_into(
 /// test entry's directory or `project_src_root`.
 pub fn build_test_into(
     project_src_root: &Path,
+    tests_root: &Path,
     test_entry: &Path,
     out: OutTarget<'_>,
     runtime_dir: &Path,
 ) -> Result<OwnedDir, CliError> {
     let project = ProjectPaths::of_file(test_entry).with_sources(project_src_root);
     let target = out.prove(&project)?;
-    let collected = collect_test_sources(project_src_root, test_entry)?;
+    let collected = collect_test_sources(project_src_root, tests_root, test_entry)?;
 
     // No manifest driver is threaded here (the test stage mirrors the sibling
     // build's "no manifest" fallback) — default to sqlite, same rationale as
@@ -517,6 +518,47 @@ pub fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliE
     })
 }
 
+/// Collect the sources for a manifest-governed file analysed by itself (e.g.
+/// `ipe type-check src/Api/Handlers.ipe`): the WHOLE `src_root` tree — the
+/// same [`project::discover_modules`] set `ipe build` compiles — rather than
+/// the loose closure rooted at the file's own directory.
+///
+/// The loose closure ([`collect_entry_and_siblings`]) resolves an import
+/// relative to the ENTRY's directory, which is only correct when the entry's
+/// directory IS the project's source root (true for [`AnalysisTarget::Project`],
+/// whose entry is always `<src_root>/Main.ipe`). A nested file's own directory
+/// is a subdirectory of `src_root`, not `src_root` itself, so the same closure
+/// would look for `Api.Types` at `<entry-dir>/Api/Types.ipe` instead of
+/// `src_root/Api/Types.ipe`. Discovering the whole `src_root` tree side-steps
+/// this: every module's path is relativised against `src_root`, matching what
+/// the emitted build sees.
+///
+/// [`AnalysisTarget::Project`]: super::commands_pkg::AnalysisTarget::Project
+///
+/// # Errors
+/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on
+/// any filesystem failure reading a discovered module;
+/// [`CliError::DiscoveryLimitReached`] when the `src_root` tree is too large.
+pub fn collect_manifest_rooted_entry(
+    src_root: &Path,
+    entry: &Path,
+) -> Result<CollectedSources, CliError> {
+    let entry_source =
+        crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
+    let entry_module_path = parse_entry_module_path(entry, &entry_source)?;
+
+    let mut discovered = project::discover_modules(src_root)?;
+    ensure_entry_present(&mut discovered, entry, &entry_module_path);
+
+    let sources = read_discovered_sources(&discovered, entry, &entry_module_path, &entry_source)?;
+
+    Ok(CollectedSources {
+        sources,
+        discovered,
+        entry_module_path,
+    })
+}
+
 /// Collect the sources for `ipe verify`'s test stage: the project's `src/`
 /// tree (the code under test) unioned with the `tests/` tree (the test entry
 /// and any test-only siblings).
@@ -538,19 +580,19 @@ pub fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliE
 /// on any filesystem failure reading a discovered module.
 pub fn collect_test_sources(
     project_src_root: &Path,
+    tests_root: &Path,
     test_entry: &Path,
 ) -> Result<CollectedSources, CliError> {
     let entry_source =
         crate::io_bounded::read_to_string_capped(test_entry, crate::io_bounded::SOURCE_READ_CAP)?;
     let entry_module_path = parse_entry_module_path(test_entry, &entry_source)?;
 
-    // The `tests/` tree: the directory holding the test entry, rooted at itself
-    // so `tests/Main.ipe` → `Main` and `tests/Support/Fixtures.ipe` →
-    // `Support.Fixtures`.
-    let tests_root = test_entry
-        .parent()
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| Path::new("."));
+    // The `tests/` tree is rooted at `tests_root` (the caller's, e.g. the
+    // manifest-governed project's `<project_root>/tests`) rather than
+    // re-derived from the test entry's own parent — a nested test file
+    // (`tests/Support/Helpers.ipe`) must still widen against the WHOLE
+    // `tests/` tree, not just its own directory, so
+    // `tests/Support/Helpers.ipe` → `Support.Helpers`.
 
     // The code under test: the `src/` tree, rooted at itself so
     // `src/Lib/Foo.ipe` → `Lib.Foo` — the SAME relativisation the build stage

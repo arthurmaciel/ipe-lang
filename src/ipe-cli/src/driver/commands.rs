@@ -2,11 +2,11 @@ use super::{
     AnalysisTarget, BuildOptions, BundleHost, BundleProfile, CliError, CollectedSources, OutTarget,
     RuntimeContext, apply_fixes_cmd, attribute_canon_errors, attribute_post_link_error,
     bluegreen_enabled, build_loose_file_into, build_project_into, bundle_delivery,
-    collect_entry_and_siblings, collect_test_sources, create_source_root, emit_machine_error,
-    emit_permissions, find_manifest_for_ipe_file, gate_decoder_pipelines, home_to_source_map,
-    io_err, render_capabilities, resolve_analysis_entry, resolve_analysis_target,
-    resolve_vendored_runtime_dir, run_version, runtime_dep_from_env,
-    single_file_cargo_name_from_env,
+    collect_entry_and_siblings, collect_manifest_rooted_entry, collect_test_sources,
+    create_source_root, emit_machine_error, emit_permissions, find_manifest_for_ipe_file,
+    gate_decoder_pipelines, home_to_source_map, io_err, render_capabilities,
+    resolve_analysis_entry, resolve_analysis_target, resolve_vendored_runtime_dir, run_version,
+    runtime_dep_from_env, single_file_cargo_name_from_env,
 };
 use crate::output_dir::{EmitTarget, OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::style::TerminalSafe;
@@ -3407,9 +3407,10 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
 /// Returns [`CliError::Pipeline`] when the compiler rejects the program, or
 /// [`CliError::Io`] when the entry file cannot be read.
 pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
-    let (db, program) = lower_entry_via_graph(entry)?;
-    let interner = ipe_db::Db::interner(&db).lock();
-    Ok(ipe_ir::pretty(&program, &interner))
+    emit_ir_text_for_target(&AnalysisTarget::File {
+        file: entry.to_path_buf(),
+        src_root: None,
+    })
 }
 
 // ===========================================================================
@@ -3594,6 +3595,20 @@ pub fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
     build_source_graph_from(collect_entry_and_siblings(entry)?, entry)
 }
 
+/// Build the whole-program source graph for a manifest-governed file analysed
+/// by itself, over the src-rooted module set [`collect_manifest_rooted_entry`]
+/// discovers (the same set `ipe build` compiles) — so a nested file importing
+/// by its full module path (`Api.Handlers` importing `Api.Types`) resolves.
+///
+/// # Errors
+/// Same as [`build_source_graph`].
+pub fn build_source_graph_for_manifest_file(
+    src_root: &Path,
+    entry: &Path,
+) -> Result<SourceGraph, CliError> {
+    build_source_graph_from(collect_manifest_rooted_entry(src_root, entry)?, entry)
+}
+
 /// Build the whole-program source graph for a `tests/`-rooted entry, unioning
 /// the project's `src/` tree with its `tests/` tree — [`collect_test_sources`],
 /// `ipe verify`'s own `tests ∪ src` convention — so `ipe type-check tests/X.ipe`
@@ -3604,10 +3619,11 @@ pub fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
 /// Same as [`build_source_graph`].
 pub fn build_source_graph_for_test(
     project_src_root: &Path,
+    tests_root: &Path,
     test_entry: &Path,
 ) -> Result<SourceGraph, CliError> {
     build_source_graph_from(
-        collect_test_sources(project_src_root, test_entry)?,
+        collect_test_sources(project_src_root, tests_root, test_entry)?,
         test_entry,
     )
 }
@@ -3928,11 +3944,26 @@ pub fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
 /// Same as [`typecheck_entry_via_graph`].
 pub fn typecheck_test_entry_via_graph(
     project_src_root: &Path,
+    tests_root: &Path,
     test_entry: &Path,
 ) -> Result<(), CliError> {
     typecheck_graph(
-        &build_source_graph_for_test(project_src_root, test_entry)?,
+        &build_source_graph_for_test(project_src_root, tests_root, test_entry)?,
         test_entry,
+    )
+}
+
+/// The manifest-rooted sibling of [`typecheck_entry_via_graph`]: type-check a
+/// nested, non-entry file over the src-rooted module set
+/// [`build_source_graph_for_manifest_file`] builds, so its imports resolve
+/// against the project's real `src_root` rather than the file's own directory.
+///
+/// # Errors
+/// Same as [`typecheck_entry_via_graph`].
+pub fn typecheck_manifest_file_via_graph(src_root: &Path, entry: &Path) -> Result<(), CliError> {
+    typecheck_graph(
+        &build_source_graph_for_manifest_file(src_root, entry)?,
+        entry,
     )
 }
 
@@ -3967,12 +3998,20 @@ fn typecheck_graph(graph: &SourceGraph, blame_path: &Path) -> Result<(), CliErro
 /// Same as [`typecheck_entry_via_graph`].
 pub fn typecheck_target(target: &AnalysisTarget) -> Result<(), CliError> {
     match target {
-        AnalysisTarget::Project(entry) | AnalysisTarget::File(entry) => {
-            typecheck_entry_via_graph(entry)
-        }
-        AnalysisTarget::TestFile { file, src_root } => {
-            typecheck_test_entry_via_graph(src_root, file)
-        }
+        AnalysisTarget::Project(entry) => typecheck_entry_via_graph(entry),
+        AnalysisTarget::File {
+            file,
+            src_root: None,
+        } => typecheck_entry_via_graph(file),
+        AnalysisTarget::File {
+            file,
+            src_root: Some(src_root),
+        } => typecheck_manifest_file_via_graph(src_root, file),
+        AnalysisTarget::TestFile {
+            file,
+            src_root,
+            tests_root,
+        } => typecheck_test_entry_via_graph(src_root, tests_root, file),
     }
 }
 
@@ -3985,12 +4024,26 @@ pub fn source_graph_for_target(
     target: &AnalysisTarget,
 ) -> Result<(SourceGraph, PathBuf), CliError> {
     match target {
-        AnalysisTarget::Project(entry) | AnalysisTarget::File(entry) => {
-            Ok((build_source_graph(entry)?, entry.clone()))
-        }
-        AnalysisTarget::TestFile { file, src_root } => {
-            Ok((build_source_graph_for_test(src_root, file)?, file.clone()))
-        }
+        AnalysisTarget::Project(entry) => Ok((build_source_graph(entry)?, entry.clone())),
+        AnalysisTarget::File {
+            file,
+            src_root: None,
+        } => Ok((build_source_graph(file)?, file.clone())),
+        AnalysisTarget::File {
+            file,
+            src_root: Some(src_root),
+        } => Ok((
+            build_source_graph_for_manifest_file(src_root, file)?,
+            file.clone(),
+        )),
+        AnalysisTarget::TestFile {
+            file,
+            src_root,
+            tests_root,
+        } => Ok((
+            build_source_graph_for_test(src_root, tests_root, file)?,
+            file.clone(),
+        )),
     }
 }
 

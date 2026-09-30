@@ -1317,6 +1317,7 @@ fn test_stage_build_resolves_src_modules_from_tests_dir() {
     let out = tmp.join("out");
     let result = build_test_into(
         &src,
+        &tests,
         &tests.join("Main.ipe"),
         OutTarget::Path(&out),
         &runtime,
@@ -1352,7 +1353,7 @@ fn collect_test_sources_unions_src_and_tests_trees() {
     )
     .expect("write tests/Main.ipe");
 
-    let collected = collect_test_sources(&src, &tests.join("Main.ipe"))
+    let collected = collect_test_sources(&src, &tests, &tests.join("Main.ipe"))
         .expect("collect_test_sources must succeed");
 
     assert_eq!(
@@ -2644,8 +2645,13 @@ fn type_check_of_a_non_default_src_file_is_analysed_as_itself() {
 
     assert_eq!(
         resolve_analysis_target(&other).expect("resolves"),
-        AnalysisTarget::File(other.clone()),
-        "a src-rooted file argument resolves to itself, never Project"
+        AnalysisTarget::File {
+            file: other.clone(),
+            src_root: Some(src.clone()),
+        },
+        "a src-rooted file argument resolves to itself, never Project, and carries \
+         the manifest's src_root so its imports are resolved against the whole \
+         src tree rather than a loose closure rooted at its own directory"
     );
     let _ = fs::remove_dir_all(&tmp);
 }
@@ -2679,6 +2685,260 @@ fn type_check_of_a_directory_still_resolves_the_project_entry() {
     assert!(
         result.is_ok(),
         "the clean default entry must still type-check via a directory argument: {result:?}"
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// [`resolve_analysis_target`] over a file lying under the manifest's
+/// `tests/` tree returns `TestFile`, carrying both the project's `src_root`
+/// and the `tests_root` the F2 fix threads through explicitly rather than
+/// re-deriving from the entry's own parent directory.
+#[test]
+fn resolve_analysis_target_of_a_tests_file_returns_test_file() {
+    let tmp = std::env::temp_dir().join("ipe_resolve_target_tests_file_is_test_file");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    let tests_dir = tmp.join("tests");
+    fs::create_dir_all(&src).expect("create src/");
+    fs::create_dir_all(&tests_dir).expect("create tests/");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"app\" }\n",
+    )
+    .expect("pkg");
+    fs::write(
+        src.join("Main.ipe"),
+        "module Main exposing (main)\nmain = 1\n",
+    )
+    .expect("src/Main.ipe");
+    let tests_main = tests_dir.join("Main.ipe");
+    fs::write(&tests_main, "module Main exposing (main)\nmain = 1\n").expect("tests/Main.ipe");
+
+    assert_eq!(
+        resolve_analysis_target(&tests_main).expect("resolves"),
+        AnalysisTarget::TestFile {
+            file: tests_main.clone(),
+            src_root: src.clone(),
+            tests_root: tests_dir.clone(),
+        },
+        "a tests/-rooted file argument resolves to TestFile carrying both roots"
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// A `tests/Main.ipe` that imports a plain `src/` module type-checks green —
+/// the baseline `tests ∪ src` union the `TestFile` analysis path relies on.
+#[test]
+fn tests_main_importing_a_src_module_type_checks_green() {
+    let tmp = std::env::temp_dir().join("ipe_tests_main_imports_src_module_green");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    let tests_dir = tmp.join("tests");
+    fs::create_dir_all(&src).expect("create src/");
+    fs::create_dir_all(&tests_dir).expect("create tests/");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"app\" }\n",
+    )
+    .expect("pkg");
+    fs::write(
+        src.join("Main.ipe"),
+        "module Main exposing (main)\nmain = 1\n",
+    )
+    .expect("src/Main.ipe");
+    fs::write(
+        src.join("Support.ipe"),
+        "module Support exposing (value)\nvalue = 42\n",
+    )
+    .expect("src/Support.ipe");
+    let tests_main = tests_dir.join("Main.ipe");
+    fs::write(
+        &tests_main,
+        "module Main exposing (main)\nimport Support\nmain = Support.value\n",
+    )
+    .expect("tests/Main.ipe");
+
+    let result = run_type_check_body(&[tests_main.to_string_lossy().into_owned()]);
+    assert!(
+        result.is_ok(),
+        "tests/Main.ipe importing a src/ module must type-check: {:?}",
+        result.err()
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// F1's class-closing case: a NESTED `src/` module importing a sibling by its
+/// full module path must type-check against the manifest's whole `src` tree.
+/// Before the fix, a manifest-governed file was analysed through the
+/// loose-file closure rooted at the FILE's own directory (`src/Api/`), so
+/// `import Api.Types` probed `src/Api/Api/Types.ipe` and failed instead of
+/// finding `src/Api/Types.ipe`.
+#[test]
+fn nested_src_module_importing_by_full_path_type_checks_green() {
+    let tmp = std::env::temp_dir().join("ipe_nested_src_module_full_path_import_green");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    let api = src.join("Api");
+    fs::create_dir_all(&api).expect("create src/Api/");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"app\" }\n",
+    )
+    .expect("pkg");
+    fs::write(
+        src.join("Main.ipe"),
+        "module Main exposing (main)\nmain = 1\n",
+    )
+    .expect("src/Main.ipe");
+    fs::write(
+        api.join("Types.ipe"),
+        "module Api.Types exposing (id)\nid = 1\n",
+    )
+    .expect("src/Api/Types.ipe");
+    let handlers = api.join("Handlers.ipe");
+    fs::write(
+        &handlers,
+        "module Api.Handlers exposing (handler)\nimport Api.Types as Types\nhandler = Types.id\n",
+    )
+    .expect("src/Api/Handlers.ipe");
+
+    let result = run_type_check_body(&[handlers.to_string_lossy().into_owned()]);
+    assert!(
+        result.is_ok(),
+        "a nested src/ file importing a sibling by its full module path must \
+         type-check against the manifest's whole src tree, not a closure \
+         rooted at the file's own directory: {:?}",
+        result.err()
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// F2's class-closing case: a NESTED `tests/` file importing a test sibling
+/// by its full module path must type-check against the manifest's whole
+/// `tests` tree. Before the fix, `TestFile` rooted the tests tree at
+/// `test_entry.parent()` (`tests/Support/`), so `import Support.Fixtures`
+/// probed `tests/Support/Support/Fixtures.ipe` and failed instead of finding
+/// `tests/Support/Fixtures.ipe`.
+#[test]
+fn nested_test_file_importing_a_test_sibling_type_checks_green() {
+    let tmp = std::env::temp_dir().join("ipe_nested_test_file_sibling_import_green");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    let tests_dir = tmp.join("tests");
+    let support = tests_dir.join("Support");
+    fs::create_dir_all(&src).expect("create src/");
+    fs::create_dir_all(&support).expect("create tests/Support/");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"app\" }\n",
+    )
+    .expect("pkg");
+    fs::write(
+        src.join("Main.ipe"),
+        "module Main exposing (main)\nmain = 1\n",
+    )
+    .expect("src/Main.ipe");
+    fs::write(
+        tests_dir.join("Main.ipe"),
+        "module Main exposing (main)\nmain = 1\n",
+    )
+    .expect("tests/Main.ipe");
+    fs::write(
+        support.join("Fixtures.ipe"),
+        "module Support.Fixtures exposing (seed)\nseed = 1\n",
+    )
+    .expect("tests/Support/Fixtures.ipe");
+    let helpers = support.join("Helpers.ipe");
+    fs::write(
+        &helpers,
+        "module Support.Helpers exposing (seeded)\nimport Support.Fixtures as Fixtures\nseeded = Fixtures.seed\n",
+    )
+    .expect("tests/Support/Helpers.ipe");
+
+    let result = run_type_check_body(&[helpers.to_string_lossy().into_owned()]);
+    assert!(
+        result.is_ok(),
+        "a nested tests/ file importing a sibling by its full module path \
+         must type-check against the manifest's whole tests tree, not a \
+         closure rooted at the file's own directory: {:?}",
+        result.err()
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// `ipe build --emit-ir` and `ipe capabilities` share `resolve_analysis_target`
+/// with `ipe type-check`; both must analyse a NAMED non-default src file, not
+/// silently substitute the project's default entry. A type error planted only
+/// in `Other.ipe` (with a clean `Main.ipe`) surfaces through both surfaces,
+/// blamed on `Other.ipe` itself — proof neither analysed `Main.ipe` instead.
+#[test]
+fn emit_ir_and_capabilities_over_a_non_default_src_file_analyse_it_not_main() {
+    let tmp = std::env::temp_dir().join("ipe_emit_ir_and_capabilities_analyse_named_file");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    fs::create_dir_all(&src).expect("create src/");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"app\" }\n",
+    )
+    .expect("pkg");
+    fs::write(
+        src.join("Main.ipe"),
+        "module Main exposing (main)\n\n\nmain : Int\nmain =\n    1\n",
+    )
+    .expect("src/Main.ipe");
+    let other = src.join("Other.ipe");
+    fs::write(
+        &other,
+        "module Other exposing (x)\n\n\nx : Int\nx =\n    \"not an int\"\n",
+    )
+    .expect("src/Other.ipe");
+
+    let ir_target = resolve_analysis_target(&other).expect("resolves");
+    let ir_result = emit_ir_text_for_target(&ir_target);
+    assert!(
+        matches!(&ir_result, Err(CliError::Pipeline { file, .. }) if file == &other),
+        "--emit-ir over the NAMED file must analyse it, blamed on it, not \
+         silently succeed by analysing src/Main.ipe instead: {ir_result:?}"
+    );
+
+    let caps_result = run_capabilities(&[other.to_string_lossy().into_owned()]);
+    assert!(
+        matches!(&caps_result, Err(CliError::Pipeline { file, .. }) if file == &other),
+        "`ipe capabilities` over the NAMED file must analyse it, blamed on it, \
+         not silently succeed by analysing src/Main.ipe instead: {caps_result:?}"
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// A file argument that does not exist inside a manifest-governed project must
+/// be refused (a typed `Io`/`Pipeline` error), never silently substituted for
+/// the project's default entry — the same fail-closed property F1/F2 restore
+/// for a file argument that DOES exist but lies off the naive entry-parent
+/// closure.
+#[test]
+fn missing_file_argument_inside_a_project_is_refused() {
+    let tmp = std::env::temp_dir().join("ipe_missing_file_argument_inside_project_refused");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    fs::create_dir_all(&src).expect("create src/");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"app\" }\n",
+    )
+    .expect("pkg");
+    fs::write(
+        src.join("Main.ipe"),
+        "module Main exposing (main)\nmain = 1\n",
+    )
+    .expect("src/Main.ipe");
+    let missing = src.join("Missing.ipe");
+
+    let result = run_type_check_body(&[missing.to_string_lossy().into_owned()]);
+    assert!(
+        result.is_err(),
+        "a file argument that does not exist must be refused, never silently \
+         substituted for the project's default entry: {result:?}"
     );
     let _ = fs::remove_dir_all(&tmp);
 }
