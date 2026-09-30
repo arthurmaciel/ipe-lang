@@ -26,10 +26,17 @@ The live ruleset is `main-protection` (`RULESET_ID` in
 `check_required_set.py`). `--fetch` parses it into a closed `Ruleset`: every
 key the API returns is examined and pinned or named as display metadata, and
 any other key, rule type, or rule parameter is refused. It must be an active
-branch ruleset on `~DEFAULT_BRANCH` with no exclusions and no
-`bypass_actors`, carrying `deletion`, `non_fast_forward`, `pull_request`,
+branch ruleset on `~DEFAULT_BRANCH` with no exclusions, carrying `deletion`, `non_fast_forward`, `pull_request`,
 `merge_queue` (grouping `ALLGREEN`), and `required_status_checks` once each,
-the last with pairs equal to the derived set in both directions. A key GitHub
+the last with pairs equal to the derived set in both directions.
+`current_user_can_bypass`, when returned, must be `never`.
+
+GitHub returns `bypass_actors` only to a ruleset admin, and the workflow token
+is not one. `--fetch` refuses a non-empty list when it sees one, but the proof
+that no bypass actor exists comes only from an owner's `--live` read, which
+refuses a ruleset without the list. That read runs at reconciliation (step 3),
+not nightly, so a bypass actor added between reconciliations is invisible to
+`ruleset-drift`; re-run the `--live` check after any ruleset edit. A key GitHub
 adds to the response turns `ruleset-drift` red until this check examines it. `ruleset-drift` is a `nightly-gate`: a red nightly makes the
 required `nightly-green` context hold every merge until the ruleset is
 reconciled. On a pull request it is not required; there it flags a

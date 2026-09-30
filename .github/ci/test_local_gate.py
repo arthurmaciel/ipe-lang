@@ -437,6 +437,11 @@ class SourceReaders(unittest.TestCase):
 
 class _TmpRepo(unittest.TestCase):
     def setUp(self) -> None:
+        # Every git the test runs, directly or through the code under test,
+        # reads only the throwaway repository's config.
+        isolated = mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+        isolated.start()
+        self.addCleanup(isolated.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = self.tmp.name
         self.git("init", "-q", "-b", "main")
@@ -445,9 +450,8 @@ class _TmpRepo(unittest.TestCase):
         self.tmp.cleanup()
 
     def git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
         ident = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
-        return subprocess.run(["git", *ident, *args], cwd=self.root, check=check, capture_output=True, text=True, env=env)
+        return subprocess.run(["git", *ident, *args], cwd=self.root, check=check, capture_output=True, text=True)
 
     def write(self, rel: str, text: str) -> None:
         path = os.path.join(self.root, rel)

@@ -29,7 +29,9 @@ pairs equal the derived set in both directions, and exactly one all-green
 `merge_queue` rule. GitHub returns `bypass_actors` only to a ruleset admin, so
 `--fetch` (a workflow token) cannot see them: it refuses a non-empty list when
 one is returned and otherwise leaves the bypass proof to an owner's `--live`
-read, which refuses a ruleset without the list. Every unreadable
+read, which refuses a ruleset without the list. That read happens when an
+owner reconciles the ruleset, not nightly: a bypass actor added between
+reconciliations is invisible to `ruleset-drift`. Every unreadable
 or malformed input fails closed (exit 1) with nothing printed to stdout.
 """
 from __future__ import annotations

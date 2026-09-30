@@ -2615,7 +2615,7 @@ class TestSsotOutputTools(unittest.TestCase):
             with self.subTest(admin_read=admin_read), self.assertRaises(crs.Refused):
                 crs.parse_ruleset(_ruleset(bypass_actors=actor), admin_read=admin_read)
             with self.subTest(admin_read=admin_read, viewer="always"), self.assertRaises(crs.Refused):
-                crs.parse_ruleset(dict(unseen, current_user_can_bypass="always"), admin_read=admin_read)
+                crs.parse_ruleset(_ruleset(current_user_can_bypass="always"), admin_read=admin_read)
 
     def test_repo_required_set_is_the_derived_set(self) -> None:
         import subprocess
