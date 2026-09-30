@@ -12,7 +12,7 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
 use super::{
-    RunJailDefect, RunJailTools, SandboxProfile, SealedFdNumber, run_jail_argv,
+    JailArgv, RunJailDefect, RunJailTools, SandboxProfile, SealedFdNumber, run_jail_argv,
     run_jail_argv_with_delivery,
 };
 use crate::seccomp;
@@ -125,8 +125,6 @@ pub fn exec_in_run_jail(
     app: &Path,
     app_args: &[OsString],
 ) -> Result<std::convert::Infallible, RunJailDefect> {
-    use std::os::unix::process::CommandExt as _;
-
     // Resolve every path once: the app the payload execs and the dirs it is
     // handed are exactly the paths the jail binds.
     let scoped_tmp = CanonicalPath::resolve(scoped_tmp).map_err(RunJailDefect::Path)?;
@@ -168,15 +166,7 @@ pub fn exec_in_run_jail(
         &payload,
     );
 
-    let (program_path, rest) = argv.split_first().ok_or_else(|| RunJailDefect::Spawn {
-        detail: "empty jail argv".to_owned(),
-    })?;
-    let mut cmd = std::process::Command::new(program_path);
-    cmd.args(rest);
-    let err = cmd.exec();
-    Err(RunJailDefect::Spawn {
-        detail: err.to_string(),
-    })
+    Err(exec_jail_argv(&argv))
 }
 
 /// Exec an embedded app held only in a sealed anonymous descriptor.
@@ -206,8 +196,6 @@ pub fn exec_embedded_in_run_jail(
     app: &SealedApp,
     app_args: &[OsString],
 ) -> Result<std::convert::Infallible, RunJailDefect> {
-    use std::os::unix::process::CommandExt as _;
-
     let scoped_tmp = CanonicalPath::resolve(scoped_tmp).map_err(RunJailDefect::Path)?;
     let working_tree = CanonicalPath::resolve(working_tree).map_err(RunJailDefect::Path)?;
     let mounts = JailMounts::of_invoker(scoped_tmp, working_tree, Vec::new())
@@ -254,15 +242,24 @@ pub fn exec_embedded_in_run_jail(
         &payload,
     );
 
-    let (program_path, rest) = argv.split_first().ok_or_else(|| RunJailDefect::Spawn {
-        detail: "empty jail argv".to_owned(),
-    })?;
-    let mut cmd = std::process::Command::new(program_path);
-    cmd.args(rest);
-    let err = cmd.exec();
-    Err(RunJailDefect::Spawn {
+    Err(exec_jail_argv(&argv))
+}
+
+/// Replace this process with the jail `argv` names; returns only on failure.
+///
+/// Taking the [`JailArgv`] by reference holds every sealed fd owner it borrows
+/// open until the `exec` has handed the descriptors to `bwrap`.
+fn exec_jail_argv(argv: &JailArgv<'_>) -> RunJailDefect {
+    use std::os::unix::process::CommandExt as _;
+    let Some((program, rest)) = argv.args().split_first() else {
+        return RunJailDefect::Spawn {
+            detail: "empty jail argv".to_owned(),
+        };
+    };
+    let err = std::process::Command::new(program).args(rest).exec();
+    RunJailDefect::Spawn {
         detail: err.to_string(),
-    })
+    }
 }
 
 /// Clear the close-on-exec flag on `fd` so a sealed memfd survives an exec.
@@ -347,6 +344,45 @@ fn write_frozen_memfd(
 /// Built only by [`write_seccomp_memfd`], which seals the fd after the write,
 /// so the filter bwrap loads is exactly the program compiled here: no process
 /// holding the fd, the jailed payload included, can rewrite or resize it.
+///
+/// The [`SealedFdNumber`] it mints cannot outlive it:
+///
+/// ```compile_fail,E0597
+/// # fn stale() -> Option<String> {
+/// let number = {
+///     let sealed = ipe_sandbox::run_jail::write_seccomp_memfd(b"filter").ok()?;
+///     sealed.make_inheritable().ok()?
+/// };
+/// Some(format!("{number:?}"))
+/// # }
+/// ```
+///
+/// Nor can it be dropped while a [`JailArgv`] naming its number is still to be
+/// spawned or exec'd:
+///
+/// ```compile_fail,E0505
+/// # use std::ffi::OsString;
+/// # use std::path::Path;
+/// # use ipe_sandbox::run_jail::{RunJailTools, SandboxProfile, run_jail_argv, write_seccomp_memfd};
+/// # use ipe_sandbox::{CanonicalPath, JailMounts};
+/// # fn stale() -> Option<usize> {
+/// # let tools = RunJailTools { bwrap: "bwrap".into(), prlimit: "prlimit".into(), timeout: None };
+/// # let tmp = CanonicalPath::resolve(Path::new("/tmp")).ok()?;
+/// # let mounts = JailMounts::of_invoker(tmp.clone(), tmp, Vec::new()).ok()?;
+/// # let no_env = |_: &str| None;
+/// let sealed = write_seccomp_memfd(b"filter").ok()?;
+/// let argv = run_jail_argv(
+///     &tools,
+///     &SandboxProfile::maximally_isolated(),
+///     &mounts,
+///     Some(sealed.make_inheritable().ok()?),
+///     &no_env,
+///     &[OsString::from("app")],
+/// );
+/// drop(sealed);
+/// Some(argv.args().len())
+/// # }
+/// ```
 pub struct SealedSeccompFd {
     fd: OwnedFd,
 }

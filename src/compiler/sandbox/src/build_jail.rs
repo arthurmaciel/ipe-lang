@@ -31,6 +31,14 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::JailMounts;
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+))]
+use crate::run_jail::JailArgv;
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -381,12 +389,9 @@ pub fn build_in_jail(
 
     // The Linux jail's env is scrubbed inside the bwrap argv (`--clearenv` +
     // allowlisted re-export), so no launcher-side env override is needed here.
-    let outcome = spawn_and_decode(&argv, None);
-    // `seccomp_owned` drops here (after the child has been waited on inside
-    // `spawn_and_decode`), closing the memfd. Keep it explicit so the ordering
-    // is not subject to a future reorder.
-    drop(seccomp_owned);
-    outcome
+    // `argv` borrows `seccomp_owned`, so the memfd stays open until the child is
+    // waited on inside `spawn_and_decode` and closes when this function returns.
+    spawn_and_decode(&argv, None)
 }
 
 /// Run `payload` inside a `sandbox-exec` Seatbelt jail lowered from `profile`,
@@ -457,6 +462,7 @@ pub fn build_in_jail(
     argv.push("-p".into());
     argv.push(sbpl.into());
     argv.extend(payload.iter().cloned());
+    let argv = JailArgv::fd_free(argv);
 
     // Enforce the `env` axis in the launcher (Seatbelt cannot scrub env),
     // mirroring the run jail and the Linux build jail's bwrap `--clearenv`, so a
@@ -682,10 +688,10 @@ pub fn build_in_jail(
     target_os = "macos"
 ))]
 fn spawn_and_decode(
-    argv: &[OsString],
+    argv: &JailArgv<'_>,
     env_override: Option<&[(OsString, OsString)]>,
 ) -> JailOutcome {
-    let Some((program, rest)) = argv.split_first() else {
+    let Some((program, rest)) = argv.args().split_first() else {
         return JailOutcome::Unavailable {
             defect: RunJailDefect::Spawn {
                 detail: "empty jail argv".to_owned(),

@@ -517,6 +517,7 @@ fn run_bwrap(
     };
     let argv = bwrap_argv_with_seccomp(bwrap, prlimit, timeout, spec, payload, seccomp_fd)?;
     let (program, rest) = argv
+        .args()
         .split_first()
         .ok_or(SandboxDefect::NoIsolationMechanism)?;
     let spawn_err = |e: std::io::Error| SandboxDefect::Spawn {
@@ -645,26 +646,23 @@ fn drain_and_reap(
 /// rendered argv, the seccomp flag cannot be attached to bwrap — dropping it
 /// would run the payload without its syscall filter (fail-open). The refusal
 /// here keeps the seccomp guarantee: no filter, no run.
-fn bwrap_argv_with_seccomp(
+fn bwrap_argv_with_seccomp<'fd>(
     bwrap: &Path,
     prlimit: &Path,
     timeout: &Path,
     spec: &JailSpec,
     payload: &[OsString],
-    seccomp_fd: Option<run_jail::SealedFdNumber<'_>>,
-) -> Result<Vec<OsString>, SandboxDefect> {
-    let mut argv = bwrap_argv(bwrap, prlimit, timeout, spec, payload);
+    seccomp_fd: Option<run_jail::SealedFdNumber<'fd>>,
+) -> Result<run_jail::JailArgv<'fd>, SandboxDefect> {
+    let mut argv = run_jail::JailArgv::fd_free(bwrap_argv(bwrap, prlimit, timeout, spec, payload));
     let Some(fd) = seccomp_fd else {
         return Ok(argv);
     };
     // The argv is `timeout … <wall> bwrap …`; insert `--seccomp <fd>` right after
     // the `bwrap` token so it is a bwrap option, not a timeout one.
-    let bwrap_os = bwrap.as_os_str();
-    let Some(pos) = argv.iter().position(|a| a.as_os_str() == bwrap_os) else {
+    if !argv.attach_fd_after(bwrap.as_os_str(), "--seccomp", &fd) {
         return Err(SandboxDefect::SeccompNotAttached);
-    };
-    argv.insert(pos + 1, fd.to_string().into());
-    argv.insert(pos + 1, "--seccomp".into());
+    }
     Ok(argv)
 }
 
@@ -1136,7 +1134,8 @@ mod tests {
         )
         .expect("bwrap token present, so the seccomp flag attaches");
         let rendered: Vec<String> = argv
-            .into_iter()
+            .args()
+            .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         let bwrap = rendered
@@ -1174,6 +1173,7 @@ mod tests {
         )
         .expect("a requested seccomp filter must attach, never drop");
         let rendered: Vec<String> = argv
+            .args()
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
@@ -1204,6 +1204,6 @@ mod tests {
             None,
         )
         .expect("no filter requested, so the argv renders unchanged");
-        assert!(!argv.iter().any(|a| a.as_os_str() == "--seccomp"));
+        assert!(!argv.args().iter().any(|a| a.as_os_str() == "--seccomp"));
     }
 }

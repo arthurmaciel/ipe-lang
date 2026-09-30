@@ -115,20 +115,13 @@ pub use windows::windows_scrubbed_env;
 /// close-on-exec, so a jail argv can never name a writable, unsealed, or
 /// non-inherited descriptor.
 ///
-/// It borrows the owner's descriptor and is neither `Copy` nor `Clone`, so it
-/// cannot outlive the sealed fd it names: a closed-then-reused fd number is
-/// unrepresentable. A number minted from an owner that is dropped first is
-/// rejected at compile time:
-///
-/// ```compile_fail
-/// # fn stale() -> Option<String> {
-/// let number = {
-///     let sealed = ipe_sandbox::run_jail::write_seccomp_memfd(b"filter").ok()?;
-///     sealed.make_inheritable().ok()?
-/// };
-/// Some(number.to_string())
-/// # }
-/// ```
+/// It borrows the owner's descriptor, is neither `Copy` nor `Clone`, and renders
+/// only into a [`JailArgv`] carrying that same borrow: no lifetime-free
+/// string of the number exists. Every spawn and exec consumes a [`JailArgv`], so
+/// the owner is held open through the hand-off to `bwrap` and a
+/// closed-then-reused fd number cannot reach a jail. Both rejections — a number
+/// outliving its owner, an owner dropped before its argv is consumed — are
+/// pinned as `compile_fail` doctests on `SealedSeccompFd`.
 #[cfg(unix)]
 #[derive(Debug)]
 pub struct SealedFdNumber<'fd>(std::os::fd::BorrowedFd<'fd>);
@@ -141,18 +134,68 @@ pub struct SealedFdNumber<'fd>(std::os::fd::BorrowedFd<'fd>);
 #[derive(Debug)]
 pub struct SealedFdNumber<'fd>(std::convert::Infallible, std::marker::PhantomData<&'fd ()>);
 
-#[cfg(unix)]
-impl std::fmt::Display for SealedFdNumber<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl SealedFdNumber<'_> {
+    /// The decimal fd number as `bwrap` reads it. Private to the run-jail
+    /// module, whose only caller is [`JailArgv`] rendering.
+    #[cfg(unix)]
+    fn render(&self) -> OsString {
         use std::os::fd::AsRawFd as _;
-        write!(f, "{}", self.0.as_raw_fd())
+        self.0.as_raw_fd().to_string().into()
+    }
+
+    /// Uninhabited off Unix.
+    #[cfg(not(unix))]
+    const fn render(&self) -> OsString {
+        match self.0 {}
     }
 }
 
-#[cfg(not(unix))]
-impl std::fmt::Display for SealedFdNumber<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
+/// A rendered jail argv whose sealed fd numbers stay borrowed from their owners.
+///
+/// Every `--seccomp <fd>` / `--file <fd>` it names was rendered from a
+/// [`SealedFdNumber`] and its `'fd` is carried here, so while the argv, or any
+/// string read from it through [`Self::args`], is live, every owner is live.
+/// The spawn and exec paths take `&JailArgv`, so no owner can be dropped before
+/// `bwrap` receives its descriptor.
+#[derive(Debug)]
+pub struct JailArgv<'fd> {
+    argv: Vec<OsString>,
+    fds: std::marker::PhantomData<SealedFdNumber<'fd>>,
+}
+
+impl<'fd> JailArgv<'fd> {
+    /// An argv naming no sealed fd. Fd-free by construction: a number renders
+    /// only inside this module, and only into a [`JailArgv`] tied to its owner.
+    pub(crate) const fn fd_free(argv: Vec<OsString>) -> Self {
+        Self {
+            argv,
+            fds: std::marker::PhantomData,
+        }
+    }
+
+    /// Insert `flag <fd>` right after the first `token`, tying `fd`'s owner to
+    /// this argv. `false`, with the argv unchanged, when `token` is absent.
+    pub(crate) fn attach_fd_after(
+        &mut self,
+        token: &std::ffi::OsStr,
+        flag: &str,
+        fd: &SealedFdNumber<'fd>,
+    ) -> bool {
+        let Some(pos) = self.argv.iter().position(|a| a.as_os_str() == token) else {
+            return false;
+        };
+        let tail = self.argv.split_off(pos.saturating_add(1));
+        self.argv.push(flag.into());
+        self.argv.push(fd.render());
+        self.argv.extend(tail);
+        true
+    }
+
+    /// The rendered arguments, program first. The slice borrows `self`, so it
+    /// keeps every fd owner alive for as long as it is used.
+    #[must_use]
+    pub const fn args(&self) -> &[OsString] {
+        self.argv.as_slice()
     }
 }
 
@@ -205,14 +248,14 @@ pub struct RunJailTools {
 /// (`PATH`, `TMPDIR`, `LANG`) plus the profile's `env_allowlist` re-enter. There
 /// is NO shell token anywhere in the result.
 #[must_use]
-pub fn run_jail_argv(
+pub fn run_jail_argv<'fd>(
     tools: &RunJailTools,
     profile: &SandboxProfile,
     mounts: &JailMounts,
-    seccomp_fd: Option<SealedFdNumber<'_>>,
+    seccomp_fd: Option<SealedFdNumber<'fd>>,
     host_env: &dyn Fn(&str) -> Option<OsString>,
     payload: &[OsString],
-) -> Vec<OsString> {
+) -> JailArgv<'fd> {
     run_jail_argv_with_delivery(tools, profile, mounts, seccomp_fd, None, host_env, payload)
 }
 
@@ -227,15 +270,15 @@ pub fn run_jail_argv(
 /// sealed bytes the caller verified, with no host path lookup to race. The
 /// caller then runs `dest` as the payload.
 #[must_use]
-pub fn run_jail_argv_with_delivery(
+pub fn run_jail_argv_with_delivery<'fd>(
     tools: &RunJailTools,
     profile: &SandboxProfile,
     mounts: &JailMounts,
-    seccomp_fd: Option<SealedFdNumber<'_>>,
-    app_delivery: Option<(SealedFdNumber<'_>, &Path)>,
+    seccomp_fd: Option<SealedFdNumber<'fd>>,
+    app_delivery: Option<(SealedFdNumber<'fd>, &Path)>,
     host_env: &dyn Fn(&str) -> Option<OsString>,
     payload: &[OsString],
-) -> Vec<OsString> {
+) -> JailArgv<'fd> {
     let (scoped_tmp, working_tree) = (mounts.scoped_tmp(), mounts.working_tree());
     let mut argv: Vec<OsString> = Vec::new();
 
@@ -317,7 +360,7 @@ pub fn run_jail_argv_with_delivery(
     // never does), so the "no privilege gain" claim is mechanical.
     if let Some(fd) = seccomp_fd {
         argv.push("--seccomp".into());
-        argv.push(fd.to_string().into());
+        argv.push(fd.render());
     }
 
     // Scrubbed env: the fixed minimal allowlist, then the profile's declared
@@ -352,7 +395,7 @@ pub fn run_jail_argv_with_delivery(
         argv.push("--perms".into());
         argv.push("0700".into());
         argv.push("--file".into());
-        argv.push(fd.to_string().into());
+        argv.push(fd.render());
         argv.push(dest.into());
     }
 
@@ -366,7 +409,11 @@ pub fn run_jail_argv_with_delivery(
     argv.push(format!("--nproc={}", profile.limits.proc_cap).into());
     argv.push("--".into());
     argv.extend(payload.iter().cloned());
-    argv
+    // `'fd` is the borrow of every number rendered above.
+    JailArgv {
+        argv,
+        fds: std::marker::PhantomData,
+    }
 }
 
 // ── refusal + the fail-closed platform decision ─────────────────────────────
@@ -1079,7 +1126,8 @@ mod tests {
             &no_env,
             &[OsString::from("/work/tree/target/debug/ipe-app")],
         )
-        .into_iter()
+        .args()
+        .iter()
         .map(|a| a.to_string_lossy().into_owned())
         .collect()
     }
@@ -1115,7 +1163,8 @@ mod tests {
             &no_env,
             &[OsString::from("app")],
         )
-        .into_iter()
+        .args()
+        .iter()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
         assert_eq!(
@@ -1179,7 +1228,8 @@ mod tests {
                 &no_env,
                 &[OsString::from("app")],
             )
-            .into_iter()
+            .args()
+            .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
             let at = |window: &[&str]| {
@@ -1260,7 +1310,8 @@ mod tests {
             &no_env,
             &[OsString::from("/work/tmp-1/ipe-app")],
         )
-        .into_iter()
+        .args()
+        .iter()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
         let joined = argv.join(" ");
@@ -1360,6 +1411,7 @@ mod tests {
             &[OsString::from("app")],
         );
         let joined: Vec<String> = argv
+            .args()
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();

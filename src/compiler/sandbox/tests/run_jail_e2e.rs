@@ -180,7 +180,7 @@ fn run_jailed_inner(
     // but a home variable, and no profile in this file grants one.
     let host_env = |k: &str| ipe_env::var_os(k);
     let argv = run_jail_argv(tools, profile, &mounts, Some(fd), &host_env, payload);
-    let (prog, rest) = argv.split_first().expect("non-empty argv");
+    let (prog, rest) = argv.args().split_first().expect("non-empty argv");
     let mut cmd = Command::new(prog);
     cmd.args(rest);
     if capture_stderr {
