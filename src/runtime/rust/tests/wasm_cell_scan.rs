@@ -1397,6 +1397,16 @@ fn cell_fixture(name: &str, features: &[&str]) -> Findings {
     scan_target(&dir.join(name), Mode::Cell { lib: false }, env, &dir)
 }
 
+/// Assert the cell walk of the fixture `name` is refused with a reason containing `reason`.
+fn assert_cell_fixture_refused(name: &str, reason: &str) {
+    let found = cell_fixture(name, &[]);
+    assert!(
+        found.refusals.iter().any(|why| why.contains(reason)),
+        "{name} must be refused in a cell for {reason:?}; refusals: {:#?}",
+        found.refusals
+    );
+}
+
 #[test]
 fn a_wasm_test_under_an_unclaimed_feature_is_refused() {
     let name = "feature_gated_wasm_test.rs";
@@ -1426,6 +1436,45 @@ fn a_wasm_test_under_an_unclaimed_feature_is_refused() {
     );
     let every = cell_fixture(name, &["unclaimed"]);
     assert!(unrun_refusals(&discovered.wasm_test_ids, &every.wasm_test_ids).is_empty());
+}
+
+#[test]
+fn an_ignored_or_should_panic_wasm_test_in_a_cell_is_refused() {
+    assert_cell_fixture_refused("ignore_wasm_test.rs", "does not run as counted");
+    assert_cell_fixture_refused("should_panic_wasm_test.rs", "does not run as counted");
+}
+
+#[test]
+fn a_wasm_test_with_arguments_in_a_cell_is_refused() {
+    assert_cell_fixture_refused("wasm_test_with_args.rs", "arguments change where it runs");
+}
+
+#[test]
+fn a_duplicate_wasm_test_attribute_is_refused() {
+    assert_fixture_refused("duplicate_wasm_attr.rs", "written more than once");
+}
+
+#[test]
+fn a_module_with_both_files_is_refused() {
+    assert_fixture_refused(
+        "both_files.rs",
+        "both `both_files_dup.rs` and `both_files_dup/mod.rs` exist",
+    );
+}
+
+#[test]
+fn a_module_tree_past_its_file_limit_is_refused() {
+    assert_fixture_refused("fan_root.rs", "more than 4096 module files");
+}
+
+#[test]
+fn a_module_tree_past_its_depth_limit_is_refused() {
+    assert_fixture_refused("self_include.rs", "module files nested more than 64 deep");
+}
+
+#[test]
+fn an_item_syn_cannot_parse_is_refused() {
+    assert_fixture_refused("unparseable_item.rs", "an item `syn` could not parse");
 }
 
 #[test]
