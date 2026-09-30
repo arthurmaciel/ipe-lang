@@ -108,6 +108,164 @@ pub(crate) fn form_url_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// The RFC grammar a URL component is decoded under.
+///
+/// The two grammars differ in exactly one byte: under `Form`
+/// (`application/x-www-form-urlencoded`, a query key or value) a `+` means a
+/// space; under `Path` (an RFC 3986 path segment) a `+` is a literal `+`. Both
+/// decode `%XX` to the byte `0xXX` and nothing else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UrlGrammar {
+    /// An RFC 3986 path segment: `+` is literal.
+    Path,
+    /// A form-encoded query key or value: `+` is a space.
+    Form,
+}
+
+/// A byte position inside the raw (still-encoded) component.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ByteOffset(usize);
+
+impl ByteOffset {
+    /// The position as a plain byte index into the raw component.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// A component length in bytes, kept apart from positions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComponentLen(usize);
+
+impl ComponentLen {
+    /// The length as a plain byte count.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// The largest raw component `decode_component` accepts.
+///
+/// Equal to the server's default request-body ceiling, so a form field that
+/// fits in a body is never refused for length, while no input can make the
+/// decoder allocate without a bound.
+pub const MAX_COMPONENT_LEN: ComponentLen = ComponentLen(32 * 1024 * 1024);
+
+/// Why a URL component was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodeRefusal {
+    /// A `%` at this raw offset is not followed by two hex digits.
+    MalformedEscape { at: ByteOffset },
+    /// The decoded bytes stop being UTF-8 at the escape or byte at this raw offset.
+    InvalidUtf8 { at: ByteOffset },
+    /// The raw component is longer than `cap` bytes.
+    TooLong { cap: ComponentLen },
+}
+
+impl std::fmt::Display for DecodeRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MalformedEscape { at } => write!(
+                f,
+                "malformed percent-escape at byte {} (a '%' must be followed by two hex digits)",
+                at.get()
+            ),
+            Self::InvalidUtf8 { at } => {
+                write!(
+                    f,
+                    "decoded bytes are not valid UTF-8 (at byte {})",
+                    at.get()
+                )
+            }
+            Self::TooLong { cap } => write!(f, "component longer than {} bytes", cap.get()),
+        }
+    }
+}
+
+/// Decode one URL component under `grammar`, refusing anything malformed.
+///
+/// This is the single percent-decoder of the runtime: every URL component (a
+/// path parameter, a query key or value, `Encoding.urlDecode`,
+/// `Encoding.pathDecode`, `Http.parseQuery`) is decoded here. It is total and
+/// strict: a `%` not followed by two hex digits, decoded bytes that are not
+/// UTF-8 (overlong forms such as `%C0%AF` included), and a component longer
+/// than `MAX_COMPONENT_LEN` are each a typed refusal, never a lossy or
+/// pass-through success.
+///
+/// # Errors
+///
+/// Returns the `DecodeRefusal` naming the first defect found.
+pub fn decode_component(raw: &str, grammar: UrlGrammar) -> Result<String, DecodeRefusal> {
+    decode_component_within(raw, grammar, MAX_COMPONENT_LEN)
+}
+
+/// `decode_component` under an explicit length cap.
+fn decode_component_within(
+    raw: &str,
+    grammar: UrlGrammar,
+    cap: ComponentLen,
+) -> Result<String, DecodeRefusal> {
+    if raw.len() > cap.get() {
+        return Err(DecodeRefusal::TooLong { cap });
+    }
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while let Some(&c) = bytes.get(i) {
+        match c {
+            b'%' => {
+                let hi = bytes.get(i + 1).copied().and_then(hex_value);
+                let lo = bytes.get(i + 2).copied().and_then(hex_value);
+                let (Some(hi), Some(lo)) = (hi, lo) else {
+                    return Err(DecodeRefusal::MalformedEscape { at: ByteOffset(i) });
+                };
+                out.push((hi << 4) | lo);
+                i += 3;
+            }
+            b'+' if grammar == UrlGrammar::Form => {
+                out.push(b' ');
+                i += 1;
+            }
+            other => {
+                out.push(other);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).map_err(|e| DecodeRefusal::InvalidUtf8 {
+        at: raw_offset_of(bytes, e.utf8_error().valid_up_to()),
+    })
+}
+
+/// The value of one ASCII hex digit, or `None` for any other byte.
+const fn hex_value(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// The raw offset that produced decoded byte number `decoded`.
+///
+/// Only called after a scan that accepted every escape, so each `%` starts a
+/// three-byte escape yielding one decoded byte and every other byte yields one.
+fn raw_offset_of(raw: &[u8], decoded: usize) -> ByteOffset {
+    let mut i = 0;
+    let mut produced = 0;
+    while let Some(&c) = raw.get(i) {
+        if produced == decoded {
+            break;
+        }
+        i += if c == b'%' { 3 } else { 1 };
+        produced += 1;
+    }
+    ByteOffset(i)
+}
+
 /// Ipê `base64Encode : String -> String` — encodes the input's UTF-8 bytes
 /// )`). Non-ASCII
 ///
@@ -487,5 +645,100 @@ mod tests {
 
         // Mixed: well-formed escapes decode; malformed ones pass through.
         assert_eq!(form_url_decode("ok%20and%ZZbad"), "ok and%ZZbad");
+    }
+
+    // ── decode_component: the single strict core ──────────────────────────
+
+    fn refusal(raw: &str, grammar: UrlGrammar) -> Option<DecodeRefusal> {
+        decode_component(raw, grammar).err()
+    }
+
+    #[test]
+    fn decode_component_refuses_malformed_escape() {
+        for grammar in [UrlGrammar::Path, UrlGrammar::Form] {
+            assert_eq!(
+                refusal("a%zzb", grammar),
+                Some(DecodeRefusal::MalformedEscape { at: ByteOffset(1) })
+            );
+            assert_eq!(
+                refusal("trailing%", grammar),
+                Some(DecodeRefusal::MalformedEscape { at: ByteOffset(8) })
+            );
+            assert_eq!(
+                refusal("%A", grammar),
+                Some(DecodeRefusal::MalformedEscape { at: ByteOffset(0) })
+            );
+            assert_eq!(
+                refusal("ok%20and%ZZbad", grammar),
+                Some(DecodeRefusal::MalformedEscape { at: ByteOffset(8) })
+            );
+            // A `%` before a multi-byte char is malformed, not a boundary panic.
+            assert_eq!(
+                refusal("%é", grammar),
+                Some(DecodeRefusal::MalformedEscape { at: ByteOffset(0) })
+            );
+        }
+    }
+
+    #[test]
+    fn decode_component_refuses_invalid_utf8() {
+        for grammar in [UrlGrammar::Path, UrlGrammar::Form] {
+            // A truncated two-byte sequence.
+            assert_eq!(
+                refusal("%C3", grammar),
+                Some(DecodeRefusal::InvalidUtf8 { at: ByteOffset(0) })
+            );
+            // A lead byte followed by a non-continuation byte.
+            assert_eq!(
+                refusal("x%C3%28", grammar),
+                Some(DecodeRefusal::InvalidUtf8 { at: ByteOffset(1) })
+            );
+            // The overlong encoding of `/` — the classic path-traversal smuggle.
+            assert_eq!(
+                refusal("a%C0%AF", grammar),
+                Some(DecodeRefusal::InvalidUtf8 { at: ByteOffset(1) })
+            );
+        }
+    }
+
+    #[test]
+    fn decode_component_plus_depends_on_grammar() {
+        assert_eq!(
+            decode_component("a+b", UrlGrammar::Path),
+            Ok("a+b".to_string())
+        );
+        assert_eq!(
+            decode_component("a+b", UrlGrammar::Form),
+            Ok("a b".to_string())
+        );
+        // `%2B` is a literal `+` under both grammars, so it round-trips.
+        for grammar in [UrlGrammar::Path, UrlGrammar::Form] {
+            assert_eq!(decode_component("a%2Bb", grammar), Ok("a+b".to_string()));
+            assert_eq!(
+                decode_component("caf%C3%A9", grammar),
+                Ok("café".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn decode_component_length_cap() {
+        let cap = ComponentLen(8);
+        assert_eq!(
+            decode_component_within("aaaaaaaa", UrlGrammar::Path, cap),
+            Ok("aaaaaaaa".to_string())
+        );
+        assert_eq!(
+            decode_component_within("aaaaaaaaa", UrlGrammar::Path, cap),
+            Err(DecodeRefusal::TooLong { cap })
+        );
+        // The shipped cap: one byte past it is refused before any decoding.
+        let past = "a".repeat(MAX_COMPONENT_LEN.get() + 1);
+        assert_eq!(
+            refusal(&past, UrlGrammar::Form),
+            Some(DecodeRefusal::TooLong {
+                cap: MAX_COMPONENT_LEN
+            })
+        );
     }
 }
