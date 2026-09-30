@@ -16701,8 +16701,8 @@ mod tests {
     /// consumer of the `url` crate and its large `idna` → ICU4X subtree), so
     /// `qualifier == "Url"` MUST imply `is_url()`, and no other qualifier may
     /// report `is_url()`. The lookalike `String.isUrl` (qualifier `"String"`,
-    /// structural parse, no `url` crate) and `Encoding.urlEncode` / `urlDecode`
-    /// (qualifier `"Encoding"`, `percent-encoding`) are deliberately excluded.
+    /// structural parse, no `url` crate) and `Encoding.urlEncode` / `urlDecode` /
+    /// `percentDecode` (qualifier `"Encoding"`) are deliberately excluded.
     /// Both directions are asserted, so a new `Url.*` kernel the predicate
     /// forgets — or an unrelated kernel wrongly claimed — fails the instant the
     /// two disagree.
