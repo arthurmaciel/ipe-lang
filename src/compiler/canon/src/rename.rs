@@ -750,6 +750,7 @@ mod tests {
         let union = Union {
             home: vec![main_sym],
             name: color_sym,
+            name_span: Span::DUMMY,
             vars: vec![],
             ctors: vec![
                 Ctor {

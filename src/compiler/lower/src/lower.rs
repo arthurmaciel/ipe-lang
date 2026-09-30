@@ -33375,6 +33375,7 @@ mod tests {
         let union = canon::Union {
             home: vec![main],
             name: wide,
+            name_span: Span::DUMMY,
             vars: vec![a],
             ctors: vec![ctor],
         };
@@ -35817,6 +35818,7 @@ mod tests {
         canon::Union {
             home,
             name,
+            name_span: Span::DUMMY,
             vars,
             ctors: vec![canon::Ctor {
                 name: ctor,

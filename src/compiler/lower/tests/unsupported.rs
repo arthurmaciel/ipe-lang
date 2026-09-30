@@ -1668,6 +1668,7 @@ fn ctor_then_variable_catch_all_lowers_to_flat_match() -> DResult<()> {
     let union = canon::Union {
         home: Vec::new(),
         name: msg,
+        name_span: Span::DUMMY,
         vars: Vec::new(),
         ctors: vec![
             canon::Ctor {

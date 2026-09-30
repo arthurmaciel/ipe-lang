@@ -10,7 +10,7 @@
 //! module unchanged; they already emit qualified identifiers
 //! (`Module_name`) from the `module` field of every `VarTopLevel` node.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 use ipe_diagnostics::{DResult, Diagnostic, NameError, Span};
 use ipe_intern::{Interner, Symbol};
@@ -73,29 +73,29 @@ pub fn link(
     // own seen-set. Gating defs here — not only unions — closes the exit-0-then-
     // cargo-fail hole where a value-only module linked twice emits duplicate
     // Rust fns.
-    let mut seen_types: HashSet<(Vec<Symbol>, Symbol)> = HashSet::new();
-    let mut seen_defs: HashSet<(Vec<Symbol>, Symbol)> = HashSet::new();
+    let mut seen_types: HashMap<(Vec<Symbol>, Symbol), Span> = HashMap::new();
+    let mut seen_defs: HashMap<(Vec<Symbol>, Symbol), Span> = HashMap::new();
     for m in modules {
         imports_unsafe_submodule |= m.imports_unsafe_submodule;
         imported_web_capabilities.extend(m.imported_web_capabilities.iter().copied());
         for u in &m.unions {
-            if !seen_types.insert((u.home.clone(), u.name)) {
+            let key = (u.home.clone(), u.name);
+            if let Some(&first) = seen_types.get(&key) {
                 let name = interner
                     .resolve(u.name)
                     .unwrap_or("<?>")
                     .to_owned()
                     .into_boxed_str();
                 return Err(Diagnostic::Name {
-                    span: Span::DUMMY,
-                    msg: NameError::DuplicateType {
-                        name,
-                        first: Span::DUMMY,
-                    },
+                    span: u.name_span,
+                    msg: NameError::DuplicateType { name, first },
                 });
             }
+            seen_types.insert(key, u.name_span);
         }
         for d in &m.defs {
-            if !seen_defs.insert((d.home().to_vec(), d.name().value)) {
+            let key = (d.home().to_vec(), d.name().value);
+            if let Some(&first) = seen_defs.get(&key) {
                 let name = interner
                     .resolve(d.name().value)
                     .unwrap_or("<?>")
@@ -103,12 +103,10 @@ pub fn link(
                     .into_boxed_str();
                 return Err(Diagnostic::Name {
                     span: d.name().span,
-                    msg: NameError::DuplicateValue {
-                        name,
-                        first: Span::DUMMY,
-                    },
+                    msg: NameError::DuplicateValue { name, first },
                 });
             }
+            seen_defs.insert(key, d.name().span);
         }
         unions.extend(m.unions);
         defs.extend(m.defs);

@@ -4,9 +4,9 @@
 //! ipe time.
 
 use ipe_canon::asserted::AssertedPath;
-use ipe_canon::ast::{Def, Expr_, Module};
+use ipe_canon::ast::{Ctor, Def, Expr_, Module, Union};
 use ipe_canon::link::link;
-use ipe_diagnostics::{Located, Span};
+use ipe_diagnostics::{Diagnostic, Located, NameError, Span};
 use ipe_intern::Interner;
 use std::collections::BTreeSet;
 
@@ -51,6 +51,124 @@ fn link_rejects_duplicate_def_identity() {
     assert!(
         result.is_err(),
         "a twice-linked value module must be a duplicate-def error"
+    );
+}
+
+/// A duplicate top-level def diagnostic carries the location of BOTH
+/// declarations: `span` (the rejected second one) and `first` (the original).
+/// Before this test's fix, `first` was always `Span::DUMMY`, so the rendered
+/// diagnostic could point at the duplicate but never show where the name was
+/// first declared.
+#[test]
+fn link_rejects_duplicate_def_identity_reports_both_spans() {
+    let mut i = Interner::new();
+    let home = vec![i.intern("Lib").expect("intern Lib")];
+    let helper = i.intern("helper").expect("intern helper");
+    let first_span = Span::new(10, 16);
+    let second_span = Span::new(40, 46);
+    let make_module = |name_span: Span| Module {
+        name: home.clone(),
+        unions: Vec::new(),
+        defs: vec![Def::Untyped {
+            home: home.clone(),
+            name: Located::new(name_span, helper),
+            patterns: Vec::new(),
+            body: Located::new(Span::DUMMY, Expr_::Unit),
+        }],
+        imports_unsafe_submodule: false,
+        imported_web_capabilities: BTreeSet::new(),
+    };
+    let result = link(
+        home.clone(),
+        vec![make_module(first_span), make_module(second_span)],
+        &i,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(Diagnostic::Name {
+                msg: NameError::DuplicateValue { .. },
+                ..
+            })
+        ),
+        "expected a DuplicateValue diagnostic, got {result:?}"
+    );
+    let Err(Diagnostic::Name {
+        span,
+        msg: NameError::DuplicateValue { first, .. },
+    }) = result
+    else {
+        return;
+    };
+    assert_eq!(
+        span, second_span,
+        "diagnostic span must point at the rejected (second) declaration"
+    );
+    assert_eq!(
+        first, first_span,
+        "`first` must point at the original declaration's real source span, not Span::DUMMY"
+    );
+}
+
+/// The same class-closing property for types: a cross-module duplicate union
+/// diagnostic carries both the rejected declaration's span and the original
+/// declaration's real `first` span.
+#[test]
+fn link_rejects_duplicate_type_identity_reports_both_spans() {
+    let mut i = Interner::new();
+    let home = vec![i.intern("Lib").expect("intern Lib")];
+    let color = i.intern("Color").expect("intern Color");
+    let red = i.intern("Red").expect("intern Red");
+    let first_span = Span::new(5, 10);
+    let second_span = Span::new(50, 55);
+    let make_module = |name_span: Span| Module {
+        name: home.clone(),
+        unions: vec![Union {
+            home: home.clone(),
+            name: color,
+            name_span,
+            vars: Vec::new(),
+            ctors: vec![Ctor {
+                name: red,
+                index: 0,
+                arity: 0,
+                args: Vec::new(),
+                span: Span::DUMMY,
+            }],
+        }],
+        defs: Vec::new(),
+        imports_unsafe_submodule: false,
+        imported_web_capabilities: BTreeSet::new(),
+    };
+    let result = link(
+        home.clone(),
+        vec![make_module(first_span), make_module(second_span)],
+        &i,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(Diagnostic::Name {
+                msg: NameError::DuplicateType { .. },
+                ..
+            })
+        ),
+        "expected a DuplicateType diagnostic, got {result:?}"
+    );
+    let Err(Diagnostic::Name {
+        span,
+        msg: NameError::DuplicateType { first, .. },
+    }) = result
+    else {
+        return;
+    };
+    assert_eq!(
+        span, second_span,
+        "diagnostic span must point at the rejected (second) declaration"
+    );
+    assert_eq!(
+        first, first_span,
+        "`first` must point at the original declaration's real source span, not Span::DUMMY"
     );
 }
 

@@ -5278,6 +5278,7 @@ fn canonicalise_union(
     Ok(canon::Union {
         home: env.home.clone(),
         name: type_name,
+        name_span: u.name.span,
         vars,
         ctors,
     })

@@ -70,6 +70,7 @@ fn lower_leaf_param_ty(leaf: &str, leaf_home: &[Symbol], declare_union: bool) ->
         unions.push(canon::Union {
             home: leaf_home.to_vec(),
             name: leaf_name,
+            name_span: Span::DUMMY,
             vars: Vec::new(),
             ctors: vec![canon::Ctor {
                 name: ctor_w,
