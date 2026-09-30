@@ -101,7 +101,7 @@ pub fn validate(s: &str) -> Result<String, PathRejection> {
 /// Unix honours only `/`; Windows ALSO honours `\`, because Windows accepts
 /// either at a syscall — so both must count, or the un-honoured one smuggles a
 /// `..` past the traversal scan.
-const fn is_sep(c: u8, windows: bool) -> bool {
+pub(crate) const fn is_sep(c: u8, windows: bool) -> bool {
     c == b'/' || (windows && c == b'\\')
 }
 

@@ -16644,6 +16644,8 @@ mod tests {
             (StdlibKernel::ServerListen, Some(Capability::Network)),
             (StdlibKernel::EmailSend, Some(Capability::Network)),
             (StdlibKernel::FileReadFile, Some(Capability::Filesystem)),
+            (StdlibKernel::PathAbsolute, Some(Capability::Filesystem)),
+            (StdlibKernel::PathUnder, None),
             (StdlibKernel::DbQuery, Some(Capability::Database)),
             (StdlibKernel::DbDecString, Some(Capability::Database)),
             (StdlibKernel::SystemGetenv, Some(Capability::Env)),
@@ -17328,6 +17330,9 @@ mod tests {
             StdlibKernel::CryptoSha256,
             StdlibKernel::CryptoAesGcmEncrypt,
             StdlibKernel::CryptoAesKeyFromPassword,
+            // `Path.absolute` reads the process working directory, which a
+            // browser tab has no denotation for, despite the `Path` family allow.
+            StdlibKernel::PathAbsolute,
         ] {
             assert!(
                 !denied.available_on(Target::WasmClient),
@@ -17398,6 +17403,9 @@ mod tests {
             StdlibKernel::SubSubscribeWebSocket,
             // `Env.public` — build-time-embedded `[wasm] publicEnv` allowlist.
             StdlibKernel::EnvPublic,
+            // The lexical `Path` surface is pure; only `absolute` is denied.
+            StdlibKernel::PathFromString,
+            StdlibKernel::PathUnder,
         ] {
             assert!(
                 allowed.available_on(Target::WasmClient),

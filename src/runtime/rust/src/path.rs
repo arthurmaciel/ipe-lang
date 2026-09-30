@@ -65,7 +65,10 @@ use super::{IpeResult, IpeTask, ok_res, str_err};
 // the HOST separator regime so the runtime seal stays target-specific. A sibling
 // module (not an extern crate) so it resolves both in the workspace AND when the
 // runtime is vendored as `mod ipe_runtime` into an emitted app.
-use super::path_core::{clean_with, escapes_root, has_disguised_dotdot, has_nul, volume_name_len};
+use super::path_core::{
+    clean_with, escapes_root, has_disguised_dotdot, has_nul, is_sep, volume_name_len,
+};
+use std::path::PathBuf;
 
 // The platform separator set the lexical engine treats as element boundaries.
 // Unix: `/` alone. Windows: BOTH `\` and `/` — Windows accepts either at the
@@ -79,7 +82,7 @@ const WINDOWS: bool = true;
 
 /// The canonical separator emitted in a cleaned path (all input separators
 /// normalise to this): `/` on Unix, `\` on Windows,
-const SEP: u8 = if WINDOWS { b'\\' } else { b'/' };
+const SEP: u8 = sep_of(WINDOWS);
 
 /// `Ipe.Path`'s opaque, validated newtype. See the module doc for the
 /// construction contract. The wrapped `String` is always the lexically-cleaned,
@@ -111,36 +114,41 @@ impl super::stringify::IpeStringify for Path {
 /// Clean("")`.
 #[must_use]
 pub fn path_from_string<E: From<String>>(s: String) -> IpeResult<E, Path> {
-    if has_nul(&s) {
-        return IpeResult::Err(
+    match seal_with(&s, WINDOWS) {
+        Ok(cleaned) => IpeResult::Ok(Path(cleaned)),
+        Err(why) => IpeResult::Err(why.into()),
+    }
+}
+
+/// The seal's decision under an explicit separator regime.
+///
+/// [`path_from_string`] drives it with the host regime; [`absolute_from`]
+/// re-seals the working directory through it, so both refuse identically and
+/// the Windows refusals are provable on any host. `Ok` is the cleaned form.
+fn seal_with(s: &str, windows: bool) -> Result<String, String> {
+    if has_nul(s) {
+        return Err(
             "Ipe.Path: path contains a NUL byte (a syscall-boundary truncation / traversal risk)"
-                .to_string()
-                .into(),
+                .to_string(),
         );
     }
-    if WINDOWS && has_disguised_dotdot(&s) {
+    if windows && has_disguised_dotdot(s) {
         // Windows strips trailing dots and spaces from every path element at the
         // syscall, so `".. "` and `"..."` name the parent directory even though
         // the lexical scan sees a literal filename. Reject before `clean` so the
         // disguise can never resolve into a traversal we failed to count.
-        return IpeResult::Err(
-            format!(
-                "Ipe.Path: path element resolves to `..` after Windows trailing dot/space \
-                 stripping (a traversal disguise): {s:?}"
-            )
-            .into(),
-        );
+        return Err(format!(
+            "Ipe.Path: path element resolves to `..` after Windows trailing dot/space \
+             stripping (a traversal disguise): {s:?}"
+        ));
     }
-    let cleaned = clean(&s);
-    if escapes_root(&cleaned, WINDOWS) {
-        return IpeResult::Err(
-            format!(
-                "Ipe.Path: path escapes its root via `..` traversal: {s:?} (cleaned: {cleaned:?})"
-            )
-            .into(),
-        );
+    let cleaned = clean_with(s, windows);
+    if escapes_root(&cleaned, windows) {
+        return Err(format!(
+            "Ipe.Path: path escapes its root via `..` traversal: {s:?} (cleaned: {cleaned:?})"
+        ));
     }
-    IpeResult::Ok(Path(cleaned))
+    Ok(cleaned)
 }
 
 /// `Ipe.Path.toString : Path -> String` — THE single un-parse: recover the
@@ -266,18 +274,19 @@ const fn sep_of(windows: bool) -> u8 {
     if windows { b'\\' } else { b'/' }
 }
 
-/// Is the cleaned `p` rooted (a separator right after any volume prefix)?
+/// Is `p` rooted (any regime separator right after its volume prefix)?
 ///
-/// A bare Windows drive (`C:x`) is drive-relative, not rooted; a lone UNC or
-/// verbatim prefix is rooted.
+/// Every separator the regime honours counts (`/` AND `\` on Windows), so a
+/// raw `/x` is rooted on both. A bare Windows drive (`C:x`) is drive-relative,
+/// not rooted; a lone UNC or verbatim prefix is rooted.
 fn is_rooted(p: &str, windows: bool) -> bool {
     let vol = volume_name_len(p, windows);
-    p.as_bytes().get(vol).copied() == Some(sep_of(windows)) || (vol > 2 && vol == p.len())
+    p.as_bytes().get(vol).is_some_and(|&c| is_sep(c, windows)) || (vol > 2 && vol == p.len())
 }
 
-/// Does `p` end in the regime's separator?
+/// Does `p` end in any separator the regime honours?
 fn ends_with_sep(p: &str, windows: bool) -> bool {
-    p.as_bytes().last().copied() == Some(sep_of(windows))
+    p.as_bytes().last().is_some_and(|&c| is_sep(c, windows))
 }
 
 /// Does the cleaned `candidate` lie at or below the cleaned `root`?
@@ -295,43 +304,85 @@ fn is_within(root: &str, candidate: &str, windows: bool) -> bool {
         return true;
     }
     candidate.strip_prefix(root).is_some_and(|rest| {
-        ends_with_sep(root, windows) || rest.as_bytes().first().copied() == Some(sep_of(windows))
+        ends_with_sep(root, windows) || rest.as_bytes().first().is_some_and(|&c| is_sep(c, windows))
     })
 }
 
-/// Join cleaned `child` beneath cleaned `root` under a separator regime.
+/// Does the cleaned `joined` lie STRICTLY below the cleaned `root`?
 ///
-/// Split from [`path_under`] so the Windows refusals are proven on any host.
-/// `Err` carries the reason the join was refused.
-fn under_with(r: &str, c: &str, windows: bool) -> Result<String, String> {
-    let sep = char::from(sep_of(windows));
-    let root_vol = volume_name_len(r, windows);
-    let refusal = if has_nul(r) || has_nul(c) {
-        Some("contains a NUL byte")
-    } else if c == "." || c.is_empty() {
+/// The independent post-join check: a join that names the root itself, or
+/// anything outside it, is refused whatever the pre-join scans concluded.
+fn strictly_beneath(root: &str, joined: &str, windows: bool) -> bool {
+    joined != root && is_within(root, joined, windows)
+}
+
+/// Why `child` may not be joined beneath any root, judged on its RAW text.
+///
+/// Runs before any cleaning, so a `..` element or a Windows dot/space disguise
+/// is refused even when cleaning would have folded it into an in-bounds form.
+fn raw_child_refusal(c: &str, windows: bool) -> Option<&'static str> {
+    if c.as_bytes()
+        .split(|&b| is_sep(b, windows))
+        .any(|e| e == b"..")
+        || (windows && has_disguised_dotdot(c))
+    {
+        Some("contains a `..` element")
+    } else if is_rooted(c, windows) || volume_name_len(c, windows) > 0 {
+        Some("is absolute or volume-prefixed (it would replace the root)")
+    } else {
+        None
+    }
+}
+
+/// Why the CLEANED `child` may not be joined, re-checking the raw verdict.
+fn clean_child_refusal(c: &str, windows: bool) -> Option<&'static str> {
+    if c == "." {
         Some("is empty (it names the root itself)")
     } else if is_rooted(c, windows) || volume_name_len(c, windows) > 0 {
         Some("is absolute or volume-prefixed (it would replace the root)")
-    } else if c.split(['/', sep]).any(|e| e == "..") || escapes_root(c, windows) {
+    } else if escapes_root(c, windows) {
         Some("contains a `..` element")
-    } else if root_vol > 0 && root_vol == r.len() && !is_rooted(r, windows) {
-        Some("cannot be joined to a bare drive root (drive-relative)")
     } else {
         None
-    };
-    if let Some(why) = refusal {
-        return Err(format!("Ipe.Path.under: child path {c:?} {why}"));
     }
-    let joined = if r == "." {
-        c.to_string()
-    } else if ends_with_sep(r, windows) {
-        clean_with(&format!("{r}{c}"), windows)
+}
+
+/// Join `child` beneath `root` under a separator regime.
+///
+/// Split from [`path_under`] so the Windows refusals are proven on any host.
+/// Neither input is trusted to be clean: the raw child is scanned first, then
+/// both are cleaned under the regime (a raw root `""` becomes `.`), and the
+/// join is always cleaned. `Err` carries the reason the join was refused.
+fn under_with(r: &str, c: &str, windows: bool) -> Result<String, String> {
+    let refused = |why: &str| Err(format!("Ipe.Path.under: child path {c:?} {why}"));
+    if has_nul(r) || has_nul(c) {
+        return refused("contains a NUL byte");
+    }
+    if c.is_empty() {
+        return refused("is empty (it names the root itself)");
+    }
+    if let Some(why) = raw_child_refusal(c, windows) {
+        return refused(why);
+    }
+    let cc = clean_with(c, windows);
+    if let Some(why) = clean_child_refusal(&cc, windows) {
+        return refused(why);
+    }
+    let rr = clean_with(r, windows);
+    let root_vol = volume_name_len(&rr, windows);
+    if root_vol > 0 && root_vol == rr.len() && !is_rooted(&rr, windows) {
+        return refused("cannot be joined to a bare drive root (drive-relative)");
+    }
+    let joined = if rr == "." {
+        cc
+    } else if ends_with_sep(&rr, windows) {
+        clean_with(&format!("{rr}{cc}"), windows)
     } else {
-        clean_with(&format!("{r}{sep}{c}"), windows)
+        clean_with(&format!("{rr}{}{cc}", char::from(sep_of(windows))), windows)
     };
-    if joined == r || !is_within(r, &joined, windows) {
+    if !strictly_beneath(&rr, &joined, windows) {
         return Err(format!(
-            "Ipe.Path.under: {c:?} does not resolve beneath the root {r:?}"
+            "Ipe.Path.under: {c:?} does not resolve beneath the root {rr:?}"
         ));
     }
     Ok(joined)
@@ -342,11 +393,11 @@ fn under_with(r: &str, c: &str, windows: bool) -> Result<String, String> {
 /// THE typed path-composition operation: it replaces every `root ++ "/" ++ x`
 /// string concatenation. Fails closed (`Err`) when `child` is empty (`.`),
 /// rooted or volume-prefixed (an absolute child would replace the root), holds
-/// any `..` element, or carries a NUL byte; and, as an independent second
-/// check on the joined result, when the cleaned join does not lie
-/// component-wise strictly below `root`. Also refuses a bare Windows drive
-/// root (`C:`), whose join would silently re-anchor a drive-relative root at
-/// the drive root.
+/// any `..` element or Windows dot/space disguise, or carries a NUL byte; and,
+/// as an independent second check on the joined result, when the cleaned join
+/// does not lie component-wise strictly below `root`. Also refuses a bare
+/// Windows drive root (`C:`), whose join would silently re-anchor a
+/// drive-relative root at the drive root.
 ///
 /// Containment is LEXICAL: a symlink below `root` may still point outside it
 /// (see the module's trust model).
@@ -358,36 +409,71 @@ pub fn path_under<E: From<String>>(root: Path, child: Path) -> IpeResult<E, Path
     }
 }
 
+/// Is `p` anchored on its own, needing no working directory to resolve?
+///
+/// Unix: any rooted path. Windows: a rooted path that ALSO names its volume
+/// (`C:\x`, `\\srv\shr\x`); a root-relative `\x` still depends on the current
+/// drive.
+fn is_self_anchored(p: &str, windows: bool) -> bool {
+    is_rooted(p, windows) && (!windows || volume_name_len(p, windows) > 0)
+}
+
+/// Resolve `p` against the working directory `cwd` under a separator regime.
+///
+/// Split from [`path_absolute`] so the refusals (a non-UTF-8 `cwd`, a
+/// drive-relative `p`) and the Windows root-relative anchoring are proven on
+/// any host. A self-anchored path is returned sealed; a Windows root-relative
+/// `\x` is anchored on the working directory's volume; a relative path is
+/// joined beneath `cwd` through [`under_with`], inheriting every refusal.
+fn absolute_from(cwd: PathBuf, p: &str, windows: bool) -> Result<String, String> {
+    if is_self_anchored(p, windows) {
+        return seal_with(p, windows);
+    }
+    let Ok(cwd) = cwd.into_os_string().into_string() else {
+        return Err("Ipe.Path.absolute: the working directory is not valid UTF-8".to_string());
+    };
+    let cwd = seal_with(&cwd, windows)?;
+    if is_rooted(p, windows) {
+        // Windows root-relative (`\x`): rooted on the CURRENT drive, so anchor
+        // it on the working directory's volume instead of returning it
+        // drive-ambiguous.
+        let vol = cwd.get(..volume_name_len(&cwd, windows)).unwrap_or("");
+        if vol.is_empty() {
+            return Err(format!(
+                "Ipe.Path.absolute: the working directory {cwd:?} has no volume to anchor {p:?}"
+            ));
+        }
+        return seal_with(&format!("{vol}{p}"), windows);
+    }
+    if clean_with(p, windows) == "." {
+        return Ok(cwd);
+    }
+    under_with(&cwd, p, windows)
+}
+
 /// `Ipe.Path.absolute : Path -> Task Error Path` — resolve a path against the working directory.
 ///
-/// A rooted path is returned unchanged; a relative one is joined beneath the
-/// process working directory through [`path_under`], so it inherits every
-/// refusal. Fails closed on a working directory that is not valid UTF-8 (never
-/// a lossy rewrite that would name a different directory) or that the seal
-/// rejects. Lexical only: symlinks are not resolved.
+/// A volume-rooted path is returned unchanged; a Windows root-relative `\x`
+/// is anchored on the working directory's volume; a relative one is joined
+/// beneath the process working directory through [`path_under`]'s join, so it
+/// inherits every refusal. Fails closed on a working directory that is not
+/// valid UTF-8 (never a lossy rewrite that would name a different directory)
+/// or that the seal rejects. Lexical only: symlinks are not resolved.
 #[must_use]
 pub fn path_absolute<E: Send + From<String> + 'static>(p: Path) -> IpeTask<E, Path> {
     Box::pin(async move {
-        if is_rooted(p.as_str(), WINDOWS) {
-            return ok_res(p);
+        let cwd = if is_self_anchored(p.as_str(), WINDOWS) {
+            PathBuf::new()
+        } else {
+            match std::env::current_dir() {
+                Ok(d) => d,
+                Err(e) => return IpeResult::Err(str_err(&format!("Ipe.Path.absolute: {e}"))),
+            }
+        };
+        match absolute_from(cwd, p.as_str(), WINDOWS) {
+            Ok(abs) => ok_res(Path(abs)),
+            Err(why) => IpeResult::Err(str_err(&why)),
         }
-        let cwd = match std::env::current_dir() {
-            Ok(d) => d,
-            Err(e) => return IpeResult::Err(str_err(&format!("Ipe.Path.absolute: {e}"))),
-        };
-        let Some(cwd) = cwd.to_str() else {
-            return IpeResult::Err(str_err(
-                "Ipe.Path.absolute: the working directory is not valid UTF-8",
-            ));
-        };
-        let cwd = match path_from_string::<String>(cwd.to_string()) {
-            IpeResult::Ok(c) => c,
-            IpeResult::Err(e) => return IpeResult::Err(str_err(&e)),
-        };
-        if p.as_str() == "." {
-            return ok_res(cwd);
-        }
-        path_under(cwd, p)
     })
 }
 
@@ -910,6 +996,73 @@ mod tests {
         );
     }
 
+    #[test]
+    fn under_treats_every_windows_separator_as_rooting() {
+        // A `/`-rooted child replaces the root on Windows too: never the drive root.
+        assert_eq!(win_raw(".", "/x"), None, "escape to the drive root");
+        assert_eq!(win_raw(".", "\\x"), None);
+        assert_eq!(win_raw("C:\\repo", "/etc"), None, "`/` roots on Windows");
+        assert_eq!(win_raw("C:\\repo", "//srv/shr/x"), None, "`/`-spelled UNC");
+        assert!(is_rooted("/x", true) && is_rooted("\\x", true));
+        assert!(ends_with_sep("C:/", true) && ends_with_sep("C:\\", true));
+        assert!(
+            !ends_with_sep("a\\", false),
+            "`\\` is a filename byte on Unix"
+        );
+    }
+
+    #[test]
+    fn under_cleans_a_raw_root_before_joining() {
+        // A raw empty root is `.`, never re-anchored at `/`.
+        assert_eq!(unix_raw("", "a").as_deref(), Some("a"));
+        assert_eq!(win_raw("", "a").as_deref(), Some("a"));
+        assert_eq!(unix_raw(".", "./a/").as_deref(), Some("a"));
+        assert_eq!(win_raw(".", "a/b").as_deref(), Some("a\\b"));
+    }
+
+    #[test]
+    fn under_accepts_valid_joins_beneath_an_unclean_root() {
+        assert_eq!(win_raw("C:/repo", "a").as_deref(), Some("C:\\repo\\a"));
+        assert_eq!(
+            win_raw("C:/repo/", "a/b").as_deref(),
+            Some("C:\\repo\\a\\b")
+        );
+        assert_eq!(win_raw("src/a", "b").as_deref(), Some("src\\a\\b"));
+        assert_eq!(unix_raw("./a", "b").as_deref(), Some("a/b"));
+        assert_eq!(unix_raw("/repo//x/", "b").as_deref(), Some("/repo/x/b"));
+        assert_eq!(unix_raw("src/a", "b").as_deref(), Some("src/a/b"));
+    }
+
+    #[test]
+    fn under_refuses_a_windows_dot_space_disguise() {
+        for child in [".. \\x", "a\\...\\x", "a/. ./x", "...", "a\\.. "] {
+            assert_eq!(win_raw("C:\\repo", child), None, "{child:?}");
+        }
+    }
+
+    #[test]
+    fn under_refuses_verbatim_and_device_children() {
+        for child in [
+            "\\\\?\\C:\\x",
+            "\\\\.\\x",
+            "//?/C:/x",
+            "\\\\.\\PhysicalDrive0",
+        ] {
+            assert_eq!(win_raw("C:\\repo", child), None, "{child:?}");
+        }
+    }
+
+    #[test]
+    fn under_refuses_a_join_that_names_the_root_itself() {
+        assert_eq!(unix_raw("/repo", "./"), None);
+        assert_eq!(win_raw("C:\\repo", ".\\"), None);
+        // The post-join check refuses the root itself and any sibling on its own.
+        assert!(!strictly_beneath("/repo", "/repo", false));
+        assert!(!strictly_beneath("/repo", "/repo2", false));
+        assert!(!strictly_beneath("C:\\repo", "C:\\repo", true));
+        assert!(strictly_beneath("/repo", "/repo/a", false));
+    }
+
     // ── `absolute` resolves against the working directory ──────────────────
 
     /// Poll a ready-at-first-poll `IpeTask` once, without an executor.
@@ -940,6 +1093,51 @@ mod tests {
             matches!(&dot, Some(Some(IpeResult::Ok(p))) if is_rooted(p.as_str(), WINDOWS)),
             "{dot:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absolute_refuses_a_non_utf8_working_directory() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let cwd = PathBuf::from(OsString::from_vec(vec![0xff]));
+        let r = absolute_from(cwd, "a", false);
+        assert!(matches!(&r, Err(e) if e.contains("UTF-8")), "{r:?}");
+    }
+
+    #[test]
+    fn absolute_resolves_under_both_regimes() {
+        let unix = |p: &str| absolute_from(PathBuf::from("/work"), p, false);
+        assert_eq!(unix("/etc/x"), Ok("/etc/x".to_string()));
+        assert_eq!(unix("a/b"), Ok("/work/a/b".to_string()));
+        assert_eq!(unix("."), Ok("/work".to_string()));
+        let win = |p: &str| absolute_from(PathBuf::from("C:\\work"), p, true);
+        assert_eq!(win("D:\\x"), Ok("D:\\x".to_string()));
+        assert_eq!(win("a/b"), Ok("C:\\work\\a\\b".to_string()));
+        // A `/`-rooted path is rooted on Windows, never joined as relative.
+        assert_eq!(win("/x"), Ok("C:\\x".to_string()));
+    }
+
+    #[test]
+    fn absolute_anchors_a_windows_root_relative_path_on_the_cwd_volume() {
+        let at = |cwd: &str, p: &str| absolute_from(PathBuf::from(cwd), p, true);
+        assert_eq!(at("C:\\work", "\\x"), Ok("C:\\x".to_string()));
+        assert_eq!(
+            at("\\\\srv\\shr\\work", "\\x"),
+            Ok("\\\\srv\\shr\\x".to_string())
+        );
+        // A cwd with no volume cannot anchor it: refused, never left ambiguous.
+        assert!(at("\\work", "\\x").is_err());
+    }
+
+    #[test]
+    fn absolute_refuses_a_drive_relative_or_escaping_path() {
+        let win = |p: &str| absolute_from(PathBuf::from("C:\\work"), p, true);
+        assert!(win("D:x").is_err(), "drive-relative");
+        assert!(win("..\\x").is_err());
+        assert!(win(".. \\x").is_err(), "disguise");
+        let unix = absolute_from(PathBuf::from("/work"), "../x", false);
+        assert!(unix.is_err(), "{unix:?}");
     }
 
     #[test]
