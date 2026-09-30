@@ -17,6 +17,14 @@ The OS temp-root names (`TMPDIR`, `TMP`, `TEMP`) always read as
 unset: temporary files live in the runtime's private scratch space,
 never under a base taken from the environment.
 
+The runtime reads its own settings through the same view, so a value
+set with `setenv`, removed with `unsetenv`, or loaded with `loadEnv`
+is what the runtime observes too: `NO_COLOR` for colour output,
+`IPE_EXPLAIN_VERBOSE` for the `Debug.explain` overlay, and
+`IPE_DEBUGGER_RECORD` / `IPE_DEBUGGER_REPLAY` for the debugger follow
+the program's writes, not only the environment the process started
+with.
+
 ## `args`
 
 ```ipe

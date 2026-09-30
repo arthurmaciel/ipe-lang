@@ -40,7 +40,10 @@ pub(crate) fn env_entry_is_valid(key: &str, val: &str) -> bool {
 /// value Ipê set/removed via `System.setenv`/`unsetenv`/`loadEnv` is observed
 /// consistently. `pub(crate)` so every non-test process-env read in the crate
 /// routes through this one accessor — that is what makes the overlay authoritative
-/// for Ipê by construction.
+/// for Ipê by construction. The runtime's own settings follow the overlay too:
+/// `NO_COLOR`, `IPE_EXPLAIN_VERBOSE`, and the debugger's `IPE_DEBUGGER_RECORD` /
+/// `IPE_DEBUGGER_REPLAY` observe a value the program wrote, not only the
+/// environment the process started with.
 ///
 /// A temp-root key ([`super::scratch_core::TEMP_ROOT_NAMES`], any case) always
 /// reads as unset: the temp root is a base other users can write, resolved only
@@ -1294,6 +1297,19 @@ mod temp_root_env_tests {
             assert_eq!(read_env_var(key), Err(VarError::NotPresent), "{key:?}");
             locked_remove_var(key);
             assert_eq!(read_env_var(key), Err(VarError::NotPresent), "{key:?}");
+        }
+    }
+
+    /// The `OsString` reader refuses every temp-root spelling alike, even when
+    /// Ipê set it.
+    #[cfg(any(feature = "tui", feature = "debugger"))]
+    #[test]
+    fn a_temp_root_key_is_never_answered_as_os_string() {
+        for key in ["TMPDIR", "tmpdir", "TmpDir", "TMP", "tmp", "TEMP", "Temp"] {
+            locked_set_var(key, "/attacker/base");
+            assert_eq!(super::read_env_var_os(key), None, "{key:?}");
+            locked_remove_var(key);
+            assert_eq!(super::read_env_var_os(key), None, "{key:?}");
         }
     }
 

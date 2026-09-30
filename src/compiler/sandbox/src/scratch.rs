@@ -125,3 +125,45 @@ mod windows_tests {
         assert!(!missing.exists(), "a refused base must not be created");
     }
 }
+
+#[cfg(test)]
+mod temp_root_key_tests {
+    use std::ffi::OsStr;
+
+    /// The runtime's temp-root spelling fold and `ipe_env`'s answer alike for
+    /// every spelling, and each answer is the pinned one: case variants,
+    /// non-ASCII case mappings onto a name, and near misses.
+    #[test]
+    fn the_runtime_and_env_folds_agree() {
+        let cases: [(&str, bool); 16] = [
+            ("TMPDIR", true),
+            ("tmpdir", true),
+            ("TmpDir", true),
+            ("TMP", true),
+            ("Tmp", true),
+            ("TEMP", true),
+            ("temp", true),
+            ("tmpd\u{131}r", true),
+            ("TMPDIRX", false),
+            ("TMPDIR_", false),
+            ("", false),
+            ("TM", false),
+            ("IPE_TMP", false),
+            ("TEMPLATE", false),
+            ("\u{ff34}\u{ff2d}\u{ff30}", false),
+            (" TMP", false),
+        ];
+        for (key, refused) in cases {
+            assert_eq!(
+                super::is_temp_root_key(key),
+                refused,
+                "runtime fold: {key:?}"
+            );
+            assert_eq!(
+                ipe_env::is_temp_root_key(OsStr::new(key)),
+                refused,
+                "ipe_env fold: {key:?}"
+            );
+        }
+    }
+}

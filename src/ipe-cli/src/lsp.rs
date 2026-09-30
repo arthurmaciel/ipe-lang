@@ -78,7 +78,7 @@ fn load_error(err: &CliError, lifted_by: LimitSource) -> LoadError {
     use crate::owner_trust::TrustSubject;
     let detail = err.to_string();
     match err {
-        CliError::Io { .. } => LoadError::Io(detail),
+        CliError::Io { .. } | CliError::ScratchUnavailable { .. } => LoadError::Io(detail),
         CliError::SourceRefused { .. } | CliError::DeviceNamedModule { .. } => {
             LoadError::Refused(detail)
         }

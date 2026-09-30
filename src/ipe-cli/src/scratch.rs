@@ -193,6 +193,16 @@ mod tests {
     /// Environment variables naming the OS temp root.
     const TEMP_ROOT_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
 
+    /// The redaction-only handle on the OS temp root.
+    const TEMP_ROOT_REDACTOR: &str = "TempRootRedactor";
+
+    /// The one production module, by workspace-relative path, that holds a
+    /// [`TEMP_ROOT_REDACTOR`]; it must still name it, so a stale entry fails.
+    const TEMP_ROOT_REDACTOR_USERS: [&str; 1] = ["src/ipe-cli/src/cli_transcript.rs"];
+
+    /// Former spellings that handed the temp root out as text or a path.
+    const RETIRED_TEMP_ROOT_READERS: [&str; 1] = ["temp_root_text"];
+
     /// Every workspace member directory, read from the root manifest.
     ///
     /// Fails closed: an unreadable or unparsable manifest, an empty member
@@ -317,6 +327,7 @@ mod tests {
         );
         let Some(workspace) = workspace else { return };
         let mut exempt_hits = [0_usize; TMP_LITERAL_EXEMPT.len()];
+        let mut redactor_hits = [0_usize; TEMP_ROOT_REDACTOR_USERS.len()];
 
         for src_root in &workspace_src_roots(workspace) {
             let mut rs_files: Vec<std::path::PathBuf> = Vec::new();
@@ -384,6 +395,15 @@ mod tests {
                         *hits += 1;
                     }
                 }
+                let redactor_user = TEMP_ROOT_REDACTOR_USERS
+                    .iter()
+                    .position(|user| from_workspace == std::path::Path::new(user));
+                let named = audit_temp_root_handles(path, &source, redactor_user.is_some());
+                if let Some(i) = redactor_user
+                    && let Some(hits) = redactor_hits.get_mut(i)
+                {
+                    *hits += named;
+                }
             }
         }
         for ((file, line), hits) in TMP_LITERAL_EXEMPT.iter().zip(exempt_hits) {
@@ -392,6 +412,93 @@ mod tests {
                 "stale temp-base exemption {file}: `{line}` matched no line — remove it"
             );
         }
+        for (file, hits) in TEMP_ROOT_REDACTOR_USERS.iter().zip(redactor_hits) {
+            assert!(
+                hits > 0,
+                "stale {TEMP_ROOT_REDACTOR} user {file}: it no longer names it — remove it"
+            );
+        }
+    }
+
+    /// Audit `source` for a handle on the OS temp root outside the scratch
+    /// primitive, panicking on the first one in production code; returns how
+    /// many production lines name [`TEMP_ROOT_REDACTOR`].
+    ///
+    /// A [`RETIRED_TEMP_ROOT_READERS`] name is refused everywhere; the
+    /// redactor only where `redactor_allowed` (a
+    /// [`TEMP_ROOT_REDACTOR_USERS`] module). Test-only items are skipped.
+    fn audit_temp_root_handles(
+        path: &std::path::Path,
+        source: &str,
+        redactor_allowed: bool,
+    ) -> usize {
+        let test_lines = panic_scan::test_only_item_lines(source);
+        assert!(
+            test_lines.is_ok(),
+            "cannot parse {}: {test_lines:?} — an unparsed file cannot be audited",
+            path.display()
+        );
+        let Ok(test_lines) = test_lines else { return 0 };
+        let mut named = 0_usize;
+        for (i, line) in source.lines().enumerate() {
+            let line_no = i + 1;
+            if test_lines.iter().any(|span| span.contains(&line_no)) {
+                continue;
+            }
+            assert!(
+                !RETIRED_TEMP_ROOT_READERS
+                    .iter()
+                    .any(|reader| line.contains(reader)),
+                "retired temp-root reader in production code at {}:{line_no} — \
+                 temporary entries come only from ScratchDir or ScratchFile.\n  line: {}",
+                path.display(),
+                line.trim()
+            );
+            if line.contains(TEMP_ROOT_REDACTOR) {
+                assert!(
+                    redactor_allowed,
+                    "{TEMP_ROOT_REDACTOR} outside its sanctioned user at {}:{line_no} — \
+                     temporary entries come only from ScratchDir or ScratchFile.\n  line: {}",
+                    path.display(),
+                    line.trim()
+                );
+                named += 1;
+            }
+        }
+        named
+    }
+
+    /// A temp-root handle outside its sanctioned user, or a retired reader
+    /// anywhere, is refused; the sanctioned user passes and is counted, and a
+    /// test-only use is exempt.
+    #[test]
+    fn temp_root_handles_are_pinned_to_their_user() {
+        let refuses = |source: &str, allowed: bool| {
+            std::panic::catch_unwind(|| {
+                audit_temp_root_handles(std::path::Path::new("injected.rs"), source, allowed)
+            })
+            .is_err()
+        };
+        let redactor =
+            "fn r() {\n    let _ = ipe_sandbox::scratch::TempRootRedactor::current();\n}\n";
+        assert!(
+            refuses(redactor, false),
+            "an unsanctioned redactor is refused"
+        );
+        assert!(!refuses(redactor, true), "the sanctioned user passes");
+        assert_eq!(
+            audit_temp_root_handles(std::path::Path::new("user.rs"), redactor, true),
+            1
+        );
+        let retired = "fn r() -> Option<String> {\n    ipe_sandbox::scratch::temp_root_text()\n}\n";
+        assert!(refuses(retired, false) && refuses(retired, true));
+        let test_only = "#[cfg(test)]\nmod tests {\n    fn r() {\n        \
+            let _ = TempRootRedactor::current();\n    }\n}\n";
+        assert!(!refuses(test_only, false), "a test-only use is exempt");
+        assert_eq!(
+            audit_temp_root_handles(std::path::Path::new("t.rs"), test_only, false),
+            0
+        );
     }
 
     /// The test-only temp-root reader never reaches production: no workspace

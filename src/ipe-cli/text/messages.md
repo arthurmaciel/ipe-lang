@@ -703,6 +703,10 @@ no such file `{path}` — pass a source file, or run inside an Ipê project (a d
 
 could not access `{path}` — {kind}
 
+## cli-scratch-unavailable
+
+could not create a private scratch directory under the OS temp directory — {kind}
+
 # Publish refusals
 
 ## publish-dirty-tree

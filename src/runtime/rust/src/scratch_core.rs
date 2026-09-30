@@ -308,16 +308,35 @@ fn temp_root() -> io::Result<PathBuf> {
     }
 }
 
-/// The OS temp root as text, for redacting it from output or naming it in a
-/// diagnostic; `None` where [`temp_root`] has none.
+/// The OS temp root, held only to be erased from text.
 ///
-/// Text, not a path: temporary entries are created only through this module's
-/// constructors, never under a base read from here.
-#[must_use]
-pub fn temp_root_text() -> Option<String> {
-    temp_root()
-        .ok()
-        .map(|root| root.to_string_lossy().into_owned())
+/// Redaction is its whole surface: no `AsRef<Path>`, `Into<PathBuf>`, `Deref`,
+/// `Display` or `Debug` hands the root back, so no caller can create an entry
+/// under the shared base or print it. Temporary entries come only from this
+/// module's constructors.
+pub struct TempRootRedactor(String);
+
+impl TempRootRedactor {
+    /// The current OS temp root; `None` where [`temp_root`] has none, or where
+    /// it is empty (an empty pattern would match everywhere).
+    #[must_use]
+    pub fn current() -> Option<Self> {
+        let text = temp_root().ok()?.to_string_lossy().into_owned();
+        (!text.is_empty()).then_some(Self(text))
+    }
+
+    /// `input` with every occurrence of the root replaced by `placeholder`.
+    #[must_use]
+    pub fn redact(&self, input: &str, placeholder: &str) -> String {
+        input.replace(self.0.as_str(), placeholder)
+    }
+
+    /// The root's length in bytes, to order it among other redactions
+    /// longest-first.
+    #[must_use]
+    pub fn byte_len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 /// The OS temp root for this crate's test code.

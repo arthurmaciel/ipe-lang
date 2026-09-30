@@ -136,25 +136,52 @@ pub fn classify(name: &str) -> Hermetic {
 /// The sentinel a completeness check greps for to detect an unclassified command.
 pub const UNCLASSIFIED_SENTINEL: &str = "UNCLASSIFIED";
 
+/// One absolute path prefix to redact to `<TMP>`.
+///
+/// The OS temp root stays behind its redaction-only wrapper: this list never
+/// holds it as text a caller could turn back into a path.
+enum VolatilePrefix {
+    Text(String),
+    TempRoot(ipe_sandbox::scratch::TempRootRedactor),
+}
+
+impl VolatilePrefix {
+    fn byte_len(&self) -> usize {
+        match self {
+            Self::Text(text) => text.len(),
+            Self::TempRoot(root) => root.byte_len(),
+        }
+    }
+
+    fn redact(&self, input: &str) -> String {
+        match self {
+            Self::Text(text) if text.is_empty() => input.to_owned(),
+            Self::Text(text) => input.replace(text.as_str(), "<TMP>"),
+            Self::TempRoot(root) => root.redact(input, "<TMP>"),
+        }
+    }
+}
+
 /// The absolute path prefixes to redact to `<TMP>`, longest first so a nested
 /// prefix does not shadow a longer one.
 ///
 /// Derived from the workspace root, the OS temp dir, and `$HOME` — the
 /// machine/checkout-specific prefixes any path in the hermetic surface can carry.
-#[must_use]
-pub fn volatile_path_prefixes(repo_root: &Path) -> Vec<String> {
-    let mut prefixes: Vec<String> = Vec::new();
+fn volatile_path_prefixes(repo_root: &Path) -> Vec<VolatilePrefix> {
+    let mut prefixes: Vec<VolatilePrefix> = Vec::new();
     if let Ok(canon) = repo_root.canonicalize() {
-        prefixes.push(canon.to_string_lossy().into_owned());
+        prefixes.push(VolatilePrefix::Text(canon.to_string_lossy().into_owned()));
     }
-    prefixes.push(repo_root.to_string_lossy().into_owned());
-    if let Some(temp_root) = ipe_sandbox::scratch::temp_root_text() {
-        prefixes.push(temp_root);
+    prefixes.push(VolatilePrefix::Text(
+        repo_root.to_string_lossy().into_owned(),
+    ));
+    if let Some(temp_root) = ipe_sandbox::scratch::TempRootRedactor::current() {
+        prefixes.push(VolatilePrefix::TempRoot(temp_root));
     }
     if let Some(home) = crate::env_dir::home() {
-        prefixes.push(home.to_string_lossy().into_owned());
+        prefixes.push(VolatilePrefix::Text(home.to_string_lossy().into_owned()));
     }
-    prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    prefixes.sort_by_key(|p| std::cmp::Reverse(p.byte_len()));
     prefixes
 }
 
@@ -168,9 +195,7 @@ pub fn redact(input: &str, repo_root: &Path) -> String {
     let mut s = input.to_owned();
 
     for prefix in volatile_path_prefixes(repo_root) {
-        if !prefix.is_empty() {
-            s = s.replace(&prefix, "<TMP>");
-        }
+        s = prefix.redact(&s);
     }
 
     s = redact_durations(&s);
