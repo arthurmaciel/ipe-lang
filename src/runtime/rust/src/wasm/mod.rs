@@ -524,11 +524,11 @@ where
     FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
     FSetPage: Fn(Page, Model) -> Model + 'static,
 {
-    use crate::web::route::{DecodedPath, check_route_table, match_routes, matches_any};
+    use crate::web::route::{DecodedPath, match_routes, matches_any, refuse_route_table};
 
-    // A malformed literal in the route table fails the mount loudly, exactly
-    // as the server's `web_app_routed` refuses to start.
-    check_route_table(&routes).map_err(|refusal| refusal.to_string())?;
+    // A malformed literal in the route table fails the mount loudly, with the
+    // same refusal the server's `web_app_routed` starts with.
+    refuse_route_table(&routes)?;
 
     let document = document()?;
     let body: web_sys::HtmlElement = document.body().ok_or("document has no <body>")?;
@@ -1227,33 +1227,5 @@ fn sync_dom_property(el: &web_sys::Element, key: &str, val: &str) {
             }
         }
         _ => {}
-    }
-}
-
-#[cfg(test)]
-mod routed_mount_tests {
-    use super::*;
-    use crate::web::route::Route;
-
-    /// A malformed literal in the route table refuses the mount before any DOM
-    /// access, naming the pattern, exactly as the server refuses to start.
-    #[test]
-    fn malformed_route_table_refuses_mount() {
-        let result = mount_app_routed(
-            |_req: WebReq| (0_i64, IpeCmd::<String>::None),
-            |_msg: String, model: i64| (model, IpeCmd::None),
-            |_model: i64| Html::<String>::HText(String::new()),
-            |_model: i64| IpeSub::<String>::None,
-            vec![
-                Route::new("/", |_| Some(())),
-                Route::new("/%zz", |_| Some(())),
-            ],
-            (),
-            |_page: (), model: i64| model,
-        );
-        assert!(
-            matches!(&result, Err(message) if message.contains("route pattern `/%zz` is malformed")),
-            "a malformed route table must refuse the mount: {result:?}"
-        );
     }
 }

@@ -464,7 +464,7 @@ update", use `Cmd.publish` instead.
 |---|---|---|
 | `req.path` | `String` | URL path |
 | `req.query` | `String` | raw `?...` (parse via `Ipe.Http.parseQuery` if needed; a malformed query is an `Err`) |
-| `req.params` | `Dict String String` | matched-route `:name` segments |
+| `req.params` | `Dict String String` | matched-route `:name` segments (`name` = `[A-Za-z_][A-Za-z0-9_]*`, unique per route) |
 | `req.method` | `String` | request method |
 | `req.headers` | `Dict String String` | request headers, canonical case |
 | `req.cookies` | `Dict String String` | parsed cookies |
@@ -546,6 +546,9 @@ nodes regardless of position.
 declaration order, captures `:param` segments, constructs Page w/ captured
 values (always `String`). Declaration order matters — literals before
 patterns (`/apps/new` before `/apps/:slug`, or "new" matches as slug).
+A `:name` is `[A-Za-z_][A-Za-z0-9_]*` and unique within its pattern; a
+literal segment's `%` starts a two-hex-digit UTF-8 escape (`%25` = `%`). A
+literal pattern breaking either rule is refused at compile time (IPE-L0156).
 
 ```elm
 type Page
@@ -735,6 +738,9 @@ Routes: `get/post/put/delete/any` | groups w/ prefix | cookies (HttpOnly,
 Secure, SameSite) | extractors: `param`, `queryParam`, `header`,
 `getCookie` | responses: `text`, `json`, `html`, `withStatus`, `redirect`
 | middleware: `Handler -> Handler`.
+Path params `:name` / catch-all `*name`: `name` = `[A-Za-z_][A-Za-z0-9_]*`,
+unique per path; a literal path breaking this is refused at compile time
+(IPE-L0156).
 
 **Handler annotation.** Named handlers ascribe at head position w/
 `Handler` alias:

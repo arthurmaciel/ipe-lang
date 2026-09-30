@@ -2340,8 +2340,8 @@ where
 {
     Box::pin(async move {
         // A malformed route pattern refuses to start, never a dead route.
-        if let Err(refusal) = route::check_route_table(&routes) {
-            return IpeResult::Err(refusal.to_string().into());
+        if let Err(message) = route::refuse_route_table(&routes) {
+            return IpeResult::Err(message.into());
         }
         let routes = Arc::new(routes);
         let not_found = Arc::new(not_found);

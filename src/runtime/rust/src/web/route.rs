@@ -188,6 +188,17 @@ pub fn check_route_table<Page>(routes: &[Route<Page>]) -> Result<(), RoutePatter
         .try_for_each(|rt| rt.pattern().map(drop).map_err(Clone::clone))
 }
 
+/// [`check_route_table`] as the startup refusal a routed app reports: the
+/// server's `web_app_routed` and the browser's routed mount both fail with
+/// this message, before any bind or DOM access.
+///
+/// # Errors
+///
+/// The rendered refusal of the first malformed pattern, in declaration order.
+pub fn refuse_route_table<Page>(routes: &[Route<Page>]) -> Result<(), String> {
+    check_route_table(routes).map_err(|refusal| refusal.to_string())
+}
+
 /// The decoded values a route pattern's `:param` segments captured, in
 /// pattern order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -547,5 +558,26 @@ mod tests {
         assert_eq!(at(&rs, &Page::NF, "/ok"), Page::Home);
         assert!(!matches_any(&rs, &dp("/%25zz")));
         assert!(!matches_any(&rs, &dp("/zz")));
+    }
+
+    /// The startup refusal both routed hosts report names the first malformed
+    /// pattern; a well-formed table is admitted.
+    #[test]
+    fn refuse_route_table_names_the_malformed_pattern() {
+        let ok: Vec<Route<Page>> = vec![
+            Route::new("/", |_| Some(Page::Home)),
+            Route::new("/apps/:slug", |_| Some(Page::Home)),
+        ];
+        assert_eq!(refuse_route_table(&ok), Ok(()));
+        let bad: Vec<Route<Page>> = vec![
+            Route::new("/", |_| Some(Page::Home)),
+            Route::new("/%zz", |_| Some(Page::Home)),
+            Route::new("/:id/:id", |_| Some(Page::Home)),
+        ];
+        let refused = refuse_route_table(&bad);
+        assert!(
+            matches!(&refused, Err(message) if message.contains("route pattern `/%zz` is malformed")),
+            "a malformed route table must be refused: {refused:?}"
+        );
     }
 }

@@ -3010,6 +3010,126 @@ main =
 }
 
 // ===========================================================================
+// Literal route paths follow the runtime's grammar — IPE-L0156. A `:name` is
+// `[A-Za-z_][A-Za-z0-9_]*` and unique per path; a `Web.route` literal segment
+// is strictly percent-decodable. A literal that breaks it is refused at ipe
+// time rather than at listener startup.
+// ===========================================================================
+
+/// A `Web.tea` app whose second route pattern is `pattern`, built by the
+/// one-field `PostPage` or the two-field `PairPage` constructor.
+fn web_route_fixture(pattern: &str, ctor: &str) -> String {
+    format!(
+        r#"module Main exposing (main)
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
+type Page = HomePage | PostPage String | PairPage String String
+type Msg = Noop
+type alias Model = {{ count : Int }}
+init : WebReq -> ( Model, Cmd Msg )
+init _req = ( {{ count = 0 }}, Cmd.none )
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model = ( model, Cmd.none )
+view : Model -> Element Msg
+view _model = Ui.text "hi"
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.none
+main =
+    Web.tea
+        {{ init = init, update = update, view = view
+        , subscriptions = subscriptions
+        , routes = [ Web.route "/" HomePage, Web.route "{pattern}" {ctor} ]
+        , notFound = HomePage
+        }}
+"#
+    )
+}
+
+/// A `Server.listen` program with one route built by `route`.
+fn server_route_fixture(route: &str) -> String {
+    format!(
+        r#"module Main exposing (main)
+import Ipe.Http.Server as Server
+import Ipe.Task
+main =
+    Server.listen 8000
+        [ {route} (\_ -> Task.succeed (Server.text "hi")) ]
+"#
+    )
+}
+
+#[test]
+fn lower_web_route_param_not_identifier() {
+    let src = web_route_fixture("/posts/:post-id", "PostPage");
+    assert_rejected("lower_web_route_param_not_identifier", &src, "IPE-L0156");
+}
+
+#[test]
+fn lower_web_route_param_empty() {
+    let src = web_route_fixture("/posts/:", "PostPage");
+    assert_rejected("lower_web_route_param_empty", &src, "IPE-L0156");
+}
+
+#[test]
+fn lower_web_route_param_duplicate() {
+    let src = web_route_fixture("/users/:id/posts/:id", "PairPage");
+    assert_rejected("lower_web_route_param_duplicate", &src, "IPE-L0156");
+}
+
+#[test]
+fn lower_web_route_malformed_escape() {
+    let src = web_route_fixture("/files/100%zz", "HomePage");
+    assert_rejected("lower_web_route_malformed_escape", &src, "IPE-L0156");
+}
+
+#[test]
+fn lower_server_route_param_not_identifier() {
+    let src = server_route_fixture(r#"Server.get "/:post-id""#);
+    assert_rejected("lower_server_route_param_not_identifier", &src, "IPE-L0156");
+}
+
+#[test]
+fn lower_server_route_param_duplicate() {
+    let src = server_route_fixture(r#"Server.get "/:id/:id""#);
+    assert_rejected("lower_server_route_param_duplicate", &src, "IPE-L0156");
+}
+
+#[test]
+fn lower_server_route_param_empty() {
+    let src = server_route_fixture(r#"Server.post "/:""#);
+    assert_rejected("lower_server_route_param_empty", &src, "IPE-L0156");
+}
+
+#[test]
+fn lower_server_api_path_param_not_identifier() {
+    let src = server_route_fixture(r#"Server.api "GET /v1/:a-b""#);
+    assert_rejected(
+        "lower_server_api_path_param_not_identifier",
+        &src,
+        "IPE-L0156",
+    );
+}
+
+/// The contrapositive: well-formed literal paths still compile.
+#[test]
+fn well_formed_route_paths_compile() {
+    assert_compiles(
+        "web_route_well_formed",
+        &web_route_fixture("/users/:user_id/posts/:post_id", "PairPage"),
+    );
+    assert_compiles(
+        "server_route_well_formed",
+        &server_route_fixture(r#"Server.get "/files/:_dir/*rest""#),
+    );
+    assert_compiles(
+        "server_api_well_formed",
+        &server_route_fixture(r#"Server.api "POST /v1/:id""#),
+    );
+}
+
+// ===========================================================================
 // App entries need a concrete Model / Msg — IPE-N0051. Every app entry's
 // runtime function bounds the cfg's model and message types with traits a
 // Rust generic does not carry, so an entry built inside a definition generic

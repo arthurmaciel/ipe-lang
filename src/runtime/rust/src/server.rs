@@ -246,13 +246,21 @@ where
     E: Send + 'static,
     H: IntoServerHandler<E>,
 {
+    let (method, path) = api_spec_parts(&spec);
+    route(&method, path, h)
+}
+
+/// Split a `Server.api` spec `"METHOD /path"` into its upper-cased method and
+/// its trimmed path; a spec with no method before the first space is `ANY`
+/// over the whole trimmed spec.
+#[must_use]
+pub fn api_spec_parts(spec: &str) -> (String, String) {
     // split_once is total by construction — no raw `spec[..idx]` range slice
     // (the restriction-lint footgun if the delimiter ever became multi-byte).
-    let (method, path) = match spec.split_once(' ') {
+    match spec.split_once(' ') {
         Some((m, p)) if !m.is_empty() => (m.trim().to_uppercase(), p.trim().to_string()),
         _ => ("ANY".to_string(), spec.trim().to_string()),
-    };
-    route(&method, path, h)
+    }
 }
 
 /// Server.static : String -> String -> Route  (urlPrefix, dir)
@@ -1270,7 +1278,12 @@ impl std::fmt::Display for EndpointParamRefusal {
 /// The router starts a parameter at the first `:` or `*` of a segment and runs
 /// it to the segment's end, so the text after that sigil is the name; a second
 /// sigil in the same segment is a non-identifier byte of that name.
-fn path_param_names(path: &str) -> Result<(), crate::encoding::ParamNameRefusal> {
+///
+/// # Errors
+///
+/// The first [`crate::encoding::ParamNameRefusal`] among the path's parameter
+/// names: an empty name, a non-identifier name, or a repeated name.
+pub fn path_param_names(path: &str) -> Result<(), crate::encoding::ParamNameRefusal> {
     let mut names = crate::encoding::ParamNames::default();
     path.split('/')
         .filter_map(|seg| seg.split_once([':', '*']).map(|(_, name)| name))
@@ -2793,7 +2806,12 @@ mod tests {
         ];
         let refusal = endpoint_param_refusal(&routes);
         assert_eq!(refusal.as_ref().map(|r| r.path.as_str()), Some("/:id/:id"));
-        let listened: IpeResult<String, ()> = server_listen(0, routes).await;
+        // A listener that got past the refusal would bind and serve forever;
+        // the timeout turns that regression into a failure instead of a hang.
+        let listened: IpeResult<String, ()> =
+            tokio::time::timeout(std::time::Duration::from_secs(10), server_listen(0, routes))
+                .await
+                .expect("a refused route set must return before binding, not serve");
         assert!(
             matches!(listened, IpeResult::Err(_)),
             "a malformed parameter name must refuse the listener"
