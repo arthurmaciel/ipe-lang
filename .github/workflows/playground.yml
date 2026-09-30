@@ -8,11 +8,14 @@ name: Playground jail
 #     `playground` scope) proves every changed path irrelevant.
 #   • On push to main/master and nightly: always.
 #
-# Two jobs:
+# Jobs:
 #   1. build  — cargo build -p ipe-wasm --target wasm32-unknown-unknown and
 #               cargo build -p playground-jail-runner.  Verifies the bundle
 #               and jail-runner compile end-to-end.
-#   2. sandbox-tests — cargo nextest run -p playground-jail-runner, which
+#   2. playground-page — builds the page's wasm bundle and runs the headless
+#               Chromium page checks (CSP agreement, cross-origin frame
+#               refusals, same-origin-only loads).
+#   3. playground-jail — cargo nextest run -p playground-jail-runner, which
 #               includes sandbox_security.rs (gated by IPE_PLAYGROUND_E2E=1
 #               when bwrap is available on the runner).
 
@@ -88,6 +91,49 @@ jobs:
 
       - name: Build playground-jail-runner
         run: cargo build -p playground-jail-runner
+
+  # The page's refusals in a real browser (tools/scripts/lib/playground-verify.mjs,
+  # static mode): the page's <meta> CSP and the run server's policy in
+  # Gate.ipe agree as parsed directives, each framing header alone refuses a
+  # cross-origin frame (proved against a control frame that loads), no request
+  # leaves the page origin, and the vendored editor matches its SHA256SUMS.
+  playground-page:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.playground == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/rust-toolchain-pinned
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          # The CLI must match the wasm-bindgen crate version in Cargo.lock.
+          tool: wasm-bindgen@0.2.126
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+
+      - name: Build ipe-wasm (wasm32-unknown-unknown)
+        run: cargo build -p ipe-wasm --target wasm32-unknown-unknown --release
+
+      - name: Generate the page's wasm bundle (pkg/)
+        run: wasm-bindgen --target web --no-typescript --out-dir examples/wasm/language-playground/pkg --out-name ipe_wasm ${{ github.workspace }}/target/wasm32-unknown-unknown/release/ipe_wasm.wasm
+
+      - name: Install the pinned verifier dependencies
+        working-directory: tools/scripts/lib
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: tools/scripts/lib
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify the page (static mode)
+        run: node tools/scripts/lib/playground-verify.mjs examples/wasm/language-playground
 
   # Run the jail-runner unit tests and, when bwrap is available, the full
   # sandbox security proofs (IPE_PLAYGROUND_E2E=1).

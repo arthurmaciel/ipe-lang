@@ -7,12 +7,12 @@ import Ipe.File as File
 import Ipe.Io as Io
 import Ipe.Json.Decode as Json
 import Ipe.Json.Encode as Encode
-import Ipe.Path as Path
 import Ipe.Result as Result
 import Ipe.Server.Http as Server
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task exposing (Task)
+import Layout exposing (Layout)
 import Runner exposing (JailWall)
 import Staging
 
@@ -23,8 +23,9 @@ import Staging
 -- it prints the launch URL, which carries this launch's token in its fragment,
 -- to the operator's terminal; no route serves the token. GET / serves the page
 -- (never framed, same-origin scripts only), "/pkg" the wasm bundle and
--- "/static" the page script with its vendored editor (resolved against the
--- process cwd, "../pkg" and "../static"). GET /health answers `{"ok":true}`
+-- "/static" the page script with its vendored editor, all from the playground
+-- root (the parent of this directory), which must hold every file `Layout`
+-- requires or the server refuses to start. GET /health answers `{"ok":true}`
 -- so the page knows a run server is present. POST /run takes
 -- `{"rust": <emitted crate>}` (the page's own ipe-wasm emit, never Ipê source)
 -- and answers with the jailed transcript: 403 or 415 for a request `Gate`
@@ -40,24 +41,26 @@ main =
             |> Result.mapError (\refusal -> Error.unexpected (Gate.bindMessage refusal))
             |> Task.fromResult
         wall <- Task.fromResult (Result.mapError (\refusal -> Error.unexpected (Runner.deadlineMessage refusal)) (Runner.jailWallFor (System.getenvOr "IPE_HTTP_REQUEST_TIMEOUT" "")))
+        cwd <- System.cwd ()
+        layout <- Layout.locate cwd
         token <- Gate.mintToken
         Io.println ("Ipê playground: open " ++ Gate.launchUrl token)
         Server.listen Gate.port
-            [ Server.get "/" page
+            [ Server.get "/" (page layout)
             , Server.get "/health" health
             , Server.post "/run" (handleRun wall token)
-            , Server.static "/pkg" "../pkg"
-            , Server.static "/static" "../static"
+            , Server.static "/pkg" (Layout.pkgDir layout)
+            , Server.static "/static" (Layout.staticDir layout)
             ]
 
 
 {-| The page, served so that no other site can frame it and it runs no other
 origin's script.
 -}
-page : Server.Request -> Task Error Server.Response
-page _ =
+page : Layout -> Server.Request -> Task Error Server.Response
+page layout _ =
     do
-        path <- Task.fromResult (Path.fromString "../index.html")
+        path <- Task.fromResult (Layout.indexPath layout)
         html <- File.readFileLimit path (ByteSize.kib 256)
         html
             |> Server.html

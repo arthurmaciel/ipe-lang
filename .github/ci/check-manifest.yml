@@ -328,6 +328,24 @@ checks:
     local:
       ci-only: privileged
     guards: Security
+  - context: playground-page
+    disposition: gate
+    producer: playground.yml
+    local:
+      tier: full
+      run:
+        - cargo build -p ipe-wasm --target wasm32-unknown-unknown --release
+        - wasm-bindgen --target web --no-typescript --out-dir examples/wasm/language-playground/pkg --out-name ipe_wasm {target_dir}/wasm32-unknown-unknown/release/ipe_wasm.wasm
+        - cmd: npm ci
+          cwd: tools/scripts/lib
+        - cmd: npx playwright install chromium
+          cwd: tools/scripts/lib
+          differs: CI also installs Chromium's system libraries (--with-deps), which needs root
+        - node tools/scripts/lib/playground-verify.mjs examples/wasm/language-playground
+    guards: >-
+      Security — the page holds the run token and runs compiled code: its
+      <meta> CSP and the run server's policy agree, each framing header alone
+      refuses a cross-origin frame, and it loads nothing from another origin.
   - context: "linux-x64 (seccomp socket-deny + bubblewrap)"
     disposition: gate
     producer: admission-sandbox.yml
@@ -539,7 +557,7 @@ checks:
     disposition: informational
     producer: playground.yml
     owner: docs
-    note: playground.yml build leg; playground-jail is the Security gate.
+    note: playground.yml build leg; playground-jail and playground-page are the Security gates.
 
   # ── Path classifiers (gate) ──────────────────────────────────────────────
   # Each workflow's `changes` job, running the fail-closed classifier
@@ -571,4 +589,4 @@ checks:
     local:
       ci-only: classifier
     guards: >-
-      Security — fail-closed path classification for playground-jail.
+      Security — fail-closed path classification for playground-jail and playground-page.

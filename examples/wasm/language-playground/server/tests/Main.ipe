@@ -6,6 +6,7 @@ import Ipe.Maybe as Maybe
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Test as Test exposing (Test, TestResult)
+import Layout exposing (LayoutRefusal(..))
 import Runner exposing (DeadlineRefusal(..))
 import Staging exposing (StagingError(..))
 
@@ -362,5 +363,21 @@ loopback =
         ]
 
 
+-- The server's layout: the playground root is the parent of the absolute
+-- directory it starts from; any other start is refused before it listens.
+layout : Test
+layout =
+    Test.suite "layout"
+        [ Test.test "the root is the parent of the server directory" (\_ -> Test.equal (Ok "/srv/playground") (Layout.rootOf "/srv/playground/server"))
+        , Test.test "a relative directory is refused" (\_ -> Test.equal (Err (RelativeCwd "server")) (Layout.rootOf "server"))
+        , Test.test "a parent-relative directory is refused" (\_ -> Test.equal (Err (RelativeCwd "../server")) (Layout.rootOf "../server"))
+        , Test.test "an empty directory is refused" (\_ -> Test.equal (Err (RelativeCwd "")) (Layout.rootOf ""))
+        , Test.test "the page and its script are required" (\_ -> Test.equal True (List.member "index.html" Layout.requiredFiles && List.member "static/app.js" Layout.requiredFiles))
+        , Test.test "the wasm bundle is required" (\_ -> Test.equal True (List.member "pkg/ipe_wasm.js" Layout.requiredFiles && List.member "pkg/ipe_wasm_bg.wasm" Layout.requiredFiles))
+        , Test.test "a missing bundle names the setup step" (\_ -> Test.equal True (String.contains "ipe run -- bundle" (Layout.layoutMessage (Missing "/srv/playground" "pkg/ipe_wasm.js"))))
+        , Test.test "a missing page names the file" (\_ -> Test.equal True (String.contains "/srv/playground/index.html is missing" (Layout.layoutMessage (Missing "/srv/playground" "index.html"))))
+        ]
+
+
 main =
-    Test.runMain [ accepted, refused, runnerPath, home, wall, gateRun, gateHealth, healthBody, launch, tokenShape, pagePolicy, loopback ]
+    Test.runMain [ accepted, refused, runnerPath, home, wall, gateRun, gateHealth, healthBody, launch, tokenShape, pagePolicy, loopback, layout ]

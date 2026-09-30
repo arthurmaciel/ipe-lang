@@ -69,10 +69,18 @@ shared log (journald, a CI log, a terminal-sharing session).
 
 Open that exact URL. The page takes the token from the fragment, removes it
 from the address bar, and keeps it in memory only, so reloading needs the
-printed URL again. Without the token the page still compiles, but Run stays
+printed URL again. The browser can still keep the full URL, token included,
+in its history and address-bar suggestions; that token is good only until the
+server stops, since each launch mints a new one. Without the token the page still compiles, but Run stays
 disabled. The server refuses to start unless `IPE_HTTP_BIND` is exactly
 `127.0.0.1` and `IPE_SERVER_PORT` is unset or `8000` (so a relocated port, as
 under `ipe watch`, is refused rather than guessed).
+
+The server serves the page from the playground root, the parent of the
+directory it starts in, so start it from `server/`. Before it listens it checks
+that `index.html`, `static/app.js`, `pkg/ipe_wasm.js` and `pkg/ipe_wasm_bg.wasm`
+exist there, and refuses to start otherwise, naming the missing file (for
+`pkg/`, run `cd ../setup && ipe run -- bundle` first).
 
 `GET /` serves `index.html` with `X-Frame-Options: DENY` and a
 `Content-Security-Policy` (`Gate.pageContentSecurityPolicy`) whose
@@ -150,7 +158,8 @@ Environment:
 5. The page shows the `── Build ──` / `── Run ──` / `── Error ──` transcript.
 
 The security proofs live in `jail-runner/tests/sandbox_security.rs`. The
-staging, gate, deadline, and `/health` refusals live in `server/tests/Main.ipe`.
+staging, gate, deadline, `/health`, and layout refusals live in
+`server/tests/Main.ipe`.
 
 ## Static hosting (GitHub Pages)
 
@@ -186,9 +195,19 @@ wasm-bindgen --target web --no-typescript --out-dir pkg --out-name ipe_wasm \
 ## Browser check
 
 `tools/scripts/lib/playground-verify.mjs` drives the page in headless Chromium
-(Playwright):
+(Playwright). Install its pinned dependencies once:
 
 ```sh
-node tools/scripts/lib/playground-verify.mjs examples/wasm/language-playground   # Pages shape, no server
-node tools/scripts/lib/playground-verify.mjs --live http://localhost:8000/       # Run through the jail
+(cd tools/scripts/lib && npm ci && npx playwright install chromium)
+node tools/scripts/lib/playground-verify.mjs examples/wasm/language-playground        # Pages shape, no server
+node tools/scripts/lib/playground-verify.mjs --live 'http://127.0.0.1:8000/#t=<token>' # the printed launch URL; Run through the jail
 ```
+
+The static mode needs `pkg/` built. Beyond booting the compiler, it checks that
+`Gate.pageContentSecurityPolicy` is the `<meta>` policy plus
+`frame-ancestors 'none'` (compared directive by directive), and that each
+framing header alone (that CSP, or `X-Frame-Options: DENY`) makes Chromium
+refuse the page to a cross-origin frame, while a control frame of the same
+origin loads. The `playground-page` CI job runs it on every relevant change.
+The live mode also checks the served headers and that a frame, or a missing or
+malformed token, keeps Run disabled.
