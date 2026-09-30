@@ -13,6 +13,18 @@ Because a `Path` is validated at construction, the helpers (`base` / `dir`
 a raw `String` — an unvalidated string can never reach a filesystem syscall.
 Use `Ipe.File` for the effectful side (read / write / exists).
 
+Compose paths with `under root child`, never by string concatenation: it
+refuses an empty, absolute, `..`-bearing, or NUL-bearing child, and checks
+that the result lies component-wise below the root (`/repo2/x` is not
+under `/repo`). `absolute` resolves a relative path against the working
+directory through the same join (it needs the `filesystem` capability).
+
+Symlinks: `under` and `absolute` are lexical. They never touch the
+filesystem, so they neither follow nor forbid a symlink; a joined path
+whose ancestor is a link can still reach outside the root when opened.
+Confining a program against links is the capability jail's job, not
+this module's.
+
 ## `fromString`
 
 ```ipe
@@ -62,4 +74,24 @@ isAbsolute : Path -> Bool
 ```
 
 `isAbsolute path` — does the path start from the root?
+
+## `under`
+
+```ipe
+under : Path -> Path -> Result Error Path
+```
+
+`under root child` — join the relative `child` beneath `root`. Returns
+`Err` when `child` is empty, absolute, contains a `..` element, or the
+join would not lie below `root`; otherwise `Ok` the cleaned joined `Path`.
+
+## `absolute`
+
+```ipe
+absolute : Path -> Task Error Path
+```
+
+`absolute path` — resolve `path` against the working directory. A path
+that is already absolute is returned unchanged; a relative one is joined
+beneath the working directory with `under`, so it inherits every refusal.
 
