@@ -58,7 +58,8 @@ pub fn parse_tier(raw: Option<&OsStr>) -> Result<Tier, OsString> {
 pub fn e2e_tier() -> Tier {
     parse_tier(ipe_env::var_os(E2E_VAR).as_deref()).unwrap_or_else(|raw| {
         fail(format_args!(
-            "{E2E_VAR}={raw:?} is neither unset nor {E2E_ON:?}; refusing to guess the test tier"
+            "{E2E_VAR}=`{}` is neither unset nor `{E2E_ON}`; refusing to guess the test tier",
+            raw.display()
         ))
     })
 }
