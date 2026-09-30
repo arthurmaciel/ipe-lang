@@ -221,7 +221,7 @@ struct SourceWalk {
 
 impl SourceWalk {
     /// Count one more file, refusing past [`MAX_STAGED_FILES`].
-    fn count_file(&mut self) -> Result<(), LayoutError> {
+    const fn count_file(&mut self) -> Result<(), LayoutError> {
         self.files = self.files.saturating_add(1);
         if self.files > MAX_STAGED_FILES {
             return Err(LayoutError::TooManyFiles);
@@ -230,7 +230,7 @@ impl SourceWalk {
     }
 
     /// Count one more entry read, refusing past [`MAX_STAGED_ENTRIES`].
-    fn count_entry(&mut self) -> Result<(), LayoutError> {
+    const fn count_entry(&mut self) -> Result<(), LayoutError> {
         self.entries = self.entries.saturating_add(1);
         if self.entries > MAX_STAGED_ENTRIES {
             return Err(LayoutError::TooManyFiles);
