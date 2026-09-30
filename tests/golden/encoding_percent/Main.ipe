@@ -1,0 +1,36 @@
+module Main exposing (main)
+
+import Ipe.Encoding as Encoding
+import Ipe.Io as Io
+import Ipe.String
+
+-- `percentDecode` is the RFC 3986 decode: a `+` stays a literal `+` and only
+-- `%XX` escapes decode. `urlDecode` is the form decode, where `+` is a space.
+-- A malformed escape (`%zz`, a truncated `%2`) is refused by `percentDecode`.
+--   percentDecode "a+b"       = Ok "a+b"
+--   percentDecode "%2B"       = Ok "+"
+--   percentDecode "/t/a+b.db" = Ok "/t/a+b.db"
+--   urlDecode     "a+b"       = Ok "a b"
+--   percentDecode "%zz"       = Err _
+--   percentDecode "%2"        = Err _
+main =
+    Io.println
+        (String.join "|"
+            [ shown (Encoding.percentDecode "a+b")
+            , shown (Encoding.percentDecode "%2B")
+            , shown (Encoding.percentDecode "/t/a+b.db")
+            , shown (Encoding.urlDecode "a+b")
+            , shown (Encoding.percentDecode "%zz")
+            , shown (Encoding.percentDecode "%2")
+            ]
+        )
+
+
+shown : Result Error String -> String
+shown decoded =
+    case decoded of
+        Ok v ->
+            v
+
+        Err _ ->
+            "refused"
