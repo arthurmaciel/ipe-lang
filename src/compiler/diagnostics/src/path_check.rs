@@ -22,20 +22,20 @@ mod tests {
         PathLitText::seal(raw).err()
     }
 
-    fn escape(regime: Regime, cleaned: &str) -> Option<LiteralRefusal> {
-        Some(LiteralRefusal {
+    fn escape(regime: Regime, cleaned: &str) -> LiteralRefusal {
+        LiteralRefusal {
             regime,
             why: SealRefusal::Escape {
                 cleaned: cleaned.to_string(),
             },
-        })
+        }
     }
 
-    fn windows(why: SealRefusal) -> Option<LiteralRefusal> {
-        Some(LiteralRefusal {
+    fn windows(why: SealRefusal) -> LiteralRefusal {
+        LiteralRefusal {
             regime: Regime::Windows,
             why,
-        })
+        }
     }
 
     // ── accepted paths carry each regime's sealed form ───────────────────────
@@ -103,17 +103,20 @@ mod tests {
 
     #[test]
     fn leading_dotdot_rejected() {
-        assert_eq!(refusal("../secret"), escape(Regime::Unix, "../secret"));
+        assert_eq!(
+            refusal("../secret"),
+            Some(escape(Regime::Unix, "../secret"))
+        );
     }
 
     #[test]
     fn bare_dotdot_rejected() {
-        assert_eq!(refusal(".."), escape(Regime::Unix, ".."));
+        assert_eq!(refusal(".."), Some(escape(Regime::Unix, "..")));
     }
 
     #[test]
     fn dotdot_that_resolves_to_escape_rejected() {
-        assert_eq!(refusal("a/../../etc"), escape(Regime::Unix, "../etc"));
+        assert_eq!(refusal("a/../../etc"), Some(escape(Regime::Unix, "../etc")));
     }
 
     // ── refused only under the Windows regime — the all-targets guarantee ────
@@ -122,7 +125,10 @@ mod tests {
 
     #[test]
     fn win_backslash_traversal_rejected() {
-        assert_eq!(refusal("..\\secret"), escape(Regime::Windows, "..\\secret"));
+        assert_eq!(
+            refusal("..\\secret"),
+            Some(escape(Regime::Windows, "..\\secret"))
+        );
     }
 
     #[test]
@@ -132,12 +138,15 @@ mod tests {
 
     #[test]
     fn win_trailing_dot_space_disguise_rejected() {
-        assert_eq!(refusal(".. \\x"), windows(SealRefusal::DisguisedParent));
+        assert_eq!(
+            refusal(".. \\x"),
+            Some(windows(SealRefusal::DisguisedParent))
+        );
     }
 
     #[test]
     fn win_triple_dot_disguise_rejected() {
-        assert_eq!(refusal("..."), windows(SealRefusal::DisguisedParent));
+        assert_eq!(refusal("..."), Some(windows(SealRefusal::DisguisedParent)));
     }
 
     #[test]
