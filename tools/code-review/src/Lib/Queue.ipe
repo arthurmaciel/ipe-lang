@@ -19,10 +19,10 @@ type alias QueuedUnit =
 -- The queue as the review app sees it, one pass over both databases:
 --
 --   * a unit whose exact (uid, body_hash) pair was already decided is
---     hidden — the first review of a pair is final (B6) and the drain loop
+--     hidden — the first review of a pair is final and the drain loop
 --     already cleared it; a re-queued identical unit is a no-op;
 --   * a unit decided on an older hash resurfaced at the head, flagged with
---     its previous review (B8 change re-enqueue);
+--     its previous review;
 --   * never-seen units keep the index's enqueue order after resurfaced ones.
 load : Task.Task Error (List QueuedUnit)
 load =

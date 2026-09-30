@@ -18,6 +18,11 @@
 //!   and `@` → `%40`. Pins parity over both shapes.
 //!   (`encoding_url_unreserved`)
 //!
+//! * `Encoding.percentDecode` (RFC 3986: `+` stays literal) against
+//!   `Encoding.urlDecode` (form: `+` → space), plus the malformed-escape
+//!   refusals `%zz` and a truncated `%2`: `"a+b|+|/t/a+b.db|a b|refused|refused"`.
+//!   (`encoding_percent`)
+//!
 //! * `Encoding.hexEncode` / `Encoding.hexDecode` roundtrip — lowercase hex:
 //!   `"Hi!"` → `"486921"` → `"Hi!"` → `"486921 Hi!"`.
 //!   (`encoding_hex`)
@@ -113,6 +118,16 @@ fn encoding_url_roundtrip() {
 #[test]
 fn encoding_url_unreserved() {
     assert_runs_and_matches_oracle("encoding_url_unreserved");
+}
+
+// ── percentDecode ────────────────────────────────────────────────────────────
+
+/// `Encoding.percentDecode` keeps `+` literal (`"a+b"`, `"/t/a+b.db"`) and
+/// decodes `%2B` → `+`, where `Encoding.urlDecode "a+b"` → `"a b"`; `%zz` and a
+/// truncated `%2` are refused.  Output: `"a+b|+|/t/a+b.db|a b|refused|refused"`.
+#[test]
+fn encoding_percent_keeps_plus_and_refuses_malformed() {
+    assert_runs_and_matches_oracle("encoding_percent");
 }
 
 // ── hexEncode + hexDecode ────────────────────────────────────────────────────

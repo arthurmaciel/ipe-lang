@@ -154,6 +154,7 @@ fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
                 code_action_kinds: Some({
                     let mut kinds = vec![lsp_types::CodeActionKind::QUICKFIX];
                     kinds.extend(ipe_lsp_features::refactor::advertised_kinds());
+                    kinds.extend(ipe_lsp_features::source_actions::advertised_kinds());
                     kinds
                 }),
                 resolve_provider: Some(false),

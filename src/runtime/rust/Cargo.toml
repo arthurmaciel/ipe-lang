@@ -181,7 +181,7 @@ icu_casemap = { version = "2.2", optional = true }
 icu_locale_core = { version = "2.2", optional = true }
 async-trait = { version = "0.1", optional = true }
 unicode-width = { version = "0.1", optional = true }
-crossterm = { version = "0.28", optional = true }
+crossterm = { version = "0.29", optional = true }
 # Ipe.Webview native window. Modern wry/tao (objc2 + current windows-rs) build on
 # macOS-15/Xcode-16 + Windows-2025; on Linux they target webkit2gtk-4.1 + libsoup-3.0.
 wry = { version = "0.55", optional = true }

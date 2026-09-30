@@ -3,7 +3,7 @@ module Lib.Keys exposing (KeyAction(..), keyAction, label)
 import Ipe.String as String
 
 
--- B10: page-level keyboard shortcuts. The mapping lives here, pure and
+-- Page-level keyboard shortcuts. The mapping lives here, pure and
 -- testable; Main only translates each KeyAction into the same Msg the
 -- matching button dispatches, so the buttons stay the single source of truth.
 type KeyAction

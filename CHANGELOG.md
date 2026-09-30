@@ -10,6 +10,25 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.3.4](https://github.com/ipe-lang/compiler/compare/ipe-v0.3.3...ipe-v0.3.4) (2026-09-30)
+
+
+### Bug Fixes
+
+* **build:** pin the imported-symlink refusal; read IPE_E2E through ipe_env ([c699cd5](https://github.com/ipe-lang/compiler/commit/c699cd525bc11247de08a9f81451851db651487b))
+* **ci:** nightly-green judges the newest nightly; sccache fails open ([#3159](https://github.com/ipe-lang/compiler/issues/3159)) ([a352987](https://github.com/ipe-lang/compiler/commit/a35298774c5d7ee2ec83f05ff4268dbcb62fe394))
+* homed diagnostics, output-dir and loose-file path proofs, CI input trust ([360faf0](https://github.com/ipe-lang/compiler/commit/360faf03b015563f7c2570c69b2329e19f12f839))
+* **lsp:** classify device-named module refusal as Refused ([45208a6](https://github.com/ipe-lang/compiler/commit/45208a6cde7b72eeebedd9ca6512ff3952ada2b2))
+* one source of truth for the repository URL ([#3191](https://github.com/ipe-lang/compiler/issues/3191)) ([10a4f07](https://github.com/ipe-lang/compiler/commit/10a4f07d48c50140c0fcb3b91f03e0cd2401ebeb))
+* **render:** bound layout work with deterministic fuel and a plain-layout fallback ([#3131](https://github.com/ipe-lang/compiler/issues/3131)) ([2e01760](https://github.com/ipe-lang/compiler/commit/2e017607276c2aed4f577ecb461f66a51c8c922c))
+* **stdlib:** kernel-alias annotations must equal the enforced kernel scheme ([#3157](https://github.com/ipe-lang/compiler/issues/3157)) ([8358bb5](https://github.com/ipe-lang/compiler/commit/8358bb5d16bf43c92f5af640bede30f611675d89))
+* **types:** judge catch-all scrutinee unions by the solver's head-identity rule ([f288862](https://github.com/ipe-lang/compiler/commit/f288862ee6028b6c8a16c35d806ea73b37309c28))
+
+
+### Performance Improvements
+
+* **build:** optimise the sha2 family in dev/test for the per-process cache epoch ([#3143](https://github.com/ipe-lang/compiler/issues/3143)) ([7047436](https://github.com/ipe-lang/compiler/commit/704743609bcd07e598996264670d6acc846b4f7d))
+
 ## [0.3.3](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.3.2...ipe-v0.3.3) (2026-09-29)
 
 
