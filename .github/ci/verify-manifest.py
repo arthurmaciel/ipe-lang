@@ -272,15 +272,18 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       exactly one workflow step, in its `owner` job, read once into a
       `ClaimRun`.  The step's whole `run:` is `cargo test … | python3
       tools/scripts/wasm-test/wasm_test_count.py N`, with no workflow
-      expression, `N` the cell's `expect_tests`, and a bare `cargo` (no env
-      assignment, wrapper, path or `+toolchain`) passing no `--`,
-      `--config`, `-C`, `-Z` or `--manifest-path`.  The cargo side tests the
+      expression, `N` the cell's `expect_tests`, every word a
+      `shell_lex.LiteralWord` (no parameter expansion, glob, brace or tilde
+      expansion, quote or backslash, so the argv is the words as written),
+      and a bare `cargo` (no env assignment, wrapper, path or `+toolchain`)
+      passing no `--`, `--config`, `-C`, `-Z` or `--manifest-path`.  The cargo side tests the
       cell: the platform as `--target`, the package by one `-p` (no
       `--workspace`), only `--lib` or only `--test <name>`, the cell's
       features, no filter and no `--no-run`.  The step runs under `shell:
       bash` (so `pipefail` holds), with no `continue-on-error` on it or its
       job, no `working-directory` on it and no `defaults.run` one on its job
-      or workflow, and no `if:` beyond the release-only guard.  Its
+      or workflow, no `container:` on its job (whose image env this check
+      cannot read), and no `if:` beyond the release-only guard.  Its
       effective env (workflow, then job, then step `env:`, each a literal
       mapping) sets the platform's runner key to the runner, and otherwise
       only the `_CLAIM_ENV` keys at their admitted values — so no
@@ -2229,9 +2232,15 @@ def _claimed_cell(
         return "its runner output is not piped into the count"
     if shell_lex.trim(run) != f"{' '.join(src)} | {' '.join(cmd.words)}":
         return "its `run:` is not exactly `cargo test … | python3 " + WASM_COUNT_SCRIPT + " N`"
+    words = shell_lex.literal_words(src + cmd.words)
+    if isinstance(words, str):
+        return (
+            f"its word {words!r} is not literal (only [{shell_lex.LITERAL_WORD_CHARS}]), "
+            "so the shell could expand it into arguments this check does not read"
+        )
     if src[:1] != ["cargo"]:
         return "its runner command is not a bare `cargo` (no env assignment, wrapper, or path)"
-    args = src[1:]
+    args = [w.text for w in words[1 : len(src)]]
     if "--" in args:
         return "it passes arguments after `--`, which this check does not read"
     redirecting = next((w for w in args if cargo_invocation._option(w, _CLAIM_REDIRECTING, frozenset()) is not None), None)
@@ -2286,6 +2295,8 @@ def _claim_run(
     claim = f"claims {' '.join(cell.key)}, but"
     if cell.owner != job_id:
         return f"{claim} the cell's owner is {cell.owner!r}, not this job"
+    if "container" in job:
+        return f"{claim} its job runs in a `container:`, whose image and `container.env` env this check does not read"
     if st.get("shell") != "bash":
         return f"{claim} it lacks `shell: bash`, so a failing runner would not fail the pipeline"
     if st.get("continue-on-error", False) is not False or job.get("continue-on-error", False) is not False:

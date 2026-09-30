@@ -1983,6 +1983,33 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
                 splits.add(ch)
         self.assertEqual(splits, set(verify_manifest.shell_lex.BLANKS))
 
+    def test_shell_lex_literal_words(self) -> None:
+        import shutil
+        import subprocess
+
+        lex = verify_manifest.shell_lex
+        word = "".join(chr(i) for i in range(0x20, 0x7F) if lex.literal_words([chr(i)]) == (lex.LiteralWord(chr(i)),))
+        self.assertEqual(lex.literal_words(["a", "--f=x,y"]), (lex.LiteralWord("a"), lex.LiteralWord("--f=x,y")))
+        for bad in ("$X", "${X}", "a*", "a?", "[a]", "{a,b}", "~", "~/x", "a\\b", "'a'", '"a"', "`x`", "a b", "a\tb", "a\nb", "a!", "", "é"):
+            with self.subTest(bad=bad):
+                self.assertEqual(lex.literal_words(["ok", bad]), bad)
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash is not installed")
+        # Every literal character, alone and in one word, reaches the argv
+        # unchanged as one argument, even beside files a glob could match.
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("a", "b", "ab"):
+                open(os.path.join(tmp, name), "w").close()
+            for w in [*word, word, "a" + word]:
+                with self.subTest(word=w):
+                    out = subprocess.run(
+                        [bash, "--norc", "--noprofile", "-c", f"printf '%s\\0' {w}"],
+                        capture_output=True, cwd=tmp, check=False, env={"HOME": tmp},
+                    ).stdout
+                    self.assertEqual(out, w.encode() + b"\0")
+        self.assertEqual(set(word), set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.,=/:+@-"))
+
     # ---- a verdict-bearing step cannot be masked -------------------------
 
     def test_masked_tool_step_is_refused(self) -> None:
@@ -5236,6 +5263,20 @@ class TestTestClaims(unittest.TestCase):
             ("working directory", _TC_PIN + claim.replace("        shell:", "        working-directory: x\n        shell:"), "working-directory"),
             ("skippable if", _TC_PIN + claim.replace("        shell:", "        if: github.event_name == 'push'\n        shell:"), "could skip the count"),
             ("expression in run", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--features a", "--features a,${{env.B}}"), "workflow expression"),
+            ("parameter in option value", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--features a", "--features a,$IPE_RUNTIME_DIR"), "word 'a,$IPE_RUNTIME_DIR' is not literal"),
+            ("braced parameter", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--features a", "--features a,${IPE_RUNTIME_DIR}"), "word 'a,${IPE_RUNTIME_DIR}' is not literal"),
+            ("bare parameter word", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--lib", "--lib $X"), "word '$X' is not literal"),
+            ("glob star in features", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--features a", "--features a*"), "word 'a*' is not literal"),
+            ("glob question in features", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--features a", "--features a?"), "word 'a?' is not literal"),
+            ("glob bracket in features", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--features a", "--features [a]"), "word '[a]' is not literal"),
+            ("brace expansion", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--features a", "--features {a,b}"), "word '{a,b}' is not literal"),
+            ("tilde", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--features a", "--features a --target-dir ~/t"), "word '~/t' is not literal"),
+            ("backslash", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--features a", "--features a\\\\b"), "is not exactly"),
+            ("literal backslash word", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("--features a", "--features 'a\\b'"), "is not exactly"),
+            ("runner-spoofing env word", _TC_PIN + _tc_env(_TC_CLAIM % _TC_RUN.replace("--features a", "--features a $IPE_RUNTIME_DIR"), "IPE_RUNTIME_DIR: 'a --config=target.wasm32-unknown-unknown.runner=[\"sh\",\"-c\",\"echo test result: ok. 3 passed; 0 failed;\"]'"), "word '$IPE_RUNTIME_DIR' is not literal"),
+            ("parameter in count", _TC_PIN + _TC_CLAIM % _TC_RUN.replace("count.py 3", "count.py $N"), "word '$N' is not literal"),
+            ("bad incremental", _TC_PIN + _tc_env(claim, 'CARGO_INCREMENTAL: "2"'), "sets CARGO_INCREMENTAL to '2'"),
+            ("bad term color", _TC_PIN + _tc_env(claim, "CARGO_TERM_COLOR: sometimes"), "sets CARGO_TERM_COLOR to 'sometimes'"),
             ("missing runner env", _TC_PIN + claim.replace("wasm-bindgen-test-runner", "node"), "is not 'wasm-bindgen-test-runner'"),
             ("no pin", claim, "no earlier step of the job installs wasm-bindgen@0.2.126"),
             ("pin after", claim + _TC_PIN, "no earlier step of the job installs"),
@@ -5258,6 +5299,8 @@ class TestTestClaims(unittest.TestCase):
             ("job rustflags cfg", job_env, "sets RUSTFLAGS to '--cfg x'"),
             ("workflow rustflags cfg", wf_env, "sets RUSTFLAGS to '--cfg x'"),
             ("job env not a mapping", _TC_OK.replace("    runs-on:", "    env: ${{ vars.E }}\n    runs-on:"), "is not a literal mapping"),
+            ("job container", _TC_OK.replace("    runs-on:", "    container: rust:1\n    runs-on:"), "runs in a `container:`"),
+            ("job container env", _TC_OK.replace("    runs-on:", "    container:\n      image: rust:1\n      env:\n        RUSTFLAGS: --cfg x\n    runs-on:"), "runs in a `container:`"),
             ("job defaults working directory", _TC_OK.replace("    runs-on:", "    defaults:\n      run:\n        working-directory: x\n    runs-on:"), "working-directory"),
             ("workflow defaults working directory", _TC_OK.replace("on: [push]\n", "on: [push]\ndefaults:\n  run:\n    working-directory: x\n"), "working-directory"),
         ):
@@ -5296,6 +5339,8 @@ class TestTestClaims(unittest.TestCase):
             ("job rustflags overridden by step", mold),
             ("chromedriver", _tc_ci(_TC_PIN + _tc_env(claim, "CHROMEDRIVER: chromedriver"))),
             ("inert key expression", _tc_ci(_TC_PIN + _tc_env(claim, "IPE_RUNTIME_DIR: ${{ github.workspace }}/x"))),
+            ("inert geo port", _tc_ci(_TC_PIN + _tc_env(claim, 'IPE_GEO_CLIPBOARD_PORT: "0"'))),
+            ("literal option values", _tc_ci(_TC_PIN + _TC_CLAIM % _TC_RUN.replace("--features a", "--features=a,b:c/d+e@f.g-h_0"))),
             ("workflow term env", wf_env),
         ):
             with self.subTest(name):
