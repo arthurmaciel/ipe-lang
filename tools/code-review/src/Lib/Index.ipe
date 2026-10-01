@@ -1,4 +1,4 @@
-module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), PendingRow, ShownSource, SourceView(..), StaleReason(..), Unit, attest, attestedHash, attestedUid, countPending, dbBytes, drainUnit, loadPendingPage, loadUnitByUid, nameFor, openRead, pageSize, qualifiedUids, reverify, shownHash, shownText, storedHash, viewText)
+module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), PendingRow, ShownSource, SourceView(..), StaleReason(..), Unit, attest, attestedHash, attestedUid, countPending, dbBytes, drainUnit, loadPendingPage, loadUnitByUid, nameFor, openRead, pageSize, qualifiedUids, reverify, shortHash, shownHash, shownText, storedHash, viewText)
 
 import Ipe.ByteSize as ByteSize exposing (ByteSize)
 import Ipe.Db
@@ -502,6 +502,18 @@ storedHash attested =
 
         UnknownScheme stored ->
             stored
+
+
+-- The first 8 digits of a stored hash, for display: an attestation shows
+-- its digest without the scheme prefix, any other value its leading text.
+shortHash : String -> String
+shortHash stored =
+    case parseAttested stored of
+        Sha256 attested ->
+            String.slice 0 8 (String.dropLeft (String.length attestScheme) attested)
+
+        UnknownScheme other ->
+            String.slice 0 8 other
 
 
 -- Source text proved equal to its attestation. Opaque: built only by

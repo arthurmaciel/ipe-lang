@@ -179,6 +179,15 @@ allChecks db =
             )
         , Task.succeed ( "db file paths escape url specials", filePathsEncodeUrlSpecials )
         , Task.succeed
+            ( "history shows the digest, not the scheme"
+            , Index.shortHash "sha256:0123456789abcdef"
+                == "01234567"
+                && Index.shortHash "deadbeefcafe"
+                == "deadbeef"
+                && Index.shortHash "sha256:"
+                == ""
+            )
+        , Task.succeed
             ( "numberedLines counts from line_start"
             , Format.numberedLines 10 "a\nb\nc"
                 == [ ( 10, "a" ), ( 11, "b" ), ( 12, "c" ) ]
