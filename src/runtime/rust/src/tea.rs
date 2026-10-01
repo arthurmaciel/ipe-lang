@@ -512,7 +512,7 @@ impl<T> EveryTimers<T> {
 
     /// The number of running timers.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) const fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.running.len()
     }
 }
