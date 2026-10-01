@@ -3449,7 +3449,7 @@ drainIsAtomic =
                 |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
         pendingAfter <- Index.countPending
         cleanupProgressScratch at
-        Task.succeed (maybeContains "reviewed" refusal && pendingAfter == pendingBefore)
+        Task.succeed (maybeContains "database error" refusal && pendingAfter == pendingBefore)
 
 
 -- An index without the `reviewed` table stops startup naming
