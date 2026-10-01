@@ -179,6 +179,11 @@ An edit inside a function queues that function alone; an edit to a top-level
 line queues the file. A pending file row still follows the file's current body
 hash, so it stays drainable after a child edit.
 
+A `reviewed` table holds the code-review app's decided `(uid, body_hash)`
+pairs, so the app counts review progress with one SQL aggregate. The app is
+its sole writer; `index` keeps the table across a rebuild, as it keeps the
+queue.
+
 ```bash
 ipe-index pending                 # queued unit changes as JSON lines
 ipe-index pending --since <sha>   # exclude rows enqueued by that update run

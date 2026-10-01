@@ -1125,8 +1125,10 @@ requireEnv key fix =
 -- serving: the index read-only with every column a page reads, the review
 -- database created and migrated, and the root, which the parse already
 -- requires to be an existing directory. A relative value resolves against
--- the working directory. Any failure stops startup with a message naming
--- the variable and one fix.
+-- the working directory. Then the index's `reviewed` copy is rebuilt from
+-- the review database once, so progress starts exact even after an edit the
+-- per-load count check cannot see. Any failure stops startup with a message
+-- naming the variable and one fix.
 requireSettings : Task Error ()
 requireSettings =
     Task.onError
@@ -1140,6 +1142,8 @@ requireSettings =
             Index.probe index
             review <- Settings.reviewDb
             LibDb.probe review
+            db <- LibDb.openAt review
+            Queue.resyncReviewed db
             Task.succeed ()
         )
 

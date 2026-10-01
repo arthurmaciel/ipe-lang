@@ -9,9 +9,11 @@ pub struct Store {
 
 /// The index schema: `units`/`links`/`callgraph`/`change_queue` are the review
 /// backbone. All `CREATE … IF NOT EXISTS` so an old DB gains missing tables on
-/// open; `index` drops and recreates every table except `change_queue`, whose
-/// rows only the queue reconciliation (`diff::reconcile`) and the review app's
-/// drain ever change. The CHECK
+/// open; `index` drops and recreates every table except `change_queue` and
+/// `reviewed`. `change_queue` rows only the queue reconciliation
+/// (`diff::reconcile`) and the review app's drain ever change. `reviewed` is
+/// the review app's copy of its decided `(uid, body_hash)` pairs: the review
+/// app is its sole writer, and ipe-index never touches its rows. The CHECK
 /// constraints make an invalid enum literal unrepresentable at the DB layer
 /// (the extractor is the only writer and only emits the allowed values).
 const SCHEMA: &str = "
@@ -65,6 +67,11 @@ CREATE TABLE IF NOT EXISTS change_queue (
   enqueued_sha TEXT NOT NULL,
   enqueued_at  INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS reviewed (
+  uid       TEXT NOT NULL,
+  body_hash TEXT NOT NULL,
+  PRIMARY KEY (uid, body_hash)
+) WITHOUT ROWID;
 ";
 
 /// Current schema version: v4 `file` units carry `residual_hash`, the change
@@ -326,7 +333,8 @@ impl Store {
     }
     /// Empties the index for a full rebuild: every derived table is dropped
     /// and recreated in the current shape, `meta` is cleared and restamped
-    /// current, and `change_queue` is kept for the rebuild to reconcile.
+    /// current, `change_queue` is kept for the rebuild to reconcile, and
+    /// `reviewed` is kept because only the review app writes it.
     pub fn reset_index(&self) -> Result<()> {
         self.conn.execute_batch(
             "DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS symbols; \
@@ -532,6 +540,47 @@ mod tests {
         assert_eq!(s.count("units").unwrap(), 0);
         assert_eq!(s.count("links").unwrap(), 0);
         assert_eq!(s.count("callgraph").unwrap(), 0);
+    }
+
+    fn reviewed_rows(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM reviewed", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    // An index created before the `reviewed` table existed gains it on open.
+    // The shared in-memory DB lives while `older` holds it open.
+    #[test]
+    fn reviewed_table_created_on_open() {
+        let uri = "file:reviewed_created_on_open?mode=memory&cache=shared";
+        let older = Connection::open(uri).unwrap();
+        older
+            .execute_batch("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT);")
+            .unwrap();
+        let absent: i64 = older
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'reviewed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(absent, 0);
+        let opened = Store::open(uri).unwrap();
+        assert_eq!(reviewed_rows(&opened.conn), 0);
+        assert_eq!(reviewed_rows(&older), 0);
+    }
+
+    // A full rebuild keeps the review app's decided pairs.
+    #[test]
+    fn reset_index_keeps_reviewed() {
+        let s = Store::open(":memory:").unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO reviewed (uid, body_hash) VALUES (?, ?)",
+                rusqlite::params!["u", "sha256:00"],
+            )
+            .unwrap();
+        s.reset_index().unwrap();
+        assert_eq!(reviewed_rows(&s.conn), 1);
     }
 
     #[test]
