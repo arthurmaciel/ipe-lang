@@ -333,7 +333,7 @@ where
 
 // `Ipe.Http.Stream.chunks` → `Sub_subscribeStream` lives in `http_stream.rs`
 // now (alongside the stream registry it drains + the bridged `ChunkEvent` enum).
-// It returns a `IpeSub::Source` driven by this module's SubManager.
+// It returns a `IpeSub::Source` driven by this module's `SubRuntime`.
 
 // ─── Subscription reconciliation (shared by every TEA loop) ─────────────────
 
