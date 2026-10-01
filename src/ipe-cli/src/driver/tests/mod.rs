@@ -2087,9 +2087,27 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
+/// Shipped artifacts build with the release intent: `ipe eject` and the
+/// `ipe release` bundle never carry the development console default.
+#[test]
+fn shipped_artifact_builds_are_release() {
+    assert_eq!(
+        eject_options().intent,
+        ipe_backend_rust::BuildIntent::Release
+    );
+    assert_eq!(
+        BundleProfile::Release.build_intent(),
+        ipe_backend_rust::BuildIntent::Release
+    );
+    assert_eq!(
+        BundleProfile::Dev.build_intent(),
+        ipe_backend_rust::BuildIntent::Development
+    );
+}
+
 /// A production IR-cache hit on a `Debug.*` program blames the in-memory entry text.
 ///
-/// The IR tier's key omits the production flag, so a development build
+/// The IR tier's key omits the build intent, so a development build
 /// seeds it and a release build of the same source hits it, then refuses
 /// with IPE-L0140. The refusal renders against the entry source the build
 /// already holds, never a fresh read of `blame_path`, whose disk bytes here
@@ -2131,7 +2149,10 @@ fn production_ir_cache_hit_blames_the_in_memory_entry_source() {
         &blame_path,
         ipe_backend_rust::DbDriver::Sqlite,
         Some(&cache_site),
-        BuildOptions::default(),
+        BuildOptions {
+            intent: ipe_backend_rust::BuildIntent::Development,
+            ..BuildOptions::default()
+        },
     );
     let (release, release_outcome) = compile_modules_observed(
         sources,
@@ -2143,7 +2164,7 @@ fn production_ir_cache_hit_blames_the_in_memory_entry_source() {
         ipe_backend_rust::DbDriver::Sqlite,
         Some(&cache_site),
         BuildOptions {
-            production: true,
+            intent: ipe_backend_rust::BuildIntent::Release,
             ..BuildOptions::default()
         },
     );

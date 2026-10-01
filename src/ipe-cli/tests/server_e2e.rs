@@ -72,13 +72,30 @@ main =
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Compile a Ipê program string, build the emitted Rust project, and return
-/// the path to the compiled binary.
+/// Compile a Ipê program string as `ipe build` does (Development intent), build
+/// the emitted Rust project, and return the path to the compiled binary.
 ///
 /// # Errors
 ///
 /// Returns an error on any pipeline or Cargo build failure.
 fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxError> {
+    compile_and_build_as(
+        test_name,
+        ipe_source,
+        ipe_backend_rust::BuildIntent::Development,
+    )
+}
+
+/// [`compile_and_build`] under an explicit build intent.
+///
+/// # Errors
+///
+/// Returns an error on any pipeline or Cargo build failure.
+fn compile_and_build_as(
+    test_name: &str,
+    ipe_source: &str,
+    intent: ipe_backend_rust::BuildIntent,
+) -> Result<PathBuf, BoxError> {
     let ipe_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("server_e2e_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
@@ -97,7 +114,11 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
     let runtime = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
 
-    ipe::build(&entry, &out_dir, &runtime)
+    let options = ipe::BuildOptions {
+        intent,
+        ..ipe::BuildOptions::from_env()
+    };
+    ipe::build_with_options(&entry, &out_dir, &runtime, options)
         .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
     let exe = e2e_support::build_rust_binary(test_name, &out_dir)
@@ -1107,6 +1128,51 @@ fn server_mounts_web_app_and_api_on_one_port() -> Result<(), BoxError> {
         app_slash.chars().take(300).collect::<String>(),
         app_noslash.chars().take(300).collect::<String>()
     );
+
+    Ok(())
+}
+
+/// A release build keeps the operator console closed with no
+/// `IPE_CONSOLE_AUTH` configured, even on a loopback bind: the dev default
+/// exists only in a Development emit, so neither the mounted app's console
+/// path nor the root one answers 200.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, or HTTP error as a test error.
+#[test]
+fn release_web_app_keeps_console_closed_without_auth() -> Result<(), BoxError> {
+    if ipe_env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+    let test_name = "release_web_app_keeps_console_closed_without_auth";
+
+    let exe = compile_and_build_as(
+        test_name,
+        IPE_SERVER_MOUNTS_WEB_PROGRAM,
+        ipe_backend_rust::BuildIntent::Release,
+    )?;
+    let port = pick_ephemeral_port()?;
+    // Empty values read as absent, so an inherited posture or credential mode
+    // cannot open the console behind the test's back.
+    let _guard = spawn_and_wait_ready_with_env(
+        test_name,
+        &exe,
+        port,
+        &[("ENV", ""), ("IPE_ENV", ""), ("IPE_CONSOLE_AUTH", "")],
+    )?;
+    let addr = format!("127.0.0.1:{port}");
+
+    for path in ["/app/_ipe/console", "/_ipe/console"] {
+        let req = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        let resp = send_raw_request(test_name, &addr, &req)?;
+        assert!(
+            matches!(resp.status, 401 | 404),
+            "{test_name}: {path} must stay closed in a release build, got {}\n--- body ---\n{}",
+            resp.status,
+            resp.body
+        );
+    }
 
     Ok(())
 }

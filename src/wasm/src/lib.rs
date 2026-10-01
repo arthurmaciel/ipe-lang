@@ -124,7 +124,7 @@ fn compile_inner(source: &str) -> Result<ipe_backend::EmittedProject, String> {
         Vec::new(),
         false,
         // The browser playground is a development surface — Debug.* is allowed.
-        false,
+        ipe_backend_rust::BuildIntent::Development,
         // Wasm always vendors its runtime (closed template); dep model is a no-op.
         None,
         // The browser playground does not expose `--debugger`; never record.

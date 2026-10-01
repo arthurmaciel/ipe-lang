@@ -8,7 +8,7 @@
 //! proxies it), the Rust console is served in-process directly off the Web
 //! router — no extra process, same data. No panic vectors.
 
-use crate::telemetry::{self, ConsoleAuthMode};
+use crate::telemetry::{self, ConsoleAuthMode, ConsoleAuthResolution, Posture};
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 
@@ -25,8 +25,9 @@ const fn json_ct() -> (header::HeaderName, &'static str) {
 /// - explicit opt-out via `IPE_CONSOLE_EMBED=off|0|false`;
 /// - `IPE_CONSOLE_AUTH` resolving to `off` (operator declared the surface
 ///   absent, or set an unrecognised value — fail closed);
-/// - production without a usable admin credential (fail-closed — no silent
-///   open-to-world mount; a metrics credential never mounts the console).
+/// - production, or a dev posture off a loopback listener (`unset-prod`),
+///   without a usable admin credential (fail-closed — no silent open-to-world
+///   mount; a metrics credential never mounts the console).
 ///
 /// This function is reqwest-free; it lives here so the mount decision is
 /// available regardless of whether `http_client` is compiled in.
@@ -43,13 +44,13 @@ pub fn gate_allows() -> bool {
     ) {
         return false;
     }
-    if ConsoleAuthMode::from_env() == ConsoleAuthMode::Off {
+    let resolved = ConsoleAuthResolution::from_env();
+    if resolved.mode == ConsoleAuthMode::Off {
         return false;
     }
-    if telemetry::production_from_env() && !admin_credential().is_configured() {
-        return false;
-    }
-    true
+    let needs_credential =
+        resolved.posture == Posture::Production || resolved.mode == ConsoleAuthMode::UnsetProd;
+    !(needs_credential && !admin_credential().is_configured())
 }
 
 /// `GET /_ipe/console` — the plain-HTML dashboard shell (no framework, no CSS
@@ -521,12 +522,11 @@ fn is_cross_origin_ingest(headers: &axum::http::HeaderMap) -> bool {
     crate::http_header::origin_host_mismatch(origin, host)
 }
 
-/// `Some(401)` when `IPE_INGEST_TOKEN` is set and the `X-Ipê-Ingest-Token` header
-/// is absent or wrong (constant-time compare). Unset → open EXCEPT for a
-/// cross-origin browser POST (log-injection CSRF shape — see
-/// `is_cross_origin_ingest`), which is rejected even in dev.
+/// The ingest gate over the process environment: the configured
+/// `IPE_INGEST_TOKEN` (env, then in-code `Console.ingestToken`) and
+/// [`telemetry::dev_open_from_env`].
 fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::Response> {
-    let want = match crate::system::read_env_var("IPE_INGEST_TOKEN")
+    let want = crate::system::read_env_var("IPE_INGEST_TOKEN")
         .ok()
         .filter(|t| !t.is_empty())
         // In-code `Console.ingestToken` (a sealed `Secret`) below the env
@@ -534,18 +534,32 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
         .or_else(|| {
             crate::app_config::resolve_console_token(crate::app_config::ConsoleTokenKind::Ingest)
                 .filter(|t| !t.is_empty())
-        }) {
+        });
+    ingest_decision(headers, want.as_deref(), telemetry::dev_open_from_env())
+}
+
+/// `Some(401)` when a token is configured and the `X-Ipê-Ingest-Token` header
+/// is absent or wrong (constant-time compare). With no token, `Some(401)`
+/// unless `dev_open` holds (a dev-intent binary in a dev posture on a loopback
+/// listener); there, a cross-origin browser POST (log-injection CSRF shape —
+/// see `is_cross_origin_ingest`) is still refused.
+pub(super) fn ingest_decision(
+    headers: &axum::http::HeaderMap,
+    want: Option<&str>,
+    dev_open: bool,
+) -> Option<axum::response::Response> {
+    let want = match want {
         Some(t) => t,
         None => {
-            // Unset token: open in dev (single-process / no federation), but in
-            // production fail CLOSED — an unauthenticated ingest endpoint folds
-            // attacker-supplied telemetry straight into the operator console
-            // (log-injection). Matches the console mount's own production gate.
-            if telemetry::production_from_env() {
+            // An unauthenticated ingest folds attacker-supplied telemetry
+            // straight into the operator console (log-injection); a client
+            // that sends no Origin passes the same-origin check below, so
+            // only a loopback dev listener may run without a token.
+            if !dev_open {
                 return Some(
                     (
                         StatusCode::UNAUTHORIZED,
-                        "observability ingest requires IPE_INGEST_TOKEN in production",
+                        "observability ingest requires IPE_INGEST_TOKEN outside a loopback dev build",
                     )
                         .into_response(),
                 );
@@ -589,7 +603,62 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::telemetry::{Posture, RawEnv};
+    use crate::telemetry::{BuildPosture, ListenScope, RawEnv};
+
+    /// Parse `IPE_CONSOLE_AUTH` as a dev-intent binary on a loopback listener
+    /// would.
+    fn parse_loopback(raw: RawEnv<'_>, posture: Posture) -> ConsoleAuthMode {
+        ConsoleAuthMode::parse(
+            raw,
+            BuildPosture::Development,
+            posture,
+            ListenScope::Loopback,
+        )
+    }
+
+    /// Clear every input the console posture reads, then set `pairs`.
+    fn seed_console_env(pairs: &[(&str, &str)]) {
+        for key in ["ENV", "IPE_ENV", "IPE_CONSOLE_AUTH", "IPE_ADMIN_TOKEN"] {
+            crate::system::locked_remove_var(key);
+        }
+        for (key, value) in pairs {
+            crate::system::locked_set_var(key, value);
+        }
+    }
+
+    // A release binary with nothing set: posture production, mode
+    // `unset-prod`, no mount, and every unauthenticated request refused.
+    #[test]
+    fn release_with_nothing_set_keeps_console_closed() {
+        seed_console_env(&[]);
+        let resolved = ConsoleAuthResolution::from_env();
+        assert_eq!(resolved.mode, ConsoleAuthMode::UnsetProd);
+        if !cfg!(feature = "dev-posture") {
+            assert_eq!(resolved.posture, Posture::Production);
+        }
+        assert!(
+            !gate_allows(),
+            "no admin credential: the console must not mount"
+        );
+        for surface in [Surface::Console, Surface::Metrics] {
+            assert!(
+                gate_blocked(surface, &axum::http::HeaderMap::new()).is_some(),
+                "an unauthenticated {surface:?} request must be refused"
+            );
+        }
+    }
+
+    // A dev posture on a listener not installed as loopback fails closed.
+    #[test]
+    fn dev_posture_off_loopback_keeps_console_closed() {
+        seed_console_env(&[("ENV", "dev")]);
+        let resolved = ConsoleAuthResolution::from_env();
+        assert_eq!(resolved.posture, Posture::Dev);
+        assert_eq!(resolved.mode, ConsoleAuthMode::UnsetProd);
+        assert!(!gate_allows());
+        assert!(gate_blocked(Surface::Console, &axum::http::HeaderMap::new()).is_some());
+        seed_console_env(&[]);
+    }
 
     #[test]
     fn gate_skips_in_subapp_context() {
@@ -660,40 +729,40 @@ mod tests {
     fn auth_mode_explicit_value_wins_over_posture() {
         for posture in POSTURES {
             assert_eq!(
-                ConsoleAuthMode::parse(RawEnv::Value("token"), posture),
+                parse_loopback(RawEnv::Value("token"), posture),
                 ConsoleAuthMode::Token
             );
             assert_eq!(
-                ConsoleAuthMode::parse(RawEnv::Value("  ToKeN "), posture),
+                parse_loopback(RawEnv::Value("  ToKeN "), posture),
                 ConsoleAuthMode::Token
             );
             assert_eq!(
-                ConsoleAuthMode::parse(RawEnv::Value("off"), posture),
+                parse_loopback(RawEnv::Value("off"), posture),
                 ConsoleAuthMode::Off
             );
             assert_eq!(
-                ConsoleAuthMode::parse(RawEnv::Value("APP"), posture),
+                parse_loopback(RawEnv::Value("APP"), posture),
                 ConsoleAuthMode::App
             );
         }
         assert_eq!(
-            ConsoleAuthMode::parse(RawEnv::Absent, Posture::Dev),
+            parse_loopback(RawEnv::Absent, Posture::Dev),
             ConsoleAuthMode::DevOpen
         );
         assert_eq!(
-            ConsoleAuthMode::parse(RawEnv::Value("  "), Posture::Dev),
+            parse_loopback(RawEnv::Value("  "), Posture::Dev),
             ConsoleAuthMode::DevOpen
         );
         assert_eq!(
-            ConsoleAuthMode::parse(RawEnv::Value(""), Posture::Dev),
+            parse_loopback(RawEnv::Value(""), Posture::Dev),
             ConsoleAuthMode::DevOpen
         );
         assert_eq!(
-            ConsoleAuthMode::parse(RawEnv::Absent, Posture::Production),
+            parse_loopback(RawEnv::Absent, Posture::Production),
             ConsoleAuthMode::UnsetProd
         );
         assert_eq!(
-            ConsoleAuthMode::parse(RawEnv::Value(""), Posture::Production),
+            parse_loopback(RawEnv::Value(""), Posture::Production),
             ConsoleAuthMode::UnsetProd
         );
     }
@@ -703,13 +772,13 @@ mod tests {
         for raw in ["tokne", "open", "dev-open", "none", "true", "1"] {
             for posture in POSTURES {
                 assert_eq!(
-                    ConsoleAuthMode::parse(RawEnv::Value(raw), posture),
+                    parse_loopback(RawEnv::Value(raw), posture),
                     ConsoleAuthMode::Off,
                     "unknown IPE_CONSOLE_AUTH={raw:?} must resolve to off"
                 );
             }
             // Even a request carrying the right token is refused.
-            let mode = ConsoleAuthMode::parse(RawEnv::Value(raw), Posture::Dev);
+            let mode = parse_loopback(RawEnv::Value(raw), Posture::Dev);
             for surface in SURFACES {
                 assert_eq!(
                     status_of(gate_decision(
@@ -730,7 +799,7 @@ mod tests {
         let raw = RawEnv::from_read(&read);
         assert_eq!(raw, RawEnv::NotUnicode);
         for posture in POSTURES {
-            let mode = ConsoleAuthMode::parse(raw, posture);
+            let mode = parse_loopback(raw, posture);
             assert_eq!(
                 mode,
                 ConsoleAuthMode::Off,
@@ -750,7 +819,7 @@ mod tests {
 
     #[test]
     fn explicit_token_enforced_in_dev_posture() {
-        let mode = ConsoleAuthMode::parse(RawEnv::Value("token"), Posture::Dev);
+        let mode = parse_loopback(RawEnv::Value("token"), Posture::Dev);
         for refused in [
             None,
             Some("Bearer wrong"),
@@ -792,7 +861,7 @@ mod tests {
 
     #[test]
     fn explicit_token_without_configured_token_refuses_all() {
-        let mode = ConsoleAuthMode::parse(RawEnv::Value("token"), Posture::Dev);
+        let mode = parse_loopback(RawEnv::Value("token"), Posture::Dev);
         for surface in SURFACES {
             for header in [Some("Bearer "), Some(ADMIN_BEARER), None] {
                 assert_eq!(
@@ -805,9 +874,9 @@ mod tests {
 
     #[test]
     fn posture_default_applies_only_when_unset() {
-        let open = ConsoleAuthMode::parse(RawEnv::Absent, Posture::Dev);
+        let open = parse_loopback(RawEnv::Absent, Posture::Dev);
         assert!(gate_decision(open, Surface::Console, &auth_headers(None), configured).is_none());
-        let prod = ConsoleAuthMode::parse(RawEnv::Absent, Posture::Production);
+        let prod = parse_loopback(RawEnv::Absent, Posture::Production);
         assert_eq!(
             status_of(gate_decision(
                 prod,
@@ -1007,55 +1076,125 @@ mod tests {
         )));
     }
 
-    // One test (not split) — IPE_INGEST_TOKEN is process-global env, so a split
-    // would race other threads. Sets then clears the var within the test.
+    fn origin_headers(origin: Option<&'static str>) -> axum::http::HeaderMap {
+        let mut h = axum::http::HeaderMap::new();
+        if let Some(origin) = origin {
+            h.insert("origin", axum::http::HeaderValue::from_static(origin));
+            h.insert(
+                "host",
+                axum::http::HeaderValue::from_static("victim.example"),
+            );
+        }
+        h
+    }
+
     #[test]
-    fn ingest_token_gate() {
+    fn ingest_gate_without_token() {
+        // A loopback dev build: open when same-origin or Origin-less (curl, a
+        // same-process push); a cross-origin browser POST is refused.
+        assert!(ingest_decision(&origin_headers(None), None, true).is_none());
+        assert!(
+            ingest_decision(&origin_headers(Some("https://victim.example")), None, true).is_none()
+        );
+        assert_eq!(
+            status_of(ingest_decision(
+                &origin_headers(Some("https://evil.example")),
+                None,
+                true
+            )),
+            Some(StatusCode::FORBIDDEN)
+        );
+        // Anywhere else (release build, production posture, exposed bind) an
+        // Origin-less push needs the token.
+        for headers in [
+            origin_headers(None),
+            origin_headers(Some("https://victim.example")),
+        ] {
+            assert_eq!(
+                status_of(ingest_decision(&headers, None, false)),
+                Some(StatusCode::UNAUTHORIZED)
+            );
+        }
+    }
+
+    // `ENV=dev` alone never opens a token-less ingest through the env-driven
+    // gate. A Release build fails the build axis; a dev-posture build fails
+    // the scope axis, since no loopback listener is installed here.
+    #[test]
+    fn env_dev_alone_does_not_open_token_less_ingest() {
+        crate::system::locked_set_var("ENV", "dev");
         crate::system::locked_remove_var("IPE_INGEST_TOKEN");
-        // Unset → endpoint open regardless of header, when same-origin (or no
-        // Origin at all — curl / non-browser caller).
-        let h = axum::http::HeaderMap::new();
-        assert!(ingest_token_blocked(&h).is_none(), "open when unset");
-
-        // Unset token + cross-origin browser POST → rejected (the CSRF-log-
-        // injection shape: no token configured, so same-origin is the only
-        // remaining defense).
-        let mut h = axum::http::HeaderMap::new();
-        h.insert("origin", "https://evil.example".parse().unwrap());
-        h.insert("host", "victim.example".parse().unwrap());
-        assert!(
-            ingest_token_blocked(&h).is_some(),
-            "cross-origin POST with no token configured must be rejected"
+        assert_eq!(
+            status_of(ingest_token_blocked(&origin_headers(None))),
+            Some(StatusCode::UNAUTHORIZED)
         );
+        crate::system::locked_remove_var("ENV");
+    }
 
-        // Unset token + same-origin Origin header → still open.
-        let mut h = axum::http::HeaderMap::new();
-        h.insert("origin", "https://victim.example".parse().unwrap());
-        h.insert("host", "victim.example".parse().unwrap());
-        assert!(
-            ingest_token_blocked(&h).is_none(),
-            "same-origin request still open in dev"
+    // Each axis refuses on its own: with the other two open, a Release build,
+    // a production posture, or an exposed listener alone keeps a token-less
+    // push out, on every compiled build.
+    #[test]
+    fn each_closed_axis_alone_refuses_token_less_ingest() {
+        use crate::telemetry::dev_open;
+        let open = dev_open(
+            BuildPosture::Development,
+            Posture::Dev,
+            ListenScope::Loopback,
         );
+        assert!(ingest_decision(&origin_headers(None), None, open).is_none());
+        for (axis, closed) in [
+            (
+                "build",
+                dev_open(BuildPosture::Release, Posture::Dev, ListenScope::Loopback),
+            ),
+            (
+                "posture",
+                dev_open(
+                    BuildPosture::Development,
+                    Posture::Production,
+                    ListenScope::Loopback,
+                ),
+            ),
+            (
+                "scope",
+                dev_open(
+                    BuildPosture::Development,
+                    Posture::Dev,
+                    ListenScope::Exposed,
+                ),
+            ),
+        ] {
+            assert_eq!(
+                status_of(ingest_decision(&origin_headers(None), None, closed)),
+                Some(StatusCode::UNAUTHORIZED),
+                "{axis} axis"
+            );
+        }
+    }
 
-        crate::system::locked_set_var("IPE_INGEST_TOKEN", "secret123");
-        // Missing header → blocked.
-        let h = axum::http::HeaderMap::new();
-        assert!(ingest_token_blocked(&h).is_some(), "missing header blocked");
-        // Wrong token → blocked.
-        let mut h = axum::http::HeaderMap::new();
-        h.insert("x-ipe-ingest-token", "wrong".parse().unwrap());
-        assert!(ingest_token_blocked(&h).is_some(), "wrong token blocked");
-        // Correct token → allowed, even cross-origin (bearer-token auth makes
-        // the same-origin check redundant once a real token is configured).
-        let mut h = axum::http::HeaderMap::new();
-        h.insert("x-ipe-ingest-token", "secret123".parse().unwrap());
-        h.insert("origin", "https://evil.example".parse().unwrap());
-        h.insert("host", "victim.example".parse().unwrap());
-        assert!(
-            ingest_token_blocked(&h).is_none(),
-            "correct token allowed even cross-origin"
-        );
-
-        crate::system::locked_remove_var("IPE_INGEST_TOKEN");
+    #[test]
+    fn ingest_gate_with_token() {
+        for dev_open in [true, false] {
+            let want = Some("secret123");
+            assert!(
+                ingest_decision(&origin_headers(None), want, dev_open).is_some(),
+                "missing header blocked"
+            );
+            let mut h = axum::http::HeaderMap::new();
+            h.insert("x-ipe-ingest-token", "wrong".parse().unwrap());
+            assert!(
+                ingest_decision(&h, want, dev_open).is_some(),
+                "wrong token blocked"
+            );
+            // Correct token → allowed, even cross-origin (bearer-token auth
+            // makes the same-origin check redundant).
+            let mut h = origin_headers(Some("https://evil.example"));
+            h.insert("x-ipe-ingest-token", "secret123".parse().unwrap());
+            assert!(
+                ingest_decision(&h, want, dev_open).is_none(),
+                "correct token allowed even cross-origin"
+            );
+        }
     }
 }

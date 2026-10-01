@@ -182,6 +182,81 @@ impl<'a> RawEnv<'a> {
     }
 }
 
+/// The build intent compiled into this binary.
+///
+/// The `ipe` verb that built the program picks it: a dev-loop verb enables the
+/// `dev-posture` feature, every other build leaves it off. The cargo profile is
+/// never consulted, so a debug-profile release artifact is still `Release`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BuildPosture {
+    /// Built by a dev-loop verb: an absent `ENV` / `IPE_ENV` reads as `Dev`.
+    Development,
+    /// Built for release: an absent `ENV` / `IPE_ENV` reads as `Production`.
+    Release,
+}
+
+impl BuildPosture {
+    /// The intent this binary was compiled with.
+    pub const COMPILED: Self = if cfg!(feature = "dev-posture") {
+        Self::Development
+    } else {
+        Self::Release
+    };
+}
+
+/// Whether the HTTP listener is reachable from beyond this host.
+///
+/// Parsed once from the resolved bind host. Only a literal loopback IP address
+/// is `Loopback`; a hostname (`localhost` included), a wildcard, any other
+/// address, or an unparsable value is `Exposed`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ListenScope {
+    /// Bound to a loopback address: reachable from this host only.
+    Loopback,
+    /// Bound to anything else, or not known to be loopback.
+    Exposed,
+}
+
+impl ListenScope {
+    /// Classify a bind host (trimmed).
+    #[must_use]
+    pub fn parse(host: &str) -> Self {
+        host.trim()
+            .parse::<std::net::IpAddr>()
+            .map_or(Self::Exposed, |ip| {
+                if ip.is_loopback() {
+                    Self::Loopback
+                } else {
+                    Self::Exposed
+                }
+            })
+    }
+
+    /// Record the listen scope of the bind host, before any console gate runs.
+    ///
+    /// The first install wins; a later call leaves the recorded scope unchanged.
+    pub fn install(host: &str) {
+        let _ = LISTEN_SCOPE.set(Self::parse(host));
+    }
+
+    /// The listen scope installed by the web server, `Exposed` when none is.
+    #[must_use]
+    pub fn installed() -> Self {
+        scope_or_exposed(LISTEN_SCOPE.get())
+    }
+}
+
+/// The listen scope of this process's web listener, installed once at startup.
+static LISTEN_SCOPE: std::sync::OnceLock<ListenScope> = std::sync::OnceLock::new();
+
+/// An absent scope is `Exposed`: the console default never opens unproven.
+const fn scope_or_exposed(installed: Option<&ListenScope>) -> ListenScope {
+    match installed {
+        Some(scope) => *scope,
+        None => ListenScope::Exposed,
+    }
+}
+
 /// The deployment posture every dev-open gate keys off.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Posture {
@@ -197,10 +272,10 @@ impl Posture {
     /// `ENV` then `IPE_ENV` selects the posture: an explicit dev marker
     /// (`dev`/`development`/`local`, case-insensitive) is `Dev`; any other
     /// explicit value, a non-UTF-8 one included, is `Production`. An absent
-    /// or empty variable defers to the next source; with neither set,
-    /// `release_build` decides.
+    /// or empty variable defers to the next source; with neither set, the
+    /// compiled `build` intent decides.
     #[must_use]
-    pub fn parse(env: RawEnv<'_>, ipe_env: RawEnv<'_>, release_build: bool) -> Self {
+    pub fn parse(env: RawEnv<'_>, ipe_env: RawEnv<'_>, build: BuildPosture) -> Self {
         for raw in [env, ipe_env] {
             match raw {
                 RawEnv::NotUnicode => return Self::Production,
@@ -214,14 +289,13 @@ impl Posture {
                 }
             }
         }
-        if release_build {
-            Self::Production
-        } else {
-            Self::Dev
+        match build {
+            BuildPosture::Release => Self::Production,
+            BuildPosture::Development => Self::Dev,
         }
     }
 
-    /// Resolve the posture from the process environment and build profile.
+    /// Resolve the posture from the process environment and compiled intent.
     #[must_use]
     pub fn from_env() -> Self {
         let env = crate::system::read_env_var("ENV");
@@ -229,7 +303,7 @@ impl Posture {
         Self::parse(
             RawEnv::from_read(&env),
             RawEnv::from_read(&ipe_env),
-            !cfg!(debug_assertions),
+            BuildPosture::COMPILED,
         )
     }
 
@@ -243,7 +317,35 @@ impl Posture {
     }
 }
 
-/// Production gate over [`Posture::from_env`]. A release binary deployed
+/// Whether an unauthenticated dev-only surface may open.
+///
+/// True only for a binary emitted with the dev-loop intent, running in a dev
+/// posture, on a loopback listener. An `ENV=dev` override cannot open a
+/// release binary, and a dev binary on an exposed bind stays closed.
+#[must_use]
+pub const fn dev_open(build: BuildPosture, posture: Posture, scope: ListenScope) -> bool {
+    matches!(
+        (build, posture, scope),
+        (
+            BuildPosture::Development,
+            Posture::Dev,
+            ListenScope::Loopback
+        )
+    )
+}
+
+/// [`dev_open`] over the compiled intent, the process posture, and the
+/// installed listen scope.
+#[must_use]
+pub fn dev_open_from_env() -> bool {
+    dev_open(
+        BuildPosture::COMPILED,
+        Posture::from_env(),
+        ListenScope::installed(),
+    )
+}
+
+/// Production gate over [`Posture::from_env`]. A release-intent binary deployed
 /// without env vars is production, so every dev-open gate (unauthenticated
 /// console, token-less ingest, SSRF deny-private, non-Secure cookies) fails
 /// closed.
@@ -265,20 +367,25 @@ pub enum ConsoleAuthMode {
     Token,
     /// Explicit `app`: the app-supplied `consoleAuth` callback decides.
     App,
-    /// Unset in production: an admin token is required.
+    /// Unset where [`dev_open`] fails: an admin token is required.
     UnsetProd,
-    /// Unset in dev: open.
+    /// Unset where [`dev_open`] holds: open.
     DevOpen,
 }
 
 impl ConsoleAuthMode {
     /// Parse a raw `IPE_CONSOLE_AUTH` value (trimmed, case-insensitive).
     ///
-    /// `posture` is consulted only when `raw` is absent or blank; a
-    /// non-UTF-8 value resolves to `Off` in every posture.
+    /// `build`, `posture` and `scope` are consulted only when `raw` is absent
+    /// or blank; a non-UTF-8 value resolves to `Off` in every posture.
     #[must_use]
-    pub fn parse(raw: RawEnv<'_>, posture: Posture) -> Self {
-        ConsoleAuthResolution::resolve(raw, posture).mode
+    pub fn parse(
+        raw: RawEnv<'_>,
+        build: BuildPosture,
+        posture: Posture,
+        scope: ListenScope,
+    ) -> Self {
+        ConsoleAuthResolution::resolve(raw, build, posture, scope).mode
     }
 
     /// Resolve the setting from the process environment.
@@ -309,7 +416,7 @@ pub enum ConsoleAuthSource {
     ///
     /// The surface is refused (`Off`).
     Invalid,
-    /// `IPE_CONSOLE_AUTH` is unset or blank: the posture picks the mode.
+    /// `IPE_CONSOLE_AUTH` is unset or blank: posture and scope pick the mode.
     PostureDefault,
 }
 
@@ -343,18 +450,21 @@ pub struct ConsoleAuthResolution {
 impl ConsoleAuthResolution {
     /// Resolve a raw `IPE_CONSOLE_AUTH` value (trimmed, case-insensitive).
     ///
-    /// `posture` picks the mode only when `raw` is absent or blank; a
-    /// recognised explicit value wins in every posture; an unrecognised or
-    /// non-UTF-8 value resolves to `Off`.
+    /// `build`, `posture` and `scope` pick the mode only when `raw` is absent
+    /// or blank; a recognised explicit value wins in every posture; an
+    /// unrecognised or non-UTF-8 value resolves to `Off`.
     #[must_use]
-    pub fn resolve(raw: RawEnv<'_>, posture: Posture) -> Self {
+    pub fn resolve(
+        raw: RawEnv<'_>,
+        build: BuildPosture,
+        posture: Posture,
+        scope: ListenScope,
+    ) -> Self {
+        let default = Self::posture_default(build, posture, scope);
         let (mode, source) = match raw {
             RawEnv::NotUnicode => (ConsoleAuthMode::Off, ConsoleAuthSource::Invalid),
-            RawEnv::Absent => (
-                Self::posture_default(posture),
-                ConsoleAuthSource::PostureDefault,
-            ),
-            RawEnv::Value(value) => Self::from_value(value.trim(), posture),
+            RawEnv::Absent => (default, ConsoleAuthSource::PostureDefault),
+            RawEnv::Value(value) => Self::from_value(value.trim(), default),
         };
         Self {
             posture,
@@ -363,12 +473,9 @@ impl ConsoleAuthResolution {
         }
     }
 
-    fn from_value(value: &str, posture: Posture) -> (ConsoleAuthMode, ConsoleAuthSource) {
+    fn from_value(value: &str, default: ConsoleAuthMode) -> (ConsoleAuthMode, ConsoleAuthSource) {
         if value.is_empty() {
-            (
-                Self::posture_default(posture),
-                ConsoleAuthSource::PostureDefault,
-            )
+            (default, ConsoleAuthSource::PostureDefault)
         } else if value.eq_ignore_ascii_case("token") {
             (ConsoleAuthMode::Token, ConsoleAuthSource::Explicit)
         } else if value.eq_ignore_ascii_case("app") {
@@ -380,10 +487,16 @@ impl ConsoleAuthResolution {
         }
     }
 
-    const fn posture_default(posture: Posture) -> ConsoleAuthMode {
-        match posture {
-            Posture::Production => ConsoleAuthMode::UnsetProd,
-            Posture::Dev => ConsoleAuthMode::DevOpen,
+    /// The unset default: open only where [`dev_open`] holds.
+    const fn posture_default(
+        build: BuildPosture,
+        posture: Posture,
+        scope: ListenScope,
+    ) -> ConsoleAuthMode {
+        if dev_open(build, posture, scope) {
+            ConsoleAuthMode::DevOpen
+        } else {
+            ConsoleAuthMode::UnsetProd
         }
     }
 
@@ -391,7 +504,12 @@ impl ConsoleAuthResolution {
     #[must_use]
     pub fn from_env() -> Self {
         let read = crate::system::read_env_var("IPE_CONSOLE_AUTH");
-        Self::resolve(RawEnv::from_read(&read), Posture::from_env())
+        Self::resolve(
+            RawEnv::from_read(&read),
+            BuildPosture::COMPILED,
+            Posture::from_env(),
+            ListenScope::installed(),
+        )
     }
 
     /// The one startup line naming the effective posture, mode, and source.
@@ -1099,67 +1217,159 @@ mod tests {
     fn posture_non_unicode_env_fails_closed_to_production() {
         let bad = not_unicode();
         let dev = Ok("dev".to_string());
-        for release_build in [false, true] {
+        for build in [BuildPosture::Development, BuildPosture::Release] {
             assert_eq!(
-                Posture::parse(RawEnv::from_read(&bad), RawEnv::Absent, release_build),
+                Posture::parse(RawEnv::from_read(&bad), RawEnv::Absent, build),
                 Posture::Production
             );
             // A garbled `ENV` is explicit: it never defers to a dev `IPE_ENV`.
             assert_eq!(
-                Posture::parse(
-                    RawEnv::from_read(&bad),
-                    RawEnv::from_read(&dev),
-                    release_build
-                ),
+                Posture::parse(RawEnv::from_read(&bad), RawEnv::from_read(&dev), build),
                 Posture::Production
             );
             assert_eq!(
-                Posture::parse(RawEnv::Absent, RawEnv::from_read(&bad), release_build),
+                Posture::parse(RawEnv::Absent, RawEnv::from_read(&bad), build),
                 Posture::Production
             );
             assert_eq!(
-                Posture::parse(RawEnv::Value(""), RawEnv::from_read(&bad), release_build),
+                Posture::parse(RawEnv::Value(""), RawEnv::from_read(&bad), build),
                 Posture::Production
             );
         }
     }
 
     #[test]
-    fn posture_explicit_value_wins_over_build_profile() {
-        for release_build in [false, true] {
+    fn posture_explicit_value_wins_over_build_intent() {
+        for build in [BuildPosture::Development, BuildPosture::Release] {
             for marker in ["dev", "Development", "LOCAL"] {
                 assert_eq!(
-                    Posture::parse(RawEnv::Value(marker), RawEnv::Absent, release_build),
+                    Posture::parse(RawEnv::Value(marker), RawEnv::Absent, build),
                     Posture::Dev
                 );
                 assert_eq!(
-                    Posture::parse(RawEnv::Absent, RawEnv::Value(marker), release_build),
+                    Posture::parse(RawEnv::Absent, RawEnv::Value(marker), build),
                     Posture::Dev
                 );
             }
             for other in ["prod", "staging", " dev", "devel"] {
                 assert_eq!(
-                    Posture::parse(RawEnv::Value(other), RawEnv::Absent, release_build),
+                    Posture::parse(RawEnv::Value(other), RawEnv::Absent, build),
                     Posture::Production,
                     "ENV={other:?} must resolve to production"
                 );
             }
             // `ENV` takes precedence over `IPE_ENV`.
             assert_eq!(
-                Posture::parse(RawEnv::Value("prod"), RawEnv::Value("dev"), release_build),
+                Posture::parse(RawEnv::Value("prod"), RawEnv::Value("dev"), build),
                 Posture::Production
             );
         }
     }
 
     #[test]
-    fn posture_unset_defers_to_build_profile() {
+    fn posture_unset_defers_to_build_intent() {
         for (env, ipe_env) in [
             (RawEnv::Absent, RawEnv::Absent),
             (RawEnv::Value(""), RawEnv::Value("")),
         ] {
-            assert_eq!(Posture::parse(env, ipe_env, true), Posture::Production);
-            assert_eq!(Posture::parse(env, ipe_env, false), Posture::Dev);
+            assert_eq!(
+                Posture::parse(env, ipe_env, BuildPosture::Release),
+                Posture::Production
+            );
+            assert_eq!(
+                Posture::parse(env, ipe_env, BuildPosture::Development),
+                Posture::Dev
+            );
+        }
+    }
+
+    // A binary built without the dev-loop intent is a release binary,
+    // whatever its cargo profile.
+    #[cfg(not(feature = "dev-posture"))]
+    #[test]
+    fn compiled_intent_without_dev_posture_is_release() {
+        assert_eq!(BuildPosture::COMPILED, BuildPosture::Release);
+    }
+
+    #[cfg(feature = "dev-posture")]
+    #[test]
+    fn compiled_intent_with_dev_posture_is_development() {
+        assert_eq!(BuildPosture::COMPILED, BuildPosture::Development);
+    }
+
+    // Only a dev-intent binary in a dev posture on a loopback listener
+    // defaults the console open; every other triple fails closed.
+    #[test]
+    fn console_default_opens_only_for_dev_build_dev_posture_on_loopback() {
+        use ConsoleAuthMode as M;
+        for build in [BuildPosture::Development, BuildPosture::Release] {
+            for posture in [Posture::Dev, Posture::Production] {
+                for scope in [ListenScope::Loopback, ListenScope::Exposed] {
+                    let open = build == BuildPosture::Development
+                        && posture == Posture::Dev
+                        && scope == ListenScope::Loopback;
+                    assert_eq!(dev_open(build, posture, scope), open);
+                    let mode = if open { M::DevOpen } else { M::UnsetProd };
+                    for raw in [RawEnv::Absent, RawEnv::Value(""), RawEnv::Value(" ")] {
+                        assert_eq!(
+                            ConsoleAuthMode::parse(raw, build, posture, scope),
+                            mode,
+                            "{build:?} {posture:?} {scope:?} {raw:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // An explicit `ENV=dev` on a release binary bound to loopback (a release
+    // service behind a same-host reverse proxy) leaves the console closed.
+    #[test]
+    fn env_dev_on_release_binary_keeps_console_closed() {
+        let posture = Posture::parse(RawEnv::Value("dev"), RawEnv::Absent, BuildPosture::Release);
+        assert_eq!(posture, Posture::Dev);
+        assert!(!dev_open(
+            BuildPosture::Release,
+            posture,
+            ListenScope::Loopback
+        ));
+        assert_eq!(
+            ConsoleAuthMode::parse(
+                RawEnv::Absent,
+                BuildPosture::Release,
+                posture,
+                ListenScope::Loopback
+            ),
+            ConsoleAuthMode::UnsetProd
+        );
+    }
+
+    // An explicit `token` is enforced on every posture and scope.
+    #[test]
+    fn explicit_token_wins_on_every_posture_and_scope() {
+        for build in [BuildPosture::Development, BuildPosture::Release] {
+            for posture in [Posture::Dev, Posture::Production] {
+                for scope in [ListenScope::Loopback, ListenScope::Exposed] {
+                    assert_eq!(
+                        ConsoleAuthMode::parse(RawEnv::Value("token"), build, posture, scope),
+                        ConsoleAuthMode::Token
+                    );
+                }
+            }
+        }
+    }
+
+    // A release binary with nothing set resolves to production and the closed
+    // console default.
+    #[test]
+    fn release_intent_with_nothing_set_is_production_closed() {
+        let posture = Posture::parse(RawEnv::Absent, RawEnv::Absent, BuildPosture::Release);
+        assert_eq!(posture, Posture::Production);
+        for scope in [ListenScope::Loopback, ListenScope::Exposed] {
+            assert_eq!(
+                ConsoleAuthMode::parse(RawEnv::Absent, BuildPosture::Release, posture, scope),
+                ConsoleAuthMode::UnsetProd
+            );
         }
     }
 
@@ -1184,7 +1394,12 @@ mod tests {
                 (RawEnv::Value("tokne"), M::Off, S::Invalid),
                 (RawEnv::from_read(&bad), M::Off, S::Invalid),
             ] {
-                let resolved = ConsoleAuthResolution::resolve(raw, posture);
+                let resolved = ConsoleAuthResolution::resolve(
+                    raw,
+                    BuildPosture::Development,
+                    posture,
+                    ListenScope::Loopback,
+                );
                 assert_eq!(
                     resolved,
                     ConsoleAuthResolution {
@@ -1194,7 +1409,15 @@ mod tests {
                     },
                     "IPE_CONSOLE_AUTH={raw:?} under {posture:?}"
                 );
-                assert_eq!(ConsoleAuthMode::parse(raw, posture), mode);
+                assert_eq!(
+                    ConsoleAuthMode::parse(
+                        raw,
+                        BuildPosture::Development,
+                        posture,
+                        ListenScope::Loopback
+                    ),
+                    mode
+                );
             }
         }
     }
@@ -1226,7 +1449,13 @@ mod tests {
                 "[ipe.console] auth posture=dev mode=off source=env-invalid",
             ),
         ] {
-            let line = ConsoleAuthResolution::resolve(raw, posture).startup_line();
+            let line = ConsoleAuthResolution::resolve(
+                raw,
+                BuildPosture::Development,
+                posture,
+                ListenScope::Loopback,
+            )
+            .startup_line();
             assert_eq!(line, expected);
             assert!(!line.contains("s3cret"), "startup line leaked a value");
         }
@@ -1443,8 +1672,8 @@ mod tests {
     #[test]
     fn dev_banner_markup_is_exact() {
         // Fixed id, target/rel/title, monospace blue style, `&#128269;` ENTITY
-        // (not a literal emoji). Default test env is dev (ENV/IPE_ENV unset) →
-        // non-empty banner.
+        // (not a literal emoji). The banner renders only under a dev posture.
+        crate::system::locked_set_var("ENV", "dev");
         let b = dev_console_banner("");
         let expected = "<a id=\"__ipe-dev-console\" href=\"/_ipe/console\" target=\"_blank\" \
             rel=\"noopener\" title=\"Ipe Console (dev only)\" \
@@ -1512,5 +1741,47 @@ mod tests {
         let body = "<body>café — 日本語</body>";
         let out = inject_dev_banner(body, "<B>");
         assert_eq!(out, "<body>café — 日本語<B></body>");
+    }
+}
+
+#[cfg(test)]
+mod listen_scope_tests {
+    use super::ListenScope;
+    use super::scope_or_exposed;
+
+    #[test]
+    fn uninstalled_scope_reads_exposed() {
+        assert_eq!(scope_or_exposed(None), ListenScope::Exposed);
+        assert_eq!(
+            scope_or_exposed(Some(&ListenScope::Loopback)),
+            ListenScope::Loopback
+        );
+    }
+
+    #[test]
+    fn only_a_literal_loopback_address_is_loopback() {
+        for host in [
+            "0.0.0.0",
+            "::",
+            "10.0.0.1",
+            "localhost",
+            "",
+            "not-an-ip",
+            "[::1]",
+            "::ffff:127.0.0.1",
+        ] {
+            assert_eq!(
+                ListenScope::parse(host),
+                ListenScope::Exposed,
+                "bind host {host:?} must read as exposed"
+            );
+        }
+        for host in ["127.0.0.1", "::1", " 127.0.0.1 ", "127.1.2.3"] {
+            assert_eq!(
+                ListenScope::parse(host),
+                ListenScope::Loopback,
+                "bind host {host:?} must read as loopback"
+            );
+        }
     }
 }

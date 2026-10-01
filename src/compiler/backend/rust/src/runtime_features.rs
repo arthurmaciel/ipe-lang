@@ -189,6 +189,12 @@ pub enum RuntimeFeature {
     /// `debugger` (whose Cargo feature implies `control-wire` directly), so those
     /// shapes never need this row to fire.
     ControlWire,
+    /// `dev-posture` — the build was emitted by a dev-loop verb
+    /// ([`crate::BuildIntent::Development`]). Selected by [`EmitCtx::build_intent`],
+    /// not by reachability. It is the one input that lets the runtime's operator
+    /// console default open, and only on a loopback bind; without it every
+    /// absent posture resolves to production and the console stays closed.
+    DevPosture,
 }
 
 impl RuntimeFeature {
@@ -235,6 +241,7 @@ impl RuntimeFeature {
         Self::WasmClient,
         Self::Debugger,
         Self::ControlWire,
+        Self::DevPosture,
     ];
 
     /// A stable per-variant index for `const`-context identity. The exhaustive,
@@ -276,6 +283,7 @@ impl RuntimeFeature {
             Self::WasmClient => 30,
             Self::Debugger => 31,
             Self::ControlWire => 32,
+            Self::DevPosture => 33,
         }
     }
 
@@ -299,7 +307,7 @@ impl RuntimeFeature {
     /// domain size grows in lockstep with the variant set and the seal then
     /// forces the variant into `ALL` too.
     pub(crate) const fn index_domain_size() -> usize {
-        Self::ControlWire.index() + 1
+        Self::DevPosture.index() + 1
     }
 
     /// The exact cargo feature name in `src/runtime/rust/Cargo.toml`.
@@ -338,6 +346,7 @@ impl RuntimeFeature {
             Self::WasmClient => "wasm-client",
             Self::Debugger => "debugger",
             Self::ControlWire => "control-wire",
+            Self::DevPosture => "dev-posture",
         }
     }
 }
@@ -395,6 +404,9 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
         // (tokio is native-only) — the wasm `tea` types come from `wasm-client`.
         if ctx.debugger {
             set.insert(RuntimeFeature::Debugger);
+        }
+        if ctx.build_intent == crate::BuildIntent::Development {
+            set.insert(RuntimeFeature::DevPosture);
         }
         return RuntimeFeatureSet(set);
     }
@@ -580,6 +592,58 @@ mod tests {
         assert!(
             !without.contains(&"debugger"),
             "a wasm build without `--debugger` must NOT select it: {without:?}"
+        );
+    }
+
+    /// Compute the selected feature names for an empty program emitted under
+    /// `target` with the given build intent.
+    fn features_for_intent(
+        target: ipe_ir::Target,
+        intent: crate::BuildIntent,
+    ) -> Vec<&'static str> {
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern Main");
+        let prog = Program {
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
+            modules: vec![ctx_module(main, |_| {})],
+        };
+        let backend = RustBackend::new(&interner)
+            .with_target(target)
+            .with_build_intent(intent);
+        let ctx = backend.emit_ctx_for_tests(&prog).expect("build EmitCtx");
+        runtime_features(&ctx).as_feature_names()
+    }
+
+    // A release emit never carries `dev-posture` (the console default stays
+    // closed); a dev-verb emit carries it, on every target.
+    #[test]
+    fn build_intent_selects_dev_posture_on_every_target() {
+        for target in [
+            ipe_ir::Target::Native,
+            ipe_ir::Target::WasmClient,
+            ipe_ir::Target::WasmWasi,
+        ] {
+            let release = features_for_intent(target, crate::BuildIntent::Release);
+            assert!(
+                !release.contains(&"dev-posture"),
+                "a release emit ({target:?}) must NOT select `dev-posture`: {release:?}"
+            );
+            let dev = features_for_intent(target, crate::BuildIntent::Development);
+            assert!(
+                dev.contains(&"dev-posture"),
+                "a development emit ({target:?}) must select `dev-posture`: {dev:?}"
+            );
+        }
+    }
+
+    // An emit whose caller states no intent is a release emit.
+    #[test]
+    fn unstated_intent_omits_dev_posture() {
+        let features = features_for(|_| {});
+        assert!(
+            !features.contains(&"dev-posture"),
+            "the default backend intent must be Release: {features:?}"
         );
     }
 
