@@ -2,6 +2,7 @@ module Lib.Links exposing (Link(..), label, linkKey, resolve)
 
 import Ipe.List as List
 import Ipe.Maybe as Maybe
+import Ipe.Set as Set
 import Ipe.String as String
 import Lib.SafeText as SafeText exposing (SafeText)
 
@@ -84,25 +85,22 @@ isPunct c =
     List.member c punctChars
 
 
--- First occurrence wins; ADTs have no structural equality, so dedup keys on
--- the link's payload via a string tag. Non-tail recursion is fine: a unit's
--- source holds at most a few hundred tokens.
+-- First occurrence wins: one left-to-right pass keeps a link only when its
+-- key is new. The seen set holds each link's comparable `linkKey`.
 dedup : List Link -> List Link
 dedup links =
-    case links of
-        [] ->
-            []
+    case List.foldl keepFirst ( Set.empty, [] ) links of
+        ( _, kept ) ->
+            List.reverse kept
 
-        link :: rest ->
-            let
-                tail =
-                    dedup rest
-            in
-            if List.member (linkKey link) (List.map linkKey tail) then
-                tail
 
-            else
-                link :: tail
+keepFirst : Link -> ( Set String, List Link ) -> ( Set String, List Link )
+keepFirst link ( seen, kept ) =
+    if Set.member (linkKey link) seen then
+        ( seen, kept )
+
+    else
+        ( Set.insert (linkKey link) seen, link :: kept )
 
 
 -- The text a link shows, never raw: an internal link's rendered name, an

@@ -2612,8 +2612,12 @@ linksSubstring =
         urlPunct =
             Links.resolve "" [] "(https://a.io/b,)"
                 == [ Links.External "https://a.io/b" ]
+
+        firstWins =
+            List.map Links.linkKey (Links.resolve "" [ ( "A", "u-a" ), ( "B", "u-b" ) ] "A B A https://x.io B")
+                == [ "i:u-a", "i:u-b", "e:https://x.io" ]
     in
-    noSelf && urlPunct
+    noSelf && urlPunct && firstWins
 
 
 -- The unit page's data path: a uid that exists loads with source and qualified
@@ -3351,7 +3355,7 @@ laterChecks results =
                 Task.succeed
                     (results
                         ++ [ ( "links resolve internal and external", linksResolve )
-                        , ( "link tokens: no self-links, urls strip punctuation", linksSubstring )
+                        , ( "link tokens: no self-links, urls strip punctuation, first occurrence wins", linksSubstring )
                         ]
                     )
             )
