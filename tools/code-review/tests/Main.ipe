@@ -2132,74 +2132,79 @@ oversizedSourceRefused =
 
 -- ── decision drain loop ─────────────────────────────────────────────────
 --
--- A decided unit leaves the index queue: recordDrain writes the drain cursor
--- (idempotent on the same pair), drainUnit deletes the consumed change_queue
--- row, and a subsequent page load no longer lists the unit.
+-- A decided unit leaves the index queue: the decision returns the attested
+-- pair, recordDrain writes the drain cursor under it (idempotent on the same
+-- pair), drainUnit deletes the consumed change_queue row, and a subsequent
+-- page load no longer lists the unit.
 drainFlow : Task.Task Error Bool
 drainFlow =
+    drainAfter "ipe-index-drain" noChange
+        |> Task.map (\o -> o.drained == 1 && o.cursorRows == 1 && not o.stillQueued && o.total == 2)
+
+
+-- R11: the unit is re-queued with a new hash between the decision and the
+-- drain. The drain deletes only the row of the attested hash, so the new
+-- change stays queued. Red if `drainUnit` matches on uid alone.
+drainKeepsRequeuedChange : Task.Task Error Bool
+drainKeepsRequeuedChange =
+    drainAfter "ipe-index-drain-requeued" requeueB
+        |> Task.map (\o -> o.drained == 0 && o.stillQueued && o.total == 3)
+
+
+requeueB : Scratch -> Task.Task Error ()
+requeueB at =
+    execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString "sha256:other", SqlString "u-b" ]
+
+
+-- Seeds the bridge fixture, decides `u-b`, runs `mutate`, then records the
+-- drain twice and drains under the decision's attested pair.
+drainAfter : String -> (Scratch -> Task.Task Error ()) -> Task.Task Error { drained : Int, cursorRows : Int, stillQueued : Bool, total : Int }
+drainAfter name mutate =
     let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b5-drain"
-
-        repo =
-            base ++ "/repo"
-
-        indexDb =
-            base ++ "/index.db"
-
-        reviewDb =
-            base ++ "/review.db"
+        at =
+            scratchAt name
     in
-    Task.fromResult (Path.fromString indexDb)
-        |> Task.andThen File.remove
-        |> Task.onError (\_ -> Task.succeed ())
-        |> Task.andThen (\_ -> Task.fromResult (Path.fromString base) |> Task.andThen File.mkdirAll)
-        |> Task.andThen (\_ -> Task.fromResult (Path.fromString (repo ++ "/src")) |> Task.andThen File.mkdirAll)
-        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/D.ipe") fixtureMainIpe)
-        |> Task.andThen (\_ -> seedDrainDb indexDb)
-        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_DB" indexDb)
-        |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" repo)
-        |> Task.andThen (\_ -> loadFirstPage)
-        |> Task.map (\r -> List.length r.units == 1 && r.total == 1)
-        |> Task.andThen
-            (\queued ->
-                if not queued then
-                    Task.succeed False
+    do
+        removeFileIfAny at.indexDb
+        removeFileIfAny at.reviewDb
+        seedIndex at.indexDb at.repo
+        r <- loadFirstPage
+        db <- openReviewAt at.reviewDb
+        migrated <- LibDb.migrate db
+        decided <- decideUnit db (List.find (\u -> u.uid == "u-b") r.units)
+        mutate at
+        outcome <- drainDecided db decided
+        cleanupIndex at.indexDb at.repo
+        removeFileIfAny at.reviewDb
+        Task.succeed outcome
 
-                else
-                    openReviewAt reviewDb
-                        |> Task.andThen (\db -> LibDb.migrate db |> Task.map (\_ -> db))
-                        |> Task.andThen
-                            (\db ->
-                                LibDb.recordDrain db "u-d" "hashD"
-                                    |> Task.andThen (\_ -> LibDb.recordDrain db "u-d" "hashD")
-                                    |> Task.andThen (\_ -> countDrainRows db "u-d" "hashD")
-                                    |> Task.map (\n -> n == 1)
-                            )
-            )
-        |> Task.andThen
-            (\drained ->
-                if not drained then
-                    Task.succeed False
 
-                else
-                    Index.drainUnit "u-d"
-                        |> Task.andThen (\_ -> loadFirstPage)
-                        |> Task.map (\r -> List.length r.units == 0 && r.total == 0)
-            )
-        |> Task.andThen
-            (\ok ->
-                Task.sequence
-                    [ removeFileIfAny indexDb
-                    , removeFileIfAny (indexDb ++ "-wal")
-                    , removeFileIfAny (indexDb ++ "-shm")
-                    , removeFileIfAny (repo ++ "/src/D.ipe")
-                    , removeFileIfAny reviewDb
-                    , removeFileIfAny (reviewDb ++ "-wal")
-                    , removeFileIfAny (reviewDb ++ "-shm")
-                    ]
-                    |> Task.map (\_ -> ok)
-            )
+decideUnit : Db -> Maybe Index.Unit -> Task.Task Error ( Index.Attested, Int )
+decideUnit db found =
+    case found of
+        Just unit ->
+            Queue.decide db unit Approved
+
+        Nothing ->
+            Task.fail (Error.conflict "fixture unit not loaded")
+
+
+drainDecided : Db -> ( Index.Attested, Int ) -> Task.Task Error { drained : Int, cursorRows : Int, stillQueued : Bool, total : Int }
+drainDecided db decided =
+    case decided of
+        ( attested, _ ) ->
+            do
+                first <- LibDb.recordDrain db (Index.attestedUid attested) (Index.attestedHash attested)
+                second <- LibDb.recordDrain db (Index.attestedUid attested) (Index.attestedHash attested)
+                cursorRows <- countDrainRows db (Index.attestedUid attested) (Index.attestedHash attested)
+                drained <- Index.drainUnit attested
+                after <- loadFirstPage
+                Task.succeed
+                    { drained = drained
+                    , cursorRows = cursorRows
+                    , stillQueued = List.any (\u -> u.uid == "u-b") after.units
+                    , total = after.total
+                    }
 
 
 countDrainRows : Db -> String -> String -> Task.Task Error Int
@@ -2211,40 +2216,6 @@ countDrainRows db uid bodyHash =
             (Sql.eq (Sql.column "body_hash") (Sql.string bodyHash))
         )
         |> Task.map List.length
-
-
-seedDrainDb : String -> Task.Task Error ()
-seedDrainDb indexDb =
-    Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
-        |> Task.andThen
-            (\conn ->
-                Db.exec conn unitsDdl []
-                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
-                    |> Task.andThen
-                        (\_ ->
-                            Db.exec conn
-                                "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
-                                [ SqlString "u-d"
-                                , SqlString "ipe:src/D.ipe"
-                                , SqlString "module"
-                                , SqlString "D"
-                                , SqlString "D"
-                                , SqlInt 1
-                                , SqlInt 2
-                                , SqlString "user"
-                                , SqlNull (SqlString "")
-                                , SqlString "hashD"
-                                , SqlString "shaD"
-                                ]
-                        )
-                    |> Task.andThen
-                        (\_ ->
-                            Db.exec conn
-                                "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
-                                [ SqlString "u-d", SqlString "new", SqlNull (SqlString ""), SqlNull (SqlString ""), SqlString "shaD", SqlInt 1 ]
-                        )
-            )
-        |> Task.map (\_ -> ())
 
 
 -- ── review history ──────────────────────────────────────────────────────
@@ -2915,6 +2886,11 @@ main =
             (\results ->
                 drainFlow
                     |> Task.map (\ok -> results ++ [ ( "decided unit drained from queue", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                drainKeepsRequeuedChange
+                    |> Task.map (\ok -> results ++ [ ( "re-queued change survives the drain", ok ) ])
             )
         |> Task.andThen
             (\results ->

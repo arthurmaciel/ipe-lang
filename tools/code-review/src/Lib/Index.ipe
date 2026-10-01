@@ -344,16 +344,20 @@ singleInt what rows =
 
 
 -- The review app consumes and clears explicitly: after a unit is decided,
--- its change_queue row is deleted so it stops appearing in queue pages. The
--- row comes back only when the index re-queues the unit after it changes
--- again (per-uid PRIMARY KEY in change_queue — a fresh change, a fresh
--- review).
-drainUnit : String -> Task.Task Error Int
-drainUnit uid =
+-- its change_queue row is deleted so it stops appearing in queue pages. Only
+-- the row queued for the attested hash is deleted: a re-index that re-queued
+-- the unit under new content keeps its row, so that change is still reviewed.
+drainUnit : Attested -> Task.Task Error Int
+drainUnit attested =
     do
         settings <- Settings.indexSettings
         conn <- Db.open "sqlite" (Settings.indexWriteUrl settings.db)
-        Db.deleteWhere conn "change_queue" (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
+        Db.deleteWhere conn
+            "change_queue"
+            (Sql.and
+                (Sql.eq (Sql.column "uid") (Sql.param (SqlString (attestedUid attested))))
+                (Sql.eq (Sql.column "new_hash") (Sql.param (SqlString (attestedHash attested))))
+            )
 
 
 -- The ipe-index `units` table modelled as a typed store over its explicit

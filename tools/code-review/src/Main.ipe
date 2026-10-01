@@ -126,7 +126,7 @@ type Msg
     | RefuseDraft String
     | RefuseCancel
     | RefuseSubmit String
-    | DecisionSaved String (Result Error Int)
+    | DecisionSaved String (Result Error ( Index.Attested, Int ))
     | ShowQueue
     | ShowHistory
     | HistoryLoaded (Result Error (List HistoryRow))
@@ -167,8 +167,8 @@ update msg model =
 
         DecisionSaved uid result ->
             case result of
-                Ok _ ->
-                    ( { model | decidedThisPass = model.decidedThisPass + 1, decisionError = Nothing }, drainAndReload model uid )
+                Ok ( attested, _ ) ->
+                    ( { model | decidedThisPass = model.decidedThisPass + 1, decisionError = Nothing }, drainAndReload model attested )
 
                 Err e ->
                     ( { model | decisionError = Just e }, Cmd.none )
@@ -295,14 +295,16 @@ clampIndex i len =
     max 0 (min i (len - 1))
 
 
+-- Every decision, from a button or a key, goes through `Queue.decide`, which
+-- re-proves the shown source before writing.
 saveDecision : Model -> String -> LibDb.Decision -> Cmd Msg
 saveDecision model uid decision =
     Cmd.perform
         (do
             db <- LibDb.open
-            case bodyHashOf uid (queueList model) of
-                Just bodyHash ->
-                    LibDb.insertDecision db uid bodyHash decision
+            case List.find (\q -> q.unit.uid == uid) (queueList model) of
+                Just q ->
+                    Queue.decide db q.unit decision
 
                 Nothing ->
                     Task.fail (Error.conflict "unit is no longer in the queue")
@@ -312,33 +314,19 @@ saveDecision model uid decision =
 
 -- The drain loop: the decision is already saved (DecisionSaved Ok), so the
 -- consumed queue entry leaves the index queue and the drain cursor records
--- the hand-off. A failure anywhere fails closed with the queue unchanged —
--- the unit stays visible with its badge and the next click retries.
-drainAndReload : Model -> String -> Cmd Msg
-drainAndReload model uid =
-    case bodyHashOf uid (queueList model) of
-        Nothing ->
-            Cmd.none
-
-        Just bodyHash ->
-            Cmd.perform
-                (do
-                    db <- LibDb.open
-                    LibDb.recordDrain db uid bodyHash
-                    Index.drainUnit uid
-                    Queue.loadPage model.queueCursor
-                )
-                PendingLoaded
-
-
-bodyHashOf : String -> List Queue.QueuedUnit -> Maybe String
-bodyHashOf uid qs =
-    case List.find (\q -> q.unit.uid == uid) qs of
-        Just q ->
-            Just (Index.storedHash q.unit.attested)
-
-        Nothing ->
-            Nothing
+-- the hand-off, both under the attested hash the decision was written with.
+-- A failure anywhere fails closed with the queue unchanged — the unit stays
+-- visible with its badge and the next click retries.
+drainAndReload : Model -> Index.Attested -> Cmd Msg
+drainAndReload model attested =
+    Cmd.perform
+        (do
+            db <- LibDb.open
+            LibDb.recordDrain db (Index.attestedUid attested) (Index.attestedHash attested)
+            Index.drainUnit attested
+            Queue.loadPage model.queueCursor
+        )
+        PendingLoaded
 
 
 -- Review history: every decided row, newest first, with the unit's qualified
