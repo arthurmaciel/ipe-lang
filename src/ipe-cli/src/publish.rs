@@ -31,12 +31,15 @@
 //! closed with a typed refusal rather than push a commit that would be rejected
 //! at merge (unsigned, or committed under a non-verifiable placeholder).
 
+use std::ffi::OsString;
 use std::fmt::Write as _;
-use std::io::Read as _;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
+use crate::remote_ingest::{
+    self, ByteBudget, CappedReadError, Captured, Curl, Git, IngestRefusal, LocalSource, RunError,
+    Transfer,
+};
 use crate::scratch::{LeafName, ScratchDir, ScratchFile};
 
 use crate::CliError;
@@ -712,13 +715,16 @@ impl CommitIdentity {
 /// call reuses the same secret-safe curl path as [`github_api_post`] (token on
 /// stdin, response to an `O_EXCL` scratch file read back through the retained
 /// handle). Any missing token, transport failure, non-200 status, or malformed
-/// JSON collapses to the one typed refusal — never a placeholder identity.
-fn resolve_publisher_identity() -> Result<AuthenticatedPublisher, Refusal> {
-    let token = publish_token().ok_or(Refusal::UnresolvableIdentity)?;
+/// JSON collapses to the one typed refusal — never a placeholder identity. A
+/// response over its budget, or a curl whose output pipe stays held, is that
+/// typed error instead.
+fn resolve_publisher_identity() -> Result<AuthenticatedPublisher, CliError> {
+    let unresolvable = || refuse(Refusal::UnresolvableIdentity);
+    let token = publish_token().ok_or_else(unresolvable)?;
     let json = github_api_get_json("https://api.github.com/user", &token)
-        .ok_or(Refusal::UnresolvableIdentity)?;
-    AuthenticatedPublisher::from_authenticated_user_response(&json)
-        .ok_or(Refusal::UnresolvableIdentity)
+        .map_err(|e| e.into_cli(unresolvable))?
+        .ok_or_else(unresolvable)?;
+    AuthenticatedPublisher::from_authenticated_user_response(&json).ok_or_else(unresolvable)
 }
 
 /// What a real (non-`--dry-run`) publish proves before the gate: the
@@ -740,19 +746,12 @@ struct PublishCredentials {
 /// [`Refusal::UnresolvableIdentity`] when `GET /user` cannot prove the account.
 fn resolve_publish_credentials() -> Result<PublishCredentials, CliError> {
     let signing_key = SigningKey::configured().ok_or_else(|| refuse(Refusal::UnsignedCommit))?;
-    let identity = resolve_publisher_identity().map_err(refuse)?;
+    let identity = resolve_publisher_identity()?;
     Ok(PublishCredentials {
         signing_key,
         identity,
     })
 }
-
-/// Upper bound on a GitHub API response body read back from a scratch file.
-///
-/// Passed to curl as `--max-filesize` AND enforced again by [`read_capped`]:
-/// two independent stops on the same number, so a body past it is refused
-/// whether or not curl's own cap holds on a given curl build.
-const GITHUB_RESPONSE_BODY_CAP: u64 = 10 * 1024 * 1024;
 
 /// A validated 3-digit HTTP status in `100..=599`.
 ///
@@ -814,38 +813,46 @@ enum StatusError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CurlExit(Option<i32>);
 
-/// Why a bounded body read failed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BodyError {
-    /// The body exceeded [`GITHUB_RESPONSE_BODY_CAP`].
-    TooLarge,
-    /// The scratch file could not be rewound or read.
-    Io,
-}
-
-/// A GitHub API call that ran to completion.
+/// A GitHub API call that ran to completion within [`remote_ingest::GITHUB_API`].
 #[derive(Debug)]
 enum CurlOutcome {
     /// Curl exited 0 and wrote a parseable status; the body is read back but
     /// not yet interpreted — the caller classifies it.
     Reply { status: HttpStatus, body: Vec<u8> },
-    /// Curl itself did not complete the request (DNS, TLS, timeout, connection
-    /// refused, `--max-filesize` exceeded, …). Carries curl's exit code only —
-    /// no body, no argv, no token.
+    /// Curl itself did not complete the request (DNS, TLS, connection refused,
+    /// …). Carries curl's exit code only — no body, no argv, no token.
     TransportFailed(CurlExit),
 }
 
 /// Everything else that can keep [`run_github_curl`] from returning a
-/// [`CurlOutcome`]: curl could not even be spawned, its status text did not
-/// parse, or its body could not be read back within the cap.
+/// [`CurlOutcome`].
 #[derive(Debug)]
 enum CurlRunError {
-    /// The scratch file, or the `curl` child process itself, could not be created.
-    CouldNotRun(std::io::Error),
+    /// The response scratch file could not be created.
+    Scratch(std::io::Error),
+    /// The `curl` child could not be run or waited on.
+    CouldNotRun(RunError),
+    /// The call crossed [`remote_ingest::GITHUB_API`]: its deadline, or its
+    /// response ceiling at curl's own `--max-filesize`, the scratch watcher, or
+    /// the bounded read-back.
+    Exceeded(IngestRefusal),
     /// Curl exited 0 but its `-w '%{http_code}'` text did not parse.
     Status(StatusError),
     /// Curl exited 0 but the response body could not be read back.
-    Body(BodyError),
+    Body,
+}
+
+impl CurlRunError {
+    /// The [`CliError`] for this failure; a failure with no typed error of its own is `other`.
+    fn into_cli(self, other: impl FnOnce() -> CliError) -> CliError {
+        match self {
+            Self::Exceeded(refusal) => CliError::RemoteIngestExceeded(refusal),
+            Self::CouldNotRun(RunError::PipeDrainTimeout(stream)) => {
+                CliError::ChildPipeHeld(stream)
+            }
+            Self::Scratch(_) | Self::CouldNotRun(_) | Self::Status(_) | Self::Body => other(),
+        }
+    }
 }
 
 /// One GitHub API call shape: `GET`, or `POST` with a JSON body.
@@ -854,146 +861,130 @@ enum CurlMethod<'a> {
     Post(&'a str),
 }
 
-/// Build the curl argv for one GitHub API call — the single place either call
-/// shape is constructed, so [`github_api_get_json`], [`github_api_post`], and
-/// their test cannot drift apart.
+/// Build the curl arguments for one GitHub API call — the single place either
+/// call shape is constructed, so [`github_api_get_json`], [`github_api_post`],
+/// and their test cannot drift apart.
 ///
 /// Takes no token: the auth header travels on curl's stdin config, written by
-/// [`run_github_curl`] after spawn, so a token cannot reach this function and
-/// so cannot appear in the argv it builds — not by convention, but because
-/// there is no parameter to carry it through.
+/// [`run_github_curl`], so a token cannot reach this function and so cannot
+/// appear in the argv it builds — not by convention, but because there is no
+/// parameter to carry it through.
 ///
-/// `--max-time 60` bounds a stalled remote party; `--max-filesize` matches
-/// [`GITHUB_RESPONSE_BODY_CAP`], the same ceiling [`read_capped`] enforces
-/// again on the bytes actually read back. `--fail-with-body` is deliberately
-/// never added: the status is read through `-w`, not curl's own pass/fail exit
-/// mapping, so curl always writes the body for classification.
-fn github_curl_argv(method: &CurlMethod<'_>, url: &str, out_path: &str) -> Vec<String> {
-    let mut args = vec!["--silent".to_owned(), "--show-error".to_owned()];
+/// [`remote_ingest::curl_limit_args`] holds the call to
+/// [`remote_ingest::GITHUB_API`]: `--max-time` bounds a stalled remote party,
+/// `--max-filesize` the same response ceiling [`read_body`] enforces again on
+/// the bytes read back. `--fail-with-body` is deliberately never added: the
+/// status is read through `-w`, not curl's own pass/fail exit mapping, so curl
+/// always writes the body for classification.
+fn github_curl_argv(method: &CurlMethod<'_>, url: &str, out_path: &Path) -> Vec<OsString> {
+    let budget = &remote_ingest::GITHUB_API;
+    let mut args: Vec<OsString> = vec!["--silent".into(), "--show-error".into()];
     if let CurlMethod::Post(_) = method {
-        args.push("-X".to_owned());
-        args.push("POST".to_owned());
+        args.extend(["-X".into(), "POST".into()]);
     }
-    args.push("-H".to_owned());
-    args.push("Accept: application/vnd.github+json".to_owned());
-    args.push("-H".to_owned());
-    args.push("User-Agent: ipe-cli".to_owned());
-    // Token delivered via stdin config, never via argv.
-    args.push("--config".to_owned());
-    args.push("-".to_owned());
+    args.extend([
+        "-H".into(),
+        "Accept: application/vnd.github+json".into(),
+        "-H".into(),
+        "User-Agent: ipe-cli".into(),
+        // Token delivered via stdin config, never via argv.
+        "--config".into(),
+        "-".into(),
+    ]);
     if let CurlMethod::Post(body) = method {
-        args.push("-d".to_owned());
-        args.push((*body).to_owned());
+        args.extend(["-d".into(), (*body).into()]);
     }
-    args.push("-o".to_owned());
-    args.push(out_path.to_owned());
-    args.push("-w".to_owned());
-    args.push("%{http_code}".to_owned());
-    args.push("--max-time".to_owned());
-    args.push("60".to_owned());
-    args.push("--max-filesize".to_owned());
-    args.push(GITHUB_RESPONSE_BODY_CAP.to_string());
-    args.push(url.to_owned());
+    args.extend(["-o".into(), out_path.as_os_str().to_owned()]);
+    args.extend(["-w".into(), "%{http_code}".into()]);
+    args.extend(remote_ingest::curl_limit_args(budget.disk_bytes(), budget).map(OsString::from));
+    args.push(url.into());
     args
 }
 
 /// Read a GitHub response body back through the retained scratch handle,
 /// refusing past `cap` bytes.
 ///
-/// Reads `cap + 1` bytes through a bounded [`Read::take`] rather than buffering
-/// an unbounded body first: an oversized body is refused by construction, not
-/// detected after the fact. Defense in depth alongside curl's own
-/// `--max-filesize` — either enforcement point alone already refuses an
-/// oversized body.
+/// The read is bounded by construction ([`remote_ingest::read_capped`] buffers
+/// at most `cap + 1` bytes), so an oversized body is refused, never silently
+/// truncated. Defense in depth alongside curl's own `--max-filesize` and the
+/// scratch watcher — any one of them alone already refuses an oversized body.
 ///
 /// # Errors
-/// [`BodyError::TooLarge`] past `cap` bytes; [`BodyError::Io`] on a rewind or
-/// read failure.
-fn read_capped(scratch: &mut ScratchFile, cap: u64) -> Result<Vec<u8>, BodyError> {
-    scratch.rewind().map_err(|_| BodyError::Io)?;
-    let limit = cap.checked_add(1).ok_or(BodyError::TooLarge)?;
-    let mut buf = Vec::new();
-    (&scratch.file)
-        .take(limit)
-        .read_to_end(&mut buf)
-        .map_err(|_| BodyError::Io)?;
-    let len = u64::try_from(buf.len()).unwrap_or(u64::MAX);
-    if len > cap {
-        return Err(BodyError::TooLarge);
-    }
-    Ok(buf)
+/// [`CurlRunError::Exceeded`] past `cap`; [`CurlRunError::Body`] on a rewind
+/// or read failure.
+fn read_body(scratch: &mut ScratchFile, cap: ByteBudget) -> Result<Vec<u8>, CurlRunError> {
+    scratch.rewind().map_err(|_| CurlRunError::Body)?;
+    remote_ingest::read_capped(&mut scratch.file, cap, remote_ingest::GITHUB_API.source()).map_err(
+        |e| match e {
+            CappedReadError::Io(_) => CurlRunError::Body,
+            CappedReadError::Exceeded(refusal) => CurlRunError::Exceeded(refusal),
+        },
+    )
 }
 
-/// Run one GitHub API curl call end to end — spawn, hand the token to stdin,
-/// wait, and read the reply back — the one place any of it happens for either
-/// call shape.
-///
-/// Checks curl's own exit status BEFORE the status text: a nonzero exit is a
-/// transport failure (DNS, TLS, timeout, `--max-filesize`, …), not a malformed
-/// status, and is refused as [`CurlOutcome::TransportFailed`] before the status
-/// text or body are ever looked at.
-///
-/// The token travels on curl's
-/// stdin config (`--config -`), never argv, so it cannot be read from
-/// `/proc/<pid>/cmdline`; the arriving [`crate::login::PublishToken`] alphabet
-/// excludes the quote/newline that could inject a further curl directive; and
-/// the response is read back through the retained scratch handle, not by
-/// re-opening the path, so the bytes parsed are the bytes curl wrote to that
-/// inode.
+/// Run one GitHub API curl call end to end under
+/// [`remote_ingest::GITHUB_API`] — spawn, hand the token to stdin, wait, and
+/// read the reply back — the one place any of it happens for either call
+/// shape.
 fn run_github_curl(
     method: &CurlMethod<'_>,
     url: &str,
     token: &crate::login::PublishToken,
     scratch_label: &str,
 ) -> Result<CurlOutcome, CurlRunError> {
-    run_curl_with_bin(Path::new("curl"), method, url, token, scratch_label)
+    run_curl_on(Curl::https(), method, url, token, scratch_label)
 }
 
-/// [`run_github_curl`]'s implementation, parameterized over the `curl`
-/// executable so a test can point it at a fake binary without touching the
-/// process environment (`std::env::set_var` is `unsafe` under edition 2024 and
-/// this workspace forbids `unsafe` outside its one sanctioned site). `curl_bin`
-/// containing no path separator still resolves through `PATH` exactly as
-/// `Command::new("curl")` always did; a test passes an absolute path instead,
-/// bypassing `PATH` lookup entirely.
-fn run_curl_with_bin(
-    curl_bin: &Path,
+/// [`run_github_curl`]'s implementation over a given [`Curl`], so a test can
+/// run a fake `curl` executable without touching the process environment.
+///
+/// Checks curl's own exit status BEFORE the status text: an exit at a
+/// [`remote_ingest::curl_limit_args`] limit is [`CurlRunError::Exceeded`], any
+/// other nonzero exit is a transport failure (DNS, TLS, …) refused as
+/// [`CurlOutcome::TransportFailed`] before the status text or body are ever
+/// looked at.
+///
+/// The token travels on curl's stdin config (`--config -`), never argv, so it
+/// cannot be read from `/proc/<pid>/cmdline`; the arriving
+/// [`crate::login::PublishToken`] alphabet excludes the quote/newline that
+/// could inject a further curl directive; and the response is read back
+/// through the retained scratch handle, not by re-opening the path, so the
+/// bytes parsed are the bytes curl wrote to that inode. The scratch file is
+/// watched while curl writes it, so a body whose length curl could not know in
+/// advance is still stopped at the ceiling.
+fn run_curl_on(
+    curl: Curl,
     method: &CurlMethod<'_>,
     url: &str,
     token: &crate::login::PublishToken,
     scratch_label: &str,
 ) -> Result<CurlOutcome, CurlRunError> {
-    let mut scratch = ScratchFile::create(scratch_label).map_err(CurlRunError::CouldNotRun)?;
-    let out_path = scratch.path().to_string_lossy().into_owned();
-    let argv = github_curl_argv(method, url, &out_path);
-
-    let mut child = Command::new(curl_bin)
-        .args(&argv)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(CurlRunError::CouldNotRun)?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = writeln!(
-            stdin,
-            r#"header = "Authorization: Bearer {}""#,
-            token.as_str()
-        );
+    let budget = &remote_ingest::GITHUB_API;
+    let mut scratch = ScratchFile::create(scratch_label).map_err(CurlRunError::Scratch)?;
+    let command = curl.args(github_curl_argv(method, url, scratch.path()));
+    let header = zeroize::Zeroizing::new(format!(
+        "header = \"Authorization: Bearer {}\"\n",
+        token.as_str()
+    ));
+    let output = command
+        .run(
+            Some(header.as_bytes()),
+            Some(scratch.path()),
+            &Transfer::begin(*budget),
+        )
+        .map_err(|e| match e {
+            RunError::Exceeded(refusal) => CurlRunError::Exceeded(refusal),
+            other => CurlRunError::CouldNotRun(other),
+        })?;
+    if let Some(refusal) = remote_ingest::curl_refusal(output.status, budget.disk_bytes(), budget) {
+        return Err(CurlRunError::Exceeded(refusal));
     }
-
-    let output = child
-        .wait_with_output()
-        .map_err(CurlRunError::CouldNotRun)?;
-
     if !output.status.success() {
         return Ok(CurlOutcome::TransportFailed(CurlExit(output.status.code())));
     }
-
     let status_text = String::from_utf8_lossy(&output.stdout);
     let status = HttpStatus::parse(&status_text).map_err(CurlRunError::Status)?;
-    let body = read_capped(&mut scratch, GITHUB_RESPONSE_BODY_CAP).map_err(CurlRunError::Body)?;
+    let body = read_body(&mut scratch, budget.disk_bytes())?;
     Ok(CurlOutcome::Reply { status, body })
 }
 
@@ -1017,16 +1008,6 @@ fn status_error_message(op: &str, err: StatusError) -> String {
     })
 }
 
-/// Render a [`BodyError`] into the user-facing message for `op`.
-fn body_error_message(op: &str, err: BodyError) -> String {
-    String::from(match err {
-        BodyError::TooLarge => {
-            text::msg::publish_http_body_too_large(&op, &GITHUB_RESPONSE_BODY_CAP)
-        }
-        BodyError::Io => text::msg::publish_http_body_io(&op),
-    })
-}
-
 /// Render a curl transport failure into the user-facing message for `op`. The
 /// message carries curl's exit status only — never the argv or the token,
 /// neither of which this function has access to.
@@ -1036,6 +1017,19 @@ fn transport_failed_message(op: &str, exit: CurlExit) -> String {
         &op,
         &crate::style::TerminalSafe::sanitize(&detail),
     ))
+}
+
+/// Render a [`CurlRunError`] into the user-facing message for `op`.
+fn curl_run_error_message(op: &str, err: CurlRunError) -> String {
+    match err {
+        CurlRunError::Scratch(e) | CurlRunError::CouldNotRun(RunError::Spawn(e)) => {
+            format!("could not run `curl` for {op}: {e}")
+        }
+        CurlRunError::CouldNotRun(other) => other.to_string(),
+        CurlRunError::Exceeded(refusal) => refusal.to_string(),
+        CurlRunError::Status(err) => status_error_message(op, err),
+        CurlRunError::Body => String::from(text::msg::publish_http_body_io(&op)),
+    }
 }
 
 /// The most `errors[]` entries [`pr_already_exists_marker`] walks looking for
@@ -1098,16 +1092,26 @@ fn classify_pr_reply(status: HttpStatus, json: &serde_json::Value) -> PrResult {
 }
 
 /// `GET` a JSON resource from the GitHub API with the bearer token, returning the
-/// parsed body only on an HTTP 200. `None` on any transport failure, non-200
-/// status, or unparseable body — the caller turns that into a fail-closed
+/// parsed body only on an HTTP 200.
+///
+/// `None` on a transport failure, a non-200
+/// status, or an unparseable body — the caller turns that into a fail-closed
 /// refusal.
-fn github_api_get_json(url: &str, token: &crate::login::PublishToken) -> Option<serde_json::Value> {
-    match run_github_curl(&CurlMethod::Get, url, token, "ipe-publish-user").ok()? {
-        CurlOutcome::Reply { status, body } if status.get() == 200 => {
-            serde_json::from_slice(&body).ok()
-        }
-        CurlOutcome::Reply { .. } | CurlOutcome::TransportFailed(_) => None,
-    }
+///
+/// # Errors
+/// A [`CurlRunError`] when the call produced no [`CurlOutcome`].
+fn github_api_get_json(
+    url: &str,
+    token: &crate::login::PublishToken,
+) -> Result<Option<serde_json::Value>, CurlRunError> {
+    Ok(
+        match run_github_curl(&CurlMethod::Get, url, token, "ipe-publish-user")? {
+            CurlOutcome::Reply { status, body } if status.get() == 200 => {
+                serde_json::from_slice(&body).ok()
+            }
+            CurlOutcome::Reply { .. } | CurlOutcome::TransportFailed(_) => None,
+        },
+    )
 }
 
 /// Open the index PR the spec's default way: push the entry to the author's fork
@@ -1143,12 +1147,14 @@ fn open_pr(
 
     // Shallow-clone the fork — it carries the index's `main` history, which the
     // branch must descend from for the compare page to work.
-    if let Err(git) = run_git_step(
-        scratch.path(),
-        &["clone", "--quiet", "--depth", "1", &fork_url, index_name],
-    ) {
-        return Err(clone_failed(&fork_url, &git));
-    }
+    // The clone is watched against the index-clone ceilings while git writes it.
+    git_step(
+        Git::user(scratch.path())
+            .args(["clone", "--quiet", "--depth", "1", "--"])
+            .args([fork_url.as_str(), index_name])
+            .run_detached(Some(&clone), &Transfer::begin(remote_ingest::INDEX_CLONE)),
+    )
+    .map_err(|failure| failure.into_cli(|git| clone_failed(&fork_url, git)))?;
 
     // Write the entry on a fresh branch and commit it. `-c user.*` supplies an
     // identity so the commit succeeds even where git has none configured, and
@@ -1160,11 +1166,17 @@ fn open_pr(
     }
     std::fs::write(&entry_path, entry_toml).map_err(|e| scratch_io(&e))?;
 
+    // Every step shares one deadline, so the sequence as a whole is held to it.
+    let transfer = Transfer::begin(remote_ingest::INDEX_PUSH);
     for step in commit_and_push_steps(plan, &credentials.signing_key, &identity) {
-        let refs: Vec<&str> = step.iter().map(String::as_str).collect();
-        if let Err(git) = run_git_step(&clone, &refs) {
-            return Err(push_failed(&fork_url, plan, fork_owner, &git));
-        }
+        let git = Git::user(&clone).args(&step.args);
+        let result = match step.reach {
+            StepReach::Local => git.run_attached(&transfer),
+            StepReach::Remote => git.run_detached(None, &transfer),
+        };
+        git_step(result).map_err(|failure| {
+            failure.into_cli(|git| push_failed(&fork_url, plan, fork_owner, git))
+        })?;
     }
 
     // The branch is pushed. Open the PR headlessly when a token is available
@@ -1202,7 +1214,7 @@ fn commit_and_push_steps(
     plan: &PrPlan,
     signing_key: &SigningKey,
     identity: &CommitIdentity,
-) -> Vec<Vec<String>> {
+) -> Vec<GitStep> {
     let owned = |args: &[&str]| {
         args.iter()
             .map(|s| (*s).to_owned())
@@ -1216,11 +1228,40 @@ fn commit_and_push_steps(
     commit.extend(owned(&["--quiet", "-m", &plan.title]));
 
     vec![
-        owned(&["checkout", "--quiet", "-b", &plan.branch]),
-        owned(&["add", "--", &plan.entry_file]),
-        commit,
-        owned(&["push", "--quiet", "-u", "origin", &plan.branch]),
+        GitStep::local(owned(&["checkout", "--quiet", "-b", &plan.branch])),
+        GitStep::local(owned(&["add", "--", &plan.entry_file])),
+        GitStep::local(commit),
+        GitStep {
+            reach: StepReach::Remote,
+            args: owned(&["push", "--quiet", "-u", "origin", &plan.branch]),
+        },
     ]
+}
+
+/// Whether a publish `git` step works only on the local clone or reaches the remote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepReach {
+    /// Local work; it keeps the terminal, so the signing key can ask for its passphrase.
+    Local,
+    /// Network work; it runs in its own process group, so a stop reaches every process it started.
+    Remote,
+}
+
+/// One publish `git` invocation and how far it reaches.
+#[derive(Debug)]
+struct GitStep {
+    reach: StepReach,
+    args: Vec<String>,
+}
+
+impl GitStep {
+    /// A step that works only on the local clone.
+    const fn local(args: Vec<String>) -> Self {
+        Self {
+            reach: StepReach::Local,
+            args,
+        }
+    }
 }
 
 /// The token for the headless PR-open path: `GITHUB_TOKEN` (CI) wins, else the
@@ -1290,7 +1331,8 @@ fn submit_pr_via_api(plan: &PrPlan, fork_owner: &str, token: &crate::login::Publ
 ///
 /// The HTTP status drives the result — not body-field presence — so the outcome
 /// is a typed [`PrResult`] parsed once, by [`classify_pr_reply`], at the
-/// network boundary.
+/// network boundary. The call runs under [`remote_ingest::GITHUB_API`]; an
+/// over-budget response is a [`PrResult::Failed`] naming the ceiling.
 fn github_api_post(
     url: &str,
     token: &crate::login::PublishToken,
@@ -1305,11 +1347,7 @@ fn github_api_post(
         Ok(CurlOutcome::TransportFailed(exit)) => {
             PrResult::Failed(transport_failed_message("POST pulls", exit))
         }
-        Err(CurlRunError::CouldNotRun(e)) => {
-            PrResult::Failed(format!("could not run `curl` (needed to open the PR): {e}"))
-        }
-        Err(CurlRunError::Status(err)) => PrResult::Failed(status_error_message("POST pulls", err)),
-        Err(CurlRunError::Body(err)) => PrResult::Failed(body_error_message("POST pulls", err)),
+        Err(err) => PrResult::Failed(curl_run_error_message("POST pulls", err)),
     }
 }
 
@@ -1319,18 +1357,42 @@ fn index_repo_name(index_repo: &str) -> &str {
     index_repo.rsplit('/').next().unwrap_or(index_repo)
 }
 
-/// Run one `git` step in `dir`; on a non-zero exit, return git's stderr as the
-/// error string so the caller can surface the real cause.
-fn run_git_step(dir: &Path, args: &[&str]) -> Result<(), String> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .map_err(|e| format!("could not run `git`: {e}"))?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+/// Why one publish `git` step failed.
+#[derive(Debug)]
+enum GitStepFailure {
+    /// git could not run or exited non-zero; its stderr or the run error.
+    Git(String),
+    /// git crossed its ingest budget and was killed.
+    Exceeded(IngestRefusal),
+    /// git finished, but a process it started held an output pipe open and was stopped.
+    PipeHeld(remote_ingest::Stream),
+}
+
+impl GitStepFailure {
+    /// The [`CliError`] for this failure; a git failure is shaped by `on_git`.
+    fn into_cli(self, on_git: impl FnOnce(&str) -> CliError) -> CliError {
+        match self {
+            Self::Git(git) => on_git(&git),
+            Self::Exceeded(refusal) => CliError::RemoteIngestExceeded(refusal),
+            Self::PipeHeld(stream) => CliError::ChildPipeHeld(stream),
+        }
+    }
+}
+
+/// The outcome of one publish `git` step; on a non-zero exit, git's stderr so
+/// the caller can surface the real cause.
+fn git_step(result: Result<Captured, RunError>) -> Result<(), GitStepFailure> {
+    match result {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(out) => Err(GitStepFailure::Git(
+            String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        )),
+        Err(RunError::Exceeded(refusal)) => Err(GitStepFailure::Exceeded(refusal)),
+        Err(RunError::PipeDrainTimeout(stream)) => Err(GitStepFailure::PipeHeld(stream)),
+        Err(RunError::Spawn(e)) => Err(GitStepFailure::Git(format!("could not run `git`: {e}"))),
+        Err(other @ (RunError::Wait(_) | RunError::Measure(..))) => {
+            Err(GitStepFailure::Git(other.to_string()))
+        }
     }
 }
 
@@ -1538,13 +1600,19 @@ fn not_a_repo(root: &Path) -> CliError {
 
 /// Run `git <args>` in `root`, returning its stdout on success, `None` when git
 /// exits non-zero (the "no such remote / not a repo" signal the caller
-/// interprets), and a resolve error only when git cannot be spawned at all.
+/// interprets), and an error when git cannot run or crosses a query's ceilings.
 fn run_git_capture(root: &Path, args: &[&str]) -> Result<Option<String>, CliError> {
-    let output = Command::new("git")
+    let output = Git::user(root)
         .args(args)
-        .current_dir(root)
-        .output()
-        .map_err(|e| CliError::Resolve(crate::text::msg::publish_git_unavailable(&e)))?;
+        .query(LocalSource::GitQuery)
+        .map_err(|e| match e {
+            RunError::Spawn(e) | RunError::Wait(e) => {
+                CliError::Resolve(crate::text::msg::publish_git_unavailable(&e))
+            }
+            RunError::Measure(path, source) => CliError::Io { path, source },
+            RunError::Exceeded(refusal) => CliError::LocalLimitExceeded(refusal),
+            RunError::PipeDrainTimeout(stream) => CliError::ChildPipeHeld(stream),
+        })?;
     if output.status.success() {
         Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
     } else {
@@ -2151,16 +2219,26 @@ mod tests {
     /// drives the production builder and pins the absence as a refusal, not
     /// just a convention. It must also always carry the transport-safety
     /// flags: `--max-time` (a stalled remote party) and `--max-filesize` (an
-    /// oversized reply), matching [`GITHUB_RESPONSE_BODY_CAP`].
+    /// oversized reply), matching [`crate::remote_ingest::GITHUB_API`].
     #[test]
     fn token_not_in_curl_argv() {
         let token = "super-secret-token";
         let url = "https://api.github.com/repos/foo/bar/pulls";
         let body_str = r#"{"title":"t"}"#;
-        let tmp_path = "/tmp/fake-resp";
+        let tmp_path = Path::new("/tmp/fake-resp");
 
-        let get_args = github_curl_argv(&CurlMethod::Get, url, tmp_path);
-        let post_args = github_curl_argv(&CurlMethod::Post(body_str), url, tmp_path);
+        let as_text = |args: Vec<OsString>| -> Vec<String> {
+            args.iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        let get_args = as_text(github_curl_argv(&CurlMethod::Get, url, tmp_path));
+        let post_args = as_text(github_curl_argv(&CurlMethod::Post(body_str), url, tmp_path));
+        // The response is held to the GitHub API budget by curl's own limits.
+        let limits = crate::remote_ingest::curl_limit_args(
+            crate::remote_ingest::GITHUB_API.disk_bytes(),
+            &crate::remote_ingest::GITHUB_API,
+        );
 
         for args in [&get_args, &post_args] {
             for arg in args {
@@ -2181,8 +2259,15 @@ mod tests {
                 args.iter().any(|a| a == "--max-filesize"),
                 "curl argv must bound an oversized reply with --max-filesize: {args:?}"
             );
+            assert!(
+                args.windows(limits.len()).any(|w| w == limits),
+                "curl argv must carry the ingest limits: {args:?}"
+            );
+            assert!(
+                args.iter().any(|a| a == "--config"),
+                "the token is read from stdin config"
+            );
         }
-
         // The stdin config line that WOULD carry the token — verify format.
         let config_line = format!("header = \"Authorization: Bearer {token}\"");
         assert!(config_line.contains(token));
@@ -2234,8 +2319,8 @@ mod tests {
         std::fs::set_permissions(&fake_curl, perms).expect("chmod fake curl");
 
         let token = crate::login::PublishToken::parse("testtoken123").expect("token");
-        let result = run_curl_with_bin(
-            &fake_curl,
+        let result = run_curl_on(
+            Curl::https_at(&fake_curl),
             &CurlMethod::Get,
             "https://api.github.com/user",
             &token,
@@ -2291,8 +2376,8 @@ mod tests {
             std::fs::set_permissions(&fake_curl, perms).expect("chmod fake curl");
 
             let token = crate::login::PublishToken::parse("testtoken123").expect("token");
-            let result = run_curl_with_bin(
-                &fake_curl,
+            let result = run_curl_on(
+                Curl::https_at(&fake_curl),
                 &CurlMethod::Get,
                 "https://api.github.com/user",
                 &token,
@@ -2306,20 +2391,31 @@ mod tests {
         }
     }
 
-    /// A response body past the shared cap is a typed refusal, never a
+    /// A response body past the cap is a typed ingest refusal, never a
     /// silently truncated read.
     #[test]
     fn oversized_body_is_refused_not_truncated() {
+        use std::io::Write as _;
+        let cap = ByteBudget::for_test(8).expect("a nonzero cap");
         let mut scratch = ScratchFile::create("ipe-test-oversized-body").expect("scratch file");
         scratch
             .file
             .write_all(&[b'x'; 16])
             .expect("write oversized body");
-        assert_eq!(read_capped(&mut scratch, 8), Err(BodyError::TooLarge));
+        let oversized = read_body(&mut scratch, cap);
+        assert!(
+            matches!(&oversized, Err(CurlRunError::Exceeded(refusal))
+                if refusal.limit == crate::remote_ingest::IngestLimit::Bytes(8)),
+            "a body past the cap must be refused, got {oversized:?}"
+        );
 
         let mut small = ScratchFile::create("ipe-test-small-body").expect("scratch file");
         small.file.write_all(b"12345").expect("write small body");
-        assert_eq!(read_capped(&mut small, 8), Ok(b"12345".to_vec()));
+        let within = read_body(&mut small, cap);
+        assert!(
+            matches!(&within, Ok(body) if body == b"12345"),
+            "a body within the cap is read whole, got {within:?}"
+        );
     }
 
     /// HTTP 201 with `html_url` → `PrResult::Created`.
@@ -2414,13 +2510,8 @@ mod tests {
         let repo = sd.path().to_path_buf();
         std::mem::forget(sd);
         let git = |args: &[&str]| {
-            Command::new("git")
+            crate::remote_ingest::fixture_git(&repo)
                 .args(args)
-                .current_dir(&repo)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@t")
                 .output()
                 .expect("git")
                 .status
@@ -2439,7 +2530,7 @@ mod tests {
             p
         };
         assert!(
-            Command::new("git")
+            crate::remote_ingest::fixture_git(&repo)
                 .args(["init", "--bare", "--quiet"])
                 .arg(&remote)
                 .output()
@@ -2458,9 +2549,8 @@ mod tests {
     }
 
     fn head_sha(repo: &Path) -> String {
-        let out = Command::new("git")
+        let out = crate::remote_ingest::fixture_git(repo)
             .args(["rev-parse", "HEAD"])
-            .current_dir(repo)
             .output()
             .expect("git rev-parse HEAD");
         String::from_utf8_lossy(&out.stdout).trim().to_owned()
@@ -2496,9 +2586,8 @@ mod tests {
         let repo = make_git_repo("pub-rev-override", "module Lib\n");
         // Create a branch "feat" pointing at the same commit.
         assert!(
-            Command::new("git")
+            crate::remote_ingest::fixture_git(&repo)
                 .args(["checkout", "-b", "feat"])
-                .current_dir(&repo)
                 .output()
                 .expect("git checkout")
                 .status
@@ -2627,10 +2716,18 @@ mod tests {
 
         let identity = sample_identity();
         let steps = commit_and_push_steps(&sample_plan(), &key, &identity);
-        let commit = steps
+        let commit_step = steps
             .iter()
-            .find(|s| s.iter().any(|a| a == "commit"))
+            .find(|s| s.args.iter().any(|a| a == "commit"))
             .expect("a commit step exists");
+        // The commit keeps the terminal so the key can prompt; only the push reaches the remote.
+        assert_eq!(commit_step.reach, StepReach::Local);
+        assert!(
+            steps.iter().all(|s| (s.reach == StepReach::Remote)
+                == (s.args.first().map(String::as_str) == Some("push"))),
+            "{steps:?}"
+        );
+        let commit = &commit_step.args;
 
         assert!(
             commit.iter().any(|a| a == "-S"),

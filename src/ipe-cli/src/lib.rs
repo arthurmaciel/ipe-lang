@@ -65,6 +65,7 @@ pub mod publish;
 pub mod published_version;
 pub mod publisher;
 pub mod registry;
+pub mod remote_ingest;
 pub mod resolve;
 pub mod run_sandbox;
 pub mod runtime_embed;

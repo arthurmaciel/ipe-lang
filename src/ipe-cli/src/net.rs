@@ -18,6 +18,9 @@ pub fn get(url: &str) -> Option<String> {
 /// GET `url`, returning the response body as a string, requesting `accept` as
 /// the `Accept` header.
 ///
+/// The body is read through [`crate::remote_ingest::read_capped`] at
+/// [`crate::remote_ingest::JSON_RESPONSE_MAX_BYTES`].
+///
 /// `None` on any failure (DNS, connect, TLS, non-2xx, timeout, oversized body):
 /// a network error is never fatal here — the caller decides how to degrade. The
 /// registry's static Pages read API serves `application/json`, so the registry
@@ -33,5 +36,11 @@ pub fn get_with_accept(url: &str, accept: &str) -> Option<String> {
         .set("Accept", accept)
         .call()
         .ok()?;
-    response.into_string().ok()
+    let body = crate::remote_ingest::read_capped(
+        response.into_reader(),
+        crate::remote_ingest::JSON_RESPONSE_MAX_BYTES,
+        crate::remote_ingest::IngestSource::HttpGet,
+    )
+    .ok()?;
+    String::from_utf8(body).ok()
 }
