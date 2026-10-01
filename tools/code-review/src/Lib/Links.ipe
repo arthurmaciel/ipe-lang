@@ -1,16 +1,20 @@
-module Lib.Links exposing (Link(..), linkKey, resolve)
+module Lib.Links exposing (Link(..), label, linkKey, resolve)
 
 import Ipe.List as List
 import Ipe.Maybe as Maybe
+import Ipe.Set as Set
 import Ipe.String as String
+import Lib.SafeText as SafeText exposing (SafeText)
 
 
 -- A link found in a unit's source, resolved against the index's unit table.
 -- Internal links jump to the /unit/<uid> page of the callee; external links
 -- open their URL. Resolution is purely lexical: identifier tokens are matched
--- against the qualified names of every indexed unit.
+-- against the qualified names of every indexed unit. An internal link's
+-- label is the matched token rendered once into `SafeText`; an external
+-- link keeps its raw URL for the `href` check, and `label` renders it.
 type Link
-    = Internal String String
+    = Internal SafeText String
     | External String
 
 
@@ -37,7 +41,7 @@ linkFor selfQualified units token =
     else
         case List.find (\( q, _ ) -> q == token) units of
             Just ( _, uid ) ->
-                Just (Internal token uid)
+                Just (Internal (SafeText.renderForeign token) uid)
 
             Nothing ->
                 Nothing
@@ -81,25 +85,34 @@ isPunct c =
     List.member c punctChars
 
 
--- First occurrence wins; ADTs have no structural equality, so dedup keys on
--- the link's payload via a string tag. Non-tail recursion is fine: a unit's
--- source holds at most a few hundred tokens.
+-- First occurrence wins: one left-to-right pass keeps a link only when its
+-- key is new. The seen set holds each link's comparable `linkKey`.
 dedup : List Link -> List Link
 dedup links =
-    case links of
-        [] ->
-            []
+    case List.foldl keepFirst ( Set.empty, [] ) links of
+        ( _, kept ) ->
+            List.reverse kept
 
-        link :: rest ->
-            let
-                tail =
-                    dedup rest
-            in
-            if List.member (linkKey link) (List.map linkKey tail) then
-                tail
 
-            else
-                link :: tail
+keepFirst : Link -> ( Set String, List Link ) -> ( Set String, List Link )
+keepFirst link ( seen, kept ) =
+    if Set.member (linkKey link) seen then
+        ( seen, kept )
+
+    else
+        ( Set.insert (linkKey link) seen, link :: kept )
+
+
+-- The text a link shows, never raw: an internal link's rendered name, an
+-- external link's URL with every control and bidi character escaped.
+label : Link -> SafeText
+label link =
+    case link of
+        Internal name _ ->
+            SafeText.concat [ SafeText.literal "→ ", name ]
+
+        External url ->
+            SafeText.concat [ SafeText.literal "↗ ", SafeText.renderForeign url ]
 
 
 linkKey : Link -> String
