@@ -9,7 +9,7 @@
 //! and to avoid shadowing the runtime's own `element` type names.
 
 use super::element::{
-    Attribute, Description, Element, HAlign, Length, Location, PseudoClass, VAlign,
+    Attribute, Description, Element, HAlign, Length, Location, Portion, PseudoClass, VAlign,
 };
 use crate::color::Color;
 use crate::core::IpeMaybe;
@@ -351,10 +351,10 @@ pub fn ui_px_(n: i64) -> Length {
     Length::Px(n)
 }
 
-/// `Ui.fill : Length`  (fill portion = 1)
+/// `Ui.fill : Length`  (`fillPortion 1`)
 #[must_use]
 pub fn ui_fill_() -> Length {
-    Length::Fill(1)
+    Length::Fill(Portion::ONE)
 }
 
 /// `Ui.content : Length`
@@ -369,10 +369,10 @@ pub fn ui_shrink_() -> Length {
     Length::Content
 }
 
-/// `Ui.fillPortion : Int -> Length`
+/// `Ui.fillPortion : Int -> Length` — `n <= 0` is `Ui.shrink`.
 #[must_use]
 pub fn ui_fill_portion_(n: i64) -> Length {
-    Length::Fill(n)
+    Length::fill_portion(n)
 }
 
 /// `Ui.vh : Int -> Length`

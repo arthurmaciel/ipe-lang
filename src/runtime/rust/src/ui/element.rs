@@ -17,6 +17,8 @@
 //! compiler, so a mismatch mis-renders at runtime rather than failing to build —
 //! the byte-identical-HTML regression on the Web backend is the safety net.
 
+use std::num::NonZeroU32;
+
 use super::super::html::{Attribute as HtmlAttribute, Html};
 
 /// `Ipe.Ui.Color` = `Rgba Int Int Int Float` (R/G/B 0-255 ints, alpha 0..1).
@@ -25,12 +27,47 @@ pub enum Color {
     Rgba(i64, i64, i64, f64),
 }
 
+/// The share of a parent's leftover space a `fill` sibling claims: positive by
+/// construction, at most [`Portion::MAX`].
+///
+/// Every backend reads the same value, so none can observe a zero or negative
+/// portion. A program `Int` enters only through [`Length::fill_portion`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Portion(NonZeroU32);
+
+impl Portion {
+    /// One share: `Ui.fill`.
+    pub const ONE: Self = Self(NonZeroU32::MIN);
+
+    /// The largest portion. A larger `fillPortion` clamps to it on every
+    /// backend: beside it a one-share sibling gets 1/100 000 of the leftover,
+    /// below one terminal cell or one CSS pixel on any real canvas.
+    pub const MAX: Self = match NonZeroU32::new(100_000) {
+        Some(n) => Self(n),
+        None => Self::ONE,
+    };
+
+    /// `Some` for a positive `n` (clamped to [`Portion::MAX`]), `None` for
+    /// `n <= 0`.
+    #[must_use]
+    pub fn from_int(n: i64) -> Option<Self> {
+        let clamped = u32::try_from(n.min(i64::from(Self::MAX.get()))).ok()?;
+        NonZeroU32::new(clamped).map(Self)
+    }
+
+    /// The portion as a share count, in `1..=Portion::MAX`.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
 /// `Ipe.Ui.Length`. `Min`/`Max` are self-recursive → `Box` (E0072 otherwise).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Length {
     Px(i64),
     Content,
-    Fill(i64),
+    Fill(Portion),
     Min(i64, Box<Length>),
     Max(i64, Box<Length>),
     Vh(i64),
@@ -38,6 +75,13 @@ pub enum Length {
 }
 
 impl Length {
+    /// `Ui.fillPortion n`: a fill of `n` shares, or `Content` (`Ui.shrink`) when
+    /// `n <= 0`, so a non-positive portion is content-sized on every backend.
+    #[must_use]
+    pub fn fill_portion(n: i64) -> Self {
+        Portion::from_int(n).map_or(Self::Content, Self::Fill)
+    }
+
     /// Render this length to its CSS value string. The single renderer for the
     /// `Ipe.Ui.Length` domain, shared by the inline-style and stylesheet paths.
     ///
@@ -364,7 +408,7 @@ mod tests {
         assert_eq!(direct, "min(320px,80vh)");
         assert_eq!(style, format!("width:{direct}"));
 
-        let floor = Length::Min(100, Box::new(Length::Fill(1)));
+        let floor = Length::Min(100, Box::new(Length::Fill(Portion::ONE)));
         assert_eq!(floor.css(), "max(100px,100%)", "minimum is a lower bound");
     }
 

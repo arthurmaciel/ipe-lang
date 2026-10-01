@@ -22,7 +22,7 @@
 
 use super::super::css_safety::{CssValueOrigin, SafeCssPropertyName, SafeCssValue};
 use super::super::html::{Attribute as HtmlAttribute, Html};
-use super::element::{Attribute, Description, Element, HAlign, Length, Location, VAlign};
+use super::element::{Attribute, Description, Element, HAlign, Length, Location, Portion, VAlign};
 
 // ── CSS boundary smart constructors ───────────────────────────────────────────
 // `SafeCssPropertyName` / `SafeCssValue` moved to the shared `css_safety` module
@@ -699,8 +699,8 @@ impl Dim {
 /// bounds wrapped around it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct FillSpec {
-    /// Non-negative flex portion; a negative `fillPortion` clamps to 0.
-    portion: u32,
+    /// Flex portion, positive by type.
+    portion: Portion,
     /// Largest `minimum` bound around the fill, in px.
     lower: Option<i64>,
     /// Smallest `maximum` bound around the fill, in px.
@@ -717,10 +717,9 @@ fn fill_spec(len: &Length) -> Option<FillSpec> {
     let mut cur = len;
     loop {
         match cur {
-            Length::Fill(n) => {
-                let portion = u32::try_from((*n).max(0)).unwrap_or(u32::MAX);
+            Length::Fill(portion) => {
                 return Some(FillSpec {
-                    portion,
+                    portion: *portion,
                     lower,
                     upper,
                 });
@@ -767,7 +766,7 @@ fn dim_css(dim: Dim, len: &Length, main: MainAxis) -> String {
             format!(
                 "{name}:{};flex-grow:{};flex-basis:0;min-{name}:{floor}",
                 len.css(),
-                fill.portion
+                fill.portion.get()
             )
         }
         (Dim::Height, MainAxis::Width) => {
@@ -1943,7 +1942,7 @@ mod tests {
     fn layout_renders_author_root_as_column_child() {
         use crate::ui::helpers::ui_el_;
         let elem: Element<TestMsg> = ui_el_(
-            vec![Attribute::AttrHeight(Length::Fill(1))],
+            vec![Attribute::AttrHeight(Length::Fill(Portion::ONE))],
             Element::Text("a".to_owned()),
         );
         let html = ui_layout(vec![], elem);
@@ -1973,7 +1972,7 @@ mod tests {
     fn fill_width_in_row_is_main_axis() {
         use crate::ui::helpers::{ui_el_, ui_row_};
         let child = ui_el_(
-            vec![Attribute::AttrWidth(Length::Fill(2))],
+            vec![Attribute::AttrWidth(Length::fill_portion(2))],
             Element::Text("a".to_owned()),
         );
         let s = first_child_style(ui_row_(vec![], vec![child]));
@@ -1988,7 +1987,7 @@ mod tests {
     fn fill_height_in_column_is_main_axis() {
         use crate::ui::helpers::{ui_column_, ui_el_};
         let child = ui_el_(
-            vec![Attribute::AttrHeight(Length::Fill(1))],
+            vec![Attribute::AttrHeight(Length::Fill(Portion::ONE))],
             Element::Text("a".to_owned()),
         );
         let s = first_child_style(ui_column_(vec![], vec![child]));
@@ -2005,7 +2004,7 @@ mod tests {
         use crate::ui::helpers::{ui_el_, ui_row_};
         let child = ui_el_(
             vec![
-                Attribute::AttrHeight(Length::Fill(1)),
+                Attribute::AttrHeight(Length::Fill(Portion::ONE)),
                 Attribute::AttrWidth(Length::Px(40)),
             ],
             Element::Text("a".to_owned()),
@@ -2027,7 +2026,7 @@ mod tests {
     fn fill_width_in_column_emits_no_flex() {
         use crate::ui::helpers::{ui_column_, ui_el_};
         let child = ui_el_(
-            vec![Attribute::AttrWidth(Length::Fill(1))],
+            vec![Attribute::AttrWidth(Length::Fill(Portion::ONE))],
             Element::Text("a".to_owned()),
         );
         let s = first_child_style(ui_column_(vec![], vec![child]));
@@ -2046,8 +2045,8 @@ mod tests {
         use crate::ui::helpers::ui_el_;
         let child = ui_el_(
             vec![
-                Attribute::AttrWidth(Length::Fill(1)),
-                Attribute::AttrHeight(Length::Fill(1)),
+                Attribute::AttrWidth(Length::Fill(Portion::ONE)),
+                Attribute::AttrHeight(Length::Fill(Portion::ONE)),
             ],
             Element::Text("a".to_owned()),
         );
@@ -2060,32 +2059,62 @@ mod tests {
         assert!(!s.contains("align-self"), "no stretch under a block: {s}");
     }
 
-    /// `fillPortion 0` grows by 0, and a negative portion clamps to 0 (never a
-    /// negative `flex-grow`).
+    /// Refusal: `fillPortion 0` and a negative portion are `shrink` — no flex
+    /// growth, no `flex-basis:0`, no zero floor — so the node keeps its content
+    /// size instead of collapsing to 0px.
     #[test]
-    fn fill_portion_zero_is_zero_grow() {
-        let s = size_css(
-            &[Attribute::<TestMsg>::AttrWidth(Length::Fill(0))],
+    fn fill_portion_non_positive_is_shrink() {
+        use crate::ui::helpers::{ui_fill_portion_, ui_shrink_};
+        let shrink = size_css(
+            &[Attribute::<TestMsg>::AttrWidth(ui_shrink_())],
             FlexAxis::Row,
         );
-        assert!(s.contains("flex-grow:0;"), "portion 0: {s}");
+        assert_eq!(shrink, "width:auto");
+        for n in [0, -3, i64::MIN] {
+            assert_eq!(ui_fill_portion_(n), ui_shrink_(), "fillPortion {n}");
+            for axis in [FlexAxis::Row, FlexAxis::Column, FlexAxis::Block] {
+                let s = size_css(
+                    &[Attribute::<TestMsg>::AttrWidth(ui_fill_portion_(n))],
+                    axis,
+                );
+                let h = size_css(
+                    &[Attribute::<TestMsg>::AttrHeight(ui_fill_portion_(n))],
+                    axis,
+                );
+                assert!(!s.contains("flex-"), "fillPortion {n} width: {s}");
+                assert!(!h.contains("flex-"), "fillPortion {n} height: {h}");
+                assert!(!s.contains("min-width:0"), "fillPortion {n}: {s}");
+                assert!(!h.contains("align-self"), "fillPortion {n}: {h}");
+            }
+            let row = size_css(
+                &[Attribute::<TestMsg>::AttrWidth(ui_fill_portion_(n))],
+                FlexAxis::Row,
+            );
+            assert_eq!(row, shrink, "fillPortion {n} renders as shrink");
+        }
     }
 
+    /// `fill` is one share, and a portion above `Portion::MAX` clamps to it.
     #[test]
-    fn fill_portion_negative_clamps() {
-        let s = size_css(
-            &[Attribute::<TestMsg>::AttrWidth(Length::Fill(-3))],
+    fn fill_portion_one_is_fill_and_huge_clamps() {
+        use crate::ui::helpers::{ui_fill_, ui_fill_portion_};
+        assert_eq!(ui_fill_portion_(1), ui_fill_());
+        let one = size_css(
+            &[Attribute::<TestMsg>::AttrWidth(ui_fill_())],
             FlexAxis::Row,
         );
-        assert!(s.contains("flex-grow:0;"), "negative portion clamps: {s}");
-        assert!(!s.contains("flex-grow:-"), "never a negative grow: {s}");
+        assert!(one.contains("flex-grow:1;"), "fill is one share: {one}");
         let max = size_css(
-            &[Attribute::<TestMsg>::AttrWidth(Length::Fill(i64::MAX))],
+            &[Attribute::<TestMsg>::AttrWidth(ui_fill_portion_(i64::MAX))],
             FlexAxis::Row,
         );
         assert!(
-            max.contains(&format!("flex-grow:{};", u32::MAX)),
-            "huge portion saturates: {max}"
+            max.contains(&format!("flex-grow:{};", Portion::MAX.get())),
+            "huge portion clamps: {max}"
+        );
+        assert_eq!(
+            ui_fill_portion_(i64::from(Portion::MAX.get()) + 1),
+            Length::Fill(Portion::MAX)
         );
     }
 
@@ -2096,7 +2125,7 @@ mod tests {
         let min = size_css(
             &[Attribute::<TestMsg>::AttrWidth(Length::Min(
                 100,
-                Box::new(Length::Fill(1)),
+                Box::new(Length::Fill(Portion::ONE)),
             ))],
             FlexAxis::Row,
         );
@@ -2113,7 +2142,7 @@ mod tests {
         let max = size_css(
             &[Attribute::<TestMsg>::AttrWidth(Length::Max(
                 200,
-                Box::new(Length::Fill(1)),
+                Box::new(Length::Fill(Portion::ONE)),
             ))],
             FlexAxis::Row,
         );
@@ -2130,7 +2159,7 @@ mod tests {
         let cross = size_css(
             &[Attribute::<TestMsg>::AttrHeight(Length::Max(
                 8,
-                Box::new(Length::Min(4, Box::new(Length::Fill(1)))),
+                Box::new(Length::Min(4, Box::new(Length::Fill(Portion::ONE)))),
             ))],
             FlexAxis::Row,
         );
@@ -2150,14 +2179,14 @@ mod tests {
                 30,
                 Box::new(Length::Max(
                     90,
-                    Box::new(Length::Max(50, Box::new(Length::Fill(2)))),
+                    Box::new(Length::Max(50, Box::new(Length::fill_portion(2)))),
                 )),
             )),
         );
         assert_eq!(
             fill_spec(&len),
             Some(FillSpec {
-                portion: 2,
+                portion: Portion::from_int(2).expect("2 is a positive portion"),
                 lower: Some(30),
                 upper: Some(50),
             })
@@ -2173,7 +2202,7 @@ mod tests {
         let child = ui_el_(
             vec![
                 Attribute::AttrAlignY(VAlign::CenterY),
-                Attribute::AttrHeight(Length::Fill(1)),
+                Attribute::AttrHeight(Length::Fill(Portion::ONE)),
             ],
             Element::Text("a".to_owned()),
         );
@@ -2190,7 +2219,7 @@ mod tests {
         let child = ui_el_(
             vec![
                 Attribute::AttrAlignX(HAlign::CenterX),
-                Attribute::AttrHeight(Length::Fill(1)),
+                Attribute::AttrHeight(Length::Fill(Portion::ONE)),
             ],
             Element::Text("a".to_owned()),
         );
@@ -2217,7 +2246,7 @@ mod tests {
     #[test]
     fn block_style_string_fill_has_no_portion() {
         let s = block_style_string(&[
-            Attribute::<TestMsg>::AttrWidth(Length::Fill(3)),
+            Attribute::<TestMsg>::AttrWidth(Length::fill_portion(3)),
             Attribute::AttrPadding(1, 1, 1, 1),
         ]);
         assert_eq!(s, "width:100%;padding:1px 1px 1px 1px");
@@ -2227,7 +2256,7 @@ mod tests {
     #[test]
     fn build_style_string_emits_no_size() {
         let s = build_style_string(&[
-            Attribute::<TestMsg>::AttrWidth(Length::Fill(1)),
+            Attribute::<TestMsg>::AttrWidth(Length::Fill(Portion::ONE)),
             Attribute::AttrHeight(Length::Px(9)),
         ]);
         assert_eq!(s, "");
