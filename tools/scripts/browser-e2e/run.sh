@@ -27,7 +27,7 @@ export IPE_RUNTIME_DIR="${IPE_RUNTIME_DIR:-$REPO_ROOT/src/runtime/rust/src}"
 
 echo "==> Building ipe compiler..."
 cargo build --release -p ipe --manifest-path "$REPO_ROOT/Cargo.toml"
-IPE="$REPO_ROOT/target/release/ipe"
+IPE="${CARGO_TARGET_DIR:-$REPO_ROOT/target}/release/ipe"
 
 SERVER_PIDS=()
 trap 'for pid in "${SERVER_PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done' EXIT
@@ -44,10 +44,13 @@ serve() {
 
   echo "==> Cargo-building emitted $name project..."
   cargo build --release --manifest-path "$out/rust/Cargo.toml"
-  local binary="$out/rust/target/release/$name"
-  if [ ! -f "$binary" ]; then
-    # Emitted binary name may differ; find it.
-    binary="$(find "$out/rust/target/release" -maxdepth 1 -type f -perm /111 ! -name "*.d" | head -1)"
+  # The binary is the emitted `[package] name`, under CARGO_TARGET_DIR when set.
+  local pkg binary
+  pkg="$(sed -n 's/^name = "\(.*\)"$/\1/p;T;q' "$out/rust/Cargo.toml")"
+  binary="${CARGO_TARGET_DIR:-$out/rust/target}/release/$pkg"
+  if [ -z "$pkg" ] || [ ! -x "$binary" ]; then
+    echo "   $name binary not found at '$binary'" >&2
+    exit 1
   fi
 
   echo "==> Spawning $name server on port $port..."
@@ -57,7 +60,7 @@ serve() {
   echo "==> Waiting for $name server readiness..."
   local ready="" i
   for i in $(seq 1 40); do
-    if curl -sf "http://127.0.0.1:$port/" >/dev/null 2>&1; then
+    if curl -sf --max-time 2 "http://127.0.0.1:$port/" >/dev/null 2>&1; then
       echo "   server ready (attempt $i)"
       ready=1
       break
