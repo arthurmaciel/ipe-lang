@@ -306,6 +306,34 @@ impl Posture {
     }
 }
 
+/// Whether an unauthenticated dev-only surface may open.
+///
+/// True only for a binary emitted with the dev-loop intent, running in a dev
+/// posture, on a loopback listener. An `ENV=dev` override cannot open a
+/// release binary, and a dev binary on an exposed bind stays closed.
+#[must_use]
+pub const fn dev_open(build: BuildPosture, posture: Posture, scope: ListenScope) -> bool {
+    matches!(
+        (build, posture, scope),
+        (
+            BuildPosture::Development,
+            Posture::Dev,
+            ListenScope::Loopback
+        )
+    )
+}
+
+/// [`dev_open`] over the compiled intent, the process posture, and the
+/// installed listen scope.
+#[must_use]
+pub fn dev_open_from_env() -> bool {
+    dev_open(
+        BuildPosture::COMPILED,
+        Posture::from_env(),
+        ListenScope::from_env(),
+    )
+}
+
 /// Production gate over [`Posture::from_env`]. A release-intent binary deployed
 /// without env vars is production, so every dev-open gate (unauthenticated
 /// console, token-less ingest, SSRF deny-private, non-Secure cookies) fails
@@ -328,20 +356,25 @@ pub enum ConsoleAuthMode {
     Token,
     /// Explicit `app`: the app-supplied `consoleAuth` callback decides.
     App,
-    /// Unset outside a loopback dev listener: an admin token is required.
+    /// Unset where [`dev_open`] fails: an admin token is required.
     UnsetProd,
-    /// Unset in dev on a loopback listener: open.
+    /// Unset where [`dev_open`] holds: open.
     DevOpen,
 }
 
 impl ConsoleAuthMode {
     /// Parse a raw `IPE_CONSOLE_AUTH` value (trimmed, case-insensitive).
     ///
-    /// `posture` and `scope` are consulted only when `raw` is absent or blank;
-    /// a non-UTF-8 value resolves to `Off` in every posture.
+    /// `build`, `posture` and `scope` are consulted only when `raw` is absent
+    /// or blank; a non-UTF-8 value resolves to `Off` in every posture.
     #[must_use]
-    pub fn parse(raw: RawEnv<'_>, posture: Posture, scope: ListenScope) -> Self {
-        ConsoleAuthResolution::resolve(raw, posture, scope).mode
+    pub fn parse(
+        raw: RawEnv<'_>,
+        build: BuildPosture,
+        posture: Posture,
+        scope: ListenScope,
+    ) -> Self {
+        ConsoleAuthResolution::resolve(raw, build, posture, scope).mode
     }
 
     /// Resolve the setting from the process environment.
@@ -406,18 +439,21 @@ pub struct ConsoleAuthResolution {
 impl ConsoleAuthResolution {
     /// Resolve a raw `IPE_CONSOLE_AUTH` value (trimmed, case-insensitive).
     ///
-    /// `posture` and `scope` pick the mode only when `raw` is absent or blank;
-    /// a recognised explicit value wins in every posture; an unrecognised or
-    /// non-UTF-8 value resolves to `Off`.
+    /// `build`, `posture` and `scope` pick the mode only when `raw` is absent
+    /// or blank; a recognised explicit value wins in every posture; an
+    /// unrecognised or non-UTF-8 value resolves to `Off`.
     #[must_use]
-    pub fn resolve(raw: RawEnv<'_>, posture: Posture, scope: ListenScope) -> Self {
+    pub fn resolve(
+        raw: RawEnv<'_>,
+        build: BuildPosture,
+        posture: Posture,
+        scope: ListenScope,
+    ) -> Self {
+        let default = Self::posture_default(build, posture, scope);
         let (mode, source) = match raw {
             RawEnv::NotUnicode => (ConsoleAuthMode::Off, ConsoleAuthSource::Invalid),
-            RawEnv::Absent => (
-                Self::posture_default(posture, scope),
-                ConsoleAuthSource::PostureDefault,
-            ),
-            RawEnv::Value(value) => Self::from_value(value.trim(), posture, scope),
+            RawEnv::Absent => (default, ConsoleAuthSource::PostureDefault),
+            RawEnv::Value(value) => Self::from_value(value.trim(), default),
         };
         Self {
             posture,
@@ -426,16 +462,9 @@ impl ConsoleAuthResolution {
         }
     }
 
-    fn from_value(
-        value: &str,
-        posture: Posture,
-        scope: ListenScope,
-    ) -> (ConsoleAuthMode, ConsoleAuthSource) {
+    fn from_value(value: &str, default: ConsoleAuthMode) -> (ConsoleAuthMode, ConsoleAuthSource) {
         if value.is_empty() {
-            (
-                Self::posture_default(posture, scope),
-                ConsoleAuthSource::PostureDefault,
-            )
+            (default, ConsoleAuthSource::PostureDefault)
         } else if value.eq_ignore_ascii_case("token") {
             (ConsoleAuthMode::Token, ConsoleAuthSource::Explicit)
         } else if value.eq_ignore_ascii_case("app") {
@@ -447,12 +476,16 @@ impl ConsoleAuthResolution {
         }
     }
 
-    /// The unset default: open only for a dev posture on a loopback listener.
-    const fn posture_default(posture: Posture, scope: ListenScope) -> ConsoleAuthMode {
-        match (posture, scope) {
-            (Posture::Dev, ListenScope::Loopback) => ConsoleAuthMode::DevOpen,
-            (Posture::Dev | Posture::Production, ListenScope::Exposed)
-            | (Posture::Production, ListenScope::Loopback) => ConsoleAuthMode::UnsetProd,
+    /// The unset default: open only where [`dev_open`] holds.
+    const fn posture_default(
+        build: BuildPosture,
+        posture: Posture,
+        scope: ListenScope,
+    ) -> ConsoleAuthMode {
+        if dev_open(build, posture, scope) {
+            ConsoleAuthMode::DevOpen
+        } else {
+            ConsoleAuthMode::UnsetProd
         }
     }
 
@@ -462,6 +495,7 @@ impl ConsoleAuthResolution {
         let read = crate::system::read_env_var("IPE_CONSOLE_AUTH");
         Self::resolve(
             RawEnv::from_read(&read),
+            BuildPosture::COMPILED,
             Posture::from_env(),
             ListenScope::from_env(),
         )
@@ -1252,36 +1286,64 @@ mod tests {
         assert_eq!(BuildPosture::COMPILED, BuildPosture::Development);
     }
 
-    // Only a dev posture on a loopback listener defaults the console open;
-    // a dev posture on an exposed bind fails closed to `UnsetProd`.
+    // Only a dev-intent binary in a dev posture on a loopback listener
+    // defaults the console open; every other triple fails closed.
     #[test]
-    fn console_default_opens_only_for_dev_on_loopback() {
+    fn console_default_opens_only_for_dev_build_dev_posture_on_loopback() {
         use ConsoleAuthMode as M;
-        for (posture, scope, mode) in [
-            (Posture::Dev, ListenScope::Loopback, M::DevOpen),
-            (Posture::Dev, ListenScope::Exposed, M::UnsetProd),
-            (Posture::Production, ListenScope::Loopback, M::UnsetProd),
-            (Posture::Production, ListenScope::Exposed, M::UnsetProd),
-        ] {
-            for raw in [RawEnv::Absent, RawEnv::Value(""), RawEnv::Value(" ")] {
-                assert_eq!(
-                    ConsoleAuthMode::parse(raw, posture, scope),
-                    mode,
-                    "{posture:?} {scope:?} {raw:?}"
-                );
+        for build in [BuildPosture::Development, BuildPosture::Release] {
+            for posture in [Posture::Dev, Posture::Production] {
+                for scope in [ListenScope::Loopback, ListenScope::Exposed] {
+                    let open = build == BuildPosture::Development
+                        && posture == Posture::Dev
+                        && scope == ListenScope::Loopback;
+                    assert_eq!(dev_open(build, posture, scope), open);
+                    let mode = if open { M::DevOpen } else { M::UnsetProd };
+                    for raw in [RawEnv::Absent, RawEnv::Value(""), RawEnv::Value(" ")] {
+                        assert_eq!(
+                            ConsoleAuthMode::parse(raw, build, posture, scope),
+                            mode,
+                            "{build:?} {posture:?} {scope:?} {raw:?}"
+                        );
+                    }
+                }
             }
         }
+    }
+
+    // An explicit `ENV=dev` on a release binary bound to loopback (a release
+    // service behind a same-host reverse proxy) leaves the console closed.
+    #[test]
+    fn env_dev_on_release_binary_keeps_console_closed() {
+        let posture = Posture::parse(RawEnv::Value("dev"), RawEnv::Absent, BuildPosture::Release);
+        assert_eq!(posture, Posture::Dev);
+        assert!(!dev_open(
+            BuildPosture::Release,
+            posture,
+            ListenScope::Loopback
+        ));
+        assert_eq!(
+            ConsoleAuthMode::parse(
+                RawEnv::Absent,
+                BuildPosture::Release,
+                posture,
+                ListenScope::Loopback
+            ),
+            ConsoleAuthMode::UnsetProd
+        );
     }
 
     // An explicit `token` is enforced on every posture and scope.
     #[test]
     fn explicit_token_wins_on_every_posture_and_scope() {
-        for posture in [Posture::Dev, Posture::Production] {
-            for scope in [ListenScope::Loopback, ListenScope::Exposed] {
-                assert_eq!(
-                    ConsoleAuthMode::parse(RawEnv::Value("token"), posture, scope),
-                    ConsoleAuthMode::Token
-                );
+        for build in [BuildPosture::Development, BuildPosture::Release] {
+            for posture in [Posture::Dev, Posture::Production] {
+                for scope in [ListenScope::Loopback, ListenScope::Exposed] {
+                    assert_eq!(
+                        ConsoleAuthMode::parse(RawEnv::Value("token"), build, posture, scope),
+                        ConsoleAuthMode::Token
+                    );
+                }
             }
         }
     }
@@ -1294,7 +1356,7 @@ mod tests {
         assert_eq!(posture, Posture::Production);
         for scope in [ListenScope::Loopback, ListenScope::Exposed] {
             assert_eq!(
-                ConsoleAuthMode::parse(RawEnv::Absent, posture, scope),
+                ConsoleAuthMode::parse(RawEnv::Absent, BuildPosture::Release, posture, scope),
                 ConsoleAuthMode::UnsetProd
             );
         }
@@ -1321,7 +1383,12 @@ mod tests {
                 (RawEnv::Value("tokne"), M::Off, S::Invalid),
                 (RawEnv::from_read(&bad), M::Off, S::Invalid),
             ] {
-                let resolved = ConsoleAuthResolution::resolve(raw, posture, ListenScope::Loopback);
+                let resolved = ConsoleAuthResolution::resolve(
+                    raw,
+                    BuildPosture::Development,
+                    posture,
+                    ListenScope::Loopback,
+                );
                 assert_eq!(
                     resolved,
                     ConsoleAuthResolution {
@@ -1332,7 +1399,12 @@ mod tests {
                     "IPE_CONSOLE_AUTH={raw:?} under {posture:?}"
                 );
                 assert_eq!(
-                    ConsoleAuthMode::parse(raw, posture, ListenScope::Loopback),
+                    ConsoleAuthMode::parse(
+                        raw,
+                        BuildPosture::Development,
+                        posture,
+                        ListenScope::Loopback
+                    ),
                     mode
                 );
             }
@@ -1366,8 +1438,13 @@ mod tests {
                 "[ipe.console] auth posture=dev mode=off source=env-invalid",
             ),
         ] {
-            let line =
-                ConsoleAuthResolution::resolve(raw, posture, ListenScope::Loopback).startup_line();
+            let line = ConsoleAuthResolution::resolve(
+                raw,
+                BuildPosture::Development,
+                posture,
+                ListenScope::Loopback,
+            )
+            .startup_line();
             assert_eq!(line, expected);
             assert!(!line.contains("s3cret"), "startup line leaked a value");
         }

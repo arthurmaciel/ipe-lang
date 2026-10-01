@@ -522,12 +522,11 @@ fn is_cross_origin_ingest(headers: &axum::http::HeaderMap) -> bool {
     crate::http_header::origin_host_mismatch(origin, host)
 }
 
-/// `Some(401)` when `IPE_INGEST_TOKEN` is set and the `X-Ipê-Ingest-Token` header
-/// is absent or wrong (constant-time compare). Unset → open EXCEPT for a
-/// cross-origin browser POST (log-injection CSRF shape — see
-/// `is_cross_origin_ingest`), which is rejected even in dev.
+/// The ingest gate over the process environment: the configured
+/// `IPE_INGEST_TOKEN` (env, then in-code `Console.ingestToken`) and
+/// [`telemetry::dev_open_from_env`].
 fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::Response> {
-    let want = match crate::system::read_env_var("IPE_INGEST_TOKEN")
+    let want = crate::system::read_env_var("IPE_INGEST_TOKEN")
         .ok()
         .filter(|t| !t.is_empty())
         // In-code `Console.ingestToken` (a sealed `Secret`) below the env
@@ -535,18 +534,32 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
         .or_else(|| {
             crate::app_config::resolve_console_token(crate::app_config::ConsoleTokenKind::Ingest)
                 .filter(|t| !t.is_empty())
-        }) {
+        });
+    ingest_decision(headers, want.as_deref(), telemetry::dev_open_from_env())
+}
+
+/// `Some(401)` when a token is configured and the `X-Ipê-Ingest-Token` header
+/// is absent or wrong (constant-time compare). With no token, `Some(401)`
+/// unless `dev_open` holds (a dev-intent binary in a dev posture on a loopback
+/// listener); there, a cross-origin browser POST (log-injection CSRF shape —
+/// see `is_cross_origin_ingest`) is still refused.
+fn ingest_decision(
+    headers: &axum::http::HeaderMap,
+    want: Option<&str>,
+    dev_open: bool,
+) -> Option<axum::response::Response> {
+    let want = match want {
         Some(t) => t,
         None => {
-            // Unset token: open in dev (single-process / no federation), but in
-            // production fail CLOSED — an unauthenticated ingest endpoint folds
-            // attacker-supplied telemetry straight into the operator console
-            // (log-injection). Matches the console mount's own production gate.
-            if telemetry::production_from_env() {
+            // An unauthenticated ingest folds attacker-supplied telemetry
+            // straight into the operator console (log-injection); a client
+            // that sends no Origin passes the same-origin check below, so
+            // only a loopback dev listener may run without a token.
+            if !dev_open {
                 return Some(
                     (
                         StatusCode::UNAUTHORIZED,
-                        "observability ingest requires IPE_INGEST_TOKEN in production",
+                        "observability ingest requires IPE_INGEST_TOKEN outside a loopback dev build",
                     )
                         .into_response(),
                 );
@@ -590,11 +603,17 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::telemetry::{ListenScope, RawEnv};
+    use crate::telemetry::{BuildPosture, ListenScope, RawEnv};
 
-    /// Parse `IPE_CONSOLE_AUTH` as a loopback listener would.
+    /// Parse `IPE_CONSOLE_AUTH` as a dev-intent binary on a loopback listener
+    /// would.
     fn parse_loopback(raw: RawEnv<'_>, posture: Posture) -> ConsoleAuthMode {
-        ConsoleAuthMode::parse(raw, posture, ListenScope::Loopback)
+        ConsoleAuthMode::parse(
+            raw,
+            BuildPosture::Development,
+            posture,
+            ListenScope::Loopback,
+        )
     }
 
     /// Clear every input the console posture reads, then set `pairs`.
@@ -1057,57 +1076,82 @@ mod tests {
         )));
     }
 
-    // One test (not split) — IPE_INGEST_TOKEN is process-global env, so a split
-    // would race other threads. Sets then clears the var within the test.
+    fn origin_headers(origin: Option<&'static str>) -> axum::http::HeaderMap {
+        let mut h = axum::http::HeaderMap::new();
+        if let Some(origin) = origin {
+            h.insert("origin", axum::http::HeaderValue::from_static(origin));
+            h.insert(
+                "host",
+                axum::http::HeaderValue::from_static("victim.example"),
+            );
+        }
+        h
+    }
+
     #[test]
-    fn ingest_token_gate() {
+    fn ingest_gate_without_token() {
+        // A loopback dev build: open when same-origin or Origin-less (curl, a
+        // same-process push); a cross-origin browser POST is refused.
+        assert!(ingest_decision(&origin_headers(None), None, true).is_none());
+        assert!(
+            ingest_decision(&origin_headers(Some("https://victim.example")), None, true).is_none()
+        );
+        assert_eq!(
+            status_of(ingest_decision(
+                &origin_headers(Some("https://evil.example")),
+                None,
+                true
+            )),
+            Some(StatusCode::FORBIDDEN)
+        );
+        // Anywhere else (release build, production posture, exposed bind) an
+        // Origin-less push needs the token.
+        for headers in [
+            origin_headers(None),
+            origin_headers(Some("https://victim.example")),
+        ] {
+            assert_eq!(
+                status_of(ingest_decision(&headers, None, false)),
+                Some(StatusCode::UNAUTHORIZED)
+            );
+        }
+    }
+
+    // A dev posture on a listener not installed as loopback is not
+    // `dev_open`, so the env-driven gate refuses a token-less push.
+    #[test]
+    fn ingest_without_token_off_loopback_is_refused() {
         crate::system::locked_set_var("ENV", "dev");
         crate::system::locked_remove_var("IPE_INGEST_TOKEN");
-        // Unset → endpoint open regardless of header, when same-origin (or no
-        // Origin at all — curl / non-browser caller).
-        let h = axum::http::HeaderMap::new();
-        assert!(ingest_token_blocked(&h).is_none(), "open when unset");
-
-        // Unset token + cross-origin browser POST → rejected (the CSRF-log-
-        // injection shape: no token configured, so same-origin is the only
-        // remaining defense).
-        let mut h = axum::http::HeaderMap::new();
-        h.insert("origin", "https://evil.example".parse().unwrap());
-        h.insert("host", "victim.example".parse().unwrap());
-        assert!(
-            ingest_token_blocked(&h).is_some(),
-            "cross-origin POST with no token configured must be rejected"
+        assert_eq!(
+            status_of(ingest_token_blocked(&origin_headers(None))),
+            Some(StatusCode::UNAUTHORIZED)
         );
-
-        // Unset token + same-origin Origin header → still open.
-        let mut h = axum::http::HeaderMap::new();
-        h.insert("origin", "https://victim.example".parse().unwrap());
-        h.insert("host", "victim.example".parse().unwrap());
-        assert!(
-            ingest_token_blocked(&h).is_none(),
-            "same-origin request still open in dev"
-        );
-
-        crate::system::locked_set_var("IPE_INGEST_TOKEN", "secret123");
-        // Missing header → blocked.
-        let h = axum::http::HeaderMap::new();
-        assert!(ingest_token_blocked(&h).is_some(), "missing header blocked");
-        // Wrong token → blocked.
-        let mut h = axum::http::HeaderMap::new();
-        h.insert("x-ipe-ingest-token", "wrong".parse().unwrap());
-        assert!(ingest_token_blocked(&h).is_some(), "wrong token blocked");
-        // Correct token → allowed, even cross-origin (bearer-token auth makes
-        // the same-origin check redundant once a real token is configured).
-        let mut h = axum::http::HeaderMap::new();
-        h.insert("x-ipe-ingest-token", "secret123".parse().unwrap());
-        h.insert("origin", "https://evil.example".parse().unwrap());
-        h.insert("host", "victim.example".parse().unwrap());
-        assert!(
-            ingest_token_blocked(&h).is_none(),
-            "correct token allowed even cross-origin"
-        );
-
-        crate::system::locked_remove_var("IPE_INGEST_TOKEN");
         crate::system::locked_remove_var("ENV");
+    }
+
+    #[test]
+    fn ingest_gate_with_token() {
+        for dev_open in [true, false] {
+            let want = Some("secret123");
+            assert!(
+                ingest_decision(&origin_headers(None), want, dev_open).is_some(),
+                "missing header blocked"
+            );
+            let mut h = axum::http::HeaderMap::new();
+            h.insert("x-ipe-ingest-token", "wrong".parse().unwrap());
+            assert!(
+                ingest_decision(&h, want, dev_open).is_some(),
+                "wrong token blocked"
+            );
+            // Correct token → allowed, even cross-origin (bearer-token auth
+            // makes the same-origin check redundant).
+            let mut h = origin_headers(Some("https://evil.example"));
+            h.insert("x-ipe-ingest-token", "secret123".parse().unwrap());
+            assert!(
+                ingest_decision(&h, want, dev_open).is_none(),
+                "correct token allowed even cross-origin"
+            );
+        }
     }
 }
