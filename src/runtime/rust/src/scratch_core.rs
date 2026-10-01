@@ -1491,11 +1491,13 @@ impl ScratchDir {
     }
 
     /// Consume this guard and return the directory path without removing it.
+    ///
+    /// The path moves out of a never-dropped guard: forgetting the guard
+    /// instead would leak the path it owns.
     #[must_use]
     pub fn into_path(self) -> PathBuf {
-        let path = self.0.clone();
-        std::mem::forget(self);
-        path
+        let mut guard = std::mem::ManuallyDrop::new(self);
+        std::mem::take(&mut guard.0)
     }
 }
 

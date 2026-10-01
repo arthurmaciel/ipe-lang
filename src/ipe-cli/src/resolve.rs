@@ -1276,9 +1276,7 @@ mod tests {
 
     fn temp_dir(_tag: &str) -> PathBuf {
         let sd = crate::scratch::ScratchDir::new("ipe-resolve-test").expect("scratch dir");
-        let p = sd.path().to_path_buf();
-        std::mem::forget(sd); // caller's explicit remove_dir_all handles cleanup
-        p
+        sd.into_path() // caller's explicit remove_dir_all handles cleanup
     }
 
     fn scaffold_project(root: &Path) {
