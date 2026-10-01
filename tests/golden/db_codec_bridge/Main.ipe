@@ -143,44 +143,45 @@ moneyFromWire s =
             Decode.fail "bad money wire"
 
 
--- Mirror the store's cell representation: build a `Row` (Dict String String)
--- from the bound binds the way `Ipe.Db.Store` reads a row back.
-sqlToCell : SqlValue -> String
+-- Mirror the store's cell representation: build a row (`Dict String (Maybe
+-- String)`, `Nothing` for SQL `NULL`) from the bound binds the way
+-- `Ipe.Db.Store` reads a row back.
+sqlToCell : SqlValue -> Maybe String
 sqlToCell v =
     case v of
         SqlString s ->
-            s
+            Just s
 
         SqlInt n ->
-            String.fromInt n
+            Just (String.fromInt n)
 
         SqlFloat f ->
-            String.fromFloat f
+            Just (String.fromFloat f)
 
         SqlNull _ ->
-            "NULL"
+            Nothing
 
         SqlBool b ->
             if b then
-                "1"
+                Just "1"
 
             else
-                "0"
+                Just "0"
 
         SqlBytes _ ->
-            ""
+            Just ""
 
         SqlTime t ->
-            String.fromInt t
+            Just (String.fromInt t)
 
         SqlDecimal d ->
-            Dec.toString d
+            Just (Dec.toString d)
 
         SqlMoney s ->
-            s
+            Just s
 
 
-rowFromBinds : List ( String, SqlValue ) -> Dict String String
+rowFromBinds : List ( String, SqlValue ) -> Dict String (Maybe String)
 rowFromBinds binds =
     Dict.fromList (List.map (\pair -> case pair of ( k, v ) -> ( k, sqlToCell v )) binds)
 
@@ -278,7 +279,7 @@ missingColumnRejected : Bool
 missingColumnRejected =
     let
         partial =
-            Dict.fromList [ ( "id", "u-9" ) ]
+            Dict.fromList [ ( "id", Just "u-9" ) ]
     in
     case DbCodec.codecFromRow userCodec partial of
         Ok _ ->

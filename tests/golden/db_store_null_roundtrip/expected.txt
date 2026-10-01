@@ -1,0 +1,7 @@
+get-null:n1 reason=Nothing score=Nothing
+get-empty:n2 reason=Just "" score=Just 0
+get-null-text:n3 reason=Just "NULL" score=Just 7
+all:n1 reason=Nothing score=Nothing|n2 reason=Just "" score=Just 0|n3 reason=Just "NULL" score=Just 7
+find-by:n1 reason=Nothing score=Nothing
+find-where:n1 reason=Nothing score=Nothing
+query-order:n1,n2,n3

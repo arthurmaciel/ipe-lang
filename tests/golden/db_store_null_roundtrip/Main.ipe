@@ -1,0 +1,232 @@
+module Main exposing (main)
+
+-- Ipe.Db.Store NULL round-trip golden: a codec store whose record holds a
+-- `Maybe String` and a `Maybe Int` reads SQL `NULL` back as `Nothing` and a
+-- present value back as `Just`, through every codec-decoded read terminal
+-- (`get`, `all`, `findBy`, `findWhere`, and the query builder's `toList`).
+--
+-- The output lines assert, in order:
+--   * a row written with both fields `Nothing` reads back `Nothing` for both —
+--     never `Just ""` for the text column, never a decode error for the int;
+--   * a row written with `Just ""` and `Just 0` reads back `Just ""` and
+--     `Just 0` — the empty string is a value, not `NULL`;
+--   * a row written with `Just "NULL"` reads back `Just "NULL"` — the text
+--     `"NULL"` is a value, not an in-band `NULL` marker;
+--   * `all` decodes every row with the same distinction;
+--   * `findBy` and `findWhere` on the `NULL` row read `Nothing`;
+--   * an ascending query on the nullable int orders the `NULL` row first.
+--
+-- Output:
+--   get-null:n1 reason=Nothing score=Nothing
+--   get-empty:n2 reason=Just "" score=Just 0
+--   get-null-text:n3 reason=Just "NULL" score=Just 7
+--   all:n1 reason=Nothing score=Nothing|n2 reason=Just "" score=Just 0|n3 reason=Just "NULL" score=Just 7
+--   find-by:n1 reason=Nothing score=Nothing
+--   find-where:n1 reason=Nothing score=Nothing
+--   query-order:n1,n2,n3
+
+import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
+import Ipe.Config as Config
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Sql as Sql
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error as Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Json.Encode as Encode
+import Ipe.List as List
+import Ipe.Maybe as Maybe exposing (Maybe(..))
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Note =
+    { id : String
+    , reason : Maybe String
+    , score : Maybe Int
+    }
+
+
+makeNote : String -> Maybe String -> Maybe Int -> Note
+makeNote id reason score =
+    { id = id, reason = reason, score = score }
+
+
+encodeMaybe : (a -> Value) -> Maybe a -> Value
+encodeMaybe enc m =
+    case m of
+        Just x ->
+            enc x
+
+        Nothing ->
+            Encode.null
+
+
+noteCodec : Codec Note
+noteCodec =
+    Codec
+        { enc =
+            \n ->
+                Encode.object
+                    [ ( "id", Encode.string n.id )
+                    , ( "reason", encodeMaybe Encode.string n.reason )
+                    , ( "score", encodeMaybe Encode.int n.score )
+                    ]
+        , mkDec =
+            \_ ->
+                Config.map3 makeNote
+                    (Config.field "id" Config.string)
+                    (Config.field "reason" (Config.nullable Config.string))
+                    (Config.field "score" (Config.nullable Config.int))
+        , shp =
+            SRecord
+                [ ( "id", CText )
+                , ( "reason", CNull CText )
+                , ( "score", CNull CInt )
+                ]
+        }
+
+
+noteStore : Result Error (Store Note)
+noteStore =
+    Store.fromCodec "notes" noteCodec
+        |> Result.map (\draft -> Store.public (Store.primaryKey .id draft))
+
+
+seed : List Note
+seed =
+    [ makeNote "n1" Nothing Nothing
+    , makeNote "n2" (Just "") (Just 0)
+    , makeNote "n3" (Just "NULL") (Just 7)
+    ]
+
+
+showReason : Maybe String -> String
+showReason m =
+    case m of
+        Just s ->
+            String.concat [ "Just \"", s, "\"" ]
+
+        Nothing ->
+            "Nothing"
+
+
+showScore : Maybe Int -> String
+showScore m =
+    case m of
+        Just n ->
+            String.concat [ "Just ", String.fromInt n ]
+
+        Nothing ->
+            "Nothing"
+
+
+showNote : Note -> String
+showNote n =
+    String.concat [ n.id, " reason=", showReason n.reason, " score=", showScore n.score ]
+
+
+showMaybeNote : Maybe Note -> String
+showMaybeNote m =
+    case m of
+        Just n ->
+            showNote n
+
+        Nothing ->
+            "missing"
+
+
+getLine : Db -> Store Note -> String -> String -> Task Error String
+getLine conn store label id =
+    Task.map
+        (\m -> String.concat [ label, ":", showMaybeNote m ])
+        (Store.get conn store (SqlString id))
+
+
+allLine : Db -> Store Note -> Task Error String
+allLine conn store =
+    Task.map
+        (\notes -> String.concat [ "all:", String.join "|" (List.map showNote (List.sortBy .id notes)) ])
+        (Store.all conn store)
+
+
+findByLine : Db -> Store Note -> Task Error String
+findByLine conn store =
+    Task.map
+        (\notes -> String.concat [ "find-by:", String.join "|" (List.map showNote notes) ])
+        (Store.findBy conn store "id" (SqlString "n1"))
+
+
+findWhereLine : Db -> Store Note -> Task Error String
+findWhereLine conn store =
+    Task.map
+        (\notes -> String.concat [ "find-where:", String.join "|" (List.map showNote notes) ])
+        (Store.findWhere conn store (Sql.eq (Sql.column "id") (Sql.param (SqlString "n1"))))
+
+
+queryOrderLine : Db -> Store Note -> Task Error String
+queryOrderLine conn store =
+    Task.map
+        (\notes -> String.concat [ "query-order:", String.join "," (List.map .id notes) ])
+        (Store.query store
+            |> Store.orderAsc "score"
+            |> Store.toList conn
+        )
+
+
+insertSeed : Db -> Store Note -> Task Error ()
+insertSeed conn store =
+    List.foldl
+        (\n acc -> Task.andThen (\_ -> Task.map (\_ -> ()) (Store.insert conn store n)) acc)
+        (Task.succeed ())
+        seed
+
+
+report : Db -> Store Note -> Task Error ()
+report conn store =
+    Task.andThen
+        (\a ->
+            Task.andThen
+                (\b ->
+                    Task.andThen
+                        (\c ->
+                            Task.andThen
+                                (\d ->
+                                    Task.andThen
+                                        (\e ->
+                                            Task.andThen
+                                                (\f ->
+                                                    Task.andThen
+                                                        (\g -> Io.println (String.join "\n" [ a, b, c, d, e, f, g ]))
+                                                        (queryOrderLine conn store)
+                                                )
+                                                (findWhereLine conn store)
+                                        )
+                                        (findByLine conn store)
+                                )
+                                (allLine conn store)
+                        )
+                        (getLine conn store "get-null-text" "n3")
+                )
+                (getLine conn store "get-empty" "n2")
+        )
+        (getLine conn store "get-null" "n1")
+
+
+runChecks : Db -> Store Note -> Task Error ()
+runChecks conn store =
+    Task.andThen
+        (\_ -> Task.andThen (\_ -> report conn store) (insertSeed conn store))
+        (Store.create conn store)
+
+
+main : Task Error ()
+main =
+    case noteStore of
+        Err e ->
+            Io.println (Error.toString e)
+
+        Ok store ->
+            Task.andThen
+                (\conn -> Db.withTransaction conn (\txconn -> runChecks txconn store))
+                (Db.open "sqlite" "sqlite::memory:")
