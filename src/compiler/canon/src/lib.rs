@@ -44,6 +44,9 @@ pub use resolve::{
 /// imports never leak into (or get captured by) an importer's scope.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ExportedAlias {
+    /// The path of the module that declares the alias. Two imports bringing the
+    /// same bare alias name from different homes are ambiguous at a bare use.
+    pub home: Vec<Symbol>,
     /// The variable standing for each declared parameter in `body`, in source
     /// order. Each slot is a symbol no source type variable can spell, so a
     /// substitution never captures a variable the body leaves free.

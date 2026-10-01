@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use ipe_canon::ast::{Def, Module, Type};
 use ipe_canon::{ModuleExports, canonicalise_module};
-use ipe_diagnostics::{DResult, Diagnostic, NameError};
+use ipe_diagnostics::{AliasExpansionKind, DResult, Diagnostic, NameError};
 use ipe_intern::{Interner, Symbol};
 
 const HIGHLIGHT: &str = "module Lib.Highlight exposing (..)\n\n\
@@ -235,5 +235,118 @@ fn an_alias_body_naming_a_module_its_definer_never_imports_is_refused_at_the_dec
             }) if &**qualifier == "Highlight"
         ),
         "the definer's own unresolvable alias body is IPE-N0004, got {result:?}"
+    );
+}
+
+/// `true` when `result` is the node-ceiling refusal (IPE-N0032, `Nodes`).
+const fn is_node_ceiling<T>(result: &DResult<T>) -> bool {
+    matches!(
+        result,
+        Err(Diagnostic::Name {
+            msg: NameError::TypeExpansionTooDeep {
+                kind: AliasExpansionKind::Nodes,
+                ..
+            },
+            ..
+        })
+    )
+}
+
+const TEN_SLOTS: &str = "module Lib.Ten exposing (..)\n\n\
+                         type alias Ten a = ( a, a, a, a, a, a, a, a, a, a )\n";
+
+#[test]
+fn a_parameter_copied_into_many_slots_spends_the_node_ceiling() {
+    // Five nested `Ten`s copy their argument into ten slots each: ~111k nodes
+    // from a handful of expansions. Every copied node is charged, so the
+    // declaration is refused rather than materialised.
+    let (result, _) = canonicalise_chain(&["module Lib.Ten exposing (..)\n\n\
+         type alias Ten a = ( a, a, a, a, a, a, a, a, a, a )\n\n\
+         type alias Big = Ten (Ten (Ten (Ten (Ten Int))))\n"]);
+    assert!(
+        is_node_ceiling(&result),
+        "copied alias arguments must spend the node ceiling, got {result:?}"
+    );
+}
+
+#[test]
+fn an_imported_parameter_copied_into_many_slots_spends_the_node_ceiling() {
+    let (result, _) = canonicalise_chain(&[
+        TEN_SLOTS,
+        "module Lib.Big exposing (..)\n\n\
+         import Lib.Ten exposing (Ten)\n\n\
+         type alias Big = Ten (Ten (Ten (Ten (Ten Int))))\n",
+    ]);
+    assert!(
+        is_node_ceiling(&result),
+        "an imported alias's copied arguments must spend the node ceiling, got {result:?}"
+    );
+}
+
+#[test]
+fn a_qualified_union_reference_never_expands_a_same_named_local_alias() {
+    let (result, i) = canonicalise_chain(&[
+        "module Lib.Counter exposing (..)\n\ntype Msg = Inc | Dec\n",
+        "module Lib.Page exposing (..)\n\n\
+         import Lib.Counter\n\n\
+         type alias Msg = Int\n\n\
+         pick : Counter.Msg -> Int\n\
+         pick m = 0\n",
+    ]);
+    let Ok((page, _)) = result else {
+        assert!(result.is_ok(), "Lib.Page must canonicalise: {result:?}");
+        return;
+    };
+    let arg = match annotation(&page, &i, "pick") {
+        Some(Type::Lambda(arg, _)) => Some(arg.as_ref()),
+        _ => None,
+    };
+    assert_eq!(
+        arg.and_then(|t| con_name(t, &i)).as_deref(),
+        Some("Lib.Counter.Msg"),
+        "`Counter.Msg` names the dep's union, not the local `Msg` alias"
+    );
+}
+
+const ALIAS_ID_INT: &str = "module Lib.A exposing (..)\n\ntype alias Id = Int\n";
+const ALIAS_ID_STRING: &str = "module Lib.B exposing (..)\n\ntype alias Id = String\n";
+
+#[test]
+fn a_bare_alias_two_imports_bring_from_different_homes_is_ambiguous() {
+    let (result, _) = canonicalise_chain(&[
+        ALIAS_ID_INT,
+        ALIAS_ID_STRING,
+        "module Lib.Use exposing (..)\n\n\
+         import Lib.A exposing (..)\n\
+         import Lib.B exposing (Id)\n\n\
+         size : Id -> Int\n\
+         size id = 0\n",
+    ]);
+    assert!(
+        matches!(
+            &result,
+            Err(Diagnostic::Name {
+                msg: NameError::AmbiguousImport { name, .. },
+                ..
+            }) if &**name == "Id"
+        ),
+        "a bare `Id` from two homes is IPE-N0024, never the first import, got {result:?}"
+    );
+}
+
+#[test]
+fn an_unused_alias_two_imports_bring_is_not_an_error() {
+    let (result, _) = canonicalise_chain(&[
+        ALIAS_ID_INT,
+        ALIAS_ID_STRING,
+        "module Lib.Use exposing (..)\n\n\
+         import Lib.A exposing (..)\n\
+         import Lib.B exposing (..)\n\n\
+         size : A.Id -> Int\n\
+         size id = 0\n",
+    ]);
+    assert!(
+        result.is_ok(),
+        "ambiguity is refused at a bare use, not at the imports: {result:?}"
     );
 }

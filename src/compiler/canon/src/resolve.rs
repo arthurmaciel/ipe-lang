@@ -879,16 +879,33 @@ enum AliasDef {
     },
     /// Exported by a dependency, its body canonical in the dependency's scope.
     Imported(crate::ExportedAlias),
+    /// A bare name two imports bring in from different homes. A bare use is
+    /// IPE-N0024; the import alone is not, exactly as for an open-import value.
+    Ambiguous { homes: [Vec<Symbol>; 2] },
 }
 
-impl AliasDef {
-    /// The number of type arguments a use site must supply.
-    const fn arity(&self) -> usize {
-        match self {
-            Self::Local { params, .. } => params.len(),
-            Self::Imported(exported) => exported.param_slots.len(),
+/// Bring a dep's exported alias into bare-name scope under `name`.
+///
+/// The same alias reached twice (a diamond import) is one entry; a second home
+/// for the name turns the entry [`AliasDef::Ambiguous`], so a bare use can never
+/// silently expand whichever import came first.
+fn inject_unqualified_alias(
+    injected_aliases: &mut BTreeMap<Symbol, AliasDef>,
+    name: Symbol,
+    exported: &crate::ExportedAlias,
+) {
+    let entry = match injected_aliases.get(&name) {
+        None => AliasDef::Imported(exported.clone()),
+        Some(AliasDef::Imported(prior)) if prior.home != exported.home => AliasDef::Ambiguous {
+            homes: [prior.home.clone(), exported.home.clone()],
+        },
+        // The same home again, already ambiguous, or a local declaration
+        // (registered after imports, so never present here): the entry stands.
+        Some(AliasDef::Imported(_) | AliasDef::Ambiguous { .. } | AliasDef::Local { .. }) => {
+            return;
         }
-    }
+    };
+    injected_aliases.insert(name, entry);
 }
 
 /// The immutable context threaded through [`canonicalise_type`]. Bundling the
@@ -3472,6 +3489,7 @@ fn resolve_own_aliases(
         resolved.insert(
             decl.name.value,
             crate::ExportedAlias {
+                home: env.home.clone(),
                 param_slots,
                 body,
                 free_vars,
@@ -3514,9 +3532,10 @@ fn instantiate_imported_alias(
     spend_expansion_node(ctx, budget, depth)?;
     let next = depth.saturating_add(1);
     Ok(match body {
-        canon::Type::Var(v) => slots
-            .get(v)
-            .map_or_else(|| canon::Type::Var(*v), Clone::clone),
+        canon::Type::Var(v) => match slots.get(v) {
+            Some(arg) => copy_substituted_arg(arg, ctx, budget)?,
+            None => canon::Type::Var(*v),
+        },
         canon::Type::Unit => canon::Type::Unit,
         canon::Type::Lambda(a, b) => canon::Type::Lambda(
             Box::new(instantiate_imported_alias(a, slots, ctx, budget, next)?),
@@ -3833,15 +3852,22 @@ fn witness_record_fields(
     let (src_fields, seed): (&Vec<(Located<Symbol>, src::TypeAnnotation)>, Vec<Symbol>) = match ann
     {
         src::TypeAnnotation::TRecord(fields) => (fields, Vec::new()),
-        src::TypeAnnotation::TType(_, segments, args) if args.is_empty() => {
+        src::TypeAnnotation::TType(qualifier, segments, args) if args.is_empty() => {
             let Some(name) = segments.last().copied() else {
                 return Ok(None);
             };
-            match aliases.get(&name) {
+            // The same key `canonicalise_type` expands through, so a qualified
+            // witness reads the qualifier's alias, never a same-named local one.
+            let qualifier =
+                resolve_or_bug(interner, *qualifier, "ipe_canon::witness_record_fields")?;
+            let Some(alias_key) = alias_lookup_key(qualifier, name, aliases, interner)? else {
+                return Ok(None);
+            };
+            match aliases.get(&alias_key) {
                 Some(AliasDef::Local {
                     params,
                     body: src::TypeAnnotation::TRecord(fields),
-                }) if params.is_empty() => (fields, vec![name]),
+                }) if params.is_empty() => (fields, vec![alias_key]),
                 // An imported record alias is already canonical in its
                 // defining module's scope; its fields are the witness as-is.
                 Some(AliasDef::Imported(exported))
@@ -4758,9 +4784,7 @@ fn inject_dep_exports(
                 )?;
             }
             for (&alias_name, ea) in &dep.aliases {
-                injected_aliases
-                    .entry(alias_name)
-                    .or_insert_with(|| AliasDef::Imported(ea.clone()));
+                inject_unqualified_alias(injected_aliases, alias_name, ea);
             }
         }
         src::Exposing::All => {
@@ -4800,9 +4824,7 @@ fn inject_dep_exports(
             // scope, so a body naming a type only the dep imports needs no
             // import here.
             for (&alias_name, ea) in &dep.aliases {
-                injected_aliases
-                    .entry(alias_name)
-                    .or_insert_with(|| AliasDef::Imported(ea.clone()));
+                inject_unqualified_alias(injected_aliases, alias_name, ea);
             }
         }
         src::Exposing::List(items) => {
@@ -4874,9 +4896,7 @@ fn inject_dep_exports(
                             }
                         }
                         if is_alias && let Some(ea) = dep.aliases.get(type_name) {
-                            injected_aliases
-                                .entry(*type_name)
-                                .or_insert_with(|| AliasDef::Imported(ea.clone()));
+                            inject_unqualified_alias(injected_aliases, *type_name, ea);
                             // A record alias also exports a value-level
                             // auto-constructor under the same name; when the
                             // dep exposed it (present in `dep.values`), bring it
@@ -6661,6 +6681,14 @@ fn spend_expansion_node(ctx: &TypeCtx, budget: &mut u32, depth: u32) -> DResult<
             },
         });
     }
+    spend_budget_node(ctx, budget)
+}
+
+/// Spend one node of the expansion's node ceiling.
+///
+/// # Errors
+/// [`NameError::TypeExpansionTooDeep`] when the ceiling is exhausted.
+fn spend_budget_node(ctx: &TypeCtx, budget: &mut u32) -> DResult<()> {
     *budget = budget.checked_sub(1).ok_or(Diagnostic::Name {
         span: ctx.ann_span,
         msg: NameError::TypeExpansionTooDeep {
@@ -6669,6 +6697,65 @@ fn spend_expansion_node(ctx: &TypeCtx, budget: &mut u32, depth: u32) -> DResult<
         },
     })?;
     Ok(())
+}
+
+/// Copy an alias argument into a parameter position, spending one node per node copied.
+///
+/// A parameter used `k` times copies its argument `k` times, so nesting such an
+/// alias multiplies the output: `T (T (T Int))` over a ten-slot `T` is a
+/// thousand nodes from a handful of calls. Charging every copied node keeps the
+/// expansion's output, not just its call count, under the node ceiling. The
+/// walk uses an explicit stack, so a deep argument cannot grow the native one.
+///
+/// # Errors
+/// [`NameError::TypeExpansionTooDeep`] when the copy exhausts the node ceiling.
+fn copy_substituted_arg(
+    arg: &canon::Type,
+    ctx: &TypeCtx,
+    budget: &mut u32,
+) -> DResult<canon::Type> {
+    let mut pending = vec![arg];
+    while let Some(node) = pending.pop() {
+        spend_budget_node(ctx, budget)?;
+        match node {
+            canon::Type::Var(_) | canon::Type::Unit => {}
+            canon::Type::Lambda(a, b) => {
+                pending.push(a);
+                pending.push(b);
+            }
+            canon::Type::Con { args, .. } | canon::Type::Tuple(args) => pending.extend(args),
+            canon::Type::Record(fields) | canon::Type::RecordOpen(_, fields) => {
+                pending.extend(fields.iter().map(|(_, ty)| ty));
+            }
+        }
+    }
+    Ok(arg.clone())
+}
+
+/// The `aliases` key a type reference `qualifier.name` expands through, if any.
+///
+/// A bare reference looks up its own name. A QUALIFIED reference (`Money.Price`)
+/// expands the dep's exported alias through its synthetic `Qualifier.Name` key
+/// even when the name was never `exposing`-injected — qualified access needs no
+/// exposure. A qualified reference with no such key (a union of the dep, a
+/// stdlib kernel type) names no alias at all, so `None`: it never expands a
+/// same-named alias of the referencing module, which the qualifier does not name.
+///
+/// # Errors
+/// [`Diagnostic::CompilerBug`] when `name` is not interned.
+fn alias_lookup_key(
+    qualifier: &str,
+    name: Symbol,
+    aliases: &BTreeMap<Symbol, AliasDef>,
+    interner: &Interner,
+) -> DResult<Option<Symbol>> {
+    if qualifier.is_empty() {
+        return Ok(Some(name));
+    }
+    let name_s = resolve_or_bug(interner, name, "ipe_canon::alias_lookup_key")?;
+    Ok(interner
+        .lookup(&format!("{qualifier}.{name_s}"))
+        .filter(|sym| aliases.contains_key(sym)))
 }
 
 #[allow(clippy::too_many_lines)] // exhaustive type-annotation walker
@@ -6708,13 +6795,13 @@ fn canonicalise_type(
             // own free variables were recorded when the argument was canonicalised
             // at the use site, so it does not re-enter `free_vars` here. An unbound
             // variable is genuinely free and is quantified by the binding.
-            Ok(subst.get(v).map_or_else(
+            subst.get(v).map_or_else(
                 || {
                     free_vars.insert(*v);
-                    canon::Type::Var(*v)
+                    Ok(canon::Type::Var(*v))
                 },
-                Clone::clone,
-            ))
+                |arg| copy_substituted_arg(arg, ctx, budget),
+            )
         }
         src::TypeAnnotation::TUnit => Ok(canon::Type::Unit),
         src::TypeAnnotation::TTuple(elems) => {
@@ -6981,46 +7068,33 @@ fn canonicalise_type(
                     depth.saturating_add(1),
                 )?);
             }
-            // A QUALIFIED reference (`Money.Price`) expands the dep's exported
-            // alias through its synthetic `Qualifier.Name` key even when the
-            // name was never `exposing`-injected — qualified access needs no
-            // exposure, and the qualified key wins over a same-named LOCAL
-            // alias. A miss (stdlib qualifier, non-alias type) falls back to
-            // the bare-name lookup below.
-            let alias_key: Symbol = if qualifier_str.is_empty() {
-                name
-            } else {
-                let name_s = resolve_or_bug(
-                    ctx.interner,
-                    name,
-                    "ipe_canon::canonicalise_type::alias_key",
-                )?;
-                ctx.interner
-                    .lookup(&format!("{qualifier_str}.{name_s}"))
-                    .filter(|sym| ctx.aliases.contains_key(sym))
-                    .unwrap_or(name)
-            };
             // A registered alias not already mid-expansion (cycle) is expanded.
             // Arity must match exactly — a type alias has to be fully applied.
-            if !visited.contains(&alias_key)
+            if let Some(alias_key) =
+                alias_lookup_key(qualifier_str, name, ctx.aliases, ctx.interner)?
+                && !visited.contains(&alias_key)
                 && let Some(alias) = ctx.aliases.get(&alias_key)
             {
-                if can_args.len() != alias.arity() {
-                    return Err(Diagnostic::Name {
+                let check_arity = |expected: usize| -> DResult<()> {
+                    if can_args.len() == expected {
+                        return Ok(());
+                    }
+                    Err(Diagnostic::Name {
                         span: ctx.ann_span,
                         msg: NameError::AliasArity {
                             name: name_str(ctx.interner, name)?,
-                            expected: alias.arity(),
+                            expected,
                             found: can_args.len(),
                         },
-                    });
-                }
+                    })
+                };
                 return match alias {
                     // A local alias: its declared parameters are bound to the
                     // canonicalised arguments and the source body is
                     // canonicalised under that fresh substitution, in this
                     // module's own scope.
                     AliasDef::Local { params, body } => {
+                        check_arity(params.len())?;
                         let body_subst: BTreeMap<Symbol, canon::Type> =
                             params.iter().copied().zip(can_args).collect();
                         visited.push(alias_key);
@@ -7040,6 +7114,7 @@ fn canonicalise_type(
                     // defining module's scope, so the arguments are substituted
                     // for its parameter slots and nothing is re-resolved here.
                     AliasDef::Imported(exported) => {
+                        check_arity(exported.param_slots.len())?;
                         free_vars.extend(exported.free_vars.iter().copied());
                         let slots: BTreeMap<Symbol, canon::Type> =
                             exported.param_slots.iter().copied().zip(can_args).collect();
@@ -7051,6 +7126,18 @@ fn canonicalise_type(
                             depth.saturating_add(1),
                         )
                     }
+                    // A bare name two imports bring in from different homes.
+                    AliasDef::Ambiguous { homes } => Err(Diagnostic::Name {
+                        span: ctx.ann_span,
+                        msg: NameError::AmbiguousImport {
+                            name: name_str(ctx.interner, name)?,
+                            modules: SortedNames::new(
+                                homes
+                                    .iter()
+                                    .map(|home| path_to_dot_string(ctx.interner, home)),
+                            ),
+                        },
+                    }),
                 };
             }
             // Qualified reference (e.g. `Counter.Msg`): use `qualifier_paths`

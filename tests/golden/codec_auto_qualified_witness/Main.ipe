@@ -1,0 +1,35 @@
+module Main exposing (main)
+
+-- `Codec.auto` over a witness annotated with a QUALIFIED record alias
+-- (`Rows.User`, never exposed bare). The derive reads the witness's record
+-- through the same alias key the annotation expands through, so the qualified
+-- spelling is a witness exactly as a bare one is.
+
+import Ipe.Io as Io
+import Ipe.Codec as Codec exposing (Codec)
+import Lib.Rows as Rows
+
+
+blankUser : Rows.User
+blankUser =
+    { id = 0
+    , email = ""
+    }
+
+
+userCodec : Codec Rows.User
+userCodec =
+    Codec.auto blankUser
+
+
+main =
+    case Codec.fromJson userCodec (Codec.toJson userCodec blankUser) of
+        Ok back ->
+            if back.id == 0 then
+                Io.println "codec-auto-qualified-witness-ok"
+
+            else
+                Io.println "codec-auto-qualified-witness-FAIL"
+
+        Err _ ->
+            Io.println "codec-auto-qualified-witness-FAIL"
