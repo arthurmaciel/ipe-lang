@@ -439,6 +439,26 @@ mod tests {
                 assert_eq!(hash, view::attest(&view), "{path}: {qualified}");
             }
         }
+        // A file no extractor yields units for still gets its FILE unit, whose
+        // hash is the view of the whole file.
+        let store = Store::open(":memory:").unwrap();
+        let src = "# only a comment\r\nexport X=1\n";
+        extract_file(&store, "tools/env.sh", Lang::Bash, src, "sha").unwrap();
+        let rows = unit_rows(&store);
+        assert_eq!(rows.len(), 1);
+        for (qualified, start, end, hash) in rows {
+            assert!(qualified.ends_with("::FILE"), "{qualified}");
+            assert_eq!((start, end), (1, 2));
+            assert_eq!(
+                hash,
+                view::attest(&view::view_text(src, start, end).unwrap())
+            );
+        }
+        // A file of an unknown language is not indexed, so it has no unit
+        // whose hash could drift from its view.
+        let store = Store::open(":memory:").unwrap();
+        extract_file(&store, "notes/a.txt", Lang::Other, "text\n", "sha").unwrap();
+        assert!(unit_rows(&store).is_empty());
     }
 
     #[test]
