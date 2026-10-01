@@ -32,6 +32,7 @@
 //! at merge (unsigned, or committed under a non-verifiable placeholder).
 
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -746,35 +747,233 @@ fn resolve_publish_credentials() -> Result<PublishCredentials, CliError> {
     })
 }
 
-/// `GET` a JSON resource from the GitHub API with the bearer token, returning the
-/// parsed body only on an HTTP 200. `None` on any transport failure, non-200
-/// status, or unparseable body — the caller turns that into a fail-closed
-/// refusal.
+/// Upper bound on a GitHub API response body read back from a scratch file.
 ///
-/// Mirrors [`github_api_post`]'s security shape exactly: the token travels on
-/// curl's stdin config (`--config -`), never argv, so it cannot be read from
-/// `/proc/<pid>/cmdline`; the arriving [`crate::login::PublishToken`] alphabet
-/// excludes the quote/newline that could inject a further curl directive; and the
-/// response is read back through the retained scratch handle, not by re-opening
-/// the path, so the bytes parsed are the bytes curl wrote to that inode.
-fn github_api_get_json(url: &str, token: &crate::login::PublishToken) -> Option<serde_json::Value> {
-    let mut scratch = ScratchFile::create("ipe-publish-user").ok()?;
-    let tmp_path = scratch.path().to_string_lossy().into_owned();
+/// Passed to curl as `--max-filesize` AND enforced again by [`read_capped`]:
+/// two independent stops on the same number, so a body past it is refused
+/// whether or not curl's own cap holds on a given curl build.
+const GITHUB_RESPONSE_BODY_CAP: u64 = 10 * 1024 * 1024;
 
-    let mut child = Command::new("curl")
-        .args(["--silent", "--show-error"])
-        .args(["-H", "Accept: application/vnd.github+json"])
-        .args(["-H", "User-Agent: ipe-cli"])
-        // Token delivered via stdin config, never via argv.
-        .args(["--config", "-"])
-        .args(["-o", &tmp_path])
-        .args(["-w", "%{http_code}"])
-        .arg(url)
+/// A validated 3-digit HTTP status in `100..=599`.
+///
+/// The private field means the only way to hold one is [`HttpStatus::parse`]
+/// succeeding — there is no path from an unvalidated `u16`, and so no path for
+/// curl's raw, possibly-garbage status text to reach a branch that treats it as
+/// a real reply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HttpStatus(u16);
+
+impl HttpStatus {
+    /// Parse curl's `-w '%{http_code}'` text: exactly 3 ASCII digits, no
+    /// surrounding whitespace (curl writes none, so any present is refused as
+    /// malformed rather than trimmed away), value in `100..=599`.
+    ///
+    /// `000` — curl's own "no response" sentinel — is refused as
+    /// [`StatusError::NoResponse`], distinct from an in-range-length-but-out-of-
+    /// range value like `099`: both are 3 digits, but only `000` means curl
+    /// never got a reply at all.
+    fn parse(raw: &str) -> Result<Self, StatusError> {
+        if raw.is_empty() {
+            return Err(StatusError::Empty);
+        }
+        if raw.len() != 3 || !raw.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(StatusError::NotDigits);
+        }
+        let value = raw
+            .bytes()
+            .fold(0u16, |acc, b| acc * 10 + u16::from(b - b'0'));
+        if value == 0 {
+            return Err(StatusError::NoResponse);
+        }
+        if !(100..=599).contains(&value) {
+            return Err(StatusError::OutOfRange(value));
+        }
+        Ok(Self(value))
+    }
+
+    /// The validated status value.
+    const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+/// Why [`HttpStatus::parse`] refused curl's status text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StatusError {
+    /// Curl wrote no status text at all.
+    Empty,
+    /// The text was not exactly 3 ASCII digits.
+    NotDigits,
+    /// Curl's own "no response" sentinel (`000`), usually a connection failure.
+    NoResponse,
+    /// 3 digits, but outside `100..=599`.
+    OutOfRange(u16),
+}
+
+/// Curl's own exit status for one GitHub API call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CurlExit(Option<i32>);
+
+/// Why a bounded body read failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BodyError {
+    /// The body exceeded [`GITHUB_RESPONSE_BODY_CAP`].
+    TooLarge,
+    /// The scratch file could not be rewound or read.
+    Io,
+}
+
+/// A GitHub API call that ran to completion.
+#[derive(Debug)]
+enum CurlOutcome {
+    /// Curl exited 0 and wrote a parseable status; the body is read back but
+    /// not yet interpreted — the caller classifies it.
+    Reply { status: HttpStatus, body: Vec<u8> },
+    /// Curl itself did not complete the request (DNS, TLS, timeout, connection
+    /// refused, `--max-filesize` exceeded, …). Carries curl's exit code only —
+    /// no body, no argv, no token.
+    TransportFailed(CurlExit),
+}
+
+/// Everything else that can keep [`run_github_curl`] from returning a
+/// [`CurlOutcome`]: curl could not even be spawned, its status text did not
+/// parse, or its body could not be read back within the cap.
+#[derive(Debug)]
+enum CurlRunError {
+    /// The scratch file, or the `curl` child process itself, could not be created.
+    CouldNotRun(std::io::Error),
+    /// Curl exited 0 but its `-w '%{http_code}'` text did not parse.
+    Status(StatusError),
+    /// Curl exited 0 but the response body could not be read back.
+    Body(BodyError),
+}
+
+/// One GitHub API call shape: `GET`, or `POST` with a JSON body.
+enum CurlMethod<'a> {
+    Get,
+    Post(&'a str),
+}
+
+/// Build the curl argv for one GitHub API call — the single place either call
+/// shape is constructed, so [`github_api_get_json`], [`github_api_post`], and
+/// their test cannot drift apart.
+///
+/// Takes no token: the auth header travels on curl's stdin config, written by
+/// [`run_github_curl`] after spawn, so a token cannot reach this function and
+/// so cannot appear in the argv it builds — not by convention, but because
+/// there is no parameter to carry it through.
+///
+/// `--max-time 60` bounds a stalled remote party; `--max-filesize` matches
+/// [`GITHUB_RESPONSE_BODY_CAP`], the same ceiling [`read_capped`] enforces
+/// again on the bytes actually read back. `--fail-with-body` is deliberately
+/// never added: the status is read through `-w`, not curl's own pass/fail exit
+/// mapping, so curl always writes the body for classification.
+fn github_curl_argv(method: &CurlMethod<'_>, url: &str, out_path: &str) -> Vec<String> {
+    let mut args = vec!["--silent".to_owned(), "--show-error".to_owned()];
+    if let CurlMethod::Post(_) = method {
+        args.push("-X".to_owned());
+        args.push("POST".to_owned());
+    }
+    args.push("-H".to_owned());
+    args.push("Accept: application/vnd.github+json".to_owned());
+    args.push("-H".to_owned());
+    args.push("User-Agent: ipe-cli".to_owned());
+    // Token delivered via stdin config, never via argv.
+    args.push("--config".to_owned());
+    args.push("-".to_owned());
+    if let CurlMethod::Post(body) = method {
+        args.push("-d".to_owned());
+        args.push((*body).to_owned());
+    }
+    args.push("-o".to_owned());
+    args.push(out_path.to_owned());
+    args.push("-w".to_owned());
+    args.push("%{http_code}".to_owned());
+    args.push("--max-time".to_owned());
+    args.push("60".to_owned());
+    args.push("--max-filesize".to_owned());
+    args.push(GITHUB_RESPONSE_BODY_CAP.to_string());
+    args.push(url.to_owned());
+    args
+}
+
+/// Read a GitHub response body back through the retained scratch handle,
+/// refusing past `cap` bytes.
+///
+/// Reads `cap + 1` bytes through a bounded [`Read::take`] rather than buffering
+/// an unbounded body first: an oversized body is refused by construction, not
+/// detected after the fact. Defense in depth alongside curl's own
+/// `--max-filesize` — either enforcement point alone already refuses an
+/// oversized body.
+///
+/// # Errors
+/// [`BodyError::TooLarge`] past `cap` bytes; [`BodyError::Io`] on a rewind or
+/// read failure.
+fn read_capped(scratch: &mut ScratchFile, cap: u64) -> Result<Vec<u8>, BodyError> {
+    scratch.rewind().map_err(|_| BodyError::Io)?;
+    let limit = cap.checked_add(1).ok_or(BodyError::TooLarge)?;
+    let mut buf = Vec::new();
+    (&scratch.file)
+        .take(limit)
+        .read_to_end(&mut buf)
+        .map_err(|_| BodyError::Io)?;
+    let len = u64::try_from(buf.len()).unwrap_or(u64::MAX);
+    if len > cap {
+        return Err(BodyError::TooLarge);
+    }
+    Ok(buf)
+}
+
+/// Run one GitHub API curl call end to end — spawn, hand the token to stdin,
+/// wait, and read the reply back — the one place any of it happens for either
+/// call shape.
+///
+/// Checks curl's own exit status BEFORE the status text: a nonzero exit is a
+/// transport failure (DNS, TLS, timeout, `--max-filesize`, …), not a malformed
+/// status, and is refused as [`CurlOutcome::TransportFailed`] before the status
+/// text or body are ever looked at.
+///
+/// The token travels on curl's
+/// stdin config (`--config -`), never argv, so it cannot be read from
+/// `/proc/<pid>/cmdline`; the arriving [`crate::login::PublishToken`] alphabet
+/// excludes the quote/newline that could inject a further curl directive; and
+/// the response is read back through the retained scratch handle, not by
+/// re-opening the path, so the bytes parsed are the bytes curl wrote to that
+/// inode.
+fn run_github_curl(
+    method: &CurlMethod<'_>,
+    url: &str,
+    token: &crate::login::PublishToken,
+    scratch_label: &str,
+) -> Result<CurlOutcome, CurlRunError> {
+    run_curl_with_bin(Path::new("curl"), method, url, token, scratch_label)
+}
+
+/// [`run_github_curl`]'s implementation, parameterized over the `curl`
+/// executable so a test can point it at a fake binary without touching the
+/// process environment (`std::env::set_var` is `unsafe` under edition 2024 and
+/// this workspace forbids `unsafe` outside its one sanctioned site). `curl_bin`
+/// containing no path separator still resolves through `PATH` exactly as
+/// `Command::new("curl")` always did; a test passes an absolute path instead,
+/// bypassing `PATH` lookup entirely.
+fn run_curl_with_bin(
+    curl_bin: &Path,
+    method: &CurlMethod<'_>,
+    url: &str,
+    token: &crate::login::PublishToken,
+    scratch_label: &str,
+) -> Result<CurlOutcome, CurlRunError> {
+    let mut scratch = ScratchFile::create(scratch_label).map_err(CurlRunError::CouldNotRun)?;
+    let out_path = scratch.path().to_string_lossy().into_owned();
+    let argv = github_curl_argv(method, url, &out_path);
+
+    let mut child = Command::new(curl_bin)
+        .args(&argv)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .ok()?;
+        .map_err(CurlRunError::CouldNotRun)?;
 
     if let Some(mut stdin) = child.stdin.take() {
         let _ = writeln!(
@@ -784,14 +983,131 @@ fn github_api_get_json(url: &str, token: &crate::login::PublishToken) -> Option<
         );
     }
 
-    let output = child.wait_with_output().ok()?;
-    let status_str = String::from_utf8_lossy(&output.stdout);
-    let http_status: u16 = status_str.trim().parse().unwrap_or(0);
-    if http_status != 200 {
-        return None;
+    let output = child
+        .wait_with_output()
+        .map_err(CurlRunError::CouldNotRun)?;
+
+    if !output.status.success() {
+        return Ok(CurlOutcome::TransportFailed(CurlExit(output.status.code())));
     }
-    let body_bytes = scratch.read_all().unwrap_or_default();
-    serde_json::from_slice(&body_bytes).ok()
+
+    let status_text = String::from_utf8_lossy(&output.stdout);
+    let status = HttpStatus::parse(&status_text).map_err(CurlRunError::Status)?;
+    let body = read_capped(&mut scratch, GITHUB_RESPONSE_BODY_CAP).map_err(CurlRunError::Body)?;
+    Ok(CurlOutcome::Reply { status, body })
+}
+
+/// Describe curl's exit status for a transport-failure message: its exit code,
+/// or that it was killed by a signal before it could finish.
+fn describe_curl_exit(exit: CurlExit) -> String {
+    exit.0.map_or_else(
+        || "curl was killed by a signal before it could finish".to_owned(),
+        |code| format!("curl exited with code {code}"),
+    )
+}
+
+/// Render a [`StatusError`] into the user-facing message for `op` (e.g. `"GET
+/// repo"`, `"POST pulls"`) — the one place curl's status refusals become text.
+fn status_error_message(op: &str, err: StatusError) -> String {
+    String::from(match err {
+        StatusError::Empty => text::msg::publish_http_status_empty(&op),
+        StatusError::NotDigits => text::msg::publish_http_status_not_digits(&op),
+        StatusError::NoResponse => text::msg::publish_http_status_no_response(&op),
+        StatusError::OutOfRange(value) => text::msg::publish_http_status_out_of_range(&op, &value),
+    })
+}
+
+/// Render a [`BodyError`] into the user-facing message for `op`.
+fn body_error_message(op: &str, err: BodyError) -> String {
+    String::from(match err {
+        BodyError::TooLarge => {
+            text::msg::publish_http_body_too_large(&op, &GITHUB_RESPONSE_BODY_CAP)
+        }
+        BodyError::Io => text::msg::publish_http_body_io(&op),
+    })
+}
+
+/// Render a curl transport failure into the user-facing message for `op`. The
+/// message carries curl's exit status only — never the argv or the token,
+/// neither of which this function has access to.
+fn transport_failed_message(op: &str, exit: CurlExit) -> String {
+    let detail = describe_curl_exit(exit);
+    String::from(text::msg::publish_http_transport_failed(
+        &op,
+        &crate::style::TerminalSafe::sanitize(&detail),
+    ))
+}
+
+/// The most `errors[]` entries [`pr_already_exists_marker`] walks looking for
+/// the "already exists" marker — GitHub's own reply carries a handful of
+/// entries; a bound keeps a pathological reply from costing an unbounded scan.
+const MAX_PR_REPLY_ERRORS: usize = 16;
+
+/// Whether `json` carries GitHub's "a pull request already exists" marker
+/// (case-insensitive), checking the top-level `message` field AND, bounded to
+/// [`MAX_PR_REPLY_ERRORS`] entries, every `errors[].message`.
+///
+/// GitHub's real duplicate-PR 422 puts the marker only inside
+/// `errors[0].message`; the top-level `message` is the generic "Validation
+/// Failed" shared by every 422, so a check of the top-level field alone never
+/// matches the real reply; this function looks where GitHub puts the marker.
+fn pr_already_exists_marker(json: &serde_json::Value) -> bool {
+    let mentions_marker = |text: &str| text.to_lowercase().contains("already exists");
+    if json
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(mentions_marker)
+    {
+        return true;
+    }
+    json.get("errors")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(MAX_PR_REPLY_ERRORS)
+        .filter_map(|entry| entry.get("message").and_then(serde_json::Value::as_str))
+        .any(mentions_marker)
+}
+
+/// Classify a GitHub PR-open reply into a typed [`PrResult`] — the one place an
+/// [`HttpStatus`] and a parsed JSON body become that outcome, shared by
+/// production and its test.
+///
+/// A 422 is [`PrResult::AlreadyExists`] only when [`pr_already_exists_marker`]
+/// finds the marker (in the top-level `message` or an `errors[].message`); any
+/// other 422 — or any status outside 201/422 — is [`PrResult::Failed`]. GitHub
+/// also returns 422 for unrelated validation failures (e.g. a malformed
+/// `head`), so a 422 alone never means success.
+fn classify_pr_reply(status: HttpStatus, json: &serde_json::Value) -> PrResult {
+    let message = json.get("message").and_then(serde_json::Value::as_str);
+    match status.get() {
+        201 => json
+            .get("html_url")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(
+                || PrResult::Failed("201 response missing html_url".to_owned()),
+                |url| PrResult::Created(url.to_owned()),
+            ),
+        422 if pr_already_exists_marker(json) => PrResult::AlreadyExists,
+        _ => PrResult::Failed(
+            message
+                .unwrap_or("unexpected GitHub API response")
+                .to_owned(),
+        ),
+    }
+}
+
+/// `GET` a JSON resource from the GitHub API with the bearer token, returning the
+/// parsed body only on an HTTP 200. `None` on any transport failure, non-200
+/// status, or unparseable body — the caller turns that into a fail-closed
+/// refusal.
+fn github_api_get_json(url: &str, token: &crate::login::PublishToken) -> Option<serde_json::Value> {
+    match run_github_curl(&CurlMethod::Get, url, token, "ipe-publish-user").ok()? {
+        CurlOutcome::Reply { status, body } if status.get() == 200 => {
+            serde_json::from_slice(&body).ok()
+        }
+        CurlOutcome::Reply { .. } | CurlOutcome::TransportFailed(_) => None,
+    }
 }
 
 /// Open the index PR the spec's default way: push the entry to the author's fork
@@ -931,6 +1247,7 @@ fn pr_request_body(plan: &PrPlan, fork_owner: &str) -> serde_json::Value {
 }
 
 /// Typed outcome of a GitHub PR-open API call.
+#[derive(Debug, PartialEq)]
 enum PrResult {
     /// HTTP 201 Created — PR was successfully opened.
     Created(String),
@@ -972,99 +1289,27 @@ fn submit_pr_via_api(plan: &PrPlan, fork_owner: &str, token: &crate::login::Publ
 /// not merely escaped.
 ///
 /// The HTTP status drives the result — not body-field presence — so the outcome
-/// is a typed [`PrResult`] parsed once at the network boundary.
+/// is a typed [`PrResult`] parsed once, by [`classify_pr_reply`], at the
+/// network boundary.
 fn github_api_post(
     url: &str,
     token: &crate::login::PublishToken,
     body: &serde_json::Value,
 ) -> PrResult {
     let body_str = body.to_string();
-    // curl writes the response body to an exclusively-created scratch file;
-    // the HTTP status code is captured on stdout (`-w '%{http_code}'`).
-    // The scratch file is created with O_EXCL before curl runs, so a
-    // pre-seeded symlink or a pre-existing name is refused rather than
-    // followed.  The response is read back through the retained file handle —
-    // not by re-opening the path — so the bytes parsed are the bytes curl
-    // wrote to this inode, with no race between write and read.
-    let mut scratch = match ScratchFile::create("ipe-publish-resp") {
-        Ok(sf) => sf,
-        Err(e) => {
-            return PrResult::Failed(format!(
-                "could not create scratch file for curl response: {e}"
-            ));
+    match run_github_curl(&CurlMethod::Post(&body_str), url, token, "ipe-publish-resp") {
+        Ok(CurlOutcome::Reply { status, body }) => match serde_json::from_slice(&body) {
+            Ok(json) => classify_pr_reply(status, &json),
+            Err(e) => PrResult::Failed(format!("could not parse GitHub's response: {e}")),
+        },
+        Ok(CurlOutcome::TransportFailed(exit)) => {
+            PrResult::Failed(transport_failed_message("POST pulls", exit))
         }
-    };
-    let tmp_path = scratch.path().to_string_lossy().into_owned();
-
-    let mut child = match Command::new("curl")
-        .args(["--silent", "--show-error", "-X", "POST"])
-        .args(["-H", "Accept: application/vnd.github+json"])
-        .args(["-H", "User-Agent: ipe-cli"])
-        // Token delivered via stdin config, never via argv.
-        .args(["--config", "-"])
-        .args(["-d", &body_str])
-        .args(["-o", &tmp_path])
-        .args(["-w", "%{http_code}"])
-        .arg(url)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return PrResult::Failed(format!("could not run `curl` (needed to open the PR): {e}"));
+        Err(CurlRunError::CouldNotRun(e)) => {
+            PrResult::Failed(format!("could not run `curl` (needed to open the PR): {e}"))
         }
-    };
-
-    // Write the auth header line to curl's stdin config, then close stdin so
-    // curl proceeds.  A write failure here means curl never gets the header;
-    // the subsequent wait will capture the error.
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = writeln!(
-            stdin,
-            r#"header = "Authorization: Bearer {}""#,
-            token.as_str()
-        );
-    }
-
-    let output = match child.wait_with_output() {
-        Ok(o) => o,
-        Err(e) => return PrResult::Failed(format!("curl wait failed: {e}")),
-    };
-
-    // stdout carries the 3-digit HTTP status code written by `-w '%{http_code}'`.
-    let status_str = String::from_utf8_lossy(&output.stdout);
-    let http_status: u16 = status_str.trim().parse().unwrap_or(0);
-
-    // Read the response body through the retained handle (not by path) so the
-    // bytes parsed are exactly what curl wrote to this inode.
-    let body_bytes = scratch.read_all().unwrap_or_default();
-    // `scratch` drops here, removing the temp file.
-
-    let json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
-        Ok(v) => v,
-        Err(e) => return PrResult::Failed(format!("could not parse GitHub's response: {e}")),
-    };
-
-    match http_status {
-        201 => {
-            // 201 Created must carry an `html_url`; anything else is unexpected.
-            json.get("html_url")
-                .and_then(serde_json::Value::as_str)
-                .map_or_else(
-                    || PrResult::Failed("201 response missing html_url".to_owned()),
-                    |url| PrResult::Created(url.to_owned()),
-                )
-        }
-        422 => PrResult::AlreadyExists,
-        _ => {
-            let msg = json
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unexpected GitHub API response");
-            PrResult::Failed(msg.to_owned())
-        }
+        Err(CurlRunError::Status(err)) => PrResult::Failed(status_error_message("POST pulls", err)),
+        Err(CurlRunError::Body(err)) => PrResult::Failed(body_error_message("POST pulls", err)),
     }
 }
 
@@ -1901,96 +2146,263 @@ mod tests {
         assert!(matches!(err, CliError::Usage(_)));
     }
 
-    /// `github_api_post` must never put the token in curl's argv — no
-    /// `Authorization` or `Bearer` substring must appear in the args list.
-    /// We verify the command that would be built (not the network result)
-    /// by constructing the same `Command` args here.
+    /// `github_curl_argv` must never put the token in curl's argv — it has no
+    /// token parameter at all, so the property holds by construction; this
+    /// drives the production builder and pins the absence as a refusal, not
+    /// just a convention. It must also always carry the transport-safety
+    /// flags: `--max-time` (a stalled remote party) and `--max-filesize` (an
+    /// oversized reply), matching [`GITHUB_RESPONSE_BODY_CAP`].
     #[test]
     fn token_not_in_curl_argv() {
-        // Mirror the argv construction in `github_api_post`.
         let token = "super-secret-token";
         let url = "https://api.github.com/repos/foo/bar/pulls";
         let body_str = r#"{"title":"t"}"#;
         let tmp_path = "/tmp/fake-resp";
 
-        let mut cmd = Command::new("curl");
-        cmd.args(["--silent", "--show-error", "-X", "POST"])
-            .args(["-H", "Accept: application/vnd.github+json"])
-            .args(["-H", "User-Agent: ipe-cli"])
-            .args(["--config", "-"])
-            .args(["-d", body_str])
-            .args(["-o", tmp_path])
-            .args(["-w", "%{http_code}"])
-            .arg(url);
+        let get_args = github_curl_argv(&CurlMethod::Get, url, tmp_path);
+        let post_args = github_curl_argv(&CurlMethod::Post(body_str), url, tmp_path);
 
-        // Collect every argv string and assert the token is absent.
-        let args: Vec<_> = cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        for arg in &args {
+        for args in [&get_args, &post_args] {
+            for arg in args {
+                assert!(
+                    !arg.contains(token),
+                    "token must not appear in curl argv; found it in: {arg:?}"
+                );
+                assert!(
+                    !arg.contains("Bearer"),
+                    "Authorization header must not appear in curl argv; found in: {arg:?}"
+                );
+            }
             assert!(
-                !arg.contains(token),
-                "token must not appear in curl argv; found it in: {arg:?}"
+                args.iter().any(|a| a == "--max-time"),
+                "curl argv must bound a stalled remote party with --max-time: {args:?}"
             );
             assert!(
-                !arg.contains("Bearer"),
-                "Authorization header must not appear in curl argv; found in: {arg:?}"
+                args.iter().any(|a| a == "--max-filesize"),
+                "curl argv must bound an oversized reply with --max-filesize: {args:?}"
             );
         }
+
         // The stdin config line that WOULD carry the token — verify format.
         let config_line = format!("header = \"Authorization: Bearer {token}\"");
         assert!(config_line.contains(token));
         assert!(config_line.contains("Bearer"));
     }
 
+    /// `HttpStatus::parse` refuses everything but exactly 3 ASCII digits in
+    /// `100..=599`, and never trims — curl's `-w` writes no surrounding
+    /// whitespace, so any is a malformed status, not one to clean up.
+    #[test]
+    fn http_status_parse_refuses_malformed_or_out_of_range() {
+        assert_eq!(HttpStatus::parse(""), Err(StatusError::Empty));
+        assert_eq!(HttpStatus::parse("abc"), Err(StatusError::NotDigits));
+        assert_eq!(HttpStatus::parse("000"), Err(StatusError::NoResponse));
+        assert_eq!(HttpStatus::parse("099"), Err(StatusError::OutOfRange(99)));
+        assert_eq!(HttpStatus::parse("600"), Err(StatusError::OutOfRange(600)));
+        assert_eq!(HttpStatus::parse("2000"), Err(StatusError::NotDigits));
+        assert_eq!(HttpStatus::parse(" 200"), Err(StatusError::NotDigits));
+        assert_eq!(HttpStatus::parse("200\n"), Err(StatusError::NotDigits));
+        assert_eq!(HttpStatus::parse("-20"), Err(StatusError::NotDigits));
+
+        assert_eq!(HttpStatus::parse("100"), Ok(HttpStatus(100)));
+        assert_eq!(HttpStatus::parse("200"), Ok(HttpStatus(200)));
+        assert_eq!(HttpStatus::parse("599"), Ok(HttpStatus(599)));
+    }
+
+    /// A curl child that exits nonzero before writing a usable status is a
+    /// typed [`CurlOutcome::TransportFailed`], never a fabricated status —
+    /// and the resulting message carries curl's exit code but no argv and no
+    /// token.
+    ///
+    /// Unix-only: the fake binary is a `#!/bin/sh` script made executable via
+    /// `std::os::unix::fs::PermissionsExt`, neither of which exists on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn curl_nonzero_exit_is_a_typed_transport_failure() {
+        // A fake `curl` binary, invoked by absolute path (bypassing `PATH`
+        // search entirely, so the test never touches the process's real
+        // `PATH`), that always exits 7 (curl's own "could not connect" code)
+        // without writing a status or a body — a nonzero exit is checked
+        // BEFORE the (absent) status text is parsed.
+        let fake_bin = ScratchDir::new("fake-curl-bin").expect("scratch dir");
+        let fake_curl = fake_bin.path().join("curl");
+        std::fs::write(&fake_curl, "#!/bin/sh\nexit 7\n").expect("write fake curl");
+        let mut perms = std::fs::metadata(&fake_curl)
+            .expect("stat fake curl")
+            .permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+        std::fs::set_permissions(&fake_curl, perms).expect("chmod fake curl");
+
+        let token = crate::login::PublishToken::parse("testtoken123").expect("token");
+        let result = run_curl_with_bin(
+            &fake_curl,
+            &CurlMethod::Get,
+            "https://api.github.com/user",
+            &token,
+            "ipe-test-transport-failed",
+        );
+
+        assert!(
+            matches!(result, Ok(CurlOutcome::TransportFailed(_))),
+            "expected TransportFailed for a nonzero curl exit, got {result:?}"
+        );
+        let Ok(CurlOutcome::TransportFailed(exit)) = result else {
+            return;
+        };
+        assert_eq!(exit, CurlExit(Some(7)));
+        let message = transport_failed_message("GET user", exit);
+        assert!(
+            !message.contains("testtoken123"),
+            "message leaked the token"
+        );
+        assert!(
+            !message.contains("Bearer"),
+            "message leaked the auth header"
+        );
+    }
+
+    /// A curl child that exits 0 but writes status text `HttpStatus::parse`
+    /// refuses — `"000"`, non-digits, or nothing at all — is a typed
+    /// [`CurlRunError::Status`], never a fabricated 0 or an empty reply
+    /// silently treated as success.
+    ///
+    /// Unix-only: the fake binary is a `#!/bin/sh` script made executable via
+    /// `std::os::unix::fs::PermissionsExt`, neither of which exists on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn curl_zero_exit_with_malformed_status_is_a_typed_status_refusal() {
+        let cases: [(&str, StatusError); 3] = [
+            ("000", StatusError::NoResponse),
+            ("abc", StatusError::NotDigits),
+            ("", StatusError::Empty),
+        ];
+        for (stdout_text, expected) in cases {
+            let fake_bin = ScratchDir::new("fake-curl-bad-status").expect("scratch dir");
+            let fake_curl = fake_bin.path().join("curl");
+            std::fs::write(
+                &fake_curl,
+                format!("#!/bin/sh\nprintf '%s' '{stdout_text}'\nexit 0\n"),
+            )
+            .expect("write fake curl");
+            let mut perms = std::fs::metadata(&fake_curl)
+                .expect("stat fake curl")
+                .permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+            std::fs::set_permissions(&fake_curl, perms).expect("chmod fake curl");
+
+            let token = crate::login::PublishToken::parse("testtoken123").expect("token");
+            let result = run_curl_with_bin(
+                &fake_curl,
+                &CurlMethod::Get,
+                "https://api.github.com/user",
+                &token,
+                "ipe-test-bad-status",
+            );
+
+            assert!(
+                matches!(&result, Err(CurlRunError::Status(actual)) if *actual == expected),
+                "status text {stdout_text:?} should refuse as Status({expected:?}), got {result:?}"
+            );
+        }
+    }
+
+    /// A response body past the shared cap is a typed refusal, never a
+    /// silently truncated read.
+    #[test]
+    fn oversized_body_is_refused_not_truncated() {
+        let mut scratch = ScratchFile::create("ipe-test-oversized-body").expect("scratch file");
+        scratch
+            .file
+            .write_all(&[b'x'; 16])
+            .expect("write oversized body");
+        assert_eq!(read_capped(&mut scratch, 8), Err(BodyError::TooLarge));
+
+        let mut small = ScratchFile::create("ipe-test-small-body").expect("scratch file");
+        small.file.write_all(b"12345").expect("write small body");
+        assert_eq!(read_capped(&mut small, 8), Ok(b"12345".to_vec()));
+    }
+
     /// HTTP 201 with `html_url` → `PrResult::Created`.
     /// HTTP 200 with `html_url` → `PrResult::Failed` (not a Create response).
-    /// HTTP 422 → `PrResult::AlreadyExists`.
-    ///
-    /// We test the branching logic directly by driving the match arms with
-    /// constructed inputs — no curl subprocess needed.
+    /// HTTP 422 shaped like GitHub's real duplicate-PR reply (the marker sits
+    /// only in `errors[].message`, not the generic top-level `message`) →
+    /// `PrResult::AlreadyExists`.
+    /// HTTP 422 whose `errors` never mention "already exists", 422 with no
+    /// `errors` at all, 5xx, and 401/403 are all refusals — `PrResult::Failed`,
+    /// never `AlreadyExists` or `Created`.
     #[test]
     fn pr_result_classification() {
-        // Simulate the dispatch logic from github_api_post for unit-testability.
-        fn classify(http_status: u16, json: &serde_json::Value) -> String {
-            match http_status {
-                201 => json
-                    .get("html_url")
-                    .and_then(serde_json::Value::as_str)
-                    .map_or_else(
-                        || "Failed:201 response missing html_url".to_owned(),
-                        |url| format!("Created:{url}"),
-                    ),
-                422 => "AlreadyExists".to_owned(),
-                _ => {
-                    let msg = json
-                        .get("message")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("unexpected GitHub API response");
-                    format!("Failed:{msg}")
-                }
-            }
-        }
-
         let with_url = serde_json::json!({"html_url": "https://github.com/foo/bar/pull/1"});
-        let error_body = serde_json::json!({"message": "Validation Failed"});
+        // GitHub's actual shape for a duplicate-PR 422: a generic top-level
+        // `message` plus the real marker nested in `errors[0].message`.
+        let already_exists = serde_json::json!({
+            "message": "Validation Failed",
+            "errors": [
+                {
+                    "resource": "PullRequest",
+                    "code": "custom",
+                    "message": "A pull request already exists for foo:branch."
+                }
+            ]
+        });
+        let validation_failed = serde_json::json!({"message": "Validation Failed"});
+        // A 422 that DOES carry `errors`, none of which mention "already
+        // exists" — e.g. a malformed `head` — must still be a refusal.
+        let unrelated_validation_failure = serde_json::json!({
+            "message": "Validation Failed",
+            "errors": [
+                {
+                    "resource": "PullRequest",
+                    "code": "invalid",
+                    "message": "head sha can't be blank"
+                }
+            ]
+        });
+        let forbidden = serde_json::json!({"message": "Forbidden"});
         let empty = serde_json::json!({});
 
+        let s = |raw: &str| HttpStatus::parse(raw).expect("valid test status");
+
         assert_eq!(
-            classify(201, &with_url),
-            "Created:https://github.com/foo/bar/pull/1"
+            classify_pr_reply(s("201"), &with_url),
+            PrResult::Created("https://github.com/foo/bar/pull/1".to_owned())
         );
         assert_eq!(
-            classify(200, &with_url),
-            "Failed:unexpected GitHub API response",
+            classify_pr_reply(s("200"), &with_url),
+            PrResult::Failed("unexpected GitHub API response".to_owned()),
             "200 with html_url is NOT a success"
         );
-        assert_eq!(classify(422, &error_body), "AlreadyExists");
-        assert_eq!(classify(500, &error_body), "Failed:Validation Failed");
         assert_eq!(
-            classify(201, &empty),
-            "Failed:201 response missing html_url"
+            classify_pr_reply(s("422"), &already_exists),
+            PrResult::AlreadyExists,
+            "the marker in errors[].message must be found even though the \
+             top-level message is only the generic \"Validation Failed\""
+        );
+        assert_eq!(
+            classify_pr_reply(s("422"), &validation_failed),
+            PrResult::Failed("Validation Failed".to_owned()),
+            "a 422 without an \"already exists\" marker must never be reported as success"
+        );
+        assert_eq!(
+            classify_pr_reply(s("422"), &unrelated_validation_failure),
+            PrResult::Failed("Validation Failed".to_owned()),
+            "a 422 whose errors never mention \"already exists\" must never be reported as success"
+        );
+        assert_eq!(
+            classify_pr_reply(s("500"), &validation_failed),
+            PrResult::Failed("Validation Failed".to_owned())
+        );
+        assert_eq!(
+            classify_pr_reply(s("401"), &forbidden),
+            PrResult::Failed("Forbidden".to_owned())
+        );
+        assert_eq!(
+            classify_pr_reply(s("403"), &forbidden),
+            PrResult::Failed("Forbidden".to_owned())
+        );
+        assert_eq!(
+            classify_pr_reply(s("201"), &empty),
+            PrResult::Failed("201 response missing html_url".to_owned())
         );
     }
 

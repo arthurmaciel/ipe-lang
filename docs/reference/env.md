@@ -153,7 +153,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 
 | Variable | Default | Effect | Class |
 |----------|---------|--------|-------|
-| `IPE_FILE_READ_MAX` | 16777216 (16 MiB) | Maximum bytes read by `File.read*` in a single call. Prevents OOM from unexpectedly large files. | `Tunable` |
+| `IPE_FILE_READ_MAX` | 536870912 (512 MiB) | Maximum bytes `File.readFile` reads in a single call; 0 refuses every non-empty file; a non-numeric value makes the read fail. Prevents OOM from unexpectedly large files. | `Tunable` |
 | `IPE_PROCESS_OUTPUT_MAX` | 16777216 (16 MiB) | Maximum bytes buffered from a subprocess's stdout or stderr by `Process.run`. Prevents OOM when a child writes without bound. | `Tunable` |
 
 ## HTTP client

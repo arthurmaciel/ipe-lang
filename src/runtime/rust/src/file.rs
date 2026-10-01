@@ -61,19 +61,69 @@ where
     f()
 }
 
-/// `Ipe.File.readFile : String -> Task Error String`. Reads the whole file,
-/// but bounded by a hard ceiling so an attacker-controlled path pointing at an
-/// unbounded source (`/dev/zero`, a named pipe, a multi-GiB file) cannot OOM the
-/// process — `read_to_string` on `/dev/zero` never returns. The ceiling defaults
-/// to 512 MiB and is overridable via `IPE_FILE_READ_MAX` (bytes). For a smaller
-/// explicit cap use `File.readFileLimit`; reading past the ceiling is an `Err`,
-/// never a silent truncation.
-fn file_read_ceiling() -> u64 {
-    crate::system::read_env_var("IPE_FILE_READ_MAX")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(512 * 1024 * 1024)
+/// Default `File.readFile` ceiling in bytes, applied only when `IPE_FILE_READ_MAX` is unset.
+pub const READ_FILE_DEFAULT_CEILING: u64 = 512 * 1024 * 1024;
+
+/// Fixed `File.readFileBytes` ceiling in bytes.
+///
+/// Lower than the text ceiling because each input byte materialises as an
+/// eight-byte `i64`.
+const READ_FILE_BYTES_CEILING: u64 = 10 * 1024 * 1024;
+
+/// Longest prefix of a malformed `IPE_FILE_READ_MAX` value echoed in its refusal.
+const READ_CEILING_SHOWN_CHARS: usize = 32;
+
+/// The operator's `IPE_FILE_READ_MAX` setting, parsed once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadCeiling {
+    /// The variable is absent; `READ_FILE_DEFAULT_CEILING` applies.
+    Unset,
+    /// An explicit byte ceiling; `0` refuses every non-empty file.
+    Bytes(u64),
+}
+
+impl ReadCeiling {
+    const fn bytes(self) -> u64 {
+        match self {
+            Self::Unset => READ_FILE_DEFAULT_CEILING,
+            Self::Bytes(n) => n,
+        }
+    }
+}
+
+/// Parses the raw `IPE_FILE_READ_MAX` lookup into a ceiling.
+///
+/// Only an absent variable yields the default. A present value must be a plain
+/// decimal byte count (`0` included); anything else — empty, signed, padded,
+/// suffixed, overflowing, non-Unicode — is a refusal, so a typo never widens
+/// the ceiling.
+fn parse_read_ceiling(raw: Result<String, std::env::VarError>) -> Result<ReadCeiling, String> {
+    let shown = match raw {
+        Err(std::env::VarError::NotPresent) => return Ok(ReadCeiling::Unset),
+        Err(std::env::VarError::NotUnicode(os)) => os.to_string_lossy().into_owned(),
+        Ok(v) => {
+            if !v.is_empty()
+                && v.bytes().all(|b| b.is_ascii_digit())
+                && let Ok(n) = v.parse::<u64>()
+            {
+                return Ok(ReadCeiling::Bytes(n));
+            }
+            v
+        }
+    };
+    let shown: String = shown.chars().take(READ_CEILING_SHOWN_CHARS).collect();
+    Err(format!(
+        "IPE_FILE_READ_MAX must be a decimal byte count (got {shown:?})"
+    ))
+}
+
+/// Resolves the `File.readFile` ceiling from `IPE_FILE_READ_MAX`.
+///
+/// The ceiling bounds an attacker-controlled path pointing at an unbounded
+/// source (`/dev/zero`, a named pipe, a multi-GiB file) so it cannot exhaust
+/// memory. A malformed setting fails the read closed rather than falling back.
+fn file_read_ceiling() -> Result<u64, String> {
+    parse_read_ceiling(crate::system::read_env_var("IPE_FILE_READ_MAX")).map(ReadCeiling::bytes)
 }
 
 fn file_read_file_sync(path: &str, cap: u64) -> Result<String, String> {
@@ -98,7 +148,10 @@ fn file_read_file_sync(path: &str, cap: u64) -> Result<String, String> {
 pub fn file_read_file<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, String> {
     let path = path.into_string();
     Box::pin(async move {
-        let cap = file_read_ceiling();
+        let cap = match file_read_ceiling() {
+            Ok(cap) => cap,
+            Err(e) => return IpeResult::Err(str_err(&e)),
+        };
         match run_blocking(move || file_read_file_sync(&path, cap)).await {
             Ok(s) => ok_res(s),
             Err(e) => IpeResult::Err(str_err(&e)),
@@ -183,33 +236,42 @@ fn file_read_file_limit_sync(path: &str, cap: u64) -> Result<String, String> {
     Ok(buf)
 }
 
+/// Parses a raw `readFileLimit` kernel argument into a byte ceiling.
+///
+/// `0` is the zero-byte ceiling; a negative value is refused. The stdlib
+/// wrapper passes a non-negative `ByteSize`, so this is the independent second
+/// boundary for any direct caller of the kernel.
+fn read_limit(limit: i64) -> Result<u64, String> {
+    u64::try_from(limit).map_err(|_| {
+        format!("File.readFileLimit: limit must be a non-negative byte count (got {limit})")
+    })
+}
+
 /// `Ipe.File.readFileLimit : String -> Int -> Task Error String`
 /// Read at most `limit` bytes. Returns `Err` when the file is larger than
 /// `limit` (to avoid OOM on unbounded inputs) or when the content is not
 /// valid UTF-8 (use `readFileBytes` for binary data in that case).
-/// A non-positive limit falls back to the 10 MiB default.
+/// A limit of `0` is a zero-byte ceiling (only an empty file reads); a
+/// negative limit is refused before the file is opened.
 ///
-/// AUD-09 gap-sweep TOCTOU fix: no separate `metadata()` pre-check. A
-/// stat-then-read split is TOCTOU — a file that grows between the two
-/// syscalls would pass the (now-stale) size check and then have `take(cap)`
-/// silently truncate the read with no error, instead of reporting that the
-/// file exceeds the limit. Reading `cap + 1` bytes in a single pass and
-/// checking the ACTUAL bytes read (same idiom as `file_read_file` above, and
-/// as `compression.rs`'s `gunzip`/`zstdDecompress` decompression-bomb check)
-/// removes the race window structurally: there is only one syscall
-/// sequence, so there is nothing left to race against.
+/// No separate `metadata()` pre-check: a stat-then-read split is TOCTOU — a
+/// file that grows between the two syscalls would pass the stale size check
+/// and then have `take(cap)` silently truncate. Reading `cap + 1` bytes in a
+/// single pass and checking the bytes actually read (same idiom as
+/// `file_read_file`, and `compression.rs`'s decompression-bomb check) leaves
+/// nothing to race against.
 #[must_use]
 pub fn file_read_file_limit<E: Send + From<String> + 'static>(
     path: Path,
     limit: i64,
 ) -> IpeTask<E, String> {
     let path = path.into_string();
-    let cap: u64 = if limit > 0 {
-        limit as u64
-    } else {
-        10 * 1024 * 1024
-    };
+    let cap = read_limit(limit);
     Box::pin(async move {
+        let cap = match cap {
+            Ok(cap) => cap,
+            Err(e) => return IpeResult::Err(str_err(&e)),
+        };
         match run_blocking(move || file_read_file_limit_sync(&path, cap)).await {
             Ok(s) => ok_res(s),
             Err(e) => IpeResult::Err(str_err(&e)),
@@ -218,22 +280,19 @@ pub fn file_read_file_limit<E: Send + From<String> + 'static>(
 }
 
 fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
-    const DEFAULT_CAP: u64 = 10 * 1024 * 1024;
     use std::io::Read as _;
     let f = std::fs::File::open(path).map_err(|e| format!("{e}"))?;
     let mut buf = Vec::new();
-    // Read `DEFAULT_CAP + 1` bytes in one pass and check the ACTUAL bytes
-    // read, same idiom as `file_read_file_sync` / `file_read_file_limit_sync`
-    // above (and the fix applied to `readFileLimit`'s TOCTOU race, commit
-    // 706f026): a file over the cap must `Err`, never silently truncate to
-    // `DEFAULT_CAP` bytes and report `Ok`.
+    // Read `READ_FILE_BYTES_CEILING + 1` bytes in one pass and check the bytes
+    // actually read (same idiom as `file_read_file_sync`): a file over the cap
+    // must `Err`, never silently truncate and report `Ok`.
     let read = f
-        .take(DEFAULT_CAP.saturating_add(1))
+        .take(READ_FILE_BYTES_CEILING.saturating_add(1))
         .read_to_end(&mut buf)
         .map_err(|e| format!("{e}"))?;
-    if read as u64 > DEFAULT_CAP {
+    if read as u64 > READ_FILE_BYTES_CEILING {
         return Err(format!(
-            "file exceeds {DEFAULT_CAP}-byte limit (stopped reading at the limit — actual size not reported to bound memory use): {path}"
+            "file exceeds {READ_FILE_BYTES_CEILING}-byte limit (stopped reading at the limit — actual size not reported to bound memory use): {path}"
         ));
     }
     Ok(from_u8_slice(&buf))
@@ -241,9 +300,8 @@ fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
 
 /// `Ipe.File.readFileBytes : String -> Task Error (List Int)`
 /// Read the file as raw bytes, returned as `Vec<i64>` (Ipê `List Int`,
-/// values 0..=255). Uses a 10 MiB cap — a file over the
-/// cap is an `Err`, never a silent truncation (sibling fix to
-/// `readFileLimit`'s TOCTOU close, commit 706f026). For text content with
+/// values 0..=255). Bounded by `READ_FILE_BYTES_CEILING` (10 MiB) — a file
+/// over the cap is an `Err`, never a silent truncation. For text content with
 /// guaranteed UTF-8, prefer `readFile` / `readFileLimit`.
 #[must_use]
 pub fn file_read_file_bytes<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, Vec<i64>> {
@@ -622,6 +680,89 @@ mod read_ceiling_tests {
         );
     }
 
+    /// A malformed ceiling fails the read closed and names the variable.
+    #[test]
+    fn read_file_refuses_a_malformed_ceiling() {
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rc_bad_{}.txt", std::process::id()));
+        std::fs::write(&p, b"hello").unwrap();
+        crate::system::locked_set_var("IPE_FILE_READ_MAX", "abc");
+        let res: IpeResult<String, String> = block(file_read_file(tp(&p)));
+        crate::system::locked_remove_var("IPE_FILE_READ_MAX");
+        let _ = std::fs::remove_file(&p);
+        assert!(
+            matches!(&res, IpeResult::Err(e) if e.contains("IPE_FILE_READ_MAX")),
+            "a malformed IPE_FILE_READ_MAX must fail the read: {res:?}"
+        );
+    }
+
+    #[test]
+    fn ceiling_unset_is_the_default() {
+        assert_eq!(
+            parse_read_ceiling(Err(std::env::VarError::NotPresent)),
+            Ok(ReadCeiling::Unset)
+        );
+        assert_eq!(ReadCeiling::Unset.bytes(), READ_FILE_DEFAULT_CEILING);
+    }
+
+    #[test]
+    fn ceiling_decimal_values_are_bytes() {
+        assert_eq!(
+            parse_read_ceiling(Ok("0".into())),
+            Ok(ReadCeiling::Bytes(0))
+        );
+        assert_eq!(
+            parse_read_ceiling(Ok("1024".into())),
+            Ok(ReadCeiling::Bytes(1024))
+        );
+        assert_eq!(
+            parse_read_ceiling(Ok("18446744073709551615".into())),
+            Ok(ReadCeiling::Bytes(u64::MAX))
+        );
+    }
+
+    #[test]
+    fn ceiling_malformed_values_are_refused() {
+        for bad in [
+            "",
+            "-1",
+            "+1024",
+            "16MiB",
+            " 1024",
+            "1024 ",
+            "18446744073709551616",
+        ] {
+            let res = parse_read_ceiling(Ok(bad.into()));
+            assert!(
+                matches!(&res, Err(e) if e.contains("IPE_FILE_READ_MAX")),
+                "{bad:?} must be refused naming the variable: {res:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ceiling_non_unicode_is_refused() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let raw = std::ffi::OsString::from_vec(vec![b'1', 0xff]);
+        let res = parse_read_ceiling(Err(std::env::VarError::NotUnicode(raw)));
+        assert!(
+            matches!(&res, Err(e) if e.contains("IPE_FILE_READ_MAX")),
+            "{res:?}"
+        );
+    }
+
+    #[test]
+    fn ceiling_refusal_truncates_the_shown_value() {
+        let long = "x".repeat(200);
+        let res = parse_read_ceiling(Ok(long));
+        assert!(
+            matches!(&res, Err(e) if !e.contains(&"x".repeat(READ_CEILING_SHOWN_CHARS + 1))
+                && e.contains(&"x".repeat(READ_CEILING_SHOWN_CHARS))),
+            "{res:?}"
+        );
+    }
+
     #[test]
     fn read_file_under_ceiling_ok() {
         let p = crate::scratch_core::test_temp_root()
@@ -696,18 +837,64 @@ mod read_file_limit_tests {
         );
     }
 
-    /// Non-positive limit falls back to the documented 10 MiB default.
-    #[test]
-    fn non_positive_limit_uses_default_cap() {
+    fn limit_read(name: &str, content: &[u8], limit: i64) -> IpeResult<String, String> {
         let p = crate::scratch_core::test_temp_root()
-            .join(format!("ipe_rfl_default_{}.txt", std::process::id()));
-        std::fs::write(&p, b"small").unwrap();
-        let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 0));
+            .join(format!("ipe_rfl_{name}_{}.txt", std::process::id()));
+        std::fs::write(&p, content).unwrap();
+        let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), limit));
         let _ = std::fs::remove_file(&p);
-        match res {
-            IpeResult::Ok(s) => assert_eq!(s, "small"),
-            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
+        res
+    }
+
+    /// A zero limit is the zero-byte ceiling, never a fallback to a default.
+    #[test]
+    fn zero_limit_refuses_a_non_empty_file() {
+        let res = limit_read("zero_full", b"small", 0);
+        assert!(
+            matches!(&res, IpeResult::Err(e) if e.contains("0-byte limit")),
+            "a 5-byte file under a 0-byte limit must Err: {res:?}"
+        );
+    }
+
+    #[test]
+    fn zero_limit_admits_an_empty_file() {
+        let res = limit_read("zero_empty", b"", 0);
+        assert!(matches!(&res, IpeResult::Ok(s) if s.is_empty()), "{res:?}");
+    }
+
+    /// A negative limit is refused before the path is opened: the refusal
+    /// names the limit even for a path that does not exist.
+    #[test]
+    fn negative_limit_is_refused_without_reading() {
+        let missing = crate::scratch_core::test_temp_root().join(format!(
+            "ipe_rfl_missing_{}_does_not_exist.txt",
+            std::process::id()
+        ));
+        for bad in [-1_i64, i64::MIN] {
+            let res: IpeResult<String, String> = block(file_read_file_limit(tp(&missing), bad));
+            assert!(
+                matches!(&res, IpeResult::Err(e)
+                    if e.contains("non-negative byte count") && e.contains(&bad.to_string())),
+                "limit {bad} must be refused naming the limit: {res:?}"
+            );
+            let res = limit_read("negative", b"x", bad);
+            assert!(
+                matches!(res, IpeResult::Err(_)),
+                "limit {bad} on a real file must Err"
+            );
         }
+    }
+
+    #[test]
+    fn limit_one_past_the_content_admits() {
+        let res = limit_read("one_past", b"small", 6);
+        assert!(matches!(&res, IpeResult::Ok(s) if s == "small"), "{res:?}");
+    }
+
+    #[test]
+    fn limit_one_short_refuses() {
+        let res = limit_read("one_short", b"small", 4);
+        assert!(matches!(res, IpeResult::Err(_)), "{res:?}");
     }
 }
 
