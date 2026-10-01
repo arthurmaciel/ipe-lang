@@ -50,6 +50,25 @@ fn split_path(p: &str) -> Vec<&str> {
     }
 }
 
+/// A path in the matcher's canonical form: one leading `/`, no trailing `/`.
+///
+/// Two paths [`split_path`] splits alike (`/a/b` and `a/b/`, `` and `/`)
+/// build one `RoutePath`, so comparing entered paths agrees with matching.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoutePath(String);
+
+impl RoutePath {
+    /// The canonical form of `path`.
+    pub fn of(path: &str) -> Self {
+        RoutePath(format!("/{}", path.trim_matches('/')))
+    }
+
+    /// The canonical path text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Match `path` against `pattern`: equal segment counts; a `:name` segment
 /// captures the corresponding path segment; a literal segment must equal it.
 /// Returns captured params in pattern order, or `None`.
@@ -257,5 +276,27 @@ mod tests {
         let missed = enter(&rs, &Page::NF, "/nope", 5_u32, entry);
         assert_eq!(missed.model, 6, "an unknown path enters notFound");
         assert_eq!(missed.cmd, "");
+    }
+
+    /// Paths the matcher splits alike share one `RoutePath`; paths it splits
+    /// apart never do.
+    #[test]
+    fn route_path_equality_agrees_with_split_path() {
+        let alike = [
+            ("/", ""),
+            ("/", "//"),
+            ("/items/5", "items/5/"),
+            ("/a//b", "a//b/"),
+        ];
+        for (a, b) in alike {
+            assert_eq!(split_path(a), split_path(b));
+            assert_eq!(RoutePath::of(a), RoutePath::of(b), "{a:?} vs {b:?}");
+        }
+        let apart = [("/items", "/items/5"), ("/a/b", "/a//b"), ("/", "/x")];
+        for (a, b) in apart {
+            assert_ne!(split_path(a), split_path(b));
+            assert_ne!(RoutePath::of(a), RoutePath::of(b), "{a:?} vs {b:?}");
+        }
+        assert_eq!(RoutePath::of("").as_str(), "/");
     }
 }

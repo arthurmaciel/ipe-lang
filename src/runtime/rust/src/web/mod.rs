@@ -574,7 +574,7 @@ pub struct SessionEntry<Model, Msg> {
     pub msg_tx: Sender<Msg>,
     /// The base-relative path the session last entered, so a reconnect that
     /// reports the same path does not enter (and run its Cmd) a second time.
-    pub entered_path: Option<String>,
+    pub entered_path: Option<route::RoutePath>,
     /// Feeds URL entries to the per-session driver, which serialises them with
     /// `update`; bounded by [`ENTER_QUEUE_CAP`].
     pub enter_tx: Sender<EnterRequest>,
@@ -710,7 +710,7 @@ const ENTER_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// A URL entry for a session driver: the base-relative path and where to send the rendered body.
 #[cfg(feature = "server")]
 pub struct EnterRequest {
-    path: String,
+    path: route::RoutePath,
     reply: tokio::sync::oneshot::Sender<EnterReply>,
 }
 
@@ -730,14 +730,11 @@ pub struct EnterReply {
 #[cfg(feature = "server")]
 fn queue_entry(
     enter_tx: &Sender<EnterRequest>,
-    path: &str,
+    path: route::RoutePath,
 ) -> Option<tokio::sync::oneshot::Receiver<EnterReply>> {
     let (reply, reply_rx) = tokio::sync::oneshot::channel();
     enter_tx
-        .try_send(EnterRequest {
-            path: path.to_owned(),
-            reply,
-        })
+        .try_send(EnterRequest { path, reply })
         .ok()
         .map(|()| reply_rx)
 }
@@ -768,9 +765,11 @@ pub enum ReconcileOutcome {
 ///
 /// `client_path` is the raw `location.pathname` the SSE client sends; it must
 /// be a bare path (leading `/`, no `?` or `#`). `base` (the sub-app mount
-/// prefix) is stripped once, then the path is entered only when it is routed
-/// and differs from the session's `entered_path`, so the GET that created the
-/// page and the SSE open that follows it run the page's entry Cmd once.
+/// prefix) is stripped once at a segment boundary — a path outside the base
+/// enters nothing — then the path is entered only when it is routed and its
+/// [`route::RoutePath`] differs from the session's `entered_path`, so the GET
+/// that created the page and the SSE open that follows it run the page's entry
+/// Cmd once.
 #[cfg(feature = "server")]
 fn reconcile_path<Model, Msg>(
     entry: &store::SessionHandle<Model, Msg>,
@@ -782,17 +781,19 @@ fn reconcile_path<Model, Msg>(
     if !client_path.starts_with('/') || client_path.contains(['?', '#']) {
         return ReconcileOutcome::Unchanged;
     }
-    let route_path = if base.is_empty() {
-        client_path
-    } else {
-        client_path.strip_prefix(base).unwrap_or(client_path)
+    let Some(rest) = client_path.strip_prefix(base) else {
+        return ReconcileOutcome::Unchanged;
     };
-    if !route_matched(route_path) {
+    if !(rest.is_empty() || rest.starts_with('/')) {
+        return ReconcileOutcome::Unchanged;
+    }
+    let route_path = route::RoutePath::of(rest);
+    if !route_matched(route_path.as_str()) {
         return ReconcileOutcome::Unchanged;
     }
     let enter_tx = {
         let g = entry.lock().unwrap_or_else(|e| e.into_inner());
-        if g.entered_path.as_deref() == Some(route_path) {
+        if g.entered_path.as_ref() == Some(&route_path) {
             return ReconcileOutcome::Unchanged;
         }
         g.enter_tx.clone()
@@ -1040,7 +1041,7 @@ where
         .model
         .clone();
     let EnterRequest { path, reply } = request;
-    let entered = pubsub::with_session_sid(sid.to_owned(), || route_entry(model, &path));
+    let entered = pubsub::with_session_sid(sid.to_owned(), || route_entry(model, path.as_str()));
     let mut tree = view(entered.model.clone());
     assign_ipe_ids(&mut tree, "r");
     style_inject::apply_style_injections(&mut tree);
@@ -2747,7 +2748,8 @@ mod handlers {
                     .unwrap_or_else(|e| e.into_inner())
                     .enter_tx
                     .clone();
-                let Some(reply_rx) = queue_entry(&enter_tx, uri.path()) else {
+                let Some(reply_rx) = queue_entry(&enter_tx, route::RoutePath::of(uri.path()))
+                else {
                     return entry_unavailable();
                 };
                 let Some(EnterReply { body }) = await_entry(reply_rx).await else {
@@ -2838,7 +2840,7 @@ mod handlers {
             seq: 0,
             sse_tx: None,
             msg_tx: msg_tx.clone(),
-            entered_path: Some(uri.path().to_owned()),
+            entered_path: Some(route::RoutePath::of(uri.path())),
             enter_tx,
             #[cfg(feature = "debugger")]
             history: history_init,
@@ -5651,7 +5653,7 @@ mod sse_reconnect_reconcile_tests {
             seq: 0,
             sse_tx: None,
             msg_tx,
-            entered_path: entered_path.map(str::to_owned),
+            entered_path: entered_path.map(route::RoutePath::of),
             enter_tx,
             #[cfg(feature = "debugger")]
             history: crate::debugger::RecordBuffer::new(page, crate::debugger::DEFAULT_HISTORY_CAP),
@@ -5768,7 +5770,7 @@ mod sse_reconnect_reconcile_tests {
             Some(()),
             "entered handler index must resolve the stamped ipe-id"
         );
-        assert_eq!(g.entered_path.as_deref(), Some("/"));
+        assert_eq!(g.entered_path, Some(route::RoutePath::of("/")));
     }
 
     #[tokio::test]
@@ -5819,13 +5821,52 @@ mod sse_reconnect_reconcile_tests {
             fx.entry
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .entered_path
-                .as_deref(),
-            Some("/items/5"),
+                .entered_path,
+            Some(route::RoutePath::of("/items/5")),
             "entered_path is base-relative"
         );
         let (again, _) = reconnect(&mut fx, "/app/items/5", "/app").await;
         assert_eq!(again, 0, "the base-relative dedupe holds under a base");
+    }
+
+    /// A sub-app opened at its bare base: the proxy forwarded "/", the browser
+    /// reports "/app"; both are the root page, so the entry Cmd does not rerun.
+    #[tokio::test]
+    async fn bare_base_is_the_entered_root() {
+        let mut fx = make_session(TestPage::Home, Some("/"), label_view());
+
+        let (entered, _) = reconnect(&mut fx, "/app", "/app").await;
+
+        assert_eq!(
+            entered, 0,
+            "\"/app\" under base \"/app\" is the entered \"/\""
+        );
+    }
+
+    /// A trailing slash names the page the matcher already entered.
+    #[tokio::test]
+    async fn trailing_slash_is_the_entered_path() {
+        let mut fx = make_session(TestPage::Detail("5".into()), Some("/items/5"), label_view());
+
+        let (entered, _) = reconnect(&mut fx, "/items/5/", "").await;
+
+        assert_eq!(entered, 0, "\"/items/5/\" is the entered \"/items/5\"");
+    }
+
+    /// The base is stripped only at a segment boundary; a path outside the
+    /// base enters nothing.
+    #[tokio::test]
+    async fn path_outside_the_base_enters_nothing() {
+        let mut fx = make_session(TestPage::Home, Some("/"), label_view());
+        let before = rendered_text(&fx.entry);
+
+        let (glued, _) = reconnect(&mut fx, "/appitems/5", "/app").await;
+        let (outside, _) = reconnect(&mut fx, "/items/5", "/app").await;
+
+        assert_eq!(glued, 0, "\"/appitems/5\" is not under \"/app\"");
+        assert_eq!(outside, 0, "\"/items/5\" is not under \"/app\"");
+        assert_eq!(model_of(&fx.entry), TestPage::Home);
+        assert_eq!(rendered_text(&fx.entry), before);
     }
 
     /// A driver whose enter queue is full refuses the entry instead of waiting.
@@ -5839,7 +5880,7 @@ mod sse_reconnect_reconcile_tests {
             .enter_tx
             .clone();
         for _ in 0..ENTER_QUEUE_CAP.get() {
-            assert!(queue_entry(&enter_tx, "/").is_some());
+            assert!(queue_entry(&enter_tx, route::RoutePath::of("/")).is_some());
         }
         assert!(matches!(
             reconcile_path(&fx.entry, &fx.route_matched, "/items/1", ""),
@@ -5847,7 +5888,7 @@ mod sse_reconnect_reconcile_tests {
         ));
         drop(fx.enter_rx);
         assert!(
-            queue_entry(&enter_tx, "/").is_none(),
+            queue_entry(&enter_tx, route::RoutePath::of("/")).is_none(),
             "a closed driver queue refuses"
         );
     }
@@ -8695,7 +8736,7 @@ mod route_entry_cmd_tests {
             seq: 0,
             sse_tx: None,
             msg_tx,
-            entered_path: Some("/".to_owned()),
+            entered_path: Some(route::RoutePath::of("/")),
             enter_tx,
             #[cfg(feature = "debugger")]
             history: crate::debugger::RecordBuffer::new(
@@ -8726,7 +8767,7 @@ mod route_entry_cmd_tests {
                 .enter_tx
                 .clone();
             let held: Vec<_> = (0..ENTER_QUEUE_CAP.get())
-                .filter_map(|_| queue_entry(&enter_tx, "/"))
+                .filter_map(|_| queue_entry(&enter_tx, route::RoutePath::of("/")))
                 .collect();
             assert_eq!(held.len(), ENTER_QUEUE_CAP.get());
 
