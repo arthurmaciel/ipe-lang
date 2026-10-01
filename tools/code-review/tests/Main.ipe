@@ -19,7 +19,7 @@ import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
 import Lib.Index as Index
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
-import Lib.Queue as Queue
+import Lib.Queue as Queue exposing (QueueState(..))
 import Lib.RepoPath as RepoPath exposing (PathError(..))
 import Lib.Settings as Settings
 
@@ -382,7 +382,7 @@ isUnknown lang =
 -- ── ipe-index bridge ───────────────────────────────────────────────────
 --
 -- Seeds a scratch ipe-index database (units + change_queue) plus two source
--- files, then asks Lib.Index.loadPending for the queue and checks the loaded
+-- files, then loads the first queue page and checks the loaded
 -- units' metadata and source slices.
 indexBridge : Task.Task Error Bool
 indexBridge =
@@ -400,7 +400,7 @@ indexBridge =
         |> Task.andThen File.remove
         |> Task.onError (\_ -> Task.succeed ())
         |> Task.andThen (\_ -> seedIndex indexDb repo)
-        |> Task.andThen (\_ -> Index.loadPending |> Task.map checkUnits)
+        |> Task.andThen (\_ -> loadFirstPage |> Task.map (\r -> checkUnits r.total r.units))
         |> Task.andThen (\ok -> cleanupIndex indexDb repo |> Task.map (\_ -> ok))
 
 
@@ -533,9 +533,18 @@ setIndexEnv indexDb repo =
         |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" repo)
 
 
-checkUnits : List Index.Unit -> Bool
-checkUnits units =
-    if List.length units /= 2 then
+-- The first queue page's units with the whole queue's count.
+loadFirstPage : Task.Task Error { units : List Index.Unit, total : Int }
+loadFirstPage =
+    do
+        rows <- Index.loadPendingPage Index.Start
+        total <- Index.countPending
+        Task.succeed { units = List.map (\r -> r.unit) rows, total = total }
+
+
+checkUnits : Int -> List Index.Unit -> Bool
+checkUnits total units =
+    if total /= 2 || List.length units /= 2 then
         False
 
     else
@@ -635,6 +644,230 @@ removeFileIfAny path =
         |> Task.onError (\_ -> Task.succeed ())
 
 
+-- ── bounded queue pages ─────────────────────────────────────────────────
+--
+-- One page holds at most `Index.pageSize` units while `total` counts the
+-- whole queue; the page cursor walks every queued unit exactly once, ties on
+-- `enqueued_at` included, and the last page has no next cursor.
+pagesCoverQueueOnce : Task.Task Error Bool
+pagesCoverQueueOnce =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-queue-pages"
+
+        repo =
+            base ++ "/repo"
+
+        indexDb =
+            base ++ "/index.db"
+
+        reviewDb =
+            base ++ "/review.db"
+
+        seeded =
+            Index.pageSize + 7
+    in
+    do
+        removePageFixture indexDb reviewDb repo
+        Task.fromResult (Path.fromString (repo ++ "/src")) |> Task.andThen File.mkdirAll
+        writeFileText (repo ++ "/src/Main.ipe") fixtureMainIpe
+        seedManyUnits indexDb seeded
+        setIndexEnv indexDb repo
+        System.setenv "IPE_REVIEW_DB" reviewDb
+        first <- Queue.loadPage Index.Start
+        second <-
+            case first.next of
+                Just cursor ->
+                    Queue.loadPage cursor
+
+                Nothing ->
+                    Task.fail (Error.unexpected "a full first page has no next cursor")
+        removePageFixture indexDb reviewDb repo
+        Task.succeed
+            (List.length first.units
+                == Index.pageSize
+                && first.total
+                == seeded
+                && List.length second.units
+                == 7
+                && isLastPage second.next
+                && distinctUids (first.units ++ second.units)
+                == seeded
+            )
+
+
+isLastPage : Maybe Index.Cursor -> Bool
+isLastPage next =
+    case next of
+        Just _ ->
+            False
+
+        Nothing ->
+            True
+
+
+distinctUids : List Queue.QueuedUnit -> Int
+distinctUids units =
+    units
+        |> List.map (\q -> ( q.unit.uid, () ))
+        |> Dict.fromList
+        |> Dict.size
+
+
+-- A `deleted` change_queue row is neither listed nor counted.
+deletedRowsNotQueued : Task.Task Error Bool
+deletedRowsNotQueued =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-queue-deleted"
+
+        repo =
+            base ++ "/repo"
+
+        indexDb =
+            base ++ "/index.db"
+
+        reviewDb =
+            base ++ "/review.db"
+    in
+    do
+        removePageFixture indexDb reviewDb repo
+        Task.fromResult (Path.fromString (repo ++ "/src")) |> Task.andThen File.mkdirAll
+        writeFileText (repo ++ "/src/Main.ipe") fixtureMainIpe
+        seedManyUnits indexDb 3
+        conn <- Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
+        Db.exec conn "UPDATE change_queue SET change = 'deleted' WHERE uid = ?" [ SqlString "u-page-2" ]
+        setIndexEnv indexDb repo
+        r <- loadFirstPage
+        removePageFixture indexDb reviewDb repo
+        Task.succeed (r.total == 2 && List.map (\u -> u.uid) r.units == [ "u-page-1", "u-page-3" ])
+
+
+-- The size of a seeded index database is positive; a queue load against a
+-- missing index database is `Failed`, never an empty `Loaded`.
+dbSizeAndMissingDb : Task.Task Error Bool
+dbSizeAndMissingDb =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-queue-size"
+
+        repo =
+            base ++ "/repo"
+
+        indexDb =
+            base ++ "/index.db"
+
+        reviewDb =
+            base ++ "/review.db"
+    in
+    do
+        removePageFixture indexDb reviewDb repo
+        Task.fromResult (Path.fromString (repo ++ "/src")) |> Task.andThen File.mkdirAll
+        writeFileText (repo ++ "/src/Main.ipe") fixtureMainIpe
+        seedManyUnits indexDb 1
+        setIndexEnv indexDb repo
+        System.setenv "IPE_REVIEW_DB" reviewDb
+        bytes <- Index.dbBytes
+        setIndexEnv (base ++ "/missing.db") repo
+        result <-
+            Queue.loadPage Index.Start
+                |> Task.map Ok
+                |> Task.onError (\e -> Task.succeed (Err e))
+        removePageFixture indexDb reviewDb repo
+        Task.succeed (bytes > 0 && isFailed (Queue.stateFromResult result))
+
+
+isFailed : Queue.QueueState -> Bool
+isFailed state =
+    case state of
+        Failed _ ->
+            True
+
+        Loading ->
+            False
+
+        Loaded _ ->
+            False
+
+
+removePageFixture : String -> String -> String -> Task.Task Error ()
+removePageFixture indexDb reviewDb repo =
+    Task.sequence
+        [ removeFileIfAny indexDb
+        , removeFileIfAny (indexDb ++ "-wal")
+        , removeFileIfAny (indexDb ++ "-shm")
+        , removeFileIfAny reviewDb
+        , removeFileIfAny (reviewDb ++ "-wal")
+        , removeFileIfAny (reviewDb ++ "-shm")
+        , removeFileIfAny (repo ++ "/src/Main.ipe")
+        ]
+        |> Task.map (\_ -> ())
+
+
+-- Seeds `n` queued units, all `new`, all pointing at the same fixture file.
+-- The last rows share one `enqueued_at` across the first page's end, so only
+-- the `uid` tiebreak orders them.
+seedManyUnits : String -> Int -> Task.Task Error ()
+seedManyUnits indexDb n =
+    Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
+        |> Task.andThen
+            (\conn ->
+                Db.exec conn unitsDdl []
+                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                    |> Task.andThen
+                        (\_ ->
+                            List.range 1 n
+                                |> List.map (seedOneUnit conn)
+                                |> Task.sequence
+                        )
+            )
+        |> Task.map (\_ -> ())
+
+
+tiedEnqueuedAt : Int -> Int
+tiedEnqueuedAt i =
+    if i > Index.pageSize - 5 then
+        Index.pageSize - 5
+
+    else
+        i
+
+
+seedOneUnit : Db -> Int -> Task.Task Error ()
+seedOneUnit conn i =
+    let
+        uid =
+            "u-page-" ++ String.fromInt i
+
+        hash =
+            "hash-" ++ String.fromInt i
+
+        sha =
+            "sha-" ++ String.fromInt i
+    in
+    Db.exec conn
+        "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+        [ SqlString uid
+        , SqlString "ipe:src/Main.ipe"
+        , SqlString "module"
+        , SqlString "Main"
+        , SqlString "Main"
+        , SqlInt 1
+        , SqlInt 1
+        , SqlString "internal"
+        , SqlNull (SqlString "")
+        , SqlString hash
+        , SqlString sha
+        ]
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                    [ SqlString uid, SqlString "new", SqlNull (SqlString ""), SqlNull (SqlString ""), SqlString sha, SqlInt (tiedEnqueuedAt i) ]
+            )
+        |> Task.map (\_ -> ())
+
+
 -- ── guard the path resolver ─────────────────────────────────────────────
 --
 -- A queued unit whose stored path escapes the index root (mid-path `..`
@@ -652,11 +885,11 @@ traversalPathsRejected =
         |> Task.andThen (\_ -> seedTraversalDb base)
         |> Task.andThen
             (\_ ->
-                Index.loadPending
+                loadFirstPage
                     |> Task.map (\_ -> Nothing)
                     |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
             )
-        |> Task.map (refusedFor "has a `..` segment")
+        |> Task.map (refusedFor "escapes its root via `..`")
         |> Task.andThen (\ok -> removeFileIfAny (base ++ "/index.db") |> Task.map (\_ -> ok))
 
 
@@ -709,19 +942,10 @@ refusalName err =
         MissingTag _ ->
             "missing-tag"
 
-        EmptyRelative _ ->
-            "empty"
-
-        AbsoluteRelative _ ->
-            "absolute"
-
-        TraversalRelative _ ->
-            "traversal"
-
-        InvalidRelative _ ->
+        InvalidRelative _ _ ->
             "invalid"
 
-        NotUnderRoot _ ->
+        NotUnderRoot _ _ ->
             "not-under-root"
 
 
@@ -733,6 +957,18 @@ refusedAs expected result =
 
         Err err ->
             refusalName err == expected
+
+
+-- A refusal whose caller-facing message carries `fragment` from the
+-- `Ipe.Path` error that decided it.
+refusalNames : String -> Result PathError Path.Path -> Bool
+refusalNames fragment result =
+    case result of
+        Ok _ ->
+            False
+
+        Err err ->
+            String.contains fragment (RepoPath.describe err)
 
 
 refused : Result PathError Path.Path -> Bool
@@ -781,21 +1017,27 @@ storedPathRefusals =
         in
         Task.succeed
             (List.all identity
-                [ refusedAs "traversal" (RepoPath.resolve root "ipe:a/../../escape")
-                , refusedAs "traversal" (RepoPath.resolve root "ipe:../escape")
-                , refusedAs "traversal" (RepoPath.resolve root "ipe:..")
-                , refusedAs "absolute" (RepoPath.resolve root "ipe:/etc/passwd")
-                , refusedAs "empty" (RepoPath.resolve root "ipe:")
+                [ refusedAs "invalid" (RepoPath.resolve root "ipe:a/../../escape")
+                , refusedAs "invalid" (RepoPath.resolve root "ipe:../escape")
+                , refusedAs "invalid" (RepoPath.resolve root "ipe:../x")
+                , refusedAs "invalid" (RepoPath.resolve root "ipe:..")
+                , refusedAs "invalid" (RepoPath.resolve root "ipe:a\0b")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:/etc/passwd")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe://etc/passwd")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:.")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:./")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:a/..")
                 , refusedAs "missing-tag" (RepoPath.resolve root "src/Main.ipe")
                 , refusedAs "missing-tag" (RepoPath.resolve root "")
                 , refusedAs "missing-tag" (RepoPath.resolve root ":src/Main.ipe")
-                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:.")
-                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:./")
-                , refusedAs "absolute" (RepoPath.resolve root "ipe://etc/passwd")
-                , refusedAs "invalid" (RepoPath.resolve root "ipe:a\0b")
+                , refusalNames "Ipe.Path.under" (RepoPath.resolve root "ipe:/etc/passwd")
+                , refusalNames "escapes its root" (RepoPath.resolve root "ipe:../x")
                 , resolvesTo (base ++ "/src/Main.ipe") (RepoPath.resolve root "ipe:src/Main.ipe")
                 , resolvesTo (base ++ "/src/Main.ipe") (RepoPath.resolve root "ipe:./src//Main.ipe/")
                 , resolvesTo (base ++ "/a:b") (RepoPath.resolve root "ipe:a:b")
+                , resolvesTo (base ++ "/b") (RepoPath.resolve root "ipe:a/../b")
+                , resolvesTo (base ++ "/..\\x") (RepoPath.resolve root "ipe:..\\x")
                 ]
             )
 
@@ -1143,9 +1385,9 @@ relativeRootLoadsQueue =
         absRepo <- Task.fromResult (Path.fromString repo)
         relRepo <- relativeFromCwd (Path.toString absRepo)
         System.setenv "IPE_INDEX_ROOT" relRepo
-        units <- Index.loadPending
+        r <- loadFirstPage
         cleanupIndex indexDb repo
-        Task.succeed (checkUnits units)
+        Task.succeed (checkUnits r.total r.units)
 
 
 -- A queued unit whose source file is one byte past the 16 MiB read ceiling
@@ -1167,7 +1409,7 @@ oversizedSourceRefused =
         seedIndex indexDb repo
         writeFileText (repo ++ "/src/Lib.rs") (String.repeat (16 * 1024 * 1024 + 1) "x")
         refusal <-
-            Index.loadPending
+            loadFirstPage
                 |> Task.map (\_ -> Nothing)
                 |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
         cleanupIndex indexDb repo
@@ -1178,7 +1420,7 @@ oversizedSourceRefused =
 --
 -- A decided unit leaves the index queue: recordDrain writes the drain cursor
 -- (idempotent on the same pair), drainUnit deletes the consumed change_queue
--- row, and a subsequent loadPending no longer lists the unit.
+-- row, and a subsequent page load no longer lists the unit.
 drainFlow : Task.Task Error Bool
 drainFlow =
     let
@@ -1203,8 +1445,8 @@ drainFlow =
         |> Task.andThen (\_ -> seedDrainDb indexDb)
         |> Task.andThen (\_ -> System.setenv "IPE_INDEX_DB" indexDb)
         |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" repo)
-        |> Task.andThen (\_ -> Index.loadPending)
-        |> Task.map (\units -> List.length units == 1)
+        |> Task.andThen (\_ -> loadFirstPage)
+        |> Task.map (\r -> List.length r.units == 1 && r.total == 1)
         |> Task.andThen
             (\queued ->
                 if not queued then
@@ -1228,8 +1470,8 @@ drainFlow =
 
                 else
                     Index.drainUnit "u-d"
-                        |> Task.andThen (\_ -> Index.loadPending)
-                        |> Task.map (\units -> List.length units == 0)
+                        |> Task.andThen (\_ -> loadFirstPage)
+                        |> Task.map (\r -> List.length r.units == 0 && r.total == 0)
             )
         |> Task.andThen
             (\ok ->
@@ -1383,14 +1625,16 @@ changeReenqueue =
                                 |> Task.map (\_ -> db)
                         )
                     |> Task.andThen (\_ -> System.setenv "IPE_REVIEW_DB" reviewDb)
-                    |> Task.andThen (\_ -> Queue.load)
+                    |> Task.andThen (\_ -> Queue.loadPage Index.Start)
             )
         |> Task.map
-            (\units ->
-                changedHead units
-                    && freshSecond units
-                    && List.length units
+            (\r ->
+                changedHead r.units
+                    && freshSecond r.units
+                    && List.length r.units
                     == 2
+                    && r.total
+                    == 3
             )
         |> Task.andThen
             (\ok ->
@@ -1672,6 +1916,60 @@ testKeys =
         ]
 
 
+-- A queue in flight or failed never renders the empty-queue text; only a
+-- loaded queue with total 0 does, and a loaded page with units has no status
+-- line at all.
+queueStateTextsDistinct : Bool
+queueStateTextsDistinct =
+    let
+        boom =
+            Error.unexpected "boom"
+
+        empty =
+            { units = [], total = 0, dbName = "index.db", dbBytes = 4096, next = Nothing }
+
+        drained =
+            { empty | total = 41000 }
+
+        full =
+            { drained | units = [ sampleQueuedUnit ] }
+    in
+    List.all identity
+        [ Queue.queueStatusText Loading == Just "Loading queue…"
+        , Queue.queueStatusText (Loaded empty) == Just "No units queued."
+        , Queue.queueStatusText (Failed boom) == Just ("Queue failed to load: " ++ Error.toString boom)
+        , Queue.queueStatusText Loading /= Queue.queueStatusText (Loaded empty)
+        , Queue.queueStatusText (Failed boom) /= Queue.queueStatusText (Loaded empty)
+        , Queue.queueStatusText (Loaded drained) == Just "No units to review on this page."
+        , Queue.queueStatusText (Loaded full) == Nothing
+        , Queue.pageHeaderText full == "index.db · 4.0 KB · showing 1 of 41000"
+        , Format.byteSize 512 == "512 B"
+        ]
+
+
+sampleQueuedUnit : Queue.QueuedUnit
+sampleQueuedUnit =
+    { unit =
+        { uid = "u-sample"
+        , change = "new"
+        , oldHash = Nothing
+        , newHash = Nothing
+        , path = "ipe:src/Main.ipe"
+        , kind = "module"
+        , name = "Main"
+        , qualified = "Main"
+        , lineStart = 1
+        , lineEnd = 1
+        , facing = "internal"
+        , purpose = Nothing
+        , bodyHash = "hash-sample"
+        , updatedSha = "sha-sample"
+        , source = "main = ()\n"
+        }
+    , changed = Nothing
+    }
+
+
 report : List ( String, Bool ) -> String
 report results =
     List.map
@@ -1790,6 +2088,21 @@ main =
             )
         |> Task.andThen
             (\results ->
+                pagesCoverQueueOnce
+                    |> Task.map (\ok -> results ++ [ ( "queue pages bound to pageSize and cover the queue once", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                deletedRowsNotQueued
+                    |> Task.map (\ok -> results ++ [ ( "deleted queue rows neither listed nor counted", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                dbSizeAndMissingDb
+                    |> Task.map (\ok -> results ++ [ ( "db size positive, missing index db fails the queue", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
                 Task.succeed
                     (results
                         ++ [ ( "links resolve internal and external", linksResolve )
@@ -1806,7 +2119,9 @@ main =
             (\results ->
                 Task.succeed
                     (results
-                        ++ [ ( "keyboard shortcuts map to the button msgs", testKeys ) ]
+                        ++ [ ( "keyboard shortcuts map to the button msgs", testKeys )
+                        , ( "queue state texts distinguish loading/empty/failed/loaded", queueStateTextsDistinct )
+                        ]
                     )
             )
         |> Task.andThen

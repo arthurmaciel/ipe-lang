@@ -42,9 +42,10 @@ must name a database: the app appends the open mode itself. A `sqlite:` or
 by variable name only, never by value, since a mistyped URL can carry a
 password.
 
-Every stored `tag:relative` path must join to a path strictly under
-`IPE_INDEX_ROOT`: an empty, absolute, or `..`-bearing stored path is refused with
-an error naming it. The check is lexical — a symlink inside the repo is
+Every stored `tag:relative` path is sealed with `Ipe.Path.fromString` and joined
+with `Ipe.Path.under`, so it must land strictly under `IPE_INDEX_ROOT`: an
+empty, absolute, or NUL-bearing stored path, or one whose `..` climbs out of it,
+is refused with an error naming it and the `Ipe.Path` reason. The check is lexical — a symlink inside the repo is
 followed, so it can point a read outside the root. A source file larger than
 16 MiB is refused rather than read.
 
@@ -61,6 +62,8 @@ IPE_INDEX_DB=../../.ipe-index/index.db IPE_INDEX_ROOT=../.. ipe run
 
 `ipe run` builds and serves on <http://localhost:8000>. `ipe type-check` runs a
 fast check with no runtime, and `ipe build` compiles to a native binary.
+
+The queue view loads one page of at most 200 units (`pageSize` in `src/Lib/Index.ipe`).
 
 If you run from inside a compiler checkout, `ipe` may auto-discover the
 checkout's vendored runtime snapshot instead of its own version-matched one,

@@ -1,4 +1,4 @@
-module Lib.Format exposing (formatReviewedAt, numberedLines, percent)
+module Lib.Format exposing (byteSize, formatReviewedAt, numberedLines, percent)
 
 import Ipe.List as List
 import Ipe.String
@@ -108,3 +108,37 @@ percent k n =
 
     else
         String.fromInt ((k * 100) // n) ++ "%"
+
+
+-- Human-readable byte size (e.g. "3.4 MB"), one decimal place above 1 KB.
+-- Pure Int arithmetic: the stdlib has no Int -> Float conversion, so the
+-- fractional digit is computed via scaled integer division rather than
+-- floating point.
+byteSize : Int -> String
+byteSize n =
+    if n < 1024 then
+        String.fromInt n ++ " B"
+
+    else if n < 1024 * 1024 then
+        oneDecimal n 1024 ++ " KB"
+
+    else if n < 1024 * 1024 * 1024 then
+        oneDecimal n (1024 * 1024) ++ " MB"
+
+    else
+        oneDecimal n (1024 * 1024 * 1024) ++ " GB"
+
+
+oneDecimal : Int -> Int -> String
+oneDecimal n unit =
+    let
+        tenths =
+            (n * 10 + unit // 2) // unit
+
+        whole =
+            tenths // 10
+
+        frac =
+            modBy 10 tenths
+    in
+    String.fromInt whole ++ "." ++ String.fromInt frac

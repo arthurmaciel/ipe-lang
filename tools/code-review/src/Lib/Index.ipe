@@ -1,10 +1,11 @@
-module Lib.Index exposing (Unit, drainUnit, loadPending, loadUnitByUid, nameFor, openRead, qualifiedUids)
+module Lib.Index exposing (Cursor(..), PendingRow, Unit, countPending, dbBytes, drainUnit, loadPendingPage, loadUnitByUid, nameFor, openRead, pageSize, qualifiedUids)
 
 import Ipe.ByteSize as ByteSize exposing (ByteSize)
 import Ipe.Db
 import Ipe.Db.Decode
 import Ipe.Db.Sql as Sql
 import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error as Error
 import Ipe.File as File
 import Ipe.List as List
 import Ipe.Result as Result exposing (Result(..))
@@ -207,25 +208,138 @@ openRead =
         Db.open "sqlite" (Settings.indexReadUrl settings.db)
 
 
-pendingSql : String
-pendingSql =
-    "SELECT q.uid, q.change, q.old_hash, q.new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha FROM change_queue q JOIN units u ON u.uid = q.uid WHERE q.change IN ('new','modified') ORDER BY q.enqueued_at, q.uid"
+-- The most queue rows one page load reads. An index can hold tens of
+-- thousands of queued units, and each loaded unit costs a source-file read
+-- plus two review-db lookups, so a load is bounded by this constant rather
+-- than by the queue's size.
+pageSize : Int
+pageSize =
+    200
 
 
--- Queue units (new + modified, ordered by enqueue time), each with its
--- source slice resolved against the index root. Deleted units drop out of
--- the JOIN — they have no row to slice.
-loadPending : Task.Task Error (List Unit)
-loadPending =
+-- Where a page starts in the queue's `(enqueued_at, uid)` order: the head, or
+-- strictly after the last row of the previous page. `uid` breaks ties on
+-- `enqueued_at`, so the order is total and no row is skipped or repeated
+-- across pages.
+type Cursor
+    = Start
+    | After { enqueuedAt : Int, uid : String }
+
+
+-- A queued unit with the `enqueued_at` it is ordered by, so the caller can
+-- build the cursor for the following page.
+type alias PendingRow =
+    { unit : Unit
+    , enqueuedAt : Int
+    }
+
+
+-- The one JOIN/WHERE both the page and the count read, so the total always
+-- counts exactly the rows a page can return.
+pendingFrom : String
+pendingFrom =
+    " FROM change_queue q JOIN units u ON u.uid = q.uid WHERE q.change IN ('new','modified')"
+
+
+pendingColumns : String
+pendingColumns =
+    "SELECT q.uid, q.change, q.old_hash, q.new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha, q.enqueued_at"
+
+
+pendingOrder : String
+pendingOrder =
+    " ORDER BY q.enqueued_at, q.uid LIMIT ?"
+
+
+-- The page query and its bound parameters for `cursor`. Every value is a
+-- bound parameter; the page bound is always the last one.
+pendingPageQuery : Cursor -> ( String, List SqlValue )
+pendingPageQuery cursor =
+    case cursor of
+        Start ->
+            ( pendingColumns ++ pendingFrom ++ pendingOrder, [ SqlInt pageSize ] )
+
+        After at ->
+            ( pendingColumns ++ pendingFrom ++ " AND (q.enqueued_at, q.uid) > (?, ?)" ++ pendingOrder
+            , [ SqlInt at.enqueuedAt, SqlString at.uid, SqlInt pageSize ]
+            )
+
+
+pendingRowDecoder : Db.Decode.Decoder ( RowUnit, Int )
+pendingRowDecoder =
+    Db.Decode.andThen
+        (\row -> Db.Decode.map (\at -> ( row, at )) enqueuedAtDecoder)
+        rowDecoder
+
+
+enqueuedAtDecoder : Db.Decode.Decoder Int
+enqueuedAtDecoder =
+    Db.Decode.succeed (\n -> n)
+        |> Db.Decode.required "enqueued_at" (Db.Decode.int "enqueued_at")
+
+
+-- One page of queue units (new + modified) at `cursor`, at most `pageSize`
+-- rows, each with its source slice resolved against the index root.
+loadPendingPage : Cursor -> Task.Task Error (List PendingRow)
+loadPendingPage cursor =
+    let
+        ( sql, params ) =
+            pendingPageQuery cursor
+    in
     do
         settings <- Settings.indexSettings
         conn <- Db.open "sqlite" (Settings.indexReadUrl settings.db)
-        rows <- Db.queryDecode conn pendingSql [] rowDecoder
-        loadSources settings.root rows
+        rows <- Db.queryDecode conn sql params pendingRowDecoder
+        rows
+            |> List.map (\( row, at ) -> Task.map (\unit -> { unit = unit, enqueuedAt = at }) (loadSource settings.root row))
+            |> Task.sequence
+
+
+countDecoder : Db.Decode.Decoder Int
+countDecoder =
+    Db.Decode.succeed (\n -> n)
+        |> Db.Decode.required "total" (Db.Decode.int "total")
+
+
+-- How many units the whole queue holds, counted over `pendingFrom` without
+-- loading a row. A count query that yields no row is a failed read, never a
+-- zero.
+countPending : Task.Task Error Int
+countPending =
+    do
+        conn <- openRead
+        rows <- Db.queryDecode conn ("SELECT COUNT(*) AS total" ++ pendingFrom) [] countDecoder
+        singleInt "COUNT(*) over change_queue" rows
+
+
+bytesDecoder : Db.Decode.Decoder Int
+bytesDecoder =
+    Db.Decode.succeed (\n -> n)
+        |> Db.Decode.required "bytes" (Db.Decode.int "bytes")
+
+
+-- The index database's size in bytes, from SQLite's page count and page
+-- size, so the size costs one constant-time query and no file read.
+dbBytes : Task.Task Error Int
+dbBytes =
+    do
+        conn <- openRead
+        rows <- Db.queryDecode conn "SELECT page_count * page_size AS bytes FROM pragma_page_count(), pragma_page_size()" [] bytesDecoder
+        singleInt "the index database size query" rows
+
+
+singleInt : String -> List Int -> Task.Task Error Int
+singleInt what rows =
+    case rows of
+        [ n ] ->
+            Task.succeed n
+
+        _ ->
+            Task.fail (Error.unexpected (what ++ " did not return exactly one row"))
 
 
 -- The review app consumes and clears explicitly: after a unit is decided,
--- its change_queue row is deleted so it stops appearing in loadPending. The
+-- its change_queue row is deleted so it stops appearing in queue pages. The
 -- row comes back only when the index re-queues the unit after it changes
 -- again (per-uid PRIMARY KEY in change_queue — a fresh change, a fresh
 -- review).
@@ -270,13 +384,6 @@ nameFor conn uid =
 
                     Nothing ->
                         Task.succeed Nothing
-
-
-loadSources : Root -> List RowUnit -> Task.Task Error (List Unit)
-loadSources root rows =
-    rows
-        |> List.map (loadSource root)
-        |> Task.sequence
 
 
 -- Reading a unit's source fails the whole load with a typed error: a queued
