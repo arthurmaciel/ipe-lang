@@ -17,6 +17,8 @@
 //! compiler, so a mismatch mis-renders at runtime rather than failing to build —
 //! the byte-identical-HTML regression on the Web backend is the safety net.
 
+use std::num::NonZeroU32;
+
 use super::super::html::{Attribute as HtmlAttribute, Html};
 
 /// `Ipe.Ui.Color` = `Rgba Int Int Int Float` (R/G/B 0-255 ints, alpha 0..1).
@@ -25,12 +27,47 @@ pub enum Color {
     Rgba(i64, i64, i64, f64),
 }
 
+/// The share of a parent's leftover space a `fill` sibling claims: positive by
+/// construction, at most [`Portion::MAX`].
+///
+/// Every backend reads the same value, so none can observe a zero or negative
+/// portion. A program `Int` enters only through [`Length::fill_portion`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Portion(NonZeroU32);
+
+impl Portion {
+    /// One share: `Ui.fill`.
+    pub const ONE: Self = Self(NonZeroU32::MIN);
+
+    /// The largest portion. A larger `fillPortion` clamps to it on every
+    /// backend: beside it a one-share sibling gets 1/100 000 of the leftover,
+    /// below one terminal cell or one CSS pixel on any real canvas.
+    pub const MAX: Self = match NonZeroU32::new(100_000) {
+        Some(n) => Self(n),
+        None => Self::ONE,
+    };
+
+    /// `Some` for a positive `n` (clamped to [`Portion::MAX`]), `None` for
+    /// `n <= 0`.
+    #[must_use]
+    pub fn from_int(n: i64) -> Option<Self> {
+        let clamped = u32::try_from(n.min(i64::from(Self::MAX.get()))).ok()?;
+        NonZeroU32::new(clamped).map(Self)
+    }
+
+    /// The portion as a share count, in `1..=Portion::MAX`.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
 /// `Ipe.Ui.Length`. `Min`/`Max` are self-recursive → `Box` (E0072 otherwise).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Length {
     Px(i64),
     Content,
-    Fill(i64),
+    Fill(Portion),
     Min(i64, Box<Length>),
     Max(i64, Box<Length>),
     Vh(i64),
@@ -38,12 +75,23 @@ pub enum Length {
 }
 
 impl Length {
+    /// `Ui.fillPortion n`: a fill of `n` shares, or `Content` (`Ui.shrink`) when
+    /// `n <= 0`, so a non-positive portion is content-sized on every backend.
+    #[must_use]
+    pub fn fill_portion(n: i64) -> Self {
+        Portion::from_int(n).map_or(Self::Content, Self::Fill)
+    }
+
     /// Render this length to its CSS value string. The single renderer for the
     /// `Ipe.Ui.Length` domain, shared by the inline-style and stylesheet paths.
     ///
     /// `Fill(n)` renders `100%`; the flex sizing (`flex-grow:n`, `flex-basis:0`)
-    /// that divides free space is emitted at the width/height attribute arms,
-    /// not here.
+    /// that divides free space depends on the parent's flex axis, so the
+    /// parent-aware `render::size_css` emits it, not this context-free renderer.
+    ///
+    /// `Min(n, l)` is a lower bound (CSS `max(npx, l)`, never below `n`) and
+    /// `Max(n, l)` an upper bound (CSS `min(npx, l)`, never above `n`), the same
+    /// bounds the TUI layout applies.
     ///
     /// The shared `Px`/`Vh`/`Vw` units are spelled by the one runtime renderer
     /// ([`crate::length::CssUnit`]); `Ipe.Ui`'s `Length` is a surface carrier
@@ -58,8 +106,8 @@ impl Length {
             Self::Px(n) => CssUnit::Px.css(*n),
             Self::Content => "auto".to_owned(),
             Self::Fill(_) => "100%".to_owned(),
-            Self::Min(n, inner) => format!("min({},{})", CssUnit::Px.css(*n), inner.css()),
-            Self::Max(n, inner) => format!("max({},{})", CssUnit::Px.css(*n), inner.css()),
+            Self::Min(n, inner) => format!("max({},{})", CssUnit::Px.css(*n), inner.css()),
+            Self::Max(n, inner) => format!("min({},{})", CssUnit::Px.css(*n), inner.css()),
             Self::Vh(n) => CssUnit::Vh.css(*n),
             Self::Vw(n) => CssUnit::Vw.css(*n),
         }
@@ -345,8 +393,9 @@ mod tests {
         assert_eq!(style, format!("background-color:{direct}"));
     }
 
-    // SSOT: a length formats identically through the inline-style path and the
-    // direct `Length::css` renderer, including the recursive `Min`/`Max` arms.
+    // SSOT: a length formats identically through the inline-style path (sized
+    // with no flex parent) and the direct `Length::css` renderer, including the
+    // recursive `Min`/`Max` arms.
     #[test]
     fn length_renders_identically_across_paths() {
         let len = Length::Max(320, Box::new(Length::Vh(80)));
@@ -354,10 +403,13 @@ mod tests {
 
         enum Msg {}
         let style =
-            super::super::render::build_style_string(&[Attribute::<Msg>::AttrWidth(len.clone())]);
+            super::super::render::block_style_string(&[Attribute::<Msg>::AttrWidth(len.clone())]);
 
-        assert_eq!(direct, "max(320px,80vh)");
+        assert_eq!(direct, "min(320px,80vh)");
         assert_eq!(style, format!("width:{direct}"));
+
+        let floor = Length::Min(100, Box::new(Length::Fill(Portion::ONE)));
+        assert_eq!(floor.css(), "max(100px,100%)", "minimum is a lower bound");
     }
 
     // Cross-language SSOT equivalence: `Length::css` output must be byte-for-byte

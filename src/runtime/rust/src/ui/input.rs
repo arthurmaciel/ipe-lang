@@ -4,7 +4,7 @@
 //! Every public function carries a trailing underscore matching
 //! the `naming.rs` convention for kernel helpers.
 
-use super::element::{Attribute, Description, Element, Length};
+use super::element::{Attribute, Description, Element, Length, Portion};
 use super::helpers::{
     ui_column_, ui_el_, ui_html_attribute_, ui_input_, ui_on_bool_, ui_on_input_, ui_row_,
     ui_spacing_,
@@ -140,8 +140,8 @@ fn implicit_fill_if_hoisted<M>(layout_attrs: &[Attribute<M>]) -> Vec<Attribute<M
         vec![]
     } else {
         vec![
-            Attribute::AttrWidth(Length::Fill(1)),
-            Attribute::AttrHeight(Length::Fill(1)),
+            Attribute::AttrWidth(Length::Fill(Portion::ONE)),
+            Attribute::AttrHeight(Length::Fill(Portion::ONE)),
         ]
     }
 }

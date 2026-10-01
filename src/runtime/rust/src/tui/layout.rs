@@ -17,7 +17,9 @@
 //! slider value, Length(Fill/Min/Max). No panic vectors.
 
 use super::super::html::Html;
-use super::super::ui::{Attribute, Description, Element, HAlign, Length, Location, VAlign};
+use super::super::ui::{
+    Attribute, Description, Element, HAlign, Length, Location, Portion, VAlign,
+};
 use super::cell::sanitize_rune;
 use super::focus::{Focusable, InputRegistry};
 use crate::color::Color;
@@ -281,19 +283,26 @@ fn resolve_fixed_h(l: &Length, canvas: Canvas) -> Option<usize> {
 }
 
 /// `(portion, min_cells, max_cells)` for a fill child (see `fill_spec`).
-type FillSpec = (i64, Option<usize>, Option<usize>);
+type FillSpec = (Portion, Option<usize>, Option<usize>);
+
+// The fill-distribution products `leftover * portion` stay in range because a
+// portion never exceeds the cell ceiling; a portion at `Portion::MAX` already
+// claims the entire leftover beside any realistic sibling set.
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if `Portion::MAX` outgrows the TUI cell ceiling [ledger #boundary]
+const _: () = assert!(Portion::MAX.get() as usize <= MAX_CELLS);
+
+/// A fill portion as a share count for the distribution passes.
+const fn portion_shares(p: Portion) -> usize {
+    p.get() as usize
+}
 
 /// Distribution spec for a fill child: `Some((portion, min_cells, max_cells))`
 /// when the length is `Fill` (possibly wrapped in `Min`/`Max`). Such a child is
 /// sized by the parent ROW's fill-distribution pass, not by its own content.
 fn fill_spec(l: &Length, canvas: Canvas) -> Option<FillSpec> {
     match l {
-        // Clamp the portion at MAX_CELLS at the parse-don't-validate boundary where
-        // the program `Int` becomes a `FillSpec`. A portion ≥ MAX_CELLS already
-        // claims the entire leftover (ratio is preserved), so no legitimate layout
-        // changes. Both fill-distribution consumers (`distribute_row_fill`,
-        // `distribute_col_fill`) inherit this bound automatically.
-        Length::Fill(p) => Some(((*p).clamp(1, MAX_CELLS as i64), None, None)),
+        // The portion is positive and at most `Portion::MAX` by type.
+        Length::Fill(p) => Some((*p, None, None)),
         Length::Min(n, inner) => fill_spec(inner, canvas)
             .map(|(p, mn, mx)| (p, Some(mn.unwrap_or(0).max(canvas.cells_x(*n))), mx)),
         Length::Max(n, inner) => fill_spec(inner, canvas).map(|(p, mn, mx)| {
@@ -2237,14 +2246,12 @@ fn distribute_col_fill(
         return;
     }
     let is_fill = |i: usize| specs.get(i).copied().flatten().is_some();
-    // Portions are already clamped at MAX_CELLS by `fill_spec`; `.min(MAX_CELLS)`
-    // is belt-and-braces in case a future caller feeds an unclamped spec.
     let portion = |i: usize| {
         specs
             .get(i)
             .copied()
             .flatten()
-            .map_or(1usize, |(p, _, _)| (p.max(1) as usize).min(MAX_CELLS))
+            .map_or(1usize, |(p, _, _)| portion_shares(p))
     };
     let fill_idx: Vec<usize> = (0..n).filter(|i| is_fill(*i)).collect();
     if fill_idx.is_empty() {
@@ -2258,7 +2265,7 @@ fn distribute_col_fill(
         .map(|(_, r)| r.block.height())
         .sum();
     let leftover = total_h.saturating_sub(fixed + gaps);
-    // Saturating fold: portions are clamped at MAX_CELLS, but a column with
+    // Saturating fold: each portion is at most `Portion::MAX`, but a column with
     // many fill children could still wrap with plain `.sum()`.
     let portion_total: usize = fill_idx
         .iter()
@@ -2393,12 +2400,12 @@ fn distribute_row_fill(
     content_avail: usize,
     gap: usize,
 ) {
-    // Portions are already clamped at MAX_CELLS by `fill_spec`; saturating-fold
-    // the sum so a pathological all-max-portion row cannot wrap `total_portion`
-    // to a tiny divisor and drive per-child widths to ~usize::MAX.
+    // Each portion is at most `Portion::MAX`; saturating-fold the sum so a
+    // pathological all-max-portion row cannot wrap `total_portion` to a tiny
+    // divisor and drive per-child widths to ~usize::MAX.
     let total_portion: usize = specs
         .iter()
-        .filter_map(|s| s.map(|(p, _, _)| p.max(0) as usize))
+        .filter_map(|s| s.map(|(p, _, _)| portion_shares(p)))
         .fold(0usize, usize::saturating_add)
         .max(1);
     let n = children.len();
@@ -2419,7 +2426,7 @@ fn distribute_row_fill(
     for (r, s) in children.iter_mut().zip(specs) {
         if let Some((p, mn, mx)) = s {
             done += 1;
-            let p_usize = (*p).max(0) as usize;
+            let p_usize = portion_shares(*p);
             let share = if done == fill_count {
                 remaining.saturating_sub(used)
             } else {
@@ -2803,7 +2810,7 @@ mod tests {
     fn fill_width_expands_to_avail() {
         let t: Element<()> = node(
             vec![
-                Attribute::AttrWidth(Length::Fill(1)),
+                Attribute::AttrWidth(Length::Fill(Portion::ONE)),
                 Attribute::AttrBgColor(rgb(5, 6, 7)),
             ],
             vec![Element::Text("x".into())],
@@ -2876,7 +2883,7 @@ mod tests {
         // Max(160, Fill): fill would claim 80 cols, capped to 160px ≈ 10 cells.
         let t: Element<()> = node(
             vec![
-                Attribute::AttrWidth(Length::Max(160, Box::new(Length::Fill(1)))),
+                Attribute::AttrWidth(Length::Max(160, Box::new(Length::Fill(Portion::ONE)))),
                 Attribute::AttrBgColor(rgb(2, 2, 2)),
             ],
             vec![Element::Text("x".into())],
@@ -2890,13 +2897,85 @@ mod tests {
         );
     }
 
+    /// Refusal: `fillPortion 0` and a negative portion are `shrink` — the
+    /// layout pass gives them no fill spec, so they never take a share.
+    #[test]
+    fn fill_portion_non_positive_is_shrink() {
+        use crate::ui::helpers::{ui_fill_, ui_fill_portion_, ui_shrink_};
+        let canvas = Canvas::new(20, 24);
+        assert!(fill_spec(&ui_fill_(), canvas).is_some());
+        for n in [0, -3, i64::MIN] {
+            assert_eq!(ui_fill_portion_(n), ui_shrink_(), "fillPortion {n}");
+            assert_eq!(
+                fill_spec(&ui_fill_portion_(n), canvas),
+                None,
+                "fillPortion {n}"
+            );
+        }
+    }
+
+    /// Refusal: in a row, a `fillPortion 0` child stays content-width beside a
+    /// `fill` sibling, which takes the whole leftover.
+    #[test]
+    fn row_fill_portion_zero_keeps_content_width() {
+        use crate::ui::helpers::{ui_fill_, ui_fill_portion_, ui_shrink_};
+        let row_of = |left: Length| -> Element<()> {
+            node(
+                vec![Attribute::AttrStyle("__row".into(), String::new())],
+                vec![
+                    node(
+                        vec![
+                            Attribute::AttrWidth(left),
+                            Attribute::AttrBgColor(rgb(10, 0, 0)),
+                        ],
+                        vec![Element::Text("x".into())],
+                    ),
+                    node(
+                        vec![
+                            Attribute::AttrWidth(ui_fill_()),
+                            Attribute::AttrBgColor(rgb(0, 10, 0)),
+                        ],
+                        vec![Element::Text("y".into())],
+                    ),
+                ],
+            )
+        };
+        let shrink = cells_true(&row_of(ui_shrink_()), 20, 24);
+        let even = cells_true(&row_of(ui_fill_()), 20, 24);
+        assert_ne!(shrink, even, "a fill sibling pair splits the row");
+        for n in [0, -3] {
+            let zero = cells_true(&row_of(ui_fill_portion_(n)), 20, 24);
+            assert_eq!(zero, shrink, "fillPortion {n} lays out as shrink");
+        }
+    }
+
+    /// `fill` is `fillPortion 1`, and a portion above `Portion::MAX` clamps.
+    #[test]
+    fn fill_portion_one_is_fill_and_huge_clamps() {
+        use crate::ui::helpers::{ui_fill_, ui_fill_portion_};
+        let canvas = Canvas::new(20, 24);
+        assert_eq!(ui_fill_portion_(1), ui_fill_());
+        assert_eq!(
+            fill_spec(&ui_fill_(), canvas),
+            Some((Portion::ONE, None, None))
+        );
+        assert_eq!(
+            fill_spec(&ui_fill_portion_(i64::MAX), canvas),
+            Some((Portion::MAX, None, None))
+        );
+        assert_eq!(
+            fill_spec(&ui_fill_portion_(i64::from(Portion::MAX.get()) + 1), canvas),
+            Some((Portion::MAX, None, None))
+        );
+    }
+
     #[test]
     fn row_fill_splits_width() {
         // A row of two equal-portion fill children each take ~half of 20 cols.
         let child = |c: Color| -> Element<()> {
             node(
                 vec![
-                    Attribute::AttrWidth(Length::Fill(1)),
+                    Attribute::AttrWidth(Length::Fill(Portion::ONE)),
                     Attribute::AttrBgColor(c),
                 ],
                 vec![Element::Text("x".into())],
@@ -3279,14 +3358,13 @@ mod tests {
         assert!(!frame.contains("row0\r\n"), "row0 scrolled off");
     }
 
-    // RT-TUI-001: fill-portion i64 overflow — three Fill(i64::MAX) siblings in
-    // a row must render without panic (the saturating fold + MAX_CELLS clamp in
-    // fill_spec / distribute_col_fill guard the multiplication path).
+    // Three `fillPortion i64::MAX` siblings must render without panic: the
+    // portion clamps to `Portion::MAX` and the distribution folds saturate.
     #[test]
     fn fill_portion_max_i64_does_not_overflow() {
         let child = |label: &'static str| {
             node(
-                vec![Attribute::AttrWidth(Length::Fill(i64::MAX))],
+                vec![Attribute::AttrWidth(Length::fill_portion(i64::MAX))],
                 vec![Element::Text(label.into())],
             )
         };
@@ -3294,7 +3372,7 @@ mod tests {
         // The default column direction is fine here — distribute_col_fill fires.
         let row: Element<()> = node(
             vec![
-                Attribute::AttrWidth(Length::Fill(i64::MAX)),
+                Attribute::AttrWidth(Length::fill_portion(i64::MAX)),
                 Attribute::AttrSpacing(0),
             ],
             vec![child("A"), child("B"), child("C")],

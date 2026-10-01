@@ -616,11 +616,18 @@ px =
     Kernel.kernel "Ui_px"
 
 
+-- | `fill` — take one share of the parent's leftover space; `fill` is
+-- `fillPortion 1`.
 fill : Length
 fill =
     Kernel.kernel "Ui_fill"
 
 
+-- | `fillPortion n` — take `n` shares of the parent's leftover space. The space
+-- left after the non-fill siblings are sized is split among the fill siblings
+-- in proportion to their portions, so `fillPortion 2` beside `fill` gets two
+-- thirds. `fillPortion 0` is `shrink`, and a negative portion behaves as 0. A
+-- portion above 100000 counts as 100000.
 fillPortion : Int -> Length
 fillPortion =
     Kernel.kernel "Ui_fillPortion"
@@ -636,11 +643,13 @@ shrink =
     Kernel.kernel "Ui_shrink"
 
 
+-- | `minimum n len` — `len`, but never smaller than `n` pixels (a lower bound).
 minimum : Int -> Length -> Length
 minimum =
     Kernel.kernel "Ui_minimum"
 
 
+-- | `maximum n len` — `len`, but never larger than `n` pixels (an upper bound).
 maximum : Int -> Length -> Length
 maximum =
     Kernel.kernel "Ui_maximum"

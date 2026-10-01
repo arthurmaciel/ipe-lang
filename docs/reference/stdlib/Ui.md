@@ -624,11 +624,20 @@ px : Int -> Length
 fill : Length
 ```
 
+`fill` — take one share of the parent's leftover space; `fill` is
+`fillPortion 1`.
+
 ## `fillPortion`
 
 ```ipe
 fillPortion : Int -> Length
 ```
+
+`fillPortion n` — take `n` shares of the parent's leftover space. The space
+left after the non-fill siblings are sized is split among the fill siblings
+in proportion to their portions, so `fillPortion 2` beside `fill` gets two
+thirds. `fillPortion 0` is `shrink`, and a negative portion behaves as 0. A
+portion above 100000 counts as 100000.
 
 ## `content`
 
@@ -648,11 +657,15 @@ shrink : Length
 minimum : Int -> Length -> Length
 ```
 
+`minimum n len` — `len`, but never smaller than `n` pixels (a lower bound).
+
 ## `maximum`
 
 ```ipe
 maximum : Int -> Length -> Length
 ```
+
+`maximum n len` — `len`, but never larger than `n` pixels (an upper bound).
 
 ## `vh`
 
