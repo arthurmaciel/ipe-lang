@@ -7,7 +7,7 @@
 # Languages: Rust, TypeScript/JS (tree-sitter) + Ipê + Bash.
 #
 # Commands (run `ipe-index` with no args for the full list):
-#   index               (re)build the index from scratch
+#   index               rebuild the index (the review queue is reconciled, never reset)
 #   update              incremental: git-diff last_sha..HEAD, re-extract changed files
 #   locate <name>       every def site of a symbol (file:line:col)
 #   roles | pipeline | wakeup | deps <m> | rdeps <m> | covers <m>
@@ -33,10 +33,9 @@ else
     TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ipe-index/target"
 fi
 
-BIN="$TARGET_DIR/release/ipe-index"
-if [ ! -x "$BIN" ]; then
-    echo "ipe-index: building the Rust binary (first run)…" >&2
-    CARGO_TARGET_DIR="$TARGET_DIR" cargo build --release \
-        --manifest-path "$REPO/tools/ipe-index/Cargo.toml" >&2
-fi
-exec "$BIN" "$@"
+# Cargo owns freshness: a no-op when the binary is current, a rebuild when any
+# source, manifest or lockfile input changed. Testing only for an existing
+# binary would run a stale one after every edit to the tool.
+CARGO_TARGET_DIR="$TARGET_DIR" cargo build --release --locked --quiet \
+    --manifest-path "$REPO/tools/ipe-index/Cargo.toml" >&2
+exec "$TARGET_DIR/release/ipe-index" "$@"

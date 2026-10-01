@@ -27,7 +27,7 @@ import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
 import Lib.Queue as Queue exposing (QueueState(..), UnitPageState(..))
-import Lib.SafeText as SafeText
+import Lib.SafeText as SafeText exposing (SafeText)
 import Lib.Settings as Settings
 
 
@@ -38,15 +38,15 @@ type Page
 
 
 -- A decided unit as the History page shows it: the review row plus the unit's
--- qualified name resolved from the index db (Nothing when the unit no longer
--- exists there).
+-- qualified name resolved from the index db, rendered (Nothing when the unit
+-- no longer exists there).
 type alias HistoryRow =
     { uid : String
     , bodyHash : String
     , decision : String
-    , reason : Maybe String
+    , reason : Maybe LibDb.Reason
     , reviewedAt : Timestamp
-    , name : Maybe String
+    , name : Maybe SafeText
     }
 
 
@@ -56,10 +56,9 @@ type alias Model =
     { page : Page
     , queueState : Queue.QueueState
     , queueCursor : Index.Cursor
-    , decidedThisPass : Int
     , refusingUid : Maybe String
     , refuseDraft : String
-    , refuseError : Maybe String
+    , refuseError : Maybe Error
     , decisionError : Maybe Error
     , history : List HistoryRow
     , historyError : Maybe Error
@@ -73,7 +72,6 @@ init req =
     ( { page = pageFor req.path
       , queueState = Loading
       , queueCursor = Index.Start
-      , decidedThisPass = 0
       , refusingUid = Nothing
       , refuseDraft = ""
       , refuseError = Nothing
@@ -164,7 +162,7 @@ update msg model =
         DecisionSaved uid result ->
             case result of
                 Ok ( attested, _ ) ->
-                    ( { model | decidedThisPass = model.decidedThisPass + 1, decisionError = Nothing }, drainAndReload model attested )
+                    ( { model | decisionError = Nothing }, drainAndReload model attested )
 
                 Err e ->
                     ( { model | decisionError = Just e }, Cmd.none )
@@ -232,13 +230,16 @@ keyActionMsg action model =
             ( model, Cmd.none )
 
 
+-- The draft is parsed into a bounded `Reason` here, the one point where the
+-- reviewer's text enters; a blank or over-long draft stays open with why.
 submitRefuse : Model -> String -> ( Model, Cmd Msg )
 submitRefuse model uid =
-    if String.isEmpty (String.trim model.refuseDraft) then
-        ( { model | refuseError = Just "Reason is required" }, Cmd.none )
+    case LibDb.parseReason model.refuseDraft of
+        Err e ->
+            ( { model | refuseError = Just e }, Cmd.none )
 
-    else
-        ( { model | refusingUid = Nothing, refuseDraft = "" }, saveDecision model uid (Refused model.refuseDraft) )
+        Ok reason ->
+            ( { model | refusingUid = Nothing, refuseDraft = "" }, saveDecision model uid (Refused reason) )
 
 
 -- The shown page's units, for selection and decisions; a queue that is not
@@ -255,20 +256,6 @@ queueList model =
 
         Failed _ ->
             []
-
-
--- The whole-queue count once a page is loaded, 0 otherwise.
-queueTotal : Model -> Int
-queueTotal model =
-    case model.queueState of
-        Loaded page ->
-            page.total
-
-        Loading ->
-            0
-
-        Failed _ ->
-            0
 
 
 selectedUid : Model -> Maybe String
@@ -383,23 +370,35 @@ navButton active label msg =
         { onPress = Just msg, label = Ui.text label }
 
 
+-- Progress comes from the loaded page, which reads it from the databases; a
+-- queue still loading or failed shows none.
 progressEl : Model -> Ui.Element Msg
 progressEl model =
+    case model.queueState of
+        Loaded page ->
+            progressOf page.progress
+
+        Loading ->
+            Ui.none
+
+        Failed _ ->
+            Ui.none
+
+
+progressOf : Queue.Progress -> Ui.Element Msg
+progressOf progress =
     let
         k =
-            model.decidedThisPass
+            progress.reviewed
 
         n =
-            k + queueTotal model
-
-        pct =
-            Format.percent k n
+            progress.total
     in
     Ui.column
         [ Ui.width (Ui.px 220), Ui.spacing 4 ]
         [ Ui.el
             [ Font.size 12, Font.color (Ui.rgb 160 160 175) ]
-            (Ui.text (String.fromInt k ++ " of " ++ String.fromInt n ++ " reviewed (" ++ pct ++ ")"))
+            (Ui.text (String.fromInt k ++ " of " ++ String.fromInt n ++ " reviewed (" ++ Format.percent k n ++ ")"))
         , progressBar k n
         ]
 
@@ -569,7 +568,7 @@ railItem model i q =
             [ Ui.width Ui.fill, Ui.spacing 6, Ui.centerY ]
             [ Ui.el
                 [ Font.size 12, Font.bold, Font.color (Ui.rgb 220 220 230) ]
-                (Ui.text q.unit.qualified)
+                (safeText q.unit.qualified)
             , changeBadge q.unit.change
             ]
         }
@@ -618,10 +617,10 @@ historyCard row =
         [ Ui.row
             [ Ui.width Ui.fill, Ui.spacing 10, Ui.centerY ]
             [ decisionBadge row.decision
-            , Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text (nameOf row))
+            , Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (safeText (nameOf row))
             , Ui.el
                 [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
-                (Ui.text (Index.shortHash row.bodyHash))
+                (safeText (Index.shortHash row.bodyHash))
             , Ui.el [ Ui.width Ui.fill ] Ui.none
             , Ui.el
                 [ Font.size 12, Font.color (Ui.rgb 150 150 165) ]
@@ -629,21 +628,21 @@ historyCard row =
             ]
         , case row.reason of
             Just r ->
-                Ui.el [ Font.size 12, Font.color (Ui.rgb 200 120 120) ] (Ui.text r)
+                Ui.el [ Font.size 12, Font.color (Ui.rgb 200 120 120) ] (safeText (LibDb.reasonText r))
 
             Nothing ->
                 Ui.none
         ]
 
 
-nameOf : HistoryRow -> String
+nameOf : HistoryRow -> SafeText
 nameOf row =
     case row.name of
         Just n ->
             n
 
         Nothing ->
-            row.uid
+            SafeText.renderForeign row.uid
 
 
 -- The unit page shows the source of one unit with its resolved links —
@@ -690,13 +689,13 @@ unitPageCard links unit =
         ]
         [ Ui.row
             [ Ui.width Ui.fill, Ui.spacing 10, Ui.centerY ]
-            [ Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text unit.qualified)
+            [ Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (safeText unit.qualified)
             , chip unit.facing
             , chip unit.kind
             ]
         , Ui.el
             [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
-            (Ui.text (SafeText.toString (SafeText.renderForeign unit.path) ++ " · lines " ++ String.fromInt unit.lineStart ++ "-" ++ String.fromInt unit.lineEnd))
+            (safeText (unitLocation unit))
         , referencesRow links
         , sourceBlock unit
         ]
@@ -716,7 +715,7 @@ referencesRow links =
 -- | Render a link from a fail-closed `LinkTarget` result and a label. On an
 -- `Err` (an unsafe / unparseable target) the anchor degrades to the plain label
 -- text — the reader still sees it, but no `href` is emitted.
-linkOrText : Result Error Ui.LinkTarget -> String -> Ui.Element Msg
+linkOrText : Result Error Ui.LinkTarget -> SafeText -> Ui.Element Msg
 linkOrText target labelText =
     case target of
         Ok t ->
@@ -726,33 +725,33 @@ linkOrText target labelText =
                 , Font.color (Ui.rgb 130 170 240)
                 , Ui.padding 4
                 ]
-                { url = t, label = Ui.text labelText }
+                { url = t, label = safeText labelText }
 
         Err _ ->
-            Ui.text labelText
+            safeText labelText
 
 
 linkEl : Links.Link -> Ui.Element Msg
 linkEl link =
     case link of
-        Internal qualified uid ->
-            linkOrText (Ui.linkTarget ("/unit/" ++ uid)) ("→ " ++ qualified)
+        Internal _ uid ->
+            linkOrText (Ui.linkTarget ("/unit/" ++ uid)) (Links.label link)
 
         External url ->
-            linkOrText (Ui.linkTarget url) ("↗ " ++ url)
+            linkOrText (Ui.linkTarget url) (Links.label link)
 
 
 decisionBadge : String -> Ui.Element Msg
 decisionBadge d =
     case d of
         "approve" ->
-            chipColored "✓ Approved" (Ui.rgb 35 120 55)
+            chipColored (SafeText.literal "✓ Approved") (Ui.rgb 35 120 55)
 
         "refuse" ->
-            chipColored "✗ Refused" (Ui.rgb 130 45 45)
+            chipColored (SafeText.literal "✗ Refused") (Ui.rgb 130 45 45)
 
         _ ->
-            chipColored d (Ui.rgb 40 40 52)
+            chipColored (SafeText.renderForeign d) (Ui.rgb 40 40 52)
 
 
 currentPath : Model -> String
@@ -800,7 +799,7 @@ unitCard model selected q =
         ]
         [ Ui.row
             [ Ui.width Ui.fill, Ui.spacing 10, Ui.centerY ]
-            [ Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text unit.qualified)
+            [ Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (safeText unit.qualified)
             , changeBadge unit.change
             , changedChip q
             , chip unit.facing
@@ -810,30 +809,42 @@ unitCard model selected q =
             ]
         , Ui.el
             [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
-            (Ui.text (SafeText.toString (SafeText.renderForeign unit.path) ++ " · lines " ++ String.fromInt unit.lineStart ++ "-" ++ String.fromInt unit.lineEnd ++ maybePurpose unit))
+            (safeText (SafeText.concat [ unitLocation unit, maybePurpose unit ]))
         , changedLine q
         , sourceBlock unit
         ]
 
 
-maybePurpose : Index.Unit -> String
+-- `path · lines a-b`, from the unit's rendered path.
+unitLocation : Index.Unit -> SafeText
+unitLocation unit =
+    SafeText.concat
+        [ unit.path
+        , SafeText.literal " · lines "
+        , SafeText.render (String.fromInt unit.lineStart)
+        , SafeText.literal "-"
+        , SafeText.render (String.fromInt unit.lineEnd)
+        ]
+
+
+maybePurpose : Index.Unit -> SafeText
 maybePurpose unit =
     case unit.purpose of
         Just p ->
-            " · purpose " ++ p
+            SafeText.concat [ SafeText.literal " · purpose ", p ]
 
         Nothing ->
-            ""
+            SafeText.literal ""
 
 
 changeBadge : String -> Ui.Element Msg
 changeBadge change =
     case change of
         "new" ->
-            chipColored "NEW" (Ui.rgb 35 120 55)
+            chipColored (SafeText.literal "NEW") (Ui.rgb 35 120 55)
 
         _ ->
-            chipColored "MODIFIED" (Ui.rgb 145 95 20)
+            chipColored (SafeText.literal "MODIFIED") (Ui.rgb 145 95 20)
 
 
 -- A unit that was already reviewed on an older hash gets an amber
@@ -842,7 +853,7 @@ changedChip : Queue.QueuedUnit -> Ui.Element Msg
 changedChip q =
     case q.changed of
         Just _ ->
-            chipColored "CHANGED" (Ui.rgb 145 95 20)
+            chipColored (SafeText.literal "CHANGED") (Ui.rgb 145 95 20)
 
         Nothing ->
             Ui.none
@@ -854,38 +865,44 @@ changedLine q =
         Just old ->
             Ui.el
                 [ Font.size 12, Font.color (Ui.rgb 200 160 90) ]
-                (Ui.text (previousLabel old ++ " on " ++ Format.formatReviewedAt old.reviewedAt))
+                (safeText (SafeText.concat [ previousLabel old, SafeText.literal " on ", SafeText.render (Format.formatReviewedAt old.reviewedAt) ]))
 
         Nothing ->
             Ui.none
 
 
-previousLabel : LibDb.ReviewRow -> String
+previousLabel : LibDb.ReviewRow -> SafeText
 previousLabel row =
     case row.decision of
         "approve" ->
-            "Previously Approved"
+            SafeText.literal "Previously Approved"
 
         "refuse" ->
-            "Previously Refused"
-                ++ (case row.reason of
-                    Just r ->
-                        " (" ++ r ++ ")"
+            case row.reason of
+                Just r ->
+                    SafeText.concat [ SafeText.literal "Previously Refused (", LibDb.reasonText r, SafeText.literal ")" ]
 
-                    Nothing ->
-                        ""
-                )
+                Nothing ->
+                    SafeText.literal "Previously Refused"
 
         other ->
-            "Previously " ++ other
+            SafeText.concat [ SafeText.literal "Previously ", SafeText.renderForeign other ]
 
 
-chip : String -> Ui.Element Msg
+-- The one sink for text that came from the index, the review database or
+-- the environment: it takes only `SafeText`, so such text cannot be shown
+-- raw.
+safeText : SafeText -> Ui.Element msg
+safeText text =
+    Ui.text (SafeText.toString text)
+
+
+chip : SafeText -> Ui.Element Msg
 chip label =
     chipColored label (Ui.rgb 40 40 52)
 
 
-chipColored : String -> Ui.Color -> Ui.Element Msg
+chipColored : SafeText -> Ui.Color -> Ui.Element Msg
 chipColored label bg =
     Ui.el
         [ Ui.paddingXY 8 3
@@ -895,7 +912,7 @@ chipColored label bg =
         , Font.bold
         , Font.color (Ui.rgb 220 220 230)
         ]
-        (Ui.text label)
+        (safeText label)
 
 
 -- Approve and Refuse exist only for a verified view; any other view shows why
@@ -952,7 +969,7 @@ refusePanel model uid =
             }
         , case model.refuseError of
             Just err ->
-                Ui.el [ Font.size 11, Font.color (Ui.rgb 220 110 110) ] (Ui.text err)
+                Ui.el [ Font.size 11, Font.color (Ui.rgb 220 110 110) ] (safeText (SafeText.renderForeign (Error.message err)))
 
             Nothing ->
                 Ui.none
@@ -993,7 +1010,7 @@ sourceBlock unit =
             [ Ui.width Ui.fill, Ui.spacing 2 ]
             (case unit.view of
                 Shown shown ->
-                    List.map (numberedLine (Highlight.langFor unit.kind)) (Format.numberedLines unit.lineStart (Index.shownText shown))
+                    List.map (numberedLine unit.lang) (Format.numberedLines unit.lineStart (Index.shownText shown))
 
                 Stale _ ->
                     withheldSource unit.view
@@ -1045,7 +1062,7 @@ tokenEl tok =
         , Font.size 12
         , Font.color (tokenColor tok)
         ]
-        (Ui.text (Highlight.tokenText tok))
+        (safeText (Highlight.tokenText tok))
 
 
 tokenColor : Highlight.Token -> Ui.Color
@@ -1089,28 +1106,27 @@ reviewApp =
 
 -- Require an environment variable, failing closed with an actionable message
 -- when it is unset. `System.getenv` errors on a missing var; the recovery
--- branch names the variable, the hint, and how to build the index, then exits
+-- branch names the variable and that variable's own fix, then exits
 -- non-zero. The app never falls back to a silent default that would surface
 -- later as an opaque SQLITE_CANTOPEN when the index db is not where a bare
--- default points.
+-- default points. `key` and `fix` are this tool's own text.
 requireEnv : String -> String -> Task Error String
-requireEnv key hint =
+requireEnv key fix =
     Task.onError
         (\_ ->
             do
-                Io.eprintln """
-                    code-review: required environment variable {{key}} is not set.
-                      {{hint}}
-                      Build the index first from the repo root:  tools/scripts/ipe-index index
-                    """
+                Io.eprintln ("code-review: required environment variable " ++ key ++ " is not set.\n  " ++ fix)
                 System.exit 1
         )
         (System.getenv key)
 
 
--- Parse every configured location once before serving: a relative
--- `IPE_INDEX_ROOT` resolves against the working directory, and a value that
--- does not name a usable location stops startup with its reason and fix.
+-- Parse every configured location, then open and probe each one before
+-- serving: the index read-only with every column a page reads, the review
+-- database created and migrated, and the root, which the parse already
+-- requires to be an existing directory. A relative value resolves against
+-- the working directory. Any failure stops startup with a message naming
+-- the variable and one fix.
 requireSettings : Task Error ()
 requireSettings =
     Task.onError
@@ -1120,8 +1136,10 @@ requireSettings =
                 System.exit 1
         )
         (do
-            Settings.indexSettings
-            Settings.reviewDb
+            index <- Settings.indexSettings
+            Index.probe index
+            review <- Settings.reviewDb
+            LibDb.probe review
             Task.succeed ()
         )
 
@@ -1129,7 +1147,7 @@ requireSettings =
 main : Task Error ()
 main =
     do
-        requireEnv "IPE_INDEX_DB" "path or sqlite:// URL of the ipe-index index.db (absolute, or relative to the working directory)"
-        requireEnv "IPE_INDEX_ROOT" "repo root the index's tag:relative paths join to (absolute, or relative to the working directory)"
+        requireEnv "IPE_INDEX_DB" "Set it to the path or sqlite:// URL of the ipe-index index.db (absolute, or relative to the working directory).\n  Build the index first from the repo root:  tools/scripts/ipe-index index"
+        requireEnv "IPE_INDEX_ROOT" "Set it to the repo root the index's tag:relative paths join to (absolute, or relative to the working directory)."
         requireSettings
         Server.listen 8000 [ Server.mountApp "/" reviewApp ]

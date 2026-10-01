@@ -1,17 +1,21 @@
-module Lib.Queue exposing (QueuePage, QueueState(..), QueuedUnit, UnitPageState(..), decide, loadPage, loadUnitView, pageHeaderText, queueStatusText, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
+module Lib.Queue exposing (Progress, QueuePage, QueueState(..), QueuedUnit, UnitPageState(..), decide, loadPage, loadUnitView, pageHeaderText, progressOf, queueStatusText, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
 
 import Ipe.Db as Db
 import Ipe.Error as Error
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.Result as Result exposing (Result(..))
+import Ipe.Set as Set
 import Ipe.String as String
 import Ipe.Task as Task
 import Lib.Db as LibDb
 import Lib.Format as Format
+-- `Index.Unit` names `Highlight.Lang`, and an imported alias resolves its
+-- qualified names in this module.
+import Lib.Highlight as Highlight
 import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.Links as Links
-import Lib.SafeText as SafeText
+import Lib.SafeText as SafeText exposing (SafeText)
 import Lib.Settings as Settings
 
 
@@ -26,14 +30,43 @@ type alias QueuedUnit =
 
 -- One loaded page of the queue. `total` counts the whole queue (never this
 -- page's length); `next` is the cursor of the following page, Nothing on the
--- last page.
+-- last page; `dbName` is the index file's name, rendered once.
 type alias QueuePage =
     { units : List QueuedUnit
     , total : Int
-    , dbName : String
+    , dbName : SafeText
     , dbBytes : Int
     , next : Maybe Index.Cursor
+    , progress : Progress
     }
+
+
+-- Review progress over the index as it stands, read from the two databases
+-- and never from a session: `reviewed` counts the units whose current body
+-- hash has a decision, `total` the units reviewed or still queued. Deciding a
+-- unit moves it from queued to reviewed, so `total` holds while the queue
+-- drains, and a reload or a second tab reads the same numbers.
+type alias Progress =
+    { reviewed : Int
+    , total : Int
+    }
+
+
+progressOf : Set String -> List Index.UnitState -> Progress
+progressOf decided states =
+    List.foldl
+        (\st acc ->
+            if Set.member (LibDb.pairKey st.uid st.bodyHash) decided then
+                { reviewed = acc.reviewed + 1, total = acc.total + 1 }
+
+            else if st.queued then
+                { acc | total = acc.total + 1 }
+
+            else
+                acc
+        )
+        { reviewed = 0, total = 0 }
+        states
 
 
 -- The queue view's state. An empty queue is only `Loaded` with `total == 0`,
@@ -149,17 +182,29 @@ loadUnitView uid =
 
 
 -- Jump links come only from verified source; a withheld view links nothing.
+-- The unit's own name, which never links, is its raw qualified name from the
+-- same table the links resolve against (`unit.qualified` is display text).
 linksFor : Index.Unit -> List ( String, String ) -> List Links.Link
 linksFor unit qs =
     case unit.view of
         Shown shown ->
-            Links.resolve unit.qualified qs (Index.shownText shown)
+            Links.resolve (ownQualified unit.uid qs) qs (Index.shownText shown)
 
         Stale _ ->
             []
 
         Unreadable _ ->
             []
+
+
+ownQualified : String -> List ( String, String ) -> String
+ownQualified uid qs =
+    case List.find (\( _, u ) -> u == uid) qs of
+        Just ( q, _ ) ->
+            q
+
+        Nothing ->
+            ""
 
 
 stateFromResult : Result Error QueuePage -> QueueState
@@ -199,7 +244,7 @@ queueStatusText state =
 pageHeaderText : QueuePage -> String
 pageHeaderText page =
     String.concat
-        [ page.dbName
+        [ SafeText.toString page.dbName
         , " · "
         , Format.byteSize page.dbBytes
         , " · showing "
@@ -231,12 +276,15 @@ loadPage cursor =
         total <- Index.countPending
         bytes <- Index.dbBytes
         units <- classify db (List.map (\r -> r.unit) rows)
+        decided <- LibDb.decidedKeys db
+        states <- Index.unitStates
         Task.succeed
             { units = units
             , total = total
-            , dbName = Settings.dbFileName settings.db
+            , dbName = SafeText.renderForeign (Settings.dbFileName settings.db)
             , dbBytes = bytes
             , next = nextCursor rows
+            , progress = progressOf decided states
             }
 
 
