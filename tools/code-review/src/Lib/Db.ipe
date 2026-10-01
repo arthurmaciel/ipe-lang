@@ -1,15 +1,15 @@
-module Lib.Db exposing (Decision(..), Reason, ReviewRow, decidedKeys, findDecision, findDecisions, findLatestForUid, insertDecision, insertDrainCursor, migrate, open, openAt, pairKey, parseReason, probe, reasonMaxChars, reasonText, recordDrain)
+module Lib.Db exposing (Decision(..), Reason, ReviewRow, countDecisions, decidedPairsAfter, findDecision, findDecisions, findLatestForUid, insertDecision, insertDrainCursor, migrate, open, openAt, pairPageSize, parseReason, probe, reasonMaxChars, reasonText, recordDrain)
 
 import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
 import Ipe.Config as Config
 import Ipe.Db as Db
+import Ipe.Db.Decode
 import Ipe.Db.Store as Store exposing (Store)
 import Ipe.Error as Error
 import Ipe.Json.Encode as Encode
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.Result as Result exposing (Result(..))
-import Ipe.Set as Set
 import Ipe.String as String
 import Ipe.Task as Task
 import Ipe.Time as Time
@@ -463,18 +463,66 @@ retryRefresh db store cursor insertError =
             Task.succeed updated
 
 
--- Every decided (uid, body_hash) pair, as `pairKey`s.
-decidedKeys : Db -> Task.Task Error (Set String)
-decidedKeys db =
-    findDecisions db
-        |> Task.map (\rows -> Set.fromList (List.map (\row -> pairKey row.uid row.bodyHash) rows))
+countDecoder : Db.Decode.Decoder Int
+countDecoder =
+    Db.Decode.succeed (\n -> n)
+        |> Db.Decode.required "total" (Db.Decode.int "total")
 
 
--- One key per (uid, body_hash) pair. The uid's length prefixes it, so no two
--- pairs share a key whatever text either holds.
-pairKey : String -> String -> String
-pairKey uid bodyHash =
-    String.concat [ String.fromInt (String.length uid), ":", uid, bodyHash ]
+-- How many decisions the review table holds, counted by SQLite without
+-- decoding a row, so a row whose stored reason no longer parses still
+-- counts. A count query that yields anything but one row is a failed read,
+-- never a zero.
+countDecisions : Db -> Task.Task Error Int
+countDecisions db =
+    do
+        rows <- Db.queryDecode db "SELECT COUNT(*) AS total FROM review" [] countDecoder
+        case rows of
+            [ n ] ->
+                Task.succeed n
+
+            _ ->
+                Task.fail (Error.unexpected "COUNT(*) over review did not return exactly one row")
+
+
+-- The most decided pairs one `decidedPairsAfter` page returns.
+pairPageSize : Int
+pairPageSize =
+    200
+
+
+pairDecoder : Db.Decode.Decoder ( String, String )
+pairDecoder =
+    Db.Decode.succeed (\uid bodyHash -> ( uid, bodyHash ))
+        |> Db.Decode.required "uid" (Db.Decode.string "uid")
+        |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
+
+
+-- One page of decided (uid, body_hash) pairs in key order, strictly after
+-- `cursor` (from the first pair when Nothing), at most `pairPageSize` of
+-- them. Only the two key columns are read, so no reason is parsed; every
+-- value is a bound parameter.
+decidedPairsAfter : Db -> Maybe ( String, String ) -> Task.Task Error (List ( String, String ))
+decidedPairsAfter db cursor =
+    case cursor of
+        Nothing ->
+            Db.queryDecode db (pairColumns ++ pairOrder) [ SqlInt pairPageSize ] pairDecoder
+
+        Just ( uid, bodyHash ) ->
+            Db.queryDecode db
+                (pairColumns ++ " WHERE (uid, body_hash) > (?, ?)" ++ pairOrder)
+                [ SqlString uid, SqlString bodyHash, SqlInt pairPageSize ]
+                pairDecoder
+
+
+pairColumns : String
+pairColumns =
+    "SELECT uid, body_hash FROM review"
+
+
+pairOrder : String
+pairOrder =
+    " ORDER BY uid, body_hash LIMIT ?"
 
 
 -- Every review row, newest first. `Store.all` fetches all rows; the query

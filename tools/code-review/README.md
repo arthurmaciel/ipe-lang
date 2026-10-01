@@ -79,13 +79,20 @@ rendering reordered (Trojan Source). `\` and `"` are shown as written.
 A refusal needs a reason of at most 500 characters; a blank or longer one is
 refused before anything is saved.
 
-The progress counter in the header reads both databases on every queue load:
-it counts the units whose current body hash has a decision, out of the units
-decided or still queued. Deciding a unit raises the first number and leaves
-the second unchanged, and a reload or a second tab shows the same numbers.
+The progress counter in the header counts the units whose current body hash
+has a decision, out of the units decided or still queued. Each queue load
+reads it as one SQL aggregate over the index's `reviewed` table, the app's
+copy of its decided `(uid, body_hash)` pairs, so a load costs the same however
+large the index or the review history grows. Deciding a unit raises the first
+number and leaves the second unchanged, and a reload or a second tab shows the
+same numbers. Each load also compares the copy's row count with the review
+DB's; on a mismatch (a decision whose drain failed, a rebuilt index file, a
+deleted review row) it rebuilds the copy from the review DB before counting,
+and startup always rebuilds it once.
 
 The index DB is opened read-only for listing and read-write (never created) only
-to delete a consumed `change_queue` row. The app creates and owns the review DB.
+to drain a decided unit: in one transaction its pair enters `reviewed` and its
+consumed `change_queue` row is deleted. The app creates and owns the review DB.
 
 ## Running
 

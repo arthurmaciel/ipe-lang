@@ -1,11 +1,10 @@
-module Lib.Queue exposing (Progress, QueuePage, QueueState(..), QueuedUnit, UnitPageState(..), decide, loadPage, loadUnitView, pageHeaderText, progressOf, queueStatusText, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
+module Lib.Queue exposing (Progress, QueuePage, QueueState(..), QueuedUnit, UnitPageState(..), decide, loadPage, loadUnitView, pageHeaderText, queueStatusText, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
 
 import Ipe.Db as Db
 import Ipe.Error as Error
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.Result as Result exposing (Result(..))
-import Ipe.Set as Set
 import Ipe.String as String
 import Ipe.Task as Task
 import Lib.Db as LibDb
@@ -41,32 +40,101 @@ type alias QueuePage =
     }
 
 
--- Review progress over the index as it stands, read from the two databases
--- and never from a session: `reviewed` counts the units whose current body
--- hash has a decision, `total` the units reviewed or still queued. Deciding a
--- unit moves it from queued to reviewed, so `total` holds while the queue
--- drains, and a reload or a second tab reads the same numbers.
+-- Review progress over the index as it stands, never from a session:
+-- `reviewed` counts the units whose current body hash has a decision, `total`
+-- the units reviewed or still queued. Both are one aggregate over the index's
+-- `reviewed` table, the copy of the review database's decided pairs that each
+-- drain extends; every load first checks the copy's row count against the
+-- review database and rebuilds the copy on a mismatch. Deciding a unit moves
+-- it from queued to reviewed, so `total` holds while the queue drains, and a
+-- reload or a second tab reads the same numbers.
 type alias Progress =
     { reviewed : Int
     , total : Int
     }
 
 
-progressOf : Set String -> List Index.UnitState -> Progress
-progressOf decided states =
-    List.foldl
-        (\st acc ->
-            if Set.member (LibDb.pairKey st.uid st.bodyHash) decided then
-                { reviewed = acc.reviewed + 1, total = acc.total + 1 }
+-- The progress of the index, with the `reviewed` copy checked fresh first:
+-- when its row count differs from the review database's decision count (a
+-- decision whose drain failed, a replaced index file, a deleted review row),
+-- the copy is rebuilt once and the row read again. It never loops.
+currentProgress : Db.Db -> Task.Task Error Progress
+currentProgress db =
+    do
+        first <- Index.loadProgress
+        decisions <- LibDb.countDecisions db
+        if first.mirrored == decisions then
+            Task.succeed (progressFrom first)
 
-            else if st.queued then
-                { acc | total = acc.total + 1 }
+        else
+            do
+                resyncReviewed db
+                second <- Index.loadProgress
+                Task.succeed (progressFrom second)
 
-            else
-                acc
+
+progressFrom : Index.ProgressRow -> Progress
+progressFrom row =
+    { reviewed = row.reviewed, total = row.total }
+
+
+-- The most review-database pages one rebuild of the `reviewed` copy reads,
+-- `pairPageSize` pairs each.
+resyncPageCeiling : Int
+resyncPageCeiling =
+    10000
+
+
+-- The `reviewed` copy rebuilt from the review database: one index
+-- transaction empties it and drains every decided pair, so a pair's
+-- undrained queue row leaves too. Returns the count of pairs copied.
+resyncReviewed : Db.Db -> Task.Task Error Int
+resyncReviewed db =
+    resyncReviewedWithin resyncPageCeiling db
+
+
+-- `resyncReviewed` reading at most `ceiling` pages of decided pairs. A review
+-- database holding more refuses the rebuild and rolls it back, leaving the
+-- copy as it was.
+resyncReviewedWithin : Int -> Db.Db -> Task.Task Error Int
+resyncReviewedWithin ceiling db =
+    Index.rebuildReviewed (\conn -> refillPages ceiling db conn 0 0 Nothing)
+
+
+-- Page `pagesRead` of decided pairs after `cursor`, each drained on `conn`;
+-- `copied` counts the pairs drained so far. A short page is the last one. A
+-- non-empty page past the ceiling fails the whole rebuild.
+refillPages : Int -> Db.Db -> Db.Db -> Int -> Int -> Maybe ( String, String ) -> Task.Task Error Int
+refillPages ceiling db conn pagesRead copied cursor =
+    do
+        pairs <- LibDb.decidedPairsAfter db cursor
+        if List.isEmpty pairs then
+            Task.succeed copied
+
+        else if pagesRead >= ceiling then
+            Task.fail (resyncCeilingRefusal ceiling)
+
+        else
+            do
+                pairs
+                    |> List.map (\( uid, hash ) -> Index.drainPair conn uid hash)
+                    |> Task.sequence
+                if List.length pairs < LibDb.pairPageSize then
+                    Task.succeed (copied + List.length pairs)
+
+                else
+                    refillPages ceiling db conn (pagesRead + 1) (copied + List.length pairs) (List.head (List.reverse pairs))
+
+
+resyncCeilingRefusal : Int -> Error
+resyncCeilingRefusal ceiling =
+    Error.unavailable
+        ("the review database holds more than "
+            ++ String.fromInt (ceiling * LibDb.pairPageSize)
+            ++ " decisions, past the "
+            ++ String.fromInt ceiling
+            ++ "-page ceiling of a review progress rebuild; the progress copy is left unchanged"
         )
-        { reviewed = 0, total = 0 }
-        states
 
 
 -- The queue view's state. An empty queue is only `Loaded` with `total == 0`,
@@ -266,25 +334,27 @@ pageHeaderText page =
 -- Only one page of the queue is classified per load, so the resurfaced-first
 -- order holds within the page.
 --
--- The page also carries the whole-queue count and the database size.
+-- The page also carries the whole-queue count, the database size and the
+-- review progress. Progress is read first, so a rebuild of the `reviewed`
+-- copy that drains an undrained decided pair is already reflected in the
+-- page's rows and count.
 loadPage : Index.Cursor -> Task.Task Error QueuePage
 loadPage cursor =
     do
         settings <- Settings.indexSettings
         db <- LibDb.open
+        progress <- currentProgress db
         rows <- Index.loadPendingPage cursor
         total <- Index.countPending
         bytes <- Index.dbBytes
         units <- classify db (List.map (\r -> r.unit) rows)
-        decided <- LibDb.decidedKeys db
-        states <- Index.unitStates
         Task.succeed
             { units = units
             , total = total
             , dbName = SafeText.renderForeign (Settings.dbFileName settings.db)
             , dbBytes = bytes
             , next = nextCursor rows
-            , progress = progressOf decided states
+            , progress = progress
             }
 
 
