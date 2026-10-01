@@ -128,9 +128,25 @@ fn a_runtime_override_naming_a_missing_dir_fails() {
     );
 }
 
+/// A scratch dir under the OS temp root, outside every checkout.
+///
+/// `CARGO_TARGET_TMPDIR` lives under the target dir, which defaults to the
+/// checkout's own `target/`, so an upward walk from it reaches the checkout's
+/// runtime tree; an absence proof must start where no ancestor holds one.
+#[allow(clippy::expect_used)] // unwritable test scratch is an environment failure, not a case under test
+fn outside_scratch(tag: &str) -> PathBuf {
+    let dir = ipe_test_temp::temp_root().join(format!(
+        "ipe-e2e-support-resolve-{tag}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create test scratch dir");
+    dir
+}
+
 #[test]
 fn a_walk_with_no_runtime_tree_fails() {
-    let root = scratch("no-runtime");
+    let root = outside_scratch("no-runtime");
     let got = resolve_runtime_src(None, &root);
     assert!(
         matches!(got, Err(ResolveError::Missing { .. })),
