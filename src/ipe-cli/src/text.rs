@@ -1149,6 +1149,8 @@ messages! {
     doc_unknown_kind(prefix) = "doc-unknown-kind";
     /// An `ipe doc <kind>:<key>` query named no entry of that kind.
     doc_no_entry_for_key(kind, key, nearby: &crate::text::TerminalBlock) = "doc-no-entry-for-key";
+    /// An `ipe doc <query>` short name matched more than one stdlib module.
+    doc_ambiguous_module(query, candidates: &crate::text::TerminalBlock) = "doc-ambiguous-module";
     /// `ipe doc --type` matched no symbol.
     doc_type_no_match(query) = "doc-type-no-match";
     /// The kernel type table could not be read for `ipe doc`.
@@ -1583,6 +1585,21 @@ messages! {
     publish_not_git_repo(path) = "publish-not-git-repo";
     /// `ipe package publish` could not run `git`.
     publish_git_unavailable(detail) = "publish-git-unavailable";
+    /// A GitHub API call's `-w '%{http_code}'` text was empty.
+    publish_http_status_empty(op) = "publish-http-status-empty";
+    /// A GitHub API call's status text was not exactly 3 ASCII digits.
+    publish_http_status_not_digits(op) = "publish-http-status-not-digits";
+    /// A GitHub API call reported curl's "no response" status (`000`).
+    publish_http_status_no_response(op) = "publish-http-status-no-response";
+    /// A GitHub API call's 3-digit status fell outside 100..=599.
+    publish_http_status_out_of_range(op, value) = "publish-http-status-out-of-range";
+    /// `curl` exited nonzero before a GitHub API call got a response.
+    publish_http_transport_failed(op, detail: &crate::style::TerminalSafe) =
+        "publish-http-transport-failed";
+    /// A GitHub API response body exceeded the shared size cap.
+    publish_http_body_too_large(op, cap) = "publish-http-body-too-large";
+    /// A GitHub API response body could not be read back from the scratch file.
+    publish_http_body_io(op) = "publish-http-body-io";
     /// A registry trust identity field that is not a token.
     trust_token_invalid(label, raw: &crate::style::TerminalSafe) = "trust-token-invalid";
     /// A malformed signature bundle.

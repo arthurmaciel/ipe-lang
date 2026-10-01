@@ -664,3 +664,120 @@ fn a_miss_under_json_is_the_machine_error_envelope() -> io::Result<()> {
     );
     Ok(())
 }
+
+// ── #3198: one qualifier rule for every doc-key kind ──────────────────────
+
+/// A project module's short name shadows the stdlib module of the same short
+/// name, while the stdlib module's own full dotted name still reaches it —
+/// short and full forms name two different, independently reachable entries.
+#[test]
+fn a_project_module_shadows_stdlib_by_short_name_only() -> io::Result<()> {
+    let dir = fresh_dir("shadow_list");
+    let src = dir.join("src");
+    fs::create_dir_all(&src)?;
+    fs::write(
+        src.join("List.ipe"),
+        "-- | A project module that shadows the stdlib `List` by short name.\n\
+         module List exposing (shadowMarker)\n\n\
+         -- | A marker value unique to this project's `List` module.\n\
+         shadowMarker : Int\n\
+         shadowMarker =\n    1\n",
+    )?;
+
+    let (ok, stdout, stderr) = run_in(&dir, &["doc", "List", "--plain"]);
+    assert!(ok, "`ipe doc List` must resolve:\n{stdout}\n{stderr}");
+    assert!(
+        stdout.contains("shadowMarker"),
+        "the short name `List` resolves to the PROJECT module, not stdlib:\n{stdout}"
+    );
+
+    let (ok, stdout, stderr) = run_in(&dir, &["doc", "Ipe.List", "--plain"]);
+    assert!(
+        ok,
+        "`ipe doc Ipe.List` must still resolve:\n{stdout}\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("shadowMarker"),
+        "the full name `Ipe.List` still reaches the STDLIB module:\n{stdout}"
+    );
+    Ok(())
+}
+
+/// An unknown module-shaped key misses cleanly with the same suggestion frame
+/// every other key kind uses — never a silent empty page, never "unknown
+/// module".
+#[test]
+fn an_unknown_module_key_misses_with_a_suggestion() -> io::Result<()> {
+    let dir = fresh_dir("unknown_module");
+    fs::create_dir_all(&dir)?;
+    for key in ["NotAModule", "Ipe.Nope"] {
+        let (ok, stdout, stderr) = run_in(&dir, &["doc", key]);
+        assert!(!ok, "`ipe doc {key}` must miss:\n{stdout}\n{stderr}");
+        assert!(
+            stderr.contains(&format!("no documentation entry is named `{key}`")),
+            "{stderr}"
+        );
+    }
+    Ok(())
+}
+
+/// The text between `label` and the next `)` — the worked example named after
+/// a key kind in `help/doc.md`'s Arguments paragraph, e.g.
+/// `extract_paren_example(text, "module (")` on `…module (List), member
+/// (…)…` returns `"List"`. An `Err` names the missing landmark rather than
+/// panicking, so a drifted `help/doc.md` fails the test with a clear cause
+/// (helpers reached only through a `#[test]` fn are still workspace-denied
+/// `unwrap`/`expect`, same as the file's own tests).
+fn extract_paren_example(text: &str, label: &str) -> io::Result<String> {
+    let start = text
+        .find(label)
+        .ok_or_else(|| io::Error::other(format!("`help/doc.md` has no `{label}` example")))?;
+    let after = &text[start + label.len()..];
+    let end = after.find(')').ok_or_else(|| {
+        io::Error::other(format!("no closing `)` after `{label}` in help/doc.md"))
+    })?;
+    Ok(after[..end].to_owned())
+}
+
+/// The key inside the worked `` `ipe doc <key>` `` backtick example.
+fn extract_backtick_example(text: &str) -> io::Result<String> {
+    let marker = "`ipe doc ";
+    let start = text
+        .find(marker)
+        .ok_or_else(|| io::Error::other("`help/doc.md` has no worked `ipe doc` example"))?;
+    let after = &text[start + marker.len()..];
+    let end = after
+        .find('`')
+        .ok_or_else(|| io::Error::other("no closing backtick after the `ipe doc` example"))?;
+    Ok(after[..end].to_owned())
+}
+
+/// Every worked example `help/doc.md`'s Arguments paragraph names — one per
+/// key kind — actually resolves. The help text and the resolver are proven
+/// against each other, so they cannot silently drift apart.
+#[test]
+fn help_doc_examples_all_resolve() -> io::Result<()> {
+    let help_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("help/doc.md");
+    let help = fs::read_to_string(&help_path)?;
+
+    let examples = [
+        extract_paren_example(&help, "diagnostic code (")?,
+        extract_paren_example(&help, "symbol (")?,
+        extract_paren_example(&help, "module (")?,
+        extract_paren_example(&help, "member (")?,
+        extract_paren_example(&help, "language construct (")?,
+        extract_paren_example(&help, "CLI command (")?,
+        extract_backtick_example(&help)?,
+    ];
+
+    let dir = fresh_dir("help_examples");
+    fs::create_dir_all(&dir)?;
+    for key in &examples {
+        let (ok, stdout, stderr) = run_in(&dir, &["doc", key]);
+        assert!(
+            ok,
+            "help/doc.md's worked example `{key}` must resolve:\n{stdout}\n{stderr}"
+        );
+    }
+    Ok(())
+}
