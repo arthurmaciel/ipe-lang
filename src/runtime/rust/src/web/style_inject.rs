@@ -1000,11 +1000,11 @@ mod tests {
             vec![],
             vec![
                 ui_el_(
-                    vec![Attribute::AttrWidth(Length::Fill(7))],
+                    vec![Attribute::AttrWidth(Length::fill_portion(7))],
                     Element::Text("left".to_owned()),
                 ),
                 ui_el_(
-                    vec![Attribute::AttrWidth(Length::Fill(3))],
+                    vec![Attribute::AttrWidth(Length::fill_portion(3))],
                     Element::Text("right".to_owned()),
                 ),
             ],

@@ -5811,6 +5811,7 @@ class TestTestClaims(unittest.TestCase):
             ("chromedriver", _tc_ci(_TC_PIN + _tc_env(claim, "CHROMEDRIVER: chromedriver"))),
             ("inert key expression", _tc_ci(_TC_PIN + _tc_env(claim, "IPE_RUNTIME_DIR: ${{ github.workspace }}/x"))),
             ("inert geo port", _tc_ci(_TC_PIN + _tc_env(claim, 'IPE_GEO_CLIPBOARD_PORT: "0"'))),
+            ("inert layout port", _tc_ci(_TC_PIN + _tc_env(claim, 'IPE_LAYOUT_FILL_PORT: "0"'))),
             ("literal option values", _tc_ci(_TC_PIN + _TC_CLAIM % _TC_RUN.replace("--features a", "--features=a,b:c/d+e@f.g-h_0"))),
             ("workflow term env", wf_env),
         ):

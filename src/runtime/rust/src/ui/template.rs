@@ -113,7 +113,9 @@ impl UiColor {
 
 /// `Ipe.Ui.Length` reduced to inert data. Mirrors [`Length`] variant-for-variant
 /// (including the self-recursive `Min` / `Max`), so materialize rebuilds the
-/// exact `Length` the render path formats.
+/// exact `Length` the render path formats. `Fill` carries the raw portion `Int`;
+/// decoding it goes through [`Length::fill_portion`], the same parse the inline
+/// `Ui.fillPortion` takes.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UiLength {
@@ -131,7 +133,7 @@ impl UiLength {
         match l {
             Length::Px(n) => Self::Px(*n),
             Length::Content => Self::Content,
-            Length::Fill(n) => Self::Fill(*n),
+            Length::Fill(p) => Self::Fill(i64::from(p.get())),
             Length::Min(n, inner) => Self::Min(*n, Box::new(Self::from_length(inner))),
             Length::Max(n, inner) => Self::Max(*n, Box::new(Self::from_length(inner))),
             Length::Vh(n) => Self::Vh(*n),
@@ -143,7 +145,7 @@ impl UiLength {
         match self {
             Self::Px(n) => Length::Px(*n),
             Self::Content => Length::Content,
-            Self::Fill(n) => Length::Fill(*n),
+            Self::Fill(n) => Length::fill_portion(*n),
             Self::Min(n, inner) => Length::Min(*n, Box::new(inner.to_length())),
             Self::Max(n, inner) => Length::Max(*n, Box::new(inner.to_length())),
             Self::Vh(n) => Length::Vh(*n),
@@ -1309,12 +1311,30 @@ fn static_ui_children_holed<M: Clone>(
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::{
-        MAX_UI_TEMPLATE_DEPTH, TemplateFills, UiHandlerMap, UiTemplate, UiTemplateAttr,
+        MAX_UI_TEMPLATE_DEPTH, TemplateFills, UiHandlerMap, UiLength, UiTemplate, UiTemplateAttr,
         UiTemplateError, materialize, ui_template_of, ui_template_of_holed,
     };
     use crate::color::Color;
-    use crate::ui::element::{Attribute, Description, Element, Length};
+    use crate::ui::element::{Attribute, Description, Element, Length, Portion};
     use crate::ui::render::ui_layout;
+
+    /// A decoded `Fill` portion takes the inline `Ui.fillPortion` parse: a
+    /// non-positive portion is `Content`, an oversized one clamps to
+    /// `Portion::MAX`, and a positive one round-trips.
+    #[test]
+    fn decoded_fill_portion_takes_the_inline_parse() {
+        assert_eq!(UiLength::Fill(0).to_length(), Length::Content);
+        assert_eq!(UiLength::Fill(-3).to_length(), Length::Content);
+        assert_eq!(UiLength::Fill(i64::MIN).to_length(), Length::Content);
+        assert_eq!(
+            UiLength::Fill(i64::MAX).to_length(),
+            Length::Fill(Portion::MAX)
+        );
+        assert_eq!(UiLength::Fill(1).to_length(), Length::Fill(Portion::ONE));
+        let three = Length::fill_portion(3);
+        assert_eq!(UiLength::from_length(&three).to_length(), three);
+        assert_eq!(UiLength::from_length(&three), UiLength::Fill(3));
+    }
 
     // Render an `Element` the way the app does — through the public `ui_layout`
     // entry — to compare rendered bytes. `ui_layout(vec![], elem)` wraps the
@@ -1366,7 +1386,7 @@ mod tests {
             vec![
                 Attribute::AttrStyle("__row".to_string(), "true".to_string()),
                 Attribute::AttrSpacing(8),
-                Attribute::AttrWidth(Length::Fill(1)),
+                Attribute::AttrWidth(Length::Fill(Portion::ONE)),
             ],
             vec![
                 Element::Text("a".to_string()),
