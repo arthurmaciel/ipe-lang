@@ -2,56 +2,50 @@ name: Build & test
 
 # GitHub-hosted runners (4-core/16GB, ephemeral) with matrix parallelism.
 #
-# Split by TRIGGER and by PATH, so a PR pays only for the gates a change of its
-# shape can break, and `main` stays green by construction:
-#   • PULL REQUEST — the required gate runs for ALL authors, scoped by the
-#     fail-closed `changes` classifier. It covers code CORRECTNESS and code SOUNDNESS
-#     before a merge: fmt, clippy, quick-check, test (nextest unit/integration),
-#     the docs-drift gates, the first-party check-floor + shapes build gate,
-#     seal-smoke (build+run ONE emitted example, a fast SEAL proxy), the runtime
-#     feature-combo / full-feature builds (`emit` filter), wasm-floor
-#     (`wasm` filter), and the ASAN/TSAN sanitizers (`sanitize` filter —
-#     PRINCIPLE 3: a codegen/runtime change is exactly what introduces memory UB
-#     or a data race, so those gate PRE-merge). It ALSO runs the full SEAL at PR time —
-#     the 14-shard e2e (and the seal-slice proof that its shards cover every
-#     archived test), seal-modset (vendored), and the arm64 Tier-2
-#     refuse-to-certify proof — each keyed on the `code` superset (not `emit`):
-#     a SEAL break is not emit-only, since a canon/types/lower acceptance change
-#     can make a program ipe-accept-then-cargo-fail. The warm `test-prep`
-#     archive keeps them from recompiling the workspace. A
-#     PR touching only the guarded PROSE set (.github/ci/change_class.py) skips
-#     them all; any other path runs them; a developer runs the same set locally
-#     to match CI.
-#   • RELEASE-ONLY PR — a same-repo PR whose diff is only release-please version
-#     metadata (`changes.release_only`, .github/ci/release_only.py) skips the
-#     heavy emitted-build/SEAL/sanitizer tiers: its tree is the already-gated
-#     `main` plus a version bump. The version-sensitive gates still run.
-#   • NIGHTLY SCHEDULE — the checks that a typical code change cannot break, or
-#     that depend on a flaky external environment: registry-admission (publish/
-#     registry INFRASTRUCTURE), browser-e2e (headless Playwright/Chromium — the
-#     only `Ipe.Browser` gate), and the Linux x64 Tier-2 jail (real bwrap+seccomp
-#     — env-flaky). These never gate a PR; they produce main-required contexts
-#     the FF promotion waits on and catch regressions on the nightly dep/upstream
-#     sweep.
+# Split by PHASE and by PATH (CONTRIBUTING.md "CI phases"). Every job
+# runs in exactly one phase, keyed on a `changes` output, and is further scoped
+# by the fail-closed path classifier (`code`, `emit`, `sanitize`, `wasm`,
+# `editors`; .github/ci/change_class.py):
+#   • CHEAP (`cheap`: pull request, merge queue, dispatch) — fmt, clippy,
+#     quick-check, panic-scan, the lock/artifact/ruleset guards, windows-check,
+#     diagnostic-tone, build-tools, the docs-drift gates, the example gates, the
+#     first-party check-floor + shapes build gate, wasm-floor, editors-configure.
+#     A pull request runs only this phase.
+#   • TESTS (`tests`: merge queue, dispatch) — test (nextest), the 14-shard e2e
+#     SEAL and seal-slice's coverage proof, seal-smoke, seal-modset (vendored),
+#     the runtime feature-combo / full-feature builds, registry-admission, the
+#     Linux x64 Tier-2 jail and browser-e2e. They run once, on the combined tree
+#     the queue is about to land.
+#   • POST-MERGE (`post_merge`: push to main, dispatch) — the ASAN/TSAN
+#     sanitizers and the arm64 Tier-2 proof.
+# The nightly dispatch (nightly-full-gate.yml) is in every phase, so it is the
+# full gate `nightly-green` reads.
 #
-# Job-level `if:` keys on the `changes` classifier output (all authors) for the
-# correctness/soundness gates and on github.event_name for the nightly infra/
-# flaky-env jobs. E2E is sharded across runners. Compiled dependencies are
-# cached by `Swatinem/rust-cache` alone, saved only from `main` so pull request
-# runs restore the main cache without evicting it.
+# A skipped required check reports as passing, so no required context is a
+# tests-phase or post-merge job itself. Each is an aggregator running on every
+# event (`if: always()`) whose one verdict step is .github/actions/phase-verdict:
+# outside its phase or scope it passes vacuously; inside them it passes only
+# when every aggregated job succeeded, so a failed, cancelled or wrongly skipped
+# job fails it. ci/verify-manifest.py check 11 holds every job to one phase
+# marker and every aggregator to that verdict.
+#
+# RELEASE-ONLY PR — a same-repo PR whose diff is only release-please version
+# metadata (`changes.release_only`, .github/ci/release_only.py) still reports
+# the scoped cheap contexts (wasm-floor, editors-configure) as an executed
+# trivial pass.
+#
+# Compiled dependencies are cached by `Swatinem/rust-cache` alone, saved only
+# from `main` so pull request runs restore the main cache without evicting it.
 
 on:
   push:
     branches: [main]
   pull_request:
-  # The merge queue's run on the combined tree. It takes the PR tier (every
-  # `!= 'pull_request'` full-tier test below also excludes `merge_group`); the
-  # push to main that follows the queue merge runs the full tier.
+  # The merge queue's run on the combined tree: the cheap and tests phases.
   merge_group:
-  # The nightly heavy sweep is dispatched by nightly-full-gate.yml (a single
-  # scheduled entry point the rerun-failed-once orchestration can watch). A dispatch is
-  # neither a pull_request nor a merge_group, so the heavy full-tier jobs run
-  # under it.
+  # The nightly sweep is dispatched by nightly-full-gate.yml (a single scheduled
+  # entry point the rerun-failed-once orchestration can watch); a dispatch runs
+  # every phase.
   workflow_dispatch: {}
 
 # Least-privilege GITHUB_TOKEN, set at the top so it also caps the token a fork
@@ -79,9 +73,9 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  # Change classification. On a PR each scope's output gates whether its
-  # dependent jobs run; on push/schedule the jobs always run (see each job's
-  # `if:`). `.github/ci/change_class.py` is the SSOT and fails closed: a scope is
+  # Change classification and phase membership. Each scope's output gates
+  # whether its dependent jobs run (outside a pull request or merge queue every
+  # scope is `true`). `.github/ci/change_class.py` is the SSOT and fails closed: a scope is
   # `false` only on proof that EVERY changed path is irrelevant to it. `code` may
   # skip only on the PROSE set, which the guard step proves no crate, include!,
   # drift check, script, or workflow reads; the narrow scopes (wasm, editors,
@@ -90,6 +84,11 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
+      # Phase membership by event (see the header); verify-manifest check 11
+      # pins these exact expressions.
+      cheap: ${{ github.event_name != 'push' }}
+      tests: ${{ github.event_name != 'pull_request' && github.event_name != 'push' }}
+      post_merge: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
       # An unset output (classifier crash) reads as `true`: absent proof, run.
       wasm: ${{ steps.classify.outputs.wasm != 'false' }}
       code: ${{ steps.classify.outputs.code != 'false' }}
@@ -172,6 +171,8 @@ jobs:
 
   fmt:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.cheap == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -183,9 +184,8 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
     needs: changes
-    # Change-gated: a prose-only PR (`code` false) skips
-    # clippy; it always runs on push/nightly.
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    # Change-gated: a prose-only change (`code` false) skips clippy.
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -264,7 +264,7 @@ jobs:
   windows-check:
     runs-on: windows-latest
     needs: changes
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -289,9 +289,8 @@ jobs:
   diagnostic-tone:
     runs-on: ubuntu-latest
     needs: changes
-    # Change-gated like clippy: a PR that touches no code path skips it; it
-    # always runs on push/nightly.
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    # Change-gated like clippy: a change that touches no code path skips it.
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # ripgrep — tools/scripts/lint-diagnostic-tone.sh requires it (fails
@@ -320,8 +319,8 @@ jobs:
     name: explain-page example gate (ADR 0059)
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    # Change-gated: runs on a PR that touches src/**, plus nightly.
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    # Change-gated: runs on a change that touches src/**.
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     env:
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
@@ -345,8 +344,8 @@ jobs:
     name: doc-string example gate
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    # Change-gated: runs on a PR that touches src/**, plus nightly.
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    # Change-gated: runs on a change that touches src/**.
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     env:
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
@@ -371,16 +370,11 @@ jobs:
   # test drives a real fixture index + source over local git — no real registry.
   # IPE_E2E=1 arms the publish --dry-run subprocess case (it builds the package
   # through the local audit gate).
-  registry-admission:
-    name: registry-admission
+  registry-admission-run:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    # Heavy (nextest --profile ci over the admission suite): off the cheap PR gate
-    # for a trusted author (heavy runs at promotion); an untrusted-author PR runs
-    # it at PR time (third-party full gate).
-    if: >-
-      (github.event_name != 'pull_request' && github.event_name != 'merge_group')
-      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    # Heavy (nextest --profile ci over the admission suite): tests phase.
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -403,13 +397,36 @@ jobs:
           IPE_E2E: "1"
         run: cargo nextest run -p ipe --test registry_admission --profile ci
 
+  # Required context for `registry-admission-run`: the phase verdict (see the header).
+  registry-admission:
+    name: registry-admission
+    runs-on: ubuntu-latest
+    needs: [changes, registry-admission-run]
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/phase-verdict
+      - name: Judge the aggregated jobs
+        uses: ./.github/actions/phase-verdict
+        with:
+          results: >-
+            changes=${{ needs.changes.result }}
+            registry-admission-run=${{ needs.registry-admission-run.result }}
+          phase: tests
+          tier: ${{ needs.changes.outputs.tests }}
+          scope: ${{ needs.changes.outputs.code }}
+
   # Fast fail-fast compile check. A non-compiling PR turns this red in ~a minute
-  # (no test link, no emit), so the expensive downstream jobs (seal-smoke and the
-  # push-only e2e) never start behind broken code — they `needs: quick-check`.
+  # (no test link, no emit), so the expensive downstream jobs (seal-smoke and
+  # e2e) never start behind broken code — they `needs: quick-check`.
   # `test` deliberately does NOT gate on this: it runs in parallel for fastest
   # feedback, and its own compile subsumes the check.
   quick-check:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.cheap == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -429,62 +446,63 @@ jobs:
   # `db`-gated code, or pulls `live` into the `db` feature list, this job fails.
   # Keep `db` and `live` independently buildable; gate cross-feature items with
   # `#[cfg(feature = "live")]`.
-  runtime-feature-combos:
+  runtime-feature-combos-run:
     runs-on: ubuntu-latest
-    # + quick-check so a compile error fails fast before this heavy build. quick-check
-    # is unconditional (no `if`) and required, so what gates a merge is unchanged.
+    # + quick-check so a compile error fails fast before this heavy build.
     needs: [changes, quick-check]
-    # Code-build correctness gate on the PR boundary: runs on any PR that touches
-    # an emit-relevant path (backend/runtime/stdlib), and always on push/nightly.
-    # Path-scoping means a prose-only PR skips it. A release-please PR (version
-    # metadata only) is handled INSIDE the job below via per-step `if:`, not by
-    # skipping the job outright — a required context must report a genuinely
-    # executed pass, never rely on GitHub's skip-counts-as-pass quirk.
-    if: needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
+    # Tests phase, scoped to an emit-relevant path (backend/runtime/stdlib). The
+    # required `runtime-feature-combos` context is its phase verdict below.
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.emit == 'true'
     steps:
-      - name: Release-please version/changelog-only diff — trivial pass
-        if: needs.changes.outputs.release_only == 'true'
-        run: |
-          echo "runtime-feature-combos: release-please-only diff (version metadata, no runtime-feature-relevant source changed); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
-        if: needs.changes.outputs.release_only != 'true'
         with:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        if: needs.changes.outputs.release_only != 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # db WITHOUT web — the load-bearing invariant.
-      - if: needs.changes.outputs.release_only != 'true'
-        run: cargo clippy -p ipe-runtime-rust --no-default-features --features db --all-targets -- -D warnings
+      - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db --all-targets -- -D warnings
       # db WITH web — the pair must also stay co-buildable.
-      - if: needs.changes.outputs.release_only != 'true'
-        run: cargo clippy -p ipe-runtime-rust --no-default-features --features db,web --all-targets -- -D warnings
+      - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db,web --all-targets -- -D warnings
       # The dev-loop time-travel debugger over each frontend — the debugger render
       # sites live only under these combos, so CI must build them or the combo can
       # break while main stays green.
-      - if: needs.changes.outputs.release_only != 'true'
-        run: cargo clippy -p ipe-runtime-rust --features debugger,tui --all-targets -- -D warnings
-      - if: needs.changes.outputs.release_only != 'true'
-        run: cargo clippy -p ipe-runtime-rust --features debugger,web --all-targets -- -D warnings
+      - run: cargo clippy -p ipe-runtime-rust --features debugger,tui --all-targets -- -D warnings
+      - run: cargo clippy -p ipe-runtime-rust --features debugger,web --all-targets -- -D warnings
+
+  # Required context for `runtime-feature-combos-run`: the phase verdict (see the header).
+  runtime-feature-combos:
+    runs-on: ubuntu-latest
+    needs: [changes, runtime-feature-combos-run]
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/phase-verdict
+      - name: Judge the aggregated jobs
+        uses: ./.github/actions/phase-verdict
+        with:
+          results: >-
+            changes=${{ needs.changes.result }}
+            runtime-feature-combos-run=${{ needs.runtime-feature-combos-run.result }}
+          phase: tests
+          tier: ${{ needs.changes.outputs.tests }}
+          scope: ${{ needs.changes.outputs.emit }}
 
   # WASM floor: the pure kernel set (incl. the whole Ipe.Ui render surface) and
   # the json leg must keep compiling to wasm32-unknown-unknown — the substrate
   # of the browser target (docs/architecture/wasm-target.md).
   wasm-floor:
     runs-on: ubuntu-latest
-    # + quick-check so a compile error fails fast before this heavy build. quick-check
-    # is unconditional (no `if`) and required, so what gates a merge is unchanged.
+    # + quick-check so a compile error fails fast before this build.
     needs: [changes, quick-check]
-    # Code-build correctness gate on the PR boundary: runs on any PR that touches
-    # a wasm-relevant path, and always on push/schedule. Path-scoping keeps it off
-    # a non-wasm PR. A release-please PR (version metadata only) is handled INSIDE
+    # Cheap phase, scoped to a wasm-relevant path. A release-please PR (version metadata only) is handled INSIDE
     # the job below via per-step `if:`, not by skipping the job outright — a
     # required context must report a genuinely executed pass, never rely on
     # GitHub's skip-counts-as-pass quirk.
-    if: needs.changes.outputs.wasm == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
+    if: (needs.changes.outputs.cheap == 'true' && needs.changes.outputs.wasm == 'true') || needs.changes.outputs.release_only == 'true'
     steps:
       - name: Release-please version/changelog-only diff — trivial pass
         if: needs.changes.outputs.release_only == 'true'
@@ -546,7 +564,7 @@ jobs:
     # via per-step `if:`, not by skipping the job outright — a required context
     # must report a genuinely executed pass, never rely on GitHub's
     # skip-counts-as-pass quirk.
-    if: needs.changes.outputs.editors == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
+    if: (needs.changes.outputs.cheap == 'true' && needs.changes.outputs.editors == 'true') || needs.changes.outputs.release_only == 'true'
     steps:
       - name: Release-please version/changelog-only diff — trivial pass
         if: needs.changes.outputs.release_only == 'true'
@@ -580,7 +598,7 @@ jobs:
   test-prep:
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
@@ -607,7 +625,8 @@ jobs:
     # Fast gates first: no shard starts until every fast deterministic gate is
     # green, so a format, lint, lock or panic-scan red never launches the heavy
     # tier. A red one skips the shards, which the `test` aggregator refuses.
-    needs: [test-prep, fmt, clippy, manifest-lock-consistency, panic-scan]
+    needs: [changes, test-prep, fmt, clippy, manifest-lock-consistency, panic-scan]
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -633,48 +652,31 @@ jobs:
     needs: [changes, test-prep, test-run]
     if: always()
     steps:
-      - name: Gate on shard + doctest results
-        run: |
-          # Fail closed: a skip below is legitimate only when the path classifier
-          # ran and succeeded; a failed/cancelled `changes` skips every tier.
-          changes='${{ needs.changes.result }}'
-          if [ "$changes" != success ]; then
-            echo "test gate FAILED: changes result=$changes (path classifier did not succeed; no skip is proven legitimate)" >&2
-            exit 1
-          fi
-          # A skipped `test-prep`/`test-run` is legitimate ONLY when the change
-          # gate deliberately skipped them (prose-only PR); in that case `test`
-          # passes vacuously. Any failure/cancellation is a hard stop.
-          prep='${{ needs.test-prep.result }}'
-          run='${{ needs.test-run.result }}'
-          code='${{ needs.changes.outputs.code }}'
-          event='${{ github.event_name }}'
-          if [ "$prep" = failure ] || [ "$prep" = cancelled ] \
-             || [ "$run" = failure ] || [ "$run" = cancelled ]; then
-            echo "test gate FAILED (test-prep=$prep test-run=$run)" >&2
-            exit 1
-          fi
-          if [ "$prep" = skipped ] && [ "$code" != true ] \
-             && { [ "$event" = pull_request ] || [ "$event" = merge_group ]; }; then
-            echo "prose-only change: no code paths changed, test suite skipped vacuously."
-            exit 0
-          fi
-          if [ "$prep" != success ] || [ "$run" != success ]; then
-            echo "test gate FAILED: expected all shards to succeed (test-prep=$prep test-run=$run)" >&2
-            exit 1
-          fi
-          echo "test gate PASSED (all shards + doctests green)."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/phase-verdict
+      - name: Judge the aggregated jobs
+        uses: ./.github/actions/phase-verdict
+        with:
+          results: >-
+            changes=${{ needs.changes.result }}
+            test-prep=${{ needs.test-prep.result }}
+            test-run=${{ needs.test-run.result }}
+          phase: tests
+          tier: ${{ needs.changes.outputs.tests }}
+          scope: ${{ needs.changes.outputs.code }}
 
   # SEAL smoke — the fast required proxy for THE SEAL. Build the compiler, then
   # take ONE small `cli` example end to end: `ipe build` → `cargo build` the
   # emitted crate → run it → assert its expected stdout. This proves the
-  # emit→build→run floor holds on every PR in ~a couple of minutes, without the
-  # full 14-shard `e2e` (which stays on push/nightly below). A break here means
+  # emit→build→run floor holds in ~a couple of minutes, apart from the full
+  # 14-shard `e2e` below. A break here means
   # the compiler emits a crate that no longer builds or runs — a hard stop.
-  seal-smoke:
+  seal-smoke-run:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -728,10 +730,30 @@ jobs:
           echo "emitted-binary output: $OUT"
           echo "$OUT" | grep -q 'Hello, Ipê!'
 
+  # Required context for `seal-smoke-run`: the phase verdict (see the header).
+  seal-smoke:
+    runs-on: ubuntu-latest
+    needs: [changes, seal-smoke-run]
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/phase-verdict
+      - name: Judge the aggregated jobs
+        uses: ./.github/actions/phase-verdict
+        with:
+          results: >-
+            changes=${{ needs.changes.result }}
+            seal-smoke-run=${{ needs.seal-smoke-run.result }}
+          phase: tests
+          tier: ${{ needs.changes.outputs.tests }}
+          scope: ${{ needs.changes.outputs.code }}
+
   # First-party shape examples — the representative user-facing gate. Every
   # committed example under examples/shapes/ (one per shape: script, terminal,
   # web) must `ipe type-check`, `ipe build`, and cargo-build its emitted crate on
-  # every PR. This is the fast, non-flaky core of the examples proof: it catches
+  # every code change. This is the fast, non-flaky core of the examples proof: it catches
   # a compiler change that makes a shipped example stop type-checking or emit a
   # crate that no longer compiles — the two ways a user first feels a regression.
   # Interactive RUN coverage (browser round-trips, pty-driven tui) is outside
@@ -740,7 +762,7 @@ jobs:
     name: first-party shapes (build gate)
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -792,7 +814,7 @@ jobs:
             # A debug build proves the emitted crate compiles and links — the two
             # ways a user first feels an emit regression. Release optimisation adds
             # minutes here without strengthening that proof; the full release SEAL
-            # (the e2e goldens) stays on push/nightly.
+            # (the e2e goldens) runs in the tests phase.
             if ! ( cd "$dir/out/rust" && cargo build ); then
               echo "::error::emitted cargo build regressed: $dir"; fail=1
             fi
@@ -820,7 +842,7 @@ jobs:
     name: first-party check floor (ipe type-check only)
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     env:
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
@@ -851,37 +873,44 @@ jobs:
   # (gate blind spot, 2026-07-11: `full` ⊇ `live`; a default-only gate shows
   # green while these are red). `full` turns on every optional feature so
   # this job is the one place those regression tests run in CI.
-  runtime-full-features:
+  runtime-full-features-run:
     runs-on: ubuntu-latest
-    # + quick-check so a compile error fails fast before this heavy build. quick-check
-    # is unconditional (no `if`) and required, so what gates a merge is unchanged.
+    # + quick-check so a compile error fails fast before this heavy build.
     needs: [changes, quick-check]
-    # Code-build correctness gate on the PR boundary (nextest --profile ci over the
-    # full-feature graph). `full` ⊇ `live`, so this is the one place feature-gated
-    # regressions (e.g. a workspace-wide serde_json flag flip changing signed-token
-    # bytes) are caught. Runs on any emit-relevant PR and always on push/nightly;
-    # path-scoping keeps it off a prose-only PR. A release-please PR (version
-    # metadata only) is handled INSIDE the job below via per-step `if:`, not by
-    # skipping the job outright — a required context must report a genuinely
-    # executed pass, never rely on GitHub's skip-counts-as-pass quirk.
-    if: needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
+    # nextest --profile ci over the full-feature graph. `full` ⊇ `live`, so this
+    # is the one place feature-gated regressions (e.g. a workspace-wide
+    # serde_json flag flip changing signed-token bytes) are caught. Tests phase,
+    # scoped to `emit`; the required `runtime-full-features` context is its
+    # phase verdict below.
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.emit == 'true'
     steps:
-      - name: Release-please version/changelog-only diff — trivial pass
-        if: needs.changes.outputs.release_only == 'true'
-        run: |
-          echo "runtime-full-features: release-please-only diff (version metadata, no emit-relevant source changed); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
-        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        if: needs.changes.outputs.release_only != 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
-        if: needs.changes.outputs.release_only != 'true'
-      - if: needs.changes.outputs.release_only != 'true'
-        run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
+      - run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
+
+  # Required context for `runtime-full-features-run`: the phase verdict (see the header).
+  runtime-full-features:
+    runs-on: ubuntu-latest
+    needs: [changes, runtime-full-features-run]
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/phase-verdict
+      - name: Judge the aggregated jobs
+        uses: ./.github/actions/phase-verdict
+        with:
+          results: >-
+            changes=${{ needs.changes.result }}
+            runtime-full-features-run=${{ needs.runtime-full-features-run.result }}
+          phase: tests
+          tier: ${{ needs.changes.outputs.tests }}
+          scope: ${{ needs.changes.outputs.emit }}
 
   # ── Sanitizers (the UB net) ─────────────────────────────────────────────────
   # ASAN (AddressSanitizer + LeakSanitizer): memory-safety UB — out-of-bounds,
@@ -923,17 +952,15 @@ jobs:
   # if a benign third-party leak surfaces, add a checked-in `*.supp` referenced
   # via `LSAN_OPTIONS=suppressions=…` and document the entry here.
   #
-  # Runtime-soundness gate on the PR boundary (PRINCIPLE 3): a codegen/runtime
-  # change is exactly what introduces memory UB, so ASAN gates PRE-merge on any
-  # PR touching a crate it tests or compiles against (`sanitize`). Sharded 1/6 via nextest partitioning; `asan-all` is the
-  # single stable context (mirrors `e2e-all`) that branch protection could require
-  # once these are proven green — deliberately NOT added to the required ruleset
-  # yet. Path-scoping keeps it off a prose-only PR; always runs on push/nightly.
+  # Runtime-soundness net (PRINCIPLE 3), post-merge phase, scoped to the crates
+  # ASAN tests or compiles against (`sanitize`). Sharded 1/6 via nextest
+  # partitioning; `asan-all` is the single stable context (mirrors `e2e-all`),
+  # not in the required ruleset.
   asan:
     name: asan (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
-    if: (needs.changes.outputs.sanitize != 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
+    needs: changes
+    if: needs.changes.outputs.post_merge == 'true' && needs.changes.outputs.sanitize == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -961,30 +988,27 @@ jobs:
             --partition count:${{ matrix.shard }}/6 \
             -E 'not (binary(run_jail_e2e) | binary(build_jail_e2e) | binary(/_seal$/))'
 
-  # Stable aggregation gate for the sharded ASAN run (mirrors `e2e-all`): green
-  # only when every shard passed, and `always()` makes a skipped/failed/cancelled
-  # shard a FAILURE (never a false green), while the PR self-skip passes vacuously.
+  # Stable aggregation gate for the sharded ASAN run: the post-merge phase
+  # verdict over every shard.
   asan-all:
     name: asan-all
     runs-on: ubuntu-latest
     needs: [changes, asan]
     if: always()
     steps:
-      - name: Gate on every asan shard result
-        run: |
-          # Fail closed: a skip below is legitimate only when the path classifier
-          # ran and succeeded; a failed/cancelled `changes` skips every tier.
-          changes='${{ needs.changes.result }}'
-          if [ "$changes" != success ]; then
-            echo "asan-all FAILED: changes result=$changes (path classifier did not succeed; no skip is proven legitimate)" >&2
-            exit 1
-          fi
-          result='${{ needs.asan.result }}'
-          case "$result" in
-            success) echo "asan-all: every shard passed — no memory UB detected." ;;
-            skipped) echo "asan-all: asan shards skipped for this event — vacuously green." ;;
-            *) echo "asan-all FAILED: asan shards result=$result (a sanitizer report or infra failure)" >&2; exit 1 ;;
-          esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/phase-verdict
+      - name: Judge the aggregated jobs
+        uses: ./.github/actions/phase-verdict
+        with:
+          results: >-
+            changes=${{ needs.changes.result }}
+            asan=${{ needs.asan.result }}
+          phase: post_merge
+          tier: ${{ needs.changes.outputs.post_merge }}
+          scope: ${{ needs.changes.outputs.sanitize }}
 
   # TSAN (ThreadSanitizer): data races / concurrency UB. Focused on the
   # concurrency-bearing crates — `ipe-runtime-rust` (the async task runtime,
@@ -992,15 +1016,14 @@ jobs:
   # `ipe_sandbox` (the jail's parallel stdout/stderr drain threads). Same nightly
   # + `-Zbuild-std` shape and the same jail/seal exclusion as ASAN (a seccomp'd
   # or cargo-spawning child is as hostile to TSAN as to ASAN). Small enough to
-  # run as a single job, not sharded. Runtime-soundness gate on the PR boundary
-  # (PRINCIPLE 3): a codegen/runtime change is what introduces data races, so TSAN
-  # gates PRE-merge on any PR touching a crate it tests or compiles against
-  # (`sanitize`); always runs on push/nightly.
+  # run as a single job, not sharded. Runtime-soundness net (PRINCIPLE 3),
+  # post-merge phase, scoped to the crates TSAN tests or compiles against
+  # (`sanitize`).
   tsan:
     name: tsan
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
-    if: (needs.changes.outputs.sanitize != 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
+    needs: changes
+    if: needs.changes.outputs.post_merge == 'true' && needs.changes.outputs.sanitize == 'true'
     env:
       RUSTFLAGS: -Zsanitizer=thread
       RUSTDOCFLAGS: -Zsanitizer=thread
@@ -1060,12 +1083,11 @@ jobs:
     # Fast gates first, as `test-run`: a red fast deterministic gate skips every
     # shard, which `e2e-all` and `seal-slice` refuse.
     needs: [changes, quick-check, test-prep, fmt, clippy, manifest-lock-consistency, panic-scan]
-    # On the PR gate for ANY code change (all authors), every shard at full
-    # depth. A SEAL break is not emit-only: a canon/types/lower acceptance change
+    # Tests phase for ANY code change, every shard at full depth. A SEAL break is not emit-only: a canon/types/lower acceptance change
     # can make a program ipe-accept that the backend then cannot cargo-build, and
     # the heavy goldens are where such a program is built, so no shard is skipped
     # on a narrower scope than `code`.
-    if: (needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
     # Wall-clock cap on the shard. Each per-test `cargo build` is already bounded
     # (nextest ci `slow-timeout` + `e2e_support`'s per-build 240s ceiling), but
     # nothing capped the SHARD as a whole, so it inherited GitHub's 360-min
@@ -1134,12 +1156,9 @@ jobs:
   # Stable aggregation gate for the sharded SEAL. The `e2e` matrix expands to one
   # shard-named job per partition, so no single shard name is a durable
   # required-check target and a `fail-fast: false` shard failure is easy to miss.
-  # This job depends on every shard and is GREEN only when all passed — one stable context name
+  # This job is the phase verdict over every shard — one stable context name
   # (`e2e-all`) branch protection can require so a SEAL regression blocks a
-  # landing. The `always()` guard makes a skipped/failed/cancelled shard a
-  # FAILURE here, never a false green. A skip passes vacuously only where the
-  # `e2e` job's own `if:` is false (a code-free PR or merge-group run, or a
-  # release-only PR); a skip behind a red need (a fast gate, quick-check) fails.
+  # landing.
   # A bare, stable `name` so the required-check context is exactly `e2e-all`
   # (branch protection matches the check name literally; a parenthetical would
   # make the required-context string brittle).
@@ -1149,49 +1168,20 @@ jobs:
     needs: [changes, e2e, test-prep]
     if: always()
     steps:
-      - name: Gate on every e2e shard result
-        run: |
-          # Fail closed: a skip below is legitimate only when the path classifier
-          # ran and succeeded; a failed/cancelled `changes` skips every tier.
-          changes='${{ needs.changes.result }}'
-          if [ "$changes" != success ]; then
-            echo "e2e-all FAILED: changes result=$changes (path classifier did not succeed; no skip is proven legitimate)" >&2
-            exit 1
-          fi
-          # A failed `test-prep` skips every e2e shard (they `needs` it); catch
-          # that here so the archive-build failure can't slip through as a
-          # vacuous skip below.
-          prep='${{ needs.test-prep.result }}'
-          if [ "$prep" = failure ] || [ "$prep" = cancelled ]; then
-            echo "e2e-all FAILED: test-prep result=$prep (the shared nextest archive never built)" >&2
-            exit 1
-          fi
-          result='${{ needs.e2e.result }}'
-          code='${{ needs.changes.outputs.code }}'
-          release_only='${{ needs.changes.outputs.release_only }}'
-          event='${{ github.event_name }}'
-          case "$result" in
-            success)
-              echo "e2e-all: every shard passed — THE SEAL holds."
-              ;;
-            skipped)
-              # A skip is legitimate ONLY where `e2e`'s own `if:` is false: a
-              # PR/merge-group run the classifier proved code-free, or a
-              # release-only PR. Any other skip is a red need (a fast gate,
-              # quick-check) and proves nothing.
-              if { [ "$code" != true ] && { [ "$event" = pull_request ] || [ "$event" = merge_group ]; }; } \
-                 || [ "$release_only" = true ]; then
-                echo "e2e-all: e2e shards skipped by the classifier for this event — vacuously green."
-              else
-                echo "e2e-all FAILED: e2e shards skipped behind a red need (code=$code release_only=$release_only event=$event)" >&2
-                exit 1
-              fi
-              ;;
-            *)
-              echo "e2e-all FAILED: e2e shards result=$result (a SEAL regression or an infra failure)" >&2
-              exit 1
-              ;;
-          esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/phase-verdict
+      - name: Judge the aggregated jobs
+        uses: ./.github/actions/phase-verdict
+        with:
+          results: >-
+            changes=${{ needs.changes.result }}
+            e2e=${{ needs.e2e.result }}
+            test-prep=${{ needs.test-prep.result }}
+          phase: tests
+          tier: ${{ needs.changes.outputs.tests }}
+          scope: ${{ needs.changes.outputs.code }}
 
   # ── SEAL slice ────────────────────────────────────────────────────────────
   # The main-required `seal-slice` context. Its executor is `e2e`: the e2e shards
@@ -1200,8 +1190,8 @@ jobs:
   # coverage proof: `tools/scripts/e2e-shard-cover.py` lists the run's own
   # archive and fails unless the `e2e_plan` the shards ran partitions its test
   # set exactly (every test in exactly one shard), so "e2e runs every test" is
-  # checked on every run, not assumed. Fail closed as `e2e-all`: a skip passes only where the classifier,
-  # not a red need, skipped the shards.
+  # checked on every run, not assumed. Its first step is the phase verdict, as
+  # `e2e-all`.
   seal-slice:
     name: seal-slice
     runs-on: ubuntu-latest
@@ -1209,45 +1199,20 @@ jobs:
     timeout-minutes: 20
     if: always()
     steps:
-      - name: Gate on the e2e shards
-        run: |
-          # Fail closed: a skip below is legitimate only when the path classifier
-          # ran and succeeded; a failed/cancelled `changes` skips every tier.
-          changes='${{ needs.changes.result }}'
-          if [ "$changes" != success ]; then
-            echo "seal-slice FAILED: changes result=$changes (path classifier did not succeed; no skip is proven legitimate)" >&2
-            exit 1
-          fi
-          # A failed `test-prep` skips every e2e shard (they `needs` it); catch it
-          # here so the archive-build failure can't slip through as a vacuous skip.
-          prep='${{ needs.test-prep.result }}'
-          if [ "$prep" = failure ] || [ "$prep" = cancelled ]; then
-            echo "seal-slice FAILED: test-prep result=$prep (the shared nextest archive never built)" >&2
-            exit 1
-          fi
-          result='${{ needs.e2e.result }}'
-          code='${{ needs.changes.outputs.code }}'
-          release_only='${{ needs.changes.outputs.release_only }}'
-          event='${{ github.event_name }}'
-          case "$result" in
-            success)
-              echo "seal-slice: every e2e shard passed."
-              ;;
-            skipped)
-              # Legitimate only where `e2e`'s own `if:` is false, as in `e2e-all`.
-              if { [ "$code" != true ] && { [ "$event" = pull_request ] || [ "$event" = merge_group ]; }; } \
-                 || [ "$release_only" = true ]; then
-                echo "seal-slice: e2e shards skipped by the classifier for this event — vacuously green."
-              else
-                echo "seal-slice FAILED: e2e shards skipped behind a red need (code=$code release_only=$release_only event=$event)" >&2
-                exit 1
-              fi
-              ;;
-            *)
-              echo "seal-slice FAILED: e2e result=$result (a SEAL regression or an infra failure)" >&2
-              exit 1
-              ;;
-          esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/phase-verdict
+      - name: Judge the aggregated jobs
+        uses: ./.github/actions/phase-verdict
+        with:
+          results: >-
+            changes=${{ needs.changes.result }}
+            e2e=${{ needs.e2e.result }}
+            test-prep=${{ needs.test-prep.result }}
+          phase: tests
+          tier: ${{ needs.changes.outputs.tests }}
+          scope: ${{ needs.changes.outputs.code }}
       # The coverage proof needs the archive, so it runs whenever the archive
       # was built — on every run whose e2e shards could have run.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1274,18 +1239,17 @@ jobs:
   # build — a SEAL breach invisible to the dep-model gate. This job makes that
   # class of break visible and blocking.
   #
-  # Gates every code PR (all authors) and runs on push/nightly. The break class
+  # Tests phase for every code change. The break class
   # is a vendored-manifest feature-flag drift, but a canon/types/lower acceptance
   # change can equally make a program ipe-accept-then-cargo-fail under the
   # vendored model, so keying on the `code` superset (not `emit`) closes that
   # SEAL blind spot. It is a single `seal_modset` nextest run (not the 14-shard
-  # matrix), so a code PR stays cheap.
+  # matrix).
   seal-modset-vendored:
     name: seal-modset (vendored emit model)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    # On the PR gate for ANY code change (all authors).
-    if: (needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -1332,10 +1296,8 @@ jobs:
   linux-x64-tier2:
     name: linux-x64-tier2 (bwrap+seccomp — the real Linux jail proof)
     runs-on: ubuntu-latest
-    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
-    if: >-
-      (github.event_name != 'pull_request' && github.event_name != 'merge_group')
-      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    needs: changes
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1418,15 +1380,12 @@ jobs:
   linux-arm64-tier2:
     name: linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)
     runs-on: ubuntu-24.04-arm
-    # + quick-check so a compile error fails fast before this heavy build. quick-check
-    # is unconditional (no `if`) and required, so what gates a merge is unchanged.
-    needs: [changes, quick-check]
-    # On the PR gate for ANY code change (all authors). The sandbox/reconciler
-    # refuse-to-certify path this proves spans canon + cli (not just emit), so a
-    # codegen change to it must redden a PR here, not only post-merge — keyed on
-    # the `code` superset. Pure aarch64 unit + audit_native tests (no jail),
-    # so it is stable code-correctness, not flaky-env.
-    if: (needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
+    needs: changes
+    # Post-merge phase, keyed on the `code` superset: the sandbox/reconciler
+    # refuse-to-certify path this proves spans canon + cli (not just emit). Pure
+    # aarch64 unit + audit_native tests (no jail); the pre-merge arm64 proof is
+    # admission-sandbox's required `linux-arm64` leg.
+    if: needs.changes.outputs.post_merge == 'true' && needs.changes.outputs.code == 'true'
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1474,16 +1433,13 @@ jobs:
   # `needs: build-tools`. needs quick-check so a workspace that does not even
   # compile never pays for this build.
   #
-  # The `if:` is the union of its consumers' conditions: the `code`-gated
-  # jobs, plus browser-e2e's untrusted-author pull request, so no consumer is
-  # skipped behind a skipped build.
+  # Cheap phase on `code`, which covers every consumer's condition (the cheap
+  # `code` jobs and the tests-phase `code` jobs, since the cheap phase also runs
+  # in the merge queue), so no consumer is skipped behind a skipped build.
   build-tools:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: >-
-      needs.changes.outputs.code == 'true'
-      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
-      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
@@ -1527,12 +1483,11 @@ jobs:
   # in the committed generated docs reddens the build (no silent drift).
   #
   # Change-gated: the `.ipe` veneers live under src/** (already in the `code`
-  # filter), so a pure prose-only PR skips this vacuously; it always runs on
-  # push/nightly.
+  # filter), so a pure prose-only PR skips this vacuously.
   stdlib-docs-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1552,12 +1507,11 @@ jobs:
   # in the committed reference reddens the build (no silent drift).
   #
   # Change-gated: env-var reads live under src/** (already in the `code`
-  # filter), so a pure prose-only PR skips this vacuously; it always runs on
-  # push/nightly.
+  # filter), so a pure prose-only PR skips this vacuously.
   env-docs-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1577,12 +1531,11 @@ jobs:
   # reflected in the committed reference reddens the build (no silent drift).
   #
   # Change-gated: capability.rs lives under src/** (already in the `code`
-  # filter), so a pure prose-only PR skips this vacuously; it always runs on
-  # push/nightly.
+  # filter), so a pure prose-only PR skips this vacuously.
   capabilities-docs-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1603,11 +1556,11 @@ jobs:
   # the build (no silent drift).
   #
   # Change-gated: help.rs lives under src/** (already in the `code` filter), so a
-  # pure prose-only PR skips this vacuously; it always runs on push/nightly.
+  # pure prose-only PR skips this vacuously.
   cli-docs-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1629,11 +1582,11 @@ jobs:
   #
   # Change-gated: rust-toolchain.toml, the workspace Cargo.toml, and db.rs are
   # already covered by the `code` filter, so a pure prose-only PR skips this
-  # vacuously; it always runs on push/nightly.
+  # vacuously.
   requirements-docs-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1657,12 +1610,11 @@ jobs:
   # build (no silent drift).
   #
   # Change-gated: the CLI surface and the goldens live under src/** (already in
-  # the `code` filter), so a pure prose-only PR skips this vacuously; it always
-  # runs on push/nightly.
+  # the `code` filter), so a pure prose-only PR skips this vacuously.
   cli-transcripts-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # regen-cli-transcripts records every transcript from build-tools' release
@@ -1702,12 +1654,11 @@ jobs:
   #
   # Change-gated on `code`: the parser, the `Ipe.Markdown` authority, and the
   # committed snapshot all live under `src/**`, so any change that can move the
-  # snapshot triggers this job; a pure prose-only PR skips vacuously. It always
-  # runs on push/nightly.
+  # snapshot triggers this job; a pure prose-only PR skips vacuously.
   markdown-parity:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -1826,7 +1777,7 @@ jobs:
   #      Locate → "Copy location" → "Paste" → model renders the same coords
   #      on the "clipboard:" line (write+read round-trip).
   #
-  # Off the PR gate (like `e2e`); runs on push to main and nightly.
+  # Tests phase (like `e2e`).
   # The `browser-e2e` job is the ONLY gate that proves the Ipe.Browser.*
   # port-glue JS actually drives the browser APIs end-to-end — the Rust
   # build-only test in live_e2e.rs (`geo_clipboard_browser_build_only`) proves
@@ -1835,10 +1786,7 @@ jobs:
     name: browser-e2e (Ipe.Browser geo+clipboard — headless Playwright)
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
-    if: >-
-      (github.event_name != 'pull_request' && github.event_name != 'merge_group')
-      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -1924,7 +1872,7 @@ jobs:
 
   # The live `main-protection` ruleset requires exactly the manifest's derived
   # `{context, integration_id}` set (.github/ci/check_required_set.py). Not
-  # required on a PR, where it flags a required-set change the ruleset has not
+  # required, so on a PR it flags a required-set change the ruleset has not
   # taken yet; a red on the nightly makes `nightly-green` hold every merge until
   # the ruleset is reconciled (.github/ci/RECONCILIATION.md).
   ruleset-drift:

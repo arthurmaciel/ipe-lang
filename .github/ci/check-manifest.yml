@@ -44,7 +44,7 @@
 version: 1
 
 checks:
-  # ── Fast per-change gates (ci.yml, PR + push) ─────────────────────────────
+  # ── Per-change gates (ci.yml) ─────────────────────────────────────────────
   - context: fmt
     disposition: gate
     producer: ci.yml
@@ -72,6 +72,7 @@ checks:
     guards: >-
       Every runtime feature combination the emitter can select builds clean
       under clippy (SEAL); path-gated, so a skip on a non-emit PR passes.
+    aggregates: [runtime-feature-combos-run]
   - context: windows-check
     disposition: gate
     producer: ci.yml
@@ -180,6 +181,7 @@ checks:
     local:
       ci-only: inline-script
     guards: SEAL
+    aggregates: [seal-smoke-run]
   - context: build-tools
     disposition: gate
     producer: ci.yml
@@ -263,6 +265,7 @@ checks:
       run:
         - cargo nextest run -p ipe-runtime-rust --features full --profile ci
     guards: SEAL
+    aggregates: [runtime-full-features-run]
   - context: registry-admission
     disposition: gate
     producer: ci.yml
@@ -273,6 +276,7 @@ checks:
           env:
             IPE_E2E: "1"
             IPE_RUNTIME_DIR: "{repo_root}/src/runtime/rust/src"
+    aggregates: [registry-admission-run]
 
   # ── Cancel-on-cheap-red watcher — informational (never a merge gate) ──────
   # Normally SKIPPED (its `needs:` all succeed and `failure()` is false), so it
@@ -328,24 +332,28 @@ checks:
     local:
       ci-only: privileged
     guards: Security
+    aggregates: [build, playground-jail-run]
   - context: "linux-x64 (seccomp socket-deny + bubblewrap)"
     disposition: gate
     producer: admission-sandbox.yml
     local:
       ci-only: privileged
     guards: Security
+    aggregates: [linux-x64-jail]
   - context: "linux-arm64 (seccomp socket-deny + bubblewrap)"
     disposition: gate
     producer: admission-sandbox.yml
     local:
       ci-only: platform
     guards: Security
+    aggregates: [linux-arm64-jail]
   - context: "macos-arm64 (sandbox-exec / Seatbelt)"
     disposition: gate
     producer: admission-sandbox.yml
     local:
       ci-only: platform
     guards: Security
+    aggregates: [macos-arm64-jail]
 
   # ── Nightly enforcement (per-change gate) ─────────────────────────────────
   # Red unless the latest nightly on main is green and fresh, or this change's
@@ -546,7 +554,7 @@ checks:
     disposition: informational
     producer: playground.yml
     owner: docs
-    note: playground.yml build leg; playground-jail is the Security gate.
+    note: playground.yml build leg (tests phase); the playground-jail verdict aggregates it.
 
   # ── Path classifiers (gate) ──────────────────────────────────────────────
   # Each workflow's `changes` job, running the fail-closed classifier

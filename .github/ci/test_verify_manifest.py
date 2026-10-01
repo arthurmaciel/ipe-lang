@@ -3777,6 +3777,457 @@ jobs:
 """
 
 
+check_phase_routing = verify_manifest.check_phase_routing
+
+_PH_CHECKOUT = (
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\n"
+    "        with:\n"
+    "          persist-credentials: false\n"
+    "          sparse-checkout: .github/actions/phase-verdict\n"
+)
+
+
+def _ph_verdict(needs: list[str], phase: str, scope: str) -> str:
+    pairs = "".join(f"            {n}=${{{{ needs.{n}.result }}}}\n" for n in needs)
+    return (
+        "      - name: Judge the aggregated jobs\n"
+        "        uses: ./.github/actions/phase-verdict\n"
+        "        with:\n"
+        "          results: >-\n"
+        f"{pairs}"
+        f"          phase: {phase}\n"
+        f"          tier: ${{{{ needs.changes.outputs.{phase} }}}}\n"
+        f"          scope: ${{{{ needs.changes.outputs.{scope} }}}}\n"
+    )
+
+
+# A routed workflow holding one job of every phase, each phase-11/12 job
+# behind its own phase verdict. Every refusal below is one edit of it.
+_PH_OK = (
+    "on:\n  push:\n    branches: [main]\n  pull_request:\n  merge_group:\n  workflow_dispatch:\n"
+    "permissions:\n  contents: read\n"
+    "jobs:\n"
+    "  changes:\n"
+    "    runs-on: ubuntu-latest\n"
+    "    outputs:\n"
+    "      cheap: ${{ github.event_name != 'push' }}\n"
+    "      tests: ${{ github.event_name != 'pull_request' && github.event_name != 'push' }}\n"
+    "      post_merge: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}\n"
+    "      code: ${{ steps.classify.outputs.code != 'false' }}\n"
+    "      release_only: ${{ steps.release.outputs.release_only == 'true' }}\n"
+    "    steps:\n      - run: echo classify\n"
+    "  guard:\n"
+    "    runs-on: ubuntu-latest\n"
+    "    steps:\n      - run: echo guard\n"
+    "  fmt:\n"
+    "    runs-on: ubuntu-latest\n"
+    "    needs: changes\n"
+    "    if: needs.changes.outputs.cheap == 'true'\n"
+    "    steps:\n      - run: echo fmt\n"
+    "  floor:\n"
+    "    runs-on: ubuntu-latest\n"
+    "    needs: [changes, fmt]\n"
+    "    if: (needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true') || needs.changes.outputs.release_only == 'true'\n"
+    "    steps:\n      - run: echo floor\n"
+    "  test-run:\n"
+    "    runs-on: ubuntu-latest\n"
+    "    needs: [changes, fmt, guard]\n"
+    "    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'\n"
+    "    steps:\n      - run: echo test\n"
+    "  test:\n"
+    "    runs-on: ubuntu-latest\n"
+    "    needs: [changes, test-run]\n"
+    "    if: always()\n"
+    "    steps:\n"
+    + _PH_CHECKOUT
+    + _ph_verdict(["changes", "test-run"], "tests", "code")
+    + "  asan:\n"
+    "    runs-on: ubuntu-latest\n"
+    "    needs: changes\n"
+    "    if: needs.changes.outputs.post_merge == 'true' && needs.changes.outputs.code == 'true'\n"
+    "    steps:\n      - run: echo asan\n"
+    "  asan-all:\n"
+    "    runs-on: ubuntu-latest\n"
+    "    needs: [changes, asan]\n"
+    "    if: always()\n"
+    "    steps:\n"
+    + _PH_CHECKOUT
+    + _ph_verdict(["changes", "asan"], "post_merge", "code")
+    + "      - name: Extra proof\n"
+    "        if: needs.asan.result == 'success'\n"
+    "        run: echo proof\n"
+    "  cancel:\n"
+    "    runs-on: ubuntu-latest\n"
+    "    needs: [fmt, guard]\n"
+    "    if: failure() && github.event_name == 'pull_request'\n"
+    "    steps:\n      - run: echo cancel\n"
+)
+_PH_GATES = frozenset({"fmt", "test", "asan-all", "guard", "changes"})
+
+
+class TestPhaseRouting(unittest.TestCase):
+    """Check 11: each routed job runs in exactly one phase, and a required
+    context over a merge-queue or post-merge job is a fail-closed verdict."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = self._tmp.name
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, content: str, *, gates: frozenset[str] = _PH_GATES) -> list[str]:
+        _write(os.path.join(self.root, "workflows", "ci.yml"), content)
+        errors: list[str] = []
+        check_phase_routing(set(gates), errors, root=self.root)
+        return errors
+
+    def assertRefused(self, old: str, new: str, needle: str, **kw: object) -> None:
+        self.assertIn(old, _PH_OK, "the edit must apply to the valid fixture")
+        errors = self.errors(_PH_OK.replace(old, new, 1), **kw)  # type: ignore[arg-type]
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def test_valid_workflow_passes(self) -> None:
+        self.assertEqual(self.errors(_PH_OK), [])
+
+    def test_repo_workflows_pass(self) -> None:
+        errors: list[str] = []
+        check_phase_routing(set(_PH_GATES), errors)
+        self.assertEqual(errors, [])
+
+    def test_workflow_outside_the_merge_queue_is_not_routed(self) -> None:
+        bad = _PH_OK.replace("  merge_group:\n", "", 1).replace("if: always()", "if: success()")
+        self.assertEqual(self.errors(bad), [])
+
+    # (a) the `changes` phase outputs are the SSOT spelling.
+    def test_phase_outputs_follow_the_ssot(self) -> None:
+        for phase, excluded in verify_manifest.PHASE_EXCLUDES.items():
+            value = verify_manifest.PHASE_OUTPUTS[phase]
+            for event in excluded:
+                self.assertIn(f"github.event_name != '{event}'", value)
+            self.assertEqual(value.count("!="), len(excluded))
+
+    def test_tests_output_admitting_the_pull_request_refused(self) -> None:
+        self.assertRefused(
+            "tests: ${{ github.event_name != 'pull_request' && github.event_name != 'push' }}",
+            "tests: ${{ github.event_name != 'push' }}",
+            "`changes` output 'tests' must be exactly",
+        )
+
+    def test_missing_phase_output_refused(self) -> None:
+        self.assertRefused(
+            "      post_merge: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}\n",
+            "",
+            "`changes` output 'post_merge' must be exactly",
+        )
+
+    def test_conditional_changes_refused(self) -> None:
+        self.assertRefused(
+            "  changes:\n    runs-on: ubuntu-latest\n",
+            "  changes:\n    runs-on: ubuntu-latest\n    if: github.event_name != 'push'\n",
+            "`changes` must run on every event",
+        )
+
+    # (b)/(c) one phase marker, no raw event routing.
+    def test_job_routing_on_the_event_refused(self) -> None:
+        self.assertRefused(
+            "if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'\n",
+            "if: needs.changes.outputs.tests == 'true' && github.event_name != 'merge_group'\n",
+            "routes by event outside the phase markers",
+        )
+
+    def test_job_with_two_phase_markers_refused(self) -> None:
+        self.assertRefused(
+            "if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'\n",
+            "if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.cheap == 'true'\n",
+            "carries 2 phase markers",
+        )
+
+    def test_job_in_two_phases_by_disjunction_refused(self) -> None:
+        self.assertRefused(
+            "if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'\n",
+            "if: needs.changes.outputs.tests == 'true' || needs.changes.outputs.cheap == 'true'\n",
+            "second disjunct must be exactly",
+        )
+
+    def test_job_without_a_phase_marker_refused(self) -> None:
+        self.assertRefused(
+            "if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'\n",
+            "if: needs.changes.outputs.code == 'true'\n",
+            "carries 0 phase markers",
+        )
+
+    def test_job_with_needs_but_no_if_refused(self) -> None:
+        self.assertRefused(
+            "    needs: changes\n    if: needs.changes.outputs.cheap == 'true'\n",
+            "    needs: changes\n",
+            "has `needs:` but no phase `if:`",
+        )
+
+    def test_release_only_disjunct_on_a_tests_job_refused(self) -> None:
+        self.assertRefused(
+            "if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'\n",
+            "if: (needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true') "
+            "|| needs.changes.outputs.release_only == 'true'\n",
+            "on a cheap job",
+        )
+
+    def test_phase_marker_without_needing_changes_refused(self) -> None:
+        self.assertRefused(
+            "    needs: [changes, fmt, guard]\n",
+            "    needs: [fmt, guard]\n",
+            "does not need `changes`",
+        )
+
+    # (d) a later-phase work job never reports a required context itself.
+    def test_required_context_from_a_tests_job_refused(self) -> None:
+        errors = self.errors(_PH_OK, gates=_PH_GATES | {"test-run"})
+        self.assertTrue(any("reports required context 'test-run' from the tests phase" in e for e in errors), errors)
+
+    def test_required_context_from_a_post_merge_job_refused(self) -> None:
+        errors = self.errors(_PH_OK, gates=_PH_GATES | {"asan"})
+        self.assertTrue(any("reports required context 'asan' from the post_merge phase" in e for e in errors), errors)
+
+    # (e) the verdict's exact shape.
+    def test_verdict_not_always_refused(self) -> None:
+        self.assertRefused(
+            "    needs: [changes, test-run]\n    if: always()\n",
+            "    needs: [changes, test-run]\n    if: success()\n",
+            "`if:` must be exactly `always()`",
+        )
+
+    def test_verdict_continue_on_error_refused(self) -> None:
+        self.assertRefused(
+            "    needs: [changes, test-run]\n    if: always()\n",
+            "    needs: [changes, test-run]\n    if: always()\n    continue-on-error: true\n",
+            "carries ['continue-on-error']",
+        )
+
+    def test_verdict_step_masked_refused(self) -> None:
+        self.assertRefused(
+            "      - name: Judge the aggregated jobs\n        uses: ./.github/actions/phase-verdict\n",
+            "      - name: Judge the aggregated jobs\n        continue-on-error: true\n"
+            "        uses: ./.github/actions/phase-verdict\n",
+            "step 2 must be `uses: ./.github/actions/phase-verdict`",
+        )
+
+    def test_verdict_after_another_step_refused(self) -> None:
+        self.assertRefused(
+            "    needs: [changes, test-run]\n    if: always()\n    steps:\n",
+            "    needs: [changes, test-run]\n    if: always()\n    steps:\n      - run: exit 0\n",
+            "step 1 must be the pinned sparse checkout",
+        )
+
+    def test_later_step_masked_refused(self) -> None:
+        self.assertRefused(
+            "        if: needs.asan.result == 'success'\n",
+            "        if: needs.asan.result == 'success'\n        continue-on-error: true\n",
+            "step 3 carries `continue-on-error:`",
+        )
+
+    def test_verdict_over_changes_alone_refused(self) -> None:
+        self.assertRefused(
+            "    needs: [changes, asan]\n",
+            "    needs: [changes]\n",
+            "must list `changes` first",
+        )
+
+    def test_verdict_with_changes_not_first_refused(self) -> None:
+        self.assertRefused(
+            "    needs: [changes, test-run]\n",
+            "    needs: [test-run, changes]\n",
+            "must list `changes` first",
+        )
+
+    def test_results_missing_a_need_refused(self) -> None:
+        self.assertRefused(
+            "    needs: [changes, test-run]\n",
+            "    needs: [changes, test-run, fmt]\n",
+            "`results` must be",
+        )
+
+    def test_results_out_of_order_refused(self) -> None:
+        self.assertRefused(
+            "            changes=${{ needs.changes.result }}\n            test-run=${{ needs.test-run.result }}\n",
+            "            test-run=${{ needs.test-run.result }}\n            changes=${{ needs.changes.result }}\n",
+            "`results` must be",
+        )
+
+    def test_tier_from_another_phase_refused(self) -> None:
+        self.assertRefused(
+            "          tier: ${{ needs.changes.outputs.tests }}\n",
+            "          tier: ${{ needs.changes.outputs.cheap }}\n",
+            "`tier` must be the `changes` output for 'tests'",
+        )
+
+    def test_cheap_verdict_phase_refused(self) -> None:
+        self.assertRefused(
+            "          phase: tests\n          tier: ${{ needs.changes.outputs.tests }}\n",
+            "          phase: cheap\n          tier: ${{ needs.changes.outputs.cheap }}\n",
+            "`phase` must be one of",
+        )
+
+    def test_scope_naming_a_phase_refused(self) -> None:
+        self.assertRefused(
+            "          tier: ${{ needs.changes.outputs.tests }}\n          scope: ${{ needs.changes.outputs.code }}\n",
+            "          tier: ${{ needs.changes.outputs.tests }}\n          scope: ${{ needs.changes.outputs.tests }}\n",
+            "`scope` must be one `changes` scope output",
+        )
+
+    def test_aggregated_job_on_another_scope_refused(self) -> None:
+        self.assertRefused(
+            "if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'\n",
+            "if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.release_only == 'true'\n",
+            "aggregates 'test-run', whose `if:` must be exactly",
+        )
+
+    def test_aggregated_cheap_job_refused(self) -> None:
+        self.assertRefused(
+            "    needs: [changes, test-run]\n",
+            "    needs: [changes, fmt]\n",
+            "aggregates 'fmt', whose `if:` must be exactly",
+        )
+
+    # (f) a job needs only jobs that run on every event it runs on.
+    def test_cheap_job_needing_a_tests_job_refused(self) -> None:
+        self.assertRefused(
+            "    needs: [changes, fmt]\n",
+            "    needs: [changes, fmt, test-run]\n",
+            "job 'floor' (cheap) needs 'test-run' (tests)",
+        )
+
+    def test_post_merge_job_needing_a_tests_job_refused(self) -> None:
+        self.assertRefused(
+            "    needs: changes\n    if: needs.changes.outputs.post_merge == 'true'",
+            "    needs: [changes, test-run]\n    if: needs.changes.outputs.post_merge == 'true'",
+            "job 'asan' (post_merge) needs 'test-run' (tests)",
+        )
+
+    def test_job_needing_a_verdict_refused(self) -> None:
+        self.assertRefused(
+            "    needs: changes\n    if: needs.changes.outputs.post_merge == 'true'",
+            "    needs: [changes, test]\n    if: needs.changes.outputs.post_merge == 'true'",
+            "needs phase verdict 'test'",
+        )
+
+    def test_check_8_still_refuses_a_bare_pr_tier(self) -> None:
+        """The canonical phase outputs are exempt from check 8's bare-PR lint;
+        any other spelling still trips it."""
+        _write(os.path.join(self.root, "workflows", "ci.yml"), _PH_OK)
+        errors: list[str] = []
+        check_merge_queue(set(), errors, root=self.root)
+        self.assertEqual(errors, [])
+        bad = _PH_OK.replace(
+            "needs.changes.outputs.cheap == 'true'\n    steps:\n      - run: echo fmt",
+            "github.event_name != 'pull_request'\n    steps:\n      - run: echo fmt",
+            1,
+        )
+        self.assertNotEqual(bad, _PH_OK)
+        _write(os.path.join(self.root, "workflows", "ci.yml"), bad)
+        errors = []
+        check_merge_queue(set(), errors, root=self.root)
+        self.assertTrue(any("without `&& github.event_name != 'merge_group'`" in e for e in errors), errors)
+
+
+def _phase_verdict_script() -> str:
+    import yaml
+
+    with open(os.path.join(HERE, "..", "actions", "phase-verdict", "action.yml")) as f:
+        action = yaml.safe_load(f)
+    steps = action["runs"]["steps"]
+    assert len(steps) == 1 and steps[0]["shell"] == "bash"
+    return steps[0]["run"]
+
+
+class TestPhaseVerdictAction(unittest.TestCase):
+    """The composite every check-11 verdict runs: fails closed on any event
+    of its phase unless every aggregated job succeeded."""
+
+    SCRIPT = _phase_verdict_script()
+
+    def run_verdict(self, event: str, results: str, *, phase: str = "tests", tier: str | None = None,
+                    scope: str = "true") -> subprocess.CompletedProcess[str]:
+        if tier is None:
+            tier = "false" if event in verify_manifest.PHASE_EXCLUDES[phase] else "true"
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "GITHUB_EVENT_NAME": event,
+            "RESULTS": results,
+            "PHASE": phase,
+            "TIER": tier,
+            "SCOPE": scope,
+        }
+        return subprocess.run(["bash", "-c", self.SCRIPT], env=env, capture_output=True, text=True, timeout=30)
+
+    def assertPasses(self, *a: object, **kw: object) -> None:
+        r = self.run_verdict(*a, **kw)  # type: ignore[arg-type]
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def assertFails(self, needle: str, *a: object, **kw: object) -> None:
+        r = self.run_verdict(*a, **kw)  # type: ignore[arg-type]
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn(needle, r.stderr)
+
+    def test_queue_run_with_every_job_green_passes(self) -> None:
+        self.assertPasses("merge_group", "changes=success a=success b=success")
+
+    def test_queue_run_with_a_red_job_fails(self) -> None:
+        for bad in ("failure", "cancelled"):
+            self.assertFails(f"b={bad}", "merge_group", f"changes=success a=success b={bad}")
+
+    def test_queue_run_with_a_skipped_job_fails(self) -> None:
+        self.assertFails("must run every aggregated job: b=skipped", "merge_group",
+                         "changes=success a=success b=skipped")
+
+    def test_post_merge_push_with_a_skipped_job_fails(self) -> None:
+        self.assertFails("must run every aggregated job", "push", "changes=success a=skipped", phase="post_merge")
+
+    def test_pull_request_skip_is_vacuous(self) -> None:
+        self.assertPasses("pull_request", "changes=success a=skipped b=skipped")
+
+    def test_pull_request_red_still_fails(self) -> None:
+        self.assertFails("a=failure", "pull_request", "changes=success a=failure")
+
+    def test_out_of_scope_skip_is_vacuous_but_red_fails(self) -> None:
+        self.assertPasses("merge_group", "changes=success a=skipped", scope="false")
+        self.assertFails("a=cancelled", "merge_group", "changes=success a=cancelled", scope="false")
+
+    def test_tier_disagreeing_with_the_event_fails(self) -> None:
+        self.assertFails("disagrees with event", "merge_group", "changes=success a=skipped", tier="false")
+        self.assertFails("disagrees with event", "pull_request", "changes=success a=success", tier="true")
+
+    def test_red_or_skipped_classifier_fails(self) -> None:
+        for bad in ("failure", "cancelled", "skipped"):
+            self.assertFails("first pair must be changes=success", "pull_request", f"changes={bad} a=skipped")
+
+    def test_changes_not_first_fails(self) -> None:
+        self.assertFails("first pair must be changes=success", "merge_group", "a=success changes=success")
+
+    def test_malformed_or_empty_results_fail(self) -> None:
+        self.assertFails("malformed result pair", "merge_group", "changes=success a")
+        self.assertFails("no aggregated job besides changes", "merge_group", "changes=success")
+        self.assertFails("no aggregated job besides changes", "merge_group", "")
+
+    def test_bad_flags_fail(self) -> None:
+        self.assertFails("unknown phase", "merge_group", "changes=success a=success", phase="cheap", tier="true")
+        self.assertFails("phase flag is neither", "merge_group", "changes=success a=success", tier="")
+        self.assertFails("scope flag is neither", "merge_group", "changes=success a=success", scope="")
+
+    def test_event_membership_matches_the_phase_ssot(self) -> None:
+        """The composite derives phase membership from the event on its own;
+        it agrees with `PHASE_EXCLUDES` (the `changes` outputs' source) on
+        every trigger, so neither can drift from the other."""
+        events = ("pull_request", "merge_group", "push", "schedule", "workflow_dispatch")
+        for phase in verify_manifest.VERDICT_PHASES:
+            for event in events:
+                member = event not in verify_manifest.PHASE_EXCLUDES[phase]
+                with self.subTest(phase=phase, event=event):
+                    self.assertPasses(event, "changes=success a=success", phase=phase,
+                                      tier="true" if member else "false")
+                    self.assertFails("disagrees with event", event, "changes=success a=success", phase=phase,
+                                     tier="false" if member else "true")
+
+
 class TestPullRequestTarget(unittest.TestCase):
     """Check 12a: a pull_request_target workflow provably runs no head code."""
 
