@@ -1030,7 +1030,8 @@ async fn commit_entry<Model, Msg, FView>(
 ) -> Option<(Model, IpeCmd<Msg>)>
 where
     Model: Clone,
-    FView: Fn(Model) -> Html<Msg>,
+    Msg: Clone,
+    FView: Fn(Model) -> Html<Msg> + ?Sized,
 {
     let strong = entry.upgrade()?;
     let model = strong
@@ -8466,16 +8467,19 @@ mod route_entry_cmd_tests {
 
     type Store = Arc<dyn store::SessionStore<Model, Msg>>;
 
+    /// The fixture app's state, its four fns as plain fn pointers.
+    type FixtureState = WebState<
+        Model,
+        Msg,
+        fn(WebReq) -> (Model, IpeCmd<Msg>),
+        fn(Msg, Model) -> (Model, IpeCmd<Msg>),
+        fn(Model) -> Html<Msg>,
+        fn(Model) -> IpeSub<Msg>,
+    >;
+
     fn router(store: Store) -> axum::Router {
         let routes_for_match = Arc::new(routes());
-        let state: WebState<
-            Model,
-            Msg,
-            fn(WebReq) -> (Model, IpeCmd<Msg>),
-            fn(Msg, Model) -> (Model, IpeCmd<Msg>),
-            fn(Model) -> Html<Msg>,
-            fn(Model) -> IpeSub<Msg>,
-        > = WebState {
+        let state: FixtureState = WebState {
             store,
             init: Arc::new(init),
             update: Arc::new(update),
@@ -8647,6 +8651,9 @@ mod route_entry_cmd_tests {
         }
         async fn delete(&self, sid: &str) {
             self.live.delete(sid).await;
+        }
+        async fn web_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
+            self.live.web_sessions().await
         }
     }
 
