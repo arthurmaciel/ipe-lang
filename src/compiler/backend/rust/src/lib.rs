@@ -1756,6 +1756,9 @@ impl<'a> EmitCtx<'a> {
         webview_host: bool,
         webview_window: Option<WebViewWindow>,
     ) -> DResult<Self> {
+        // Every emission entry builds its context here, so a malformed literal
+        // route path is refused whether or not emission reaches the route.
+        route_grammar::refuse_malformed_literals(program)?;
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         // Generated Rust type name -> the first Ipê type (dotted) that claimed
         // it. Keyed by the emitted name so a fold collision is an O(1) lookup

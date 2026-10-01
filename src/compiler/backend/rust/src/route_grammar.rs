@@ -18,6 +18,7 @@ use std::collections::HashSet;
 
 use ipe_diagnostics::terminal::is_denied_format_char;
 use ipe_diagnostics::{DResult, Diagnostic, LowerError, RoutePatternDefect, Span};
+use ipe_ir::{Callee, Expr, KernelFn, Program};
 
 /// The runtime's `MAX_URL_COMPONENT_LEN`: the longest pattern it parses.
 pub const MAX_PATH_LEN: usize = 32 * 1024 * 1024;
@@ -192,6 +193,140 @@ pub fn refuse_malformed(call: &str, verdict: Result<(), RoutePatternDefect>) -> 
     })
 }
 
+/// The grammar a route kernel holds its first (path) argument to.
+#[derive(Clone, Copy)]
+enum RoutePath {
+    /// A `Web.route` pattern.
+    Web,
+    /// A `Server.*` route path.
+    Server,
+    /// A `Server.api` spec, whose path follows an optional method.
+    ServerApi,
+}
+
+/// The path grammar of `k`'s first argument, or `None` for a kernel that
+/// takes no route path.
+const fn route_path_of(k: KernelFn) -> Option<RoutePath> {
+    match k {
+        KernelFn::WebRoute => Some(RoutePath::Web),
+        KernelFn::ServerApi => Some(RoutePath::ServerApi),
+        KernelFn::ServerGet
+        | KernelFn::ServerPost
+        | KernelFn::ServerPut
+        | KernelFn::ServerDelete
+        | KernelFn::ServerAny
+        | KernelFn::ServerStatic
+        | KernelFn::ServerMountApp
+        | KernelFn::ServerGetAuthed
+        | KernelFn::ServerPostAuthed
+        | KernelFn::ServerPutAuthed
+        | KernelFn::ServerDeleteAuthed => Some(RoutePath::Server),
+        _ => None,
+    }
+}
+
+/// Hold one literal path passed to route kernel `k` to its grammar.
+fn refuse_literal(k: KernelFn, grammar: RoutePath, lit: &str) -> DResult<()> {
+    let d = k.decl();
+    let call = format!("{}.{}", d.qualifier, d.name);
+    let verdict = match grammar {
+        RoutePath::Web => web_route_pattern(lit),
+        RoutePath::Server => server_route_path(lit),
+        RoutePath::ServerApi => server_route_path(server_api_path(lit)),
+    };
+    refuse_malformed(&call, verdict)
+}
+
+/// Refuse every malformed literal route path anywhere in `program`.
+///
+/// The check walks the whole lowered program rather than riding on route
+/// emission, so a route the emitted app never serves (an unrouted `Web.tea`
+/// whose `routes` list is dropped, an unreachable helper) is refused the same
+/// as one that is served.
+///
+/// # Errors
+///
+/// IPE-L0156 for the first malformed literal path.
+pub fn refuse_malformed_literals(program: &Program) -> DResult<()> {
+    program
+        .modules
+        .iter()
+        .flat_map(|module| &module.funcs)
+        .try_for_each(|func| literal_routes(&func.body))
+}
+
+/// Refuse every malformed literal route path inside `expr`.
+fn literal_routes(expr: &Expr) -> DResult<()> {
+    match expr {
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::CustomElementRef { .. }
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. }
+        | Expr::Var(_)
+        | Expr::CloneVar(_) => Ok(()),
+        Expr::Call { callee, args, .. } => {
+            if let (Callee::Kernel(k), Some(Expr::Str(lit))) = (callee, args.first())
+                && let Some(grammar) = route_path_of(*k)
+            {
+                refuse_literal(*k, grammar, lit.as_str())?;
+            }
+            args.iter().try_for_each(literal_routes)
+        }
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().try_for_each(literal_routes)
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            literal_routes(lhs)?;
+            literal_routes(rhs)
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            literal_routes(value)?;
+            literal_routes(body)
+        }
+        Expr::If { cond, then_, else_ } => {
+            literal_routes(cond)?;
+            literal_routes(then_)?;
+            literal_routes(else_)
+        }
+        Expr::Match(m) => {
+            literal_routes(m.scrutinee())?;
+            m.arms().iter().try_for_each(|arm| {
+                if let Some(guard) = &arm.guard {
+                    literal_routes(guard)?;
+                }
+                literal_routes(&arm.body)
+            })
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => items.iter().try_for_each(literal_routes),
+        Expr::Cons { head, tail } => {
+            literal_routes(head)?;
+            literal_routes(tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => literal_routes(list),
+        Expr::Record { fields, .. } => fields.iter().try_for_each(|(_, e)| literal_routes(e)),
+        Expr::Access { record, .. } => literal_routes(record),
+        Expr::Update { record, fields } => {
+            literal_routes(record)?;
+            fields.iter().try_for_each(|(_, e)| literal_routes(e))
+        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::TailLoop { body, .. } => literal_routes(body),
+        Expr::Apply { func, args } => {
+            literal_routes(func)?;
+            args.iter().try_for_each(literal_routes)
+        }
+        Expr::TaskSeq { effect, rest } => {
+            literal_routes(effect)?;
+            literal_routes(rest)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -320,6 +455,79 @@ mod tests {
         assert_eq!(&*excerpt("x\u{202e}y"), "x\\u{202e}y");
         let long = excerpt(&"n".repeat(1000));
         assert_eq!(long.chars().count(), super::EXCERPT_CHARS + 1);
+    }
+}
+
+/// The whole-program walk refuses a malformed literal route wherever it sits,
+/// including positions no route emission reaches.
+#[cfg(test)]
+mod walk_tests {
+    use ipe_diagnostics::{Diagnostic, LowerError, RoutePatternDefect};
+    use ipe_ir::{CallPin, Callee, Expr, IrType, KernelFn, OnFormKind};
+
+    use super::literal_routes;
+
+    fn call(k: KernelFn, path: &str) -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(k),
+            args: vec![Expr::Str(path.to_owned()), Expr::Unit],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    fn defect(expr: &Expr) -> Option<(Box<str>, RoutePatternDefect)> {
+        match literal_routes(expr) {
+            Err(Diagnostic::Lower {
+                msg: LowerError::RoutePatternMalformed { call, defect },
+                ..
+            }) => Some((call, defect)),
+            Ok(()) | Err(_) => None,
+        }
+    }
+
+    #[test]
+    fn a_route_in_an_unserved_routes_list_is_refused() {
+        let routes = Expr::Tuple(vec![
+            Expr::Unit,
+            Expr::List {
+                elem: IrType::Unit,
+                items: vec![
+                    call(KernelFn::WebRoute, "/"),
+                    call(KernelFn::WebRoute, "/:"),
+                ],
+            },
+        ]);
+        assert_eq!(
+            defect(&routes),
+            Some(("Web.route".into(), RoutePatternDefect::ParamEmpty))
+        );
+    }
+
+    #[test]
+    fn a_server_api_path_under_a_lambda_is_refused() {
+        let handler = Expr::Lambda {
+            params: Vec::new(),
+            ret: IrType::Unit,
+            body: Box::new(call(KernelFn::ServerApi, "GET /v1/:id/:id")),
+        };
+        assert_eq!(
+            defect(&handler),
+            Some((
+                "Server.api".into(),
+                RoutePatternDefect::ParamDuplicate { name: "id".into() }
+            ))
+        );
+    }
+
+    #[test]
+    fn well_formed_routes_and_non_route_kernels_pass() {
+        let ok = Expr::Tuple(vec![
+            call(KernelFn::WebRoute, "/posts/:id"),
+            call(KernelFn::ServerGet, "/users/:id"),
+            call(KernelFn::IoPrintln, "/:"),
+        ]);
+        assert_eq!(literal_routes(&ok).ok(), Some(()));
     }
 }
 

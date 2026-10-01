@@ -2062,9 +2062,9 @@ pub fn emit_server_call(
         }
 
         // Route constructors whose first argument is the route path use the
-        // standard N-arg call path; a literal path is first held to the
-        // runtime's parameter-name grammar (IPE-L0156), so a table the
-        // listener would refuse at startup is refused here.
+        // standard N-arg call path; a literal path was already held to the
+        // runtime's parameter-name grammar (IPE-L0156) by
+        // `route_grammar::refuse_malformed_literals` over the whole program.
         KernelFn::ServerGet
         | KernelFn::ServerPost
         | KernelFn::ServerPut
@@ -2083,25 +2083,10 @@ pub fn emit_server_call(
         | KernelFn::ServerGetAuthed
         | KernelFn::ServerPostAuthed
         | KernelFn::ServerPutAuthed
-        | KernelFn::ServerDeleteAuthed => {
-            if let Some(Expr::Str(lit)) = args.first() {
-                let d = k.decl();
-                let call = format!("{}.{}", d.qualifier, d.name);
-                let path = if matches!(k, KernelFn::ServerApi) {
-                    crate::route_grammar::server_api_path(lit.as_str())
-                } else {
-                    lit.as_str()
-                };
-                crate::route_grammar::refuse_malformed(
-                    &call,
-                    crate::route_grammar::server_route_path(path),
-                )?;
-            }
-            Ok(None)
-        }
+        | KernelFn::ServerDeleteAuthed
         // All remaining server kernels use the standard N-arg call path — no
         // special boxing or argument projection is needed.
-        KernelFn::ServerListen
+        | KernelFn::ServerListen
         | KernelFn::ServerText
         | KernelFn::ServerJson
         | KernelFn::ServerHtml
