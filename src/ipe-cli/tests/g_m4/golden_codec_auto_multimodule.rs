@@ -95,3 +95,10 @@ fn codec_auto_multimodule_derives() {
 fn codec_auto_multimodule_roundtrips() {
     assert_runs_and_matches_oracle("codec_auto_multimodule");
 }
+
+/// The derive runs (no IPE-N0041) for a witness annotated with a QUALIFIED
+/// record alias (`Rows.User`) the entry module never exposes bare.
+#[test]
+fn codec_auto_qualified_witness_derives() {
+    assert_ipe_derive_succeeds("codec_auto_qualified_witness");
+}
