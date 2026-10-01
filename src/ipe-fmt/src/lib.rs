@@ -558,26 +558,25 @@ impl<'a> Printer<'a> {
     ///
     /// A definition with a signature starts at the signature's name, the code
     /// token before the `:` that precedes the annotation.
-    fn decl_start(&self, d: &Decl<'_>) -> usize {
-        match d {
-            Decl::Union(u) => u.span.lo as usize,
-            Decl::Alias(a) => a.span.lo as usize,
-            Decl::Foreign(f) => f.span.lo as usize,
-            Decl::Value(v) => {
-                v.value
-                    .type_annotation
-                    .as_ref()
-                    .map_or(v.value.name.span.lo as usize, |ann| {
-                        let lo = ann.span.lo as usize;
-                        let i = self.code.partition_point(|t| t.lo < lo);
-                        let colon = i.checked_sub(1).and_then(|j| self.code.get(j));
-                        let name = i.checked_sub(2).and_then(|j| self.code.get(j));
-                        match (colon, name) {
-                            (Some(c), Some(n)) if matches!(c.kind, TokenKind::Colon) => n.lo,
-                            _ => lo,
+    fn decl_start(&self, decl: &Decl<'_>) -> usize {
+        match decl {
+            Decl::Union(union) => union.span.lo as usize,
+            Decl::Alias(alias) => alias.span.lo as usize,
+            Decl::Foreign(foreign) => foreign.span.lo as usize,
+            Decl::Value(value) => value.value.type_annotation.as_ref().map_or(
+                value.value.name.span.lo as usize,
+                |ann| {
+                    let ann_lo = ann.span.lo as usize;
+                    let at = self.code.partition_point(|tok| tok.lo < ann_lo);
+                    let before = |back: usize| at.checked_sub(back).and_then(|j| self.code.get(j));
+                    match (before(1), before(2)) {
+                        (Some(colon), Some(name)) if matches!(colon.kind, TokenKind::Colon) => {
+                            name.lo
                         }
-                    })
-            }
+                        _ => ann_lo,
+                    }
+                },
+            ),
         }
     }
 
