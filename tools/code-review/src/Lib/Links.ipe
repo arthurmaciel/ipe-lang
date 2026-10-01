@@ -1,16 +1,19 @@
-module Lib.Links exposing (Link(..), linkKey, resolve)
+module Lib.Links exposing (Link(..), label, linkKey, resolve)
 
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.String as String
+import Lib.SafeText as SafeText exposing (SafeText)
 
 
 -- A link found in a unit's source, resolved against the index's unit table.
 -- Internal links jump to the /unit/<uid> page of the callee; external links
 -- open their URL. Resolution is purely lexical: identifier tokens are matched
--- against the qualified names of every indexed unit.
+-- against the qualified names of every indexed unit. An internal link's
+-- label is the matched token rendered once into `SafeText`; an external
+-- link keeps its raw URL for the `href` check, and `label` renders it.
 type Link
-    = Internal String String
+    = Internal SafeText String
     | External String
 
 
@@ -37,7 +40,7 @@ linkFor selfQualified units token =
     else
         case List.find (\( q, _ ) -> q == token) units of
             Just ( _, uid ) ->
-                Just (Internal token uid)
+                Just (Internal (SafeText.renderForeign token) uid)
 
             Nothing ->
                 Nothing
@@ -100,6 +103,18 @@ dedup links =
 
             else
                 link :: tail
+
+
+-- The text a link shows, never raw: an internal link's rendered name, an
+-- external link's URL with every control and bidi character escaped.
+label : Link -> SafeText
+label link =
+    case link of
+        Internal name _ ->
+            SafeText.concat [ SafeText.literal "→ ", name ]
+
+        External url ->
+            SafeText.concat [ SafeText.literal "↗ ", SafeText.renderForeign url ]
 
 
 linkKey : Link -> String
