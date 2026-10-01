@@ -1818,6 +1818,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
     if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
+    timeout-minutes: 60
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -1851,7 +1852,7 @@ jobs:
         run: |
           set -euo pipefail
           IPE="$RUNNER_TEMP/ipe-release/ipe"
-          OUT="${{ runner.temp }}/geo-clipboard-emitted"
+          OUT="$RUNNER_TEMP/geo-clipboard-emitted"
           "$IPE" build examples/shapes/web/geo-clipboard/package.ipe --out "$OUT"
           bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_GEO_CLIPBOARD_EMITTED "$OUT/rust"
       - name: Cargo-build emitted project
@@ -1863,7 +1864,14 @@ jobs:
           cargo build --release
           # CARGO_TARGET_DIR is redirected to a shared cache dir above, so the
           # release artifacts land there — never the emitted project's ./target.
-          BIN="$(find "$CARGO_TARGET_DIR/release" -maxdepth 1 -type f -perm /111 ! -name '*.d' | head -1)"
+          # The binary is the emitted `[package] name`; the cached dir may hold
+          # other executables, so no directory scan picks it.
+          NAME="$(sed -n 's/^name = "\(.*\)"$/\1/p;T;q' Cargo.toml)"
+          BIN="$CARGO_TARGET_DIR/release/$NAME"
+          if [ -z "$NAME" ] || [ ! -x "$BIN" ]; then
+            echo "geo-clipboard binary not found at '$BIN'" >&2
+            exit 1
+          fi
           bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_GEO_CLIPBOARD_BIN "$BIN"
       - name: Spawn geo-clipboard server
         run: |
@@ -1875,7 +1883,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_GEO_SERVER_PID "$!"
           ready=""
           for i in $(seq 1 40); do
-            if curl -sf "http://127.0.0.1:$IPE_GEO_CLIPBOARD_PORT/" >/dev/null 2>&1; then
+            if curl -sf --max-time 2 "http://127.0.0.1:$IPE_GEO_CLIPBOARD_PORT/" >/dev/null 2>&1; then
               echo "server ready (attempt $i)"; ready=1; break
             fi
             sleep 0.5
@@ -1898,7 +1906,7 @@ jobs:
           "$RUNNER_TEMP/ipe-release/ipe" build examples/shapes/web/layout-fill/package.ipe --out "$OUT"
           cd "$OUT/rust"
           cargo build --release
-          NAME="$(sed -n 's/^name = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          NAME="$(sed -n 's/^name = "\(.*\)"$/\1/p;T;q' Cargo.toml)"
           BIN="$CARGO_TARGET_DIR/release/$NAME"
           # Fail closed: no executable named after the emitted package means the
           # spawn below would run nothing.
@@ -1917,7 +1925,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_LAYOUT_SERVER_PID "$!"
           ready=""
           for i in $(seq 1 40); do
-            if curl -sf "http://127.0.0.1:$IPE_LAYOUT_FILL_PORT/" >/dev/null 2>&1; then
+            if curl -sf --max-time 2 "http://127.0.0.1:$IPE_LAYOUT_FILL_PORT/" >/dev/null 2>&1; then
               echo "server ready (attempt $i)"; ready=1; break
             fi
             sleep 0.5
