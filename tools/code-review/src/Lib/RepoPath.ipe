@@ -10,6 +10,7 @@ import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.Tuple as Tuple
+import Lib.SafeText as SafeText exposing (SafeText)
 
 
 -- The directory the index's `tag:relative` paths are relative to: an absolute,
@@ -145,30 +146,55 @@ absolutize raw =
 parseRoot : String -> Task.Task Error Root
 parseRoot raw =
     if String.trim raw == "" then
-        Task.fail (Error.invalidInput (rootRefusal raw "is empty"))
+        Task.fail (Error.invalidInput (rootRefusal raw (SafeText.literal "is empty")))
 
     else
         do
             path <-
                 absolutize raw
-                    |> Task.mapError (\e -> Error.invalidInput (rootRefusal raw ("is not a valid path (" ++ Error.message e ++ ")")))
+                    |> Task.mapError
+                        (\e ->
+                            Error.invalidInput
+                                (rootRefusal raw
+                                    (SafeText.concat
+                                        [ SafeText.literal "is not a valid path ("
+                                        , SafeText.render (Error.message e)
+                                        , SafeText.literal ")"
+                                        ]
+                                    )
+                                )
+                        )
             isDir <- File.isDir path |> Task.onError (\_ -> Task.succeed False)
             if isDir then
                 Task.succeed (Root path)
 
             else
-                Task.fail (Error.invalidInput (rootRefusal raw ("resolves to " ++ Path.toString path ++ ", which is not a directory")))
+                Task.fail
+                    (Error.invalidInput
+                        (rootRefusal raw
+                            (SafeText.concat
+                                [ SafeText.literal "resolves to "
+                                , SafeText.quoted (Path.toString path)
+                                , SafeText.literal ", which is not a directory"
+                                ]
+                            )
+                        )
+                    )
 
 
-rootRefusal : String -> String -> String
+-- The operator's raw value is foreign text: it enters only through
+-- `SafeText.quoted`, and the problem is already `SafeText`.
+rootRefusal : String -> SafeText -> String
 rootRefusal raw problem =
-    String.concat
-        [ "IPE_INDEX_ROOT=\""
-        , raw
-        , "\" "
-        , problem
-        , "; set it to the repository root the index was built from (absolute, or relative to the working directory)"
-        ]
+    SafeText.toString
+        (SafeText.concat
+            [ SafeText.literal "IPE_INDEX_ROOT="
+            , SafeText.quoted raw
+            , SafeText.literal " "
+            , problem
+            , SafeText.literal "; set it to the repository root the index was built from (absolute, or relative to the working directory)"
+            ]
+        )
 
 
 -- A stored `tag:relative` path joined under its tag's root. The prefix
@@ -211,28 +237,42 @@ joinUnder root stored rel =
                 |> Result.mapError (\e -> NotUnderRoot stored e)
 
 
-describe : PathError -> String
+-- A refusal as diagnostic text. The stored path and every nested error message
+-- are foreign text, so they enter only through `SafeText.quoted`/`render`.
+describe : PathError -> SafeText
 describe err =
     case err of
         MissingTag stored ->
-            "index path \"" ++ stored ++ "\" has no `tag:` prefix"
+            SafeText.concat [ SafeText.literal "index path ", SafeText.quoted stored, SafeText.literal " has no `tag:` prefix" ]
 
         InvalidRelative stored e ->
-            "index path \"" ++ stored ++ "\" is not a valid relative path (" ++ Error.message e ++ ")"
+            SafeText.concat
+                [ SafeText.literal "index path "
+                , SafeText.quoted stored
+                , SafeText.literal " is not a valid relative path ("
+                , SafeText.render (Error.message e)
+                , SafeText.literal ")"
+                ]
 
         UnknownTag stored ->
-            "index path \"" ++ stored ++ "\" names a repo tag no configured root binds"
+            SafeText.concat [ SafeText.literal "index path ", SafeText.quoted stored, SafeText.literal " names a repo tag no configured root binds" ]
 
         NotUnderRoot stored e ->
-            "index path \"" ++ stored ++ "\" does not join to a path under its repo root (" ++ Error.message e ++ ")"
+            SafeText.concat
+                [ SafeText.literal "index path "
+                , SafeText.quoted stored
+                , SafeText.literal " does not join to a path under its repo root ("
+                , SafeText.render (Error.message e)
+                , SafeText.literal ")"
+                ]
 
         NoRoots ->
-            "no repository root is configured"
+            SafeText.literal "no repository root is configured"
 
         DuplicateTag tag ->
-            "repo tag \"" ++ tag ++ "\" is bound to more than one root"
+            SafeText.concat [ SafeText.literal "repo tag ", SafeText.quoted tag, SafeText.literal " is bound to more than one root" ]
 
 
 toError : PathError -> Error
 toError err =
-    Error.invalidInput (describe err)
+    Error.invalidInput (SafeText.toString (describe err))

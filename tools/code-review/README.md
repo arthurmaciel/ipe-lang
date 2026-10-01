@@ -55,6 +55,11 @@ is refused with an error naming it and the `Ipe.Path` reason. The check is lexic
 followed, so it can point a read outside the root. A source file larger than
 16 MiB is refused rather than read.
 
+Diagnostics escape control characters: a stored path, an env value, or an error
+shown on stderr or the page has every control, line-separator and bidi
+character spelled as a visible escape (`\n`, `\r`, `\t`, `\u{1b}`, `\u{202e}`),
+so index or env text cannot rewrite the terminal or reorder a displayed path.
+
 The index DB is opened read-only for listing and read-write (never created) only
 to delete a consumed `change_queue` row. The app creates and owns the review DB.
 

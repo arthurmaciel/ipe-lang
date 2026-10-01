@@ -27,6 +27,7 @@ import Lib.Index as Index
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
 import Lib.Queue as Queue exposing (QueueState(..))
+import Lib.SafeText as SafeText
 import Lib.Settings as Settings
 
 
@@ -503,7 +504,7 @@ decisionErrorBanner : Model -> Ui.Element Msg
 decisionErrorBanner model =
     case model.decisionError of
         Just err ->
-            Ui.el [ Font.size 13, Font.color (Ui.rgb 230 120 120) ] (Ui.text ("Decision save failed: " ++ Error.toString err))
+            Ui.el [ Font.size 13, Font.color (Ui.rgb 230 120 120) ] (Ui.text ("Decision save failed: " ++ SafeText.toString (SafeText.renderForeign (Error.toString err))))
 
         Nothing ->
             Ui.none
@@ -628,7 +629,7 @@ historyBody : Model -> Ui.Element Msg
 historyBody model =
     case model.historyError of
         Just err ->
-            Ui.text ("History load failed: " ++ Error.toString err)
+            Ui.text ("History load failed: " ++ SafeText.toString (SafeText.renderForeign (Error.toString err)))
 
         Nothing ->
             if List.isEmpty model.history then
@@ -689,7 +690,7 @@ unitPageBody : Model -> Ui.Element Msg
 unitPageBody model =
     case model.unitError of
         Just err ->
-            Ui.text ("Unit load failed: " ++ Error.toString err)
+            Ui.text ("Unit load failed: " ++ SafeText.toString (SafeText.renderForeign (Error.toString err)))
 
         Nothing ->
             case model.unitPage of
@@ -722,7 +723,7 @@ unitPageCard model unit =
             ]
         , Ui.el
             [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
-            (Ui.text (unit.path ++ " · lines " ++ String.fromInt unit.lineStart ++ "-" ++ String.fromInt unit.lineEnd))
+            (Ui.text (SafeText.toString (SafeText.renderForeign unit.path) ++ " · lines " ++ String.fromInt unit.lineStart ++ "-" ++ String.fromInt unit.lineEnd))
         , referencesRow model.unitLinks
         , sourceBlock unit
         ]
@@ -836,7 +837,7 @@ unitCard model selected q =
             ]
         , Ui.el
             [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
-            (Ui.text (unit.path ++ " · lines " ++ String.fromInt unit.lineStart ++ "-" ++ String.fromInt unit.lineEnd ++ maybePurpose unit))
+            (Ui.text (SafeText.toString (SafeText.renderForeign unit.path) ++ " · lines " ++ String.fromInt unit.lineStart ++ "-" ++ String.fromInt unit.lineEnd ++ maybePurpose unit))
         , changedLine q
         , sourceBlock unit
         ]
@@ -1111,7 +1112,7 @@ requireSettings =
     Task.onError
         (\e ->
             do
-                Io.eprintln ("code-review: " ++ Error.message e)
+                Io.eprintln ("code-review: " ++ SafeText.toString (SafeText.renderForeign (Error.message e)))
                 System.exit 1
         )
         (do
