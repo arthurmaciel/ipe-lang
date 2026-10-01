@@ -13,7 +13,10 @@ Three knots.
   sensible size" by accident: `Cache.new` takes a `CacheCfg`, and the only way to
   build one is `Cache.defaultCfg` threaded through `withMaxEntries` / `withTTL` /
   `withMaxBytes`. A bound is always a choice made at the call site, so the memory
-  ceiling is visible in the code that creates the cache.
+  ceiling is visible in the code that creates the cache. The entry count is the
+  bound the runtime enforces: it has no per-value byte accounting, so
+  `Cache.new` refuses a non-zero `withMaxBytes` cap instead of silently
+  ignoring it.
 - **Keys and values are typed.** `Cache k v` carries `k` and `v` as phantom
   parameters. A `Cache String User` accepts a `String` key and a `User` value and
   the compiler holds both sides to that; the runtime stringifies the key for its
@@ -105,6 +108,7 @@ case, handled by a value, not an exception.
   sequence and recover. [Maybe](maybe.md) — the type a lookup returns.
   [Durations](duration.md) — how a TTL is spelled with its unit
   (`Duration.seconds 60`), never a bare millisecond count. [Byte sizes](bytesize.md)
-  — the unit-explicit quantity `withMaxBytes` takes.
+  — the unit-explicit quantity `withMaxBytes` takes (any non-zero cap is refused
+  by `Cache.new`).
 - **Concepts:** [Types and inference](types.md) — how the `k` and `v` of a
   `Cache k v` are tracked across every read and write.

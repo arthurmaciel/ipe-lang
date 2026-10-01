@@ -96,16 +96,12 @@ place that performs it, so purity holds everywhere else.
 
 ## Configuration
 
-Two env vars set the per-call byte ceilings for file and process I/O.
-Use `ipe doc <VAR>` for the full entry.
-
-| Variable | Default | Effect |
-|----------|---------|--------|
-| `IPE_FILE_READ_MAX` | 16777216 (16 MiB) | Maximum bytes read by `File.read*` in a single call. |
-| `IPE_PROCESS_OUTPUT_MAX` | 16777216 (16 MiB) | Maximum bytes buffered from a subprocess's stdout or stderr. |
-
-See the [**File** subsystem](../reference/env.md#file) in the
-environment variable reference.
+`IPE_FILE_READ_MAX` sets the per-call byte ceiling of `File.readFile`, and
+`IPE_PROCESS_OUTPUT_MAX` the ceiling on a subprocess's buffered output. Their
+defaults and exact rules live in the [**File** subsystem](../reference/env.md#file)
+of the environment variable reference; `ipe doc <VAR>` prints the same entry.
+For a per-call cap of your own, `File.readFileLimit` takes a `ByteSize`:
+`ByteSize.zero` admits only an empty file.
 
 ## References
 
