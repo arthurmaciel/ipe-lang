@@ -56,7 +56,7 @@ pub const MAX_SUB_MSG_JSON_BYTES: usize = 64 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SubDescription {
     /// The tick interval in milliseconds. A non-positive interval installs no
-    /// subscription (matching the runtime `SubManager`, which drops `ms <= 0`).
+    /// subscription (matching `EveryInterval::from_millis`, which rejects `ms <= 0`).
     pub interval_ms: i64,
     /// The tick message, as the serde JSON of the concrete `Msg` value. Decoded
     /// into `Msg` at install time; a decode failure installs no subscription.

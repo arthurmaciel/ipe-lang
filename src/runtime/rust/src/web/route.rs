@@ -50,6 +50,34 @@ fn split_path(p: &str) -> Vec<&str> {
     }
 }
 
+/// Is `path` the root page, the one URL a single-page app (no route table) serves?
+///
+/// Root is every path the matcher's segment splitter turns into no segments
+/// (`/`, `//`, the empty path), so a single-page app and a routed app with a
+/// `/` route agree on it.
+pub fn is_root(path: &str) -> bool {
+    split_path(path).is_empty()
+}
+
+/// A path in the matcher's canonical form: one leading `/`, no trailing `/`.
+///
+/// Two paths [`split_path`] splits alike (`/a/b` and `a/b/`, `` and `/`)
+/// build one `RoutePath`, so comparing entered paths agrees with matching.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoutePath(String);
+
+impl RoutePath {
+    /// The canonical form of `path`.
+    pub fn of(path: &str) -> Self {
+        RoutePath(format!("/{}", path.trim_matches('/')))
+    }
+
+    /// The canonical path text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Match `path` against `pattern`: equal segment counts; a `:name` segment
 /// captures the corresponding path segment; a literal segment must equal it.
 /// Returns captured params in pattern order, or `None`.
@@ -91,7 +119,7 @@ pub fn match_routes<Page: Clone>(routes: &[Route<Page>], not_found: &Page, path:
 }
 
 /// Does `path` match ANY declared route? With no
-/// routes only `/` is a page URL (the single-page `Web.tea` shape). The page
+/// routes only the root ([`is_root`]) is a page URL (the single-page `Web.tea` shape). The page
 /// handler uses this to keep unrouted GETs (browser noise like
 /// `/favicon.ico`, asset probes, unknown paths) from re-routing a live
 /// session's model — an unrouted re-route would rebuild the handler index
@@ -99,7 +127,7 @@ pub fn match_routes<Page: Clone>(routes: &[Route<Page>], not_found: &Page, path:
 /// is actually showing.
 pub fn matches_any<Page>(routes: &[Route<Page>], path: &str) -> bool {
     if routes.is_empty() {
-        return path == "/";
+        return is_root(path);
     }
     routes
         .iter()
@@ -123,6 +151,36 @@ pub fn match_params<Page>(routes: &[Route<Page>], path: &str) -> crate::dict::Ip
         }
     }
     IpeDict::new()
+}
+
+/// The result of entering a routed page: the model to commit and the Cmd to run once.
+///
+/// `#[must_use]` so a caller that drops the entry (and with it the page's
+/// load Cmd) is a denied warning, never a silently skipped page load.
+///
+/// Generic over the Cmd carrier `C` (the platform's `IpeCmd<Msg>`), so the
+/// server-free render core shares it without the TEA loop.
+#[must_use]
+pub struct Entered<M, C> {
+    pub model: M,
+    pub cmd: C,
+}
+
+/// Enter `path`: match it against `routes` and apply the app's entry fn to the matched page.
+///
+/// The single URL-to-model entry every platform shares (server GET, SSE
+/// reconnect, wasm mount, popstate, in-app navigation). The entry fn is the
+/// app's `set_page` (`onNavigate` routed through `update`, or the implicit
+/// `{ model | page }` paired with `Cmd.none`); its Cmd is returned, never dropped.
+pub fn enter<Page: Clone, M, C>(
+    routes: &[Route<Page>],
+    not_found: &Page,
+    path: &str,
+    model: M,
+    entry: impl Fn(Page, M) -> (M, C),
+) -> Entered<M, C> {
+    let (model, cmd) = entry(match_routes(routes, not_found, path), model);
+    Entered { model, cmd }
 }
 
 #[cfg(test)]
@@ -204,5 +262,69 @@ mod tests {
         assert!(matches_any(&none, "/"));
         assert!(!matches_any(&none, "/favicon.ico"));
         assert!(!matches_any(&none, "/about"));
+    }
+
+    /// `enter` hands back the entry fn's Cmd beside its model, so no caller can
+    /// commit the page and lose the page's load.
+    #[test]
+    fn enter_returns_the_entry_fns_cmd() {
+        let rs = routes();
+        let entry = |page: Page, count: u32| {
+            let cmd = match page {
+                Page::App(slug) => format!("load {slug}"),
+                _ => String::new(),
+            };
+            (count + 1, cmd)
+        };
+        let entered = enter(&rs, &Page::NF, "/apps/abc", 0_u32, entry);
+        assert_eq!(entered.model, 1);
+        assert_eq!(
+            entered.cmd, "load abc",
+            "enter must return the entry fn's Cmd for the matched page"
+        );
+        let missed = enter(&rs, &Page::NF, "/nope", 5_u32, entry);
+        assert_eq!(missed.model, 6, "an unknown path enters notFound");
+        assert_eq!(missed.cmd, "");
+    }
+
+    /// Paths the matcher splits alike share one `RoutePath`; paths it splits
+    /// apart never do.
+    #[test]
+    fn route_path_equality_agrees_with_split_path() {
+        let alike = [
+            ("/", ""),
+            ("/", "//"),
+            ("/items/5", "items/5/"),
+            ("/a//b", "a//b/"),
+        ];
+        for (a, b) in alike {
+            assert_eq!(split_path(a), split_path(b));
+            assert_eq!(RoutePath::of(a), RoutePath::of(b), "{a:?} vs {b:?}");
+        }
+        let apart = [("/items", "/items/5"), ("/a/b", "/a//b"), ("/", "/x")];
+        for (a, b) in apart {
+            assert_ne!(split_path(a), split_path(b));
+            assert_ne!(RoutePath::of(a), RoutePath::of(b), "{a:?} vs {b:?}");
+        }
+        assert_eq!(RoutePath::of("").as_str(), "/");
+    }
+
+    /// A single-page app's root agrees with a routed app whose only route is
+    /// `/`: every spelling the matcher splits to no segments is root, and no
+    /// other path is.
+    #[test]
+    fn single_page_root_agrees_with_the_routed_matcher() {
+        let none: Vec<Route<Page>> = Vec::new();
+        let root_only = [Route::new("/", |_| Some(Page::Home))];
+        for p in ["/", "", "//", "///"] {
+            assert!(is_root(p), "{p:?} is root");
+            assert!(matches_any(&root_only, p), "routed: {p:?} is root");
+            assert!(matches_any(&none, p), "single-page: {p:?} is root");
+        }
+        for p in ["/x", "x", "/x/", "//x", "/favicon.ico"] {
+            assert!(!is_root(p), "{p:?} is not root");
+            assert!(!matches_any(&root_only, p), "routed: {p:?} is not root");
+            assert!(!matches_any(&none, p), "single-page: {p:?} is not root");
+        }
     }
 }
