@@ -19,7 +19,7 @@ import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
 import Lib.Index as Index
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
-import Lib.Queue as Queue
+import Lib.Queue as Queue exposing (QueueState(..))
 import Lib.RepoPath as RepoPath exposing (PathError(..))
 import Lib.Settings as Settings
 
@@ -780,13 +780,13 @@ dbSizeAndMissingDb =
 isFailed : Queue.QueueState -> Bool
 isFailed state =
     case state of
-        Queue.Failed _ ->
+        Failed _ ->
             True
 
-        Queue.Loading ->
+        Loading ->
             False
 
-        Queue.Loaded _ ->
+        Loaded _ ->
             False
 
 
@@ -1935,13 +1935,13 @@ queueStateTextsDistinct =
             { drained | units = [ sampleQueuedUnit ] }
     in
     List.all identity
-        [ Queue.queueStatusText Queue.Loading == Just "Loading queue…"
-        , Queue.queueStatusText (Queue.Loaded empty) == Just "No units queued."
-        , Queue.queueStatusText (Queue.Failed boom) == Just ("Queue failed to load: " ++ Error.toString boom)
-        , Queue.queueStatusText Queue.Loading /= Queue.queueStatusText (Queue.Loaded empty)
-        , Queue.queueStatusText (Queue.Failed boom) /= Queue.queueStatusText (Queue.Loaded empty)
-        , Queue.queueStatusText (Queue.Loaded drained) == Just "No units to review on this page."
-        , Queue.queueStatusText (Queue.Loaded full) == Nothing
+        [ Queue.queueStatusText Loading == Just "Loading queue…"
+        , Queue.queueStatusText (Loaded empty) == Just "No units queued."
+        , Queue.queueStatusText (Failed boom) == Just ("Queue failed to load: " ++ Error.toString boom)
+        , Queue.queueStatusText Loading /= Queue.queueStatusText (Loaded empty)
+        , Queue.queueStatusText (Failed boom) /= Queue.queueStatusText (Loaded empty)
+        , Queue.queueStatusText (Loaded drained) == Just "No units to review on this page."
+        , Queue.queueStatusText (Loaded full) == Nothing
         , Queue.pageHeaderText full == "index.db · 4.0 KB · showing 1 of 41000"
         , Format.byteSize 512 == "512 B"
         ]
