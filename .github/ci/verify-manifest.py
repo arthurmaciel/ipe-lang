@@ -124,7 +124,8 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
      `github.event_name != 'pull_request'` full-tier test (either operand
      order) must be followed by `&& github.event_name != 'merge_group'`, so a
      merge-group run takes the PR tier rather than silently running the full
-     tier.
+     tier; the canonical `changes` phase outputs (`PHASE_OUTPUTS`), which
+     check 11 pins exactly, are the one exemption.
      A workflow naming a repository-admin secret (`SCHEDULE_ONLY_SECRETS`)
      triggers on `schedule` alone, and names it only inside its keyed job
      (`ADMIN_ENVIRONMENT_JOBS`), which declares exactly its literal
@@ -166,6 +167,35 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       a single unexpanded ci.yml job, a manifest `gate`, and `needs` nothing
       but `changes`, so it stays fast.  A format, lint, lock or panic-scan red
       therefore never launches the heavy tier on any event or fork.
+  11. CI phases (contributing guide, "CI phases"): in every
+      `merge_group`-triggered workflow with a `changes` job, each job runs in
+      exactly one phase.  `changes` runs on every event and publishes the
+      phase outputs `cheap`, `tests`, `post_merge` spelled exactly as
+      `PHASE_OUTPUTS`, generated from `PHASE_EXCLUDES` (the events each phase
+      skips: cheap skips `push`, tests skips `pull_request` and `push`,
+      post_merge skips `pull_request` and `merge_group`).  Every other job is
+      unconditional (no `needs:`, no `if:`), a phase verdict, or a work job
+      whose `if:` is one `&&`-conjunction holding exactly one phase marker
+      (`needs.changes.outputs.<phase> == 'true'`, or `github.event_name ==
+      'pull_request'` for a PR-only job), plus on a cheap job at most the
+      `|| needs.changes.outputs.release_only == 'true'` disjunct; no other
+      conjunct names the event.  A job needs only jobs that run on every event
+      it runs on, and never a verdict.  A skipped required check reads as
+      passing, so a tests or post_merge work job never reports a `gate`
+      context: it reports through a phase verdict, a job whose `if:` is
+      exactly `always()`, whose `needs:` are `changes` then each aggregated
+      job once, whose first two steps are the pinned sparse checkout and
+      `uses: ./.github/actions/phase-verdict` (unmasked: no step or job
+      `continue-on-error:`, no `env:`), whose `results` lists one
+      `job=${{ needs.job.result }}` pair per need in order, whose `tier` is
+      its phase's output and `scope` one scope output, and each of whose
+      aggregated jobs has `if:` exactly that phase and scope.  The composite
+      fails unless `changes` succeeded and the tier agrees with the event,
+      fails on any failed or cancelled need, and on an event of its phase in
+      scope fails on any skipped need; it passes vacuously only off-phase or
+      out of scope.  Every tests-phase work job is a direct need of a phase
+      verdict whose context is a `gate`, so a merge-queue red always blocks
+      the merge; a tests-phase proof that is not to block runs post_merge.
   12. Gate integrity.  (a) A `pull_request_target` run holds the base
       repository's token beside a PR author's input, so every workflow
       triggering on it must provably run no head code: no `uses:` at step or
@@ -1235,8 +1265,13 @@ def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = R
                     "workflow; its `if:` must be a conjunction requiring "
                     "`github.event_name == 'pull_request'` at the top level"
                 )
-        for m in _BARE_PR_TIER.finditer(text):
-            line = text.count("\n", 0, m.start()) + 1
+        # The canonical phase outputs are pinned by check 11; they exclude the
+        # merge queue from no phase by accident.
+        scan = text
+        for value in PHASE_OUTPUTS.values():
+            scan = scan.replace(value, "")
+        for m in _BARE_PR_TIER.finditer(scan):
+            line = scan.count("\n", 0, m.start()) + 1
             errors.append(
                 f"{fname}:{line}: `github.event_name != 'pull_request'` without "
                 "`&& github.event_name != 'merge_group'` — a merge-group run would "
@@ -1473,6 +1508,256 @@ def check_fast_gate_first(gate_contexts: set[str], errors: list[str], root: str 
                 f"check 10: heavy shard job {jid!r} `if:` calls a status function "
                 "(always/failure/cancelled) or is not a string; it would start behind a red need"
             )
+
+
+# CI phases (CONTRIBUTING.md "CI phases"): the events each phase
+# EXCLUDES. Every other trigger (including `workflow_dispatch` and `schedule`)
+# runs every phase. The SSOT for the `changes` phase outputs and for the
+# composite verdict's own event membership (pinned in tests).
+PHASE_EXCLUDES: dict[str, tuple[str, ...]] = {
+    "cheap": ("push",),
+    "tests": ("pull_request", "push"),
+    "post_merge": ("pull_request", "merge_group"),
+}
+# Phases whose required contexts go green only through a phase verdict.
+VERDICT_PHASES = ("tests", "post_merge")
+
+
+def _phase_output(phase: str) -> str:
+    excluded = " && ".join(f"github.event_name != '{e}'" for e in PHASE_EXCLUDES[phase])
+    return "${{ " + excluded + " }}"
+
+
+PHASE_OUTPUTS: dict[str, str] = {p: _phase_output(p) for p in PHASE_EXCLUDES}
+PHASE_VERDICT_ACTION = "./.github/actions/phase-verdict"
+PHASE_VERDICT_CHECKOUT_WITH = {"persist-credentials": False, "sparse-checkout": ".github/actions/phase-verdict"}
+_CHECKOUT_PIN = re.compile(r"actions/checkout@[0-9a-f]{40}")
+_PHASE_MARKER = re.compile(r"needs\.changes\.outputs\.(cheap|tests|post_merge) == 'true'")
+_SCOPE_MARKER = re.compile(r"needs\.changes\.outputs\.([a-z_]+) == 'true'")
+_RELEASE_ONLY_DISJUNCT = "needs.changes.outputs.release_only == 'true'"
+_EVENT_NAME = re.compile(r"event_name", re.IGNORECASE)
+_AGGREGATOR_KEYS = frozenset({"name", "runs-on", "needs", "if", "steps", "timeout-minutes"})
+_EVENTS = frozenset({"pull_request", "merge_group", "push", "schedule", "workflow_dispatch"})
+# A PR-only job (`_PR_ONLY` conjunct): the cheap phase's narrowest member.
+_PR_PHASE = "pull_request_only"
+
+
+def _phase_events(phase: str | None) -> frozenset[str]:
+    """The events a job of `phase` may run on; None is unconditional."""
+    if phase is None:
+        return _EVENTS
+    if phase == _PR_PHASE:
+        return frozenset({"pull_request"})
+    return _EVENTS - frozenset(PHASE_EXCLUDES[phase])
+
+
+def _strip_outer_parens(expr: str) -> str:
+    expr = expr.strip()
+    while expr.startswith("(") and expr.endswith(")"):
+        inner = expr[1:-1]
+        if _top_level_conjuncts(inner) is None and _top_level_disjuncts(inner) is None:
+            break
+        depth = 0
+        balanced = True
+        for c in inner:
+            depth += c == "("
+            depth -= c == ")"
+            if depth < 0:
+                balanced = False
+                break
+        if not balanced or depth != 0:
+            break
+        expr = inner.strip()
+    return expr
+
+
+def _job_phase(where: str, job: dict, errors: list[str]) -> tuple[bool, str | None]:
+    """(ok, phase) of a routed work job: phase None means unconditional.
+    Refuses an `if:` naming the event or carrying no single phase marker."""
+    needs = _needs_list(job)
+    cond = job.get("if")
+    if cond is None:
+        if needs:
+            errors.append(f"check 11: {where} has `needs:` but no phase `if:`; a job runs in exactly one phase")
+            return False, None
+        return True, None
+    if not isinstance(cond, str):
+        errors.append(f"check 11: {where} `if:` is not a string")
+        return False, None
+    disjuncts = _top_level_disjuncts(cond)
+    if disjuncts is None or not 1 <= len(disjuncts) <= 2:
+        errors.append(f"check 11: {where} `if:` is not one phase conjunction (plus at most the release-only disjunct)")
+        return False, None
+    main = _top_level_conjuncts(_strip_outer_parens(disjuncts[0]))
+    if main is None:
+        errors.append(f"check 11: {where} `if:` main disjunct is not a plain conjunction")
+        return False, None
+    phases: list[str] = []
+    for c in main:
+        m = _PHASE_MARKER.fullmatch(c)
+        if m:
+            phases.append(m.group(1))
+        elif c == _PR_ONLY:
+            phases.append(_PR_PHASE)
+        elif _EVENT_NAME.search(c) or re.search(r"outputs\.(cheap|tests|post_merge)\b", c):
+            errors.append(f"check 11: {where} `if:` conjunct {c!r} routes by event outside the phase markers")
+            return False, None
+    if len(phases) != 1:
+        errors.append(f"check 11: {where} `if:` carries {len(phases)} phase markers; exactly one is required")
+        return False, None
+    phase = phases[0]
+    if len(disjuncts) == 2:
+        if _strip_outer_parens(disjuncts[1]) != _RELEASE_ONLY_DISJUNCT or phase != "cheap":
+            errors.append(
+                f"check 11: {where} `if:` second disjunct must be exactly {_RELEASE_ONLY_DISJUNCT!r} "
+                "on a cheap job"
+            )
+            return False, None
+    if phase != _PR_PHASE and (needs is None or "changes" not in needs):
+        errors.append(f"check 11: {where} reads a `changes` phase output but does not need `changes`")
+        return False, None
+    if _EVENT_NAME.search(cond) and phase != _PR_PHASE:
+        errors.append(f"check 11: {where} `if:` names the event; route through the `changes` phase outputs")
+        return False, None
+    return True, phase
+
+
+def _check_aggregator(where: str, jobs: dict, job: dict, errors: list[str]) -> None:
+    extra = set(job) - _AGGREGATOR_KEYS
+    if extra:
+        errors.append(f"check 11: {where} (phase verdict) carries {sorted(extra)}; only {sorted(_AGGREGATOR_KEYS)} are admitted")
+    if job.get("if") != "always()":
+        errors.append(f"check 11: {where} (phase verdict) `if:` must be exactly `always()`, so no need's state skips it")
+    needs = _needs_list(job)
+    if needs is None or len(needs) < 2 or needs[0] != "changes" or len(set(needs)) != len(needs):
+        errors.append(f"check 11: {where} (phase verdict) `needs:` must list `changes` first, then each aggregated job once")
+        return
+    steps = job.get("steps")
+    if not isinstance(steps, list) or len(steps) < 2 or not all(isinstance(s, dict) for s in steps):
+        errors.append(f"check 11: {where} (phase verdict) must open with the checkout and verdict steps")
+        return
+    checkout, verdict = steps[0], steps[1]
+    for i, st in enumerate(steps[2:], start=3):
+        if "continue-on-error" in st:
+            errors.append(f"check 11: {where} (phase verdict) step {i} carries `continue-on-error:`; a later step may only add a refusal")
+    if (
+        set(checkout) != {"uses", "with"}
+        or not isinstance(checkout.get("uses"), str)
+        or not _CHECKOUT_PIN.fullmatch(checkout["uses"])
+        or checkout.get("with") != PHASE_VERDICT_CHECKOUT_WITH
+    ):
+        errors.append(f"check 11: {where} (phase verdict) step 1 must be the pinned sparse checkout of the verdict action")
+    if set(verdict) - {"name"} != {"uses", "with"} or verdict.get("uses") != PHASE_VERDICT_ACTION:
+        errors.append(f"check 11: {where} (phase verdict) step 2 must be `uses: {PHASE_VERDICT_ACTION}` with no `if:`/`continue-on-error:`/`env:`")
+        return
+    w = verdict.get("with")
+    if not isinstance(w, dict) or set(w) != {"results", "phase", "tier", "scope"}:
+        errors.append(f"check 11: {where} (phase verdict) `with:` must set exactly results, phase, tier, scope")
+        return
+    want = " ".join(f"{n}=${{{{ needs.{n}.result }}}}" for n in needs)
+    if w["results"] != want:
+        errors.append(f"check 11: {where} (phase verdict) `results` must be {want!r}, one pair per need in order")
+    phase = w["phase"]
+    if phase not in VERDICT_PHASES:
+        errors.append(f"check 11: {where} (phase verdict) `phase` must be one of {list(VERDICT_PHASES)}")
+        return
+    if w["tier"] != f"${{{{ needs.changes.outputs.{phase} }}}}":
+        errors.append(f"check 11: {where} (phase verdict) `tier` must be the `changes` output for {phase!r}")
+    m = re.fullmatch(r"\$\{\{ needs\.changes\.outputs\.([a-z_]+) \}\}", str(w["scope"]))
+    if not m or m.group(1) in PHASE_EXCLUDES or m.group(1) == "release_only":
+        errors.append(f"check 11: {where} (phase verdict) `scope` must be one `changes` scope output")
+        return
+    run_if = f"needs.changes.outputs.{phase} == 'true' && needs.changes.outputs.{m.group(1)} == 'true'"
+    for n in needs[1:]:
+        dep = jobs.get(n)
+        if not isinstance(dep, dict):
+            errors.append(f"check 11: {where} (phase verdict) needs unknown job {n!r}")
+        elif dep.get("if") != run_if:
+            errors.append(
+                f"check 11: {where} (phase verdict) aggregates {n!r}, whose `if:` must be exactly "
+                f"{run_if!r} so the verdict's tier and scope are the job's own"
+            )
+
+
+def check_phase_routing(gate_contexts: set[str], errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 11 (see the module docstring). Unparseable workflows are refused
+    by check 6."""
+    paths = sorted(
+        p for pattern in ("*.yml", "*.yaml") for p in glob.glob(os.path.join(root, "workflows", pattern))
+    )
+    for path in paths:
+        fname = os.path.basename(path)
+        try:
+            with open(path) as f:
+                doc = strict_yaml.safe_load(f)
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        triggers = _triggers(doc)
+        jobs = doc.get("jobs")
+        if triggers is None or "merge_group" not in triggers or not isinstance(jobs, dict):
+            continue
+        changes = jobs.get("changes")
+        if not isinstance(changes, dict):
+            continue
+        if "if" in changes or "needs" in changes:
+            errors.append(f"check 11: {fname}: `changes` must run on every event (no `if:`/`needs:`)")
+        outputs = changes.get("outputs")
+        for phase, value in PHASE_OUTPUTS.items():
+            got = outputs.get(phase) if isinstance(outputs, dict) else None
+            if got != value:
+                errors.append(f"check 11: {fname}: `changes` output {phase!r} must be exactly {value!r}, got {got!r}")
+        phases: dict[str, str | None] = {"changes": None}
+        aggregators: list[str] = []
+        for jid, job in jobs.items():
+            jid = str(jid)
+            if jid == "changes" or not isinstance(job, dict):
+                continue
+            where = f"{fname}: job {jid!r}"
+            if any(isinstance(s, dict) and s.get("uses") == PHASE_VERDICT_ACTION for s in job.get("steps") or []):
+                aggregators.append(jid)
+                _check_aggregator(where, jobs, job, errors)
+                continue
+            ok, phase = _job_phase(where, job, errors)
+            if not ok:
+                continue
+            phases[jid] = phase
+            ctx = job.get("name", jid)
+            if phase in VERDICT_PHASES and ctx in gate_contexts:
+                errors.append(
+                    f"check 11: {where} reports required context {ctx!r} from the {phase} phase; a skipped "
+                    "check reads as passing, so it must report through a phase verdict"
+                )
+        # Direct aggregation only: a work job's `if:` may admit `always()`, so a
+        # job reached through another work job's `needs` is not proven to gate.
+        required = {
+            n
+            for a in aggregators
+            if str(jobs[a].get("name", a)) in gate_contexts
+            for n in _needs_list(jobs[a]) or []
+            if n != "changes"
+        }
+        for jid, phase in phases.items():
+            if phase == "tests" and jid not in required:
+                errors.append(
+                    f"check 11: {fname}: tests-phase job {jid!r} is aggregated by no required phase verdict; "
+                    "its red never reaches the merge decision"
+                )
+        for jid, phase in phases.items():
+            needs = _needs_list(jobs[jid]) or []
+            own = _phase_events(phase)
+            for n in needs:
+                if n in aggregators:
+                    errors.append(f"check 11: {fname}: job {jid!r} needs phase verdict {n!r}; need its work jobs")
+                    continue
+                if n not in phases:
+                    continue
+                if not own <= _phase_events(phases[n]):
+                    errors.append(
+                        f"check 11: {fname}: job {jid!r} ({phase or 'unconditional'}) needs {n!r} "
+                        f"({phases[n] or 'unconditional'}), which does not run on every event it does"
+                    )
 
 
 # The ONLY expression a `pull_request_target` workflow may interpolate: the
@@ -4564,6 +4849,11 @@ def main() -> int:
 
     # ---- 10. fast gate first: heavy test shards need every fast gate ----
     check_fast_gate_first(
+        {ctx for ctx, e in by_context.items() if e.get("disposition") == "gate"},
+        errors,
+    )
+    # ---- 11. CI phases: each job in one phase; later-phase contexts report a fail-closed verdict ----
+    check_phase_routing(
         {ctx for ctx, e in by_context.items() if e.get("disposition") == "gate"},
         errors,
     )

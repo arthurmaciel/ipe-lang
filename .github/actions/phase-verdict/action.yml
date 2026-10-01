@@ -1,0 +1,91 @@
+name: Phase verdict
+description: >-
+  The one aggregation rule for a required context whose work runs in a later
+  phase than the pull request (the contributing guide, "CI phases"). A
+  skipped required check reports as passing, so the context is this verdict,
+  run on every event: it passes vacuously only where the work's phase or scope
+  is off, and on any event of that phase it passes only when every needed job
+  succeeded. A failed or absent classifier, a failed or cancelled need, a
+  phase flag that disagrees with the event, or a malformed result list fails
+  it. `ci/verify-manifest.py` check 11 holds every aggregator to this exact
+  step, with `results` naming each of the job's needs once, `changes` first.
+
+inputs:
+  results:
+    description: >-
+      Space-separated `job=result` pairs, one per need of the calling job, in
+      its `needs:` order, `changes` first (`changes=<result of needs.changes> ...`).
+    required: true
+  phase:
+    description: The phase the aggregated jobs run in, `tests` or `post_merge`.
+    required: true
+  tier:
+    description: The `changes` job's output for that phase, `true` or `false`.
+    required: true
+  scope:
+    description: The `changes` scope output the aggregated jobs key on, `true` or `false`.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Judge the aggregated jobs
+      shell: bash
+      env:
+        RESULTS: ${{ inputs.results }}
+        PHASE: ${{ inputs.phase }}
+        TIER: ${{ inputs.tier }}
+        SCOPE: ${{ inputs.scope }}
+      run: |
+        set -euo pipefail
+        # The event's phase membership, derived independently of `changes`.
+        case "$PHASE" in
+          tests)
+            case "$GITHUB_EVENT_NAME" in pull_request|push) member=false ;; *) member=true ;; esac ;;
+          post_merge)
+            case "$GITHUB_EVENT_NAME" in pull_request|merge_group) member=false ;; *) member=true ;; esac ;;
+          *) echo "::error::phase verdict FAILED: unknown phase input" >&2; exit 1 ;;
+        esac
+        case "$TIER" in true|false) ;; *) echo "::error::phase verdict FAILED: phase flag is neither true nor false" >&2; exit 1 ;; esac
+        case "$SCOPE" in true|false) ;; *) echo "::error::phase verdict FAILED: scope flag is neither true nor false" >&2; exit 1 ;; esac
+        if [ "$TIER" != "$member" ]; then
+          echo "::error::phase verdict FAILED: phase flag ($TIER) disagrees with event $GITHUB_EVENT_NAME" >&2; exit 1
+        fi
+        read -r -a pairs <<< "$RESULTS"
+        if [ "${#pairs[@]}" -lt 2 ]; then
+          echo "::error::phase verdict FAILED: no aggregated job besides changes" >&2; exit 1
+        fi
+        broken=""
+        unrun=""
+        for i in "${!pairs[@]}"; do
+          pair="${pairs[$i]}"
+          job="${pair%%=*}"
+          result="${pair#*=}"
+          if [ "$job" = "$pair" ] || [ -z "$job" ]; then
+            echo "::error::phase verdict FAILED: malformed result pair at position $i" >&2; exit 1
+          fi
+          if [ "$i" -eq 0 ]; then
+            if [ "$job" != changes ] || [ "$result" != success ]; then
+              echo "::error::phase verdict FAILED: first pair must be changes=success, got $job=$result; no skip is proven legitimate" >&2; exit 1
+            fi
+            continue
+          fi
+          case "$result" in
+            success) ;;
+            skipped) unrun="$unrun $job=$result" ;;
+            *) broken="$broken $job=$result" ;;
+          esac
+        done
+        if [ -n "$broken" ]; then
+          echo "::error::phase verdict FAILED:$broken" >&2; exit 1
+        fi
+        if [ "$TIER" = true ] && [ "$SCOPE" = true ]; then
+          if [ -n "$unrun" ]; then
+            echo "::error::phase verdict FAILED: this event must run every aggregated job:$unrun" >&2; exit 1
+          fi
+          echo "phase verdict PASSED: every aggregated job succeeded."
+        elif [ "$TIER" = false ]; then
+          echo "phase verdict PASSED vacuously: $GITHUB_EVENT_NAME is outside the $PHASE phase."
+        else
+          echo "phase verdict PASSED vacuously: the classifier proved the change irrelevant to this scope."
+        fi

@@ -38,59 +38,51 @@
 # ─────────────────────────────────────────────────────────────────────────────
 name: Sandbox
 
+# Phases (CONTRIBUTING.md "CI phases"): the three required legs' jail proofs
+# run in the tests phase — once in the merge queue on the combined tree, and
+# nightly — and each reports through its required phase verdict. The Windows
+# and FreeBSD proofs run in the post-merge phase (nightly and on dispatch),
+# because no required verdict aggregates them. A pull request runs only
+# `admission-changes` and the three phase verdicts, which pass vacuously there.
 on:
-  push:
-    branches: [main, 'ci/admission-sandbox-matrix']
   pull_request:
   schedule:
     - cron: '17 3 * * *'   # nightly, offset from ci.yml / security.yml
   merge_group:
   workflow_dispatch: {}
 
-# A push run is keyed by its commit: GitHub replaces a queued run (and
-# cancel-in-progress cancels a running one) when a newer run joins its group,
-# so a per-ref push group would let one main commit go unbuilt.
+# The event is part of the group, so a nightly run and a dispatch run on the
+# same ref never cancel each other; only a newer pull-request push supersedes
+# an older one.
 concurrency:
-  group: admission-sandbox-${{ github.event_name == 'push' && github.sha || github.ref }}
-  cancel-in-progress: true
+  group: admission-sandbox-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  # Change classification — the same fail-closed `code` scope as ci.yml
-  # (.github/ci/change_class.py, whose PROSE set ci.yml's `changes` guards). On a
-  # prose-only PR every jail job sees `code == 'false'` and skips, posting a
-  # skipped-success that satisfies the required-check context. Any other PR (or
-  # push/schedule/merge_group), an unreadable diff, or a classifier crash yields
-  # `code == 'true'` and all proofs run at full strictness.
+  # Change classification and phase membership — the same fail-closed `code`
+  # scope as ci.yml (.github/ci/change_class.py, whose PROSE set ci.yml's
+  # `changes` guards). An unreadable diff or a classifier crash yields
+  # `code == 'true'` and every proof runs at full strictness.
   changes:
     # Unique context: a required `changes` shared with ci.yml would be ambiguous.
     name: admission-changes
     runs-on: ubuntu-latest
     outputs:
+      # Phase membership by event, as ci.yml's `changes` (verify-manifest check 11).
+      cheap: ${{ github.event_name != 'push' }}
+      tests: ${{ github.event_name != 'pull_request' && github.event_name != 'push' }}
+      post_merge: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
       # An unset output (classifier crash) reads as `true`: absent proof, run.
       code: ${{ steps.classify.outputs.code != 'false' }}
-      release_only: ${{ steps.release.outputs.release_only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The tested merge commit and its base parent, for the changed-path diffs;
           # a merge-group run needs history back to the queue base.
           fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
-      # `release_only` — true only for a same-repo PR whose changed files are all
-      # release-please version metadata (see .github/ci/release_only.py). Keyed on
-      # the diff, never the branch name, so no PR can opt itself out of a tier.
-      - name: Classify release-only PR
-        id: release
-        # A classifier crash leaves the output unset, so every tier runs.
-        continue-on-error: true
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          REPO: ${{ github.repository }}
-        run: python3 .github/ci/release_only.py
       - name: Classify changed paths
         id: classify
         # A crash leaves the output unset, which the job output reads as `true`.
@@ -116,53 +108,31 @@ jobs:
   # Solution: install bwrap and python3 on the runner host before entering
   # the container, then invoke jail-linux.sh directly on the host. The seccomp
   # socket-deny profile is the outer network layer.
-  linux-x64:
-    name: linux-x64 (seccomp socket-deny + bubblewrap)
+  linux-x64-jail:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [changes]
-    # A release-only PR (`changes.release_only`: a same-repo PR whose diff is
-    # version metadata only) cannot change the OS-sandbox behaviour, and the same
-    # tree's proof already ran on the code PRs it contains. This job is a required
-    # context, so it is handled INSIDE the job via per-step `if:` (a leading
-    # trivial-pass step), never by skipping the job — a skipped job reports a pass
-    # without executing anything (verify-manifest check 8).
-    if: >-
-      needs.changes.outputs.code == 'true'
-      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
-      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
-      || needs.changes.outputs.release_only == 'true'
-
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
     steps:
-      - name: Release-please version/changelog-only diff — trivial pass
-        if: needs.changes.outputs.release_only == 'true'
-        run: |
-          echo "linux-x64: release-please-only diff (version metadata, no sandbox-relevant source changed); trivial pass, not a skip."
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.changes.outputs.release_only != 'true'
 
       - name: Install bubblewrap and python3
-        if: needs.changes.outputs.release_only != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends bubblewrap python3
 
       - name: Make scripts executable
-        if: needs.changes.outputs.release_only != 'true'
         run: chmod +x tools/scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
       # Positive control: OUTSIDE the jail, as the same root principal, net +
       # fs-escape must SUCCEED — so a block in the enforce run below can only be
       # the jail, not an unreachable host or an already-unwritable path.
       - name: Positive control (no jail — forbidden actions must succeed)
-        if: needs.changes.outputs.release_only != 'true'
         env:
           ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
         run: sudo -E env PROBE_MODE=control ESCAPE_PATH="$ESCAPE_PATH" sh tests/fixtures/admission/untrusted-build.sh
 
       - name: Run admission jail
-        if: needs.changes.outputs.release_only != 'true'
         env:
           ADMISSION_TIMEOUT_SECS: '60'
           ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
@@ -170,108 +140,131 @@ jobs:
         # (the runner user has no /etc/subuid entry).
         run: sudo -E tools/scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
+  # Required `linux-x64 (seccomp socket-deny + bubblewrap)` context:
+  # the tests-phase verdict over `linux-x64-jail`.
+  linux-x64:
+    name: linux-x64 (seccomp socket-deny + bubblewrap)
+    runs-on: ubuntu-latest
+    needs: [changes, linux-x64-jail]
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/phase-verdict
+      - name: Judge the aggregated jobs
+        uses: ./.github/actions/phase-verdict
+        with:
+          results: >-
+            changes=${{ needs.changes.result }}
+            linux-x64-jail=${{ needs.linux-x64-jail.result }}
+          phase: tests
+          tier: ${{ needs.changes.outputs.tests }}
+          scope: ${{ needs.changes.outputs.code }}
+
   # ── Linux arm64 ────────────────────────────────────────────────────────────
   # Identical layering to linux-x64, on a native arm64 runner.
-  linux-arm64:
-    name: linux-arm64 (seccomp socket-deny + bubblewrap)
+  linux-arm64-jail:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     needs: [changes]
-    # A release-only PR (`changes.release_only`: a same-repo PR whose diff is
-    # version metadata only) cannot change the OS-sandbox behaviour, and the same
-    # tree's proof already ran on the code PRs it contains. This job is a required
-    # context, so it is handled INSIDE the job via per-step `if:` (a leading
-    # trivial-pass step), never by skipping the job — a skipped job reports a pass
-    # without executing anything (verify-manifest check 8).
-    if: >-
-      needs.changes.outputs.code == 'true'
-      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
-      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
-      || needs.changes.outputs.release_only == 'true'
-
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
     steps:
-      - name: Release-please version/changelog-only diff — trivial pass
-        if: needs.changes.outputs.release_only == 'true'
-        run: |
-          echo "linux-arm64: release-please-only diff (version metadata, no sandbox-relevant source changed); trivial pass, not a skip."
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.changes.outputs.release_only != 'true'
 
       - name: Install bubblewrap and python3
-        if: needs.changes.outputs.release_only != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends bubblewrap python3
 
       - name: Make scripts executable
-        if: needs.changes.outputs.release_only != 'true'
         run: chmod +x tools/scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
       # Positive control: OUTSIDE the jail, as the same root principal (see linux-x64).
       - name: Positive control (no jail — forbidden actions must succeed)
-        if: needs.changes.outputs.release_only != 'true'
         env:
           ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
         run: sudo -E env PROBE_MODE=control ESCAPE_PATH="$ESCAPE_PATH" sh tests/fixtures/admission/untrusted-build.sh
 
       - name: Run admission jail
-        if: needs.changes.outputs.release_only != 'true'
         env:
           ADMISSION_TIMEOUT_SECS: '60'
           ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
         # sudo: bwrap needs root to set up uid/gid maps on GHA runners
         run: sudo -E tools/scripts/admission/jail-linux.sh tests/fixtures/admission/untrusted-build.sh
 
+  # Required `linux-arm64 (seccomp socket-deny + bubblewrap)` context:
+  # the tests-phase verdict over `linux-arm64-jail`.
+  linux-arm64:
+    name: linux-arm64 (seccomp socket-deny + bubblewrap)
+    runs-on: ubuntu-latest
+    needs: [changes, linux-arm64-jail]
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/phase-verdict
+      - name: Judge the aggregated jobs
+        uses: ./.github/actions/phase-verdict
+        with:
+          results: >-
+            changes=${{ needs.changes.result }}
+            linux-arm64-jail=${{ needs.linux-arm64-jail.result }}
+          phase: tests
+          tier: ${{ needs.changes.outputs.tests }}
+          scope: ${{ needs.changes.outputs.code }}
+
   # ── macOS arm64 ────────────────────────────────────────────────────────────
   # Jail: sandbox-exec(1) with an SBPL profile (Seatbelt).
   # Network is denied at the SBPL level (deny network*).
   # FS writes are restricted to the scratch dir.
-  macos-arm64:
-    name: macos-arm64 (sandbox-exec / Seatbelt)
+  macos-arm64-jail:
     runs-on: macos-latest
     timeout-minutes: 15
     needs: [changes]
-    # A release-only PR (`changes.release_only`: a same-repo PR whose diff is
-    # version metadata only) cannot change the OS-sandbox behaviour, and the same
-    # tree's proof already ran on the code PRs it contains. This job is a required
-    # context, so it is handled INSIDE the job via per-step `if:` (a leading
-    # trivial-pass step), never by skipping the job — a skipped job reports a pass
-    # without executing anything (verify-manifest check 8).
-    if: >-
-      needs.changes.outputs.code == 'true'
-      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
-      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
-      || needs.changes.outputs.release_only == 'true'
-
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
     steps:
-      - name: Release-please version/changelog-only diff — trivial pass
-        if: needs.changes.outputs.release_only == 'true'
-        run: |
-          echo "macos-arm64: release-please-only diff (version metadata, no sandbox-relevant source changed); trivial pass, not a skip."
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.changes.outputs.release_only != 'true'
 
       - name: Make scripts executable
-        if: needs.changes.outputs.release_only != 'true'
         run: chmod +x tools/scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
 
       # Positive control: OUTSIDE the jail, as the same user principal, net +
       # fs-escape must SUCCEED (the workspace path is outside the SBPL allow-list
       # jailed, but user-writable unjailed).
       - name: Positive control (no jail — forbidden actions must succeed)
-        if: needs.changes.outputs.release_only != 'true'
         env:
           ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
         run: PROBE_MODE=control ESCAPE_PATH="$ESCAPE_PATH" sh tests/fixtures/admission/untrusted-build.sh
 
       - name: Run admission jail
-        if: needs.changes.outputs.release_only != 'true'
         env:
           ADMISSION_TIMEOUT_SECS: '60'
           ESCAPE_PATH: ${{ github.workspace }}/admission-escape-probe
         run: tools/scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
+
+  # Required `macos-arm64 (sandbox-exec / Seatbelt)` context:
+  # the tests-phase verdict over `macos-arm64-jail`.
+  macos-arm64:
+    name: macos-arm64 (sandbox-exec / Seatbelt)
+    runs-on: ubuntu-latest
+    needs: [changes, macos-arm64-jail]
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/phase-verdict
+      - name: Judge the aggregated jobs
+        uses: ./.github/actions/phase-verdict
+        with:
+          results: >-
+            changes=${{ needs.changes.result }}
+            macos-arm64-jail=${{ needs.macos-arm64-jail.result }}
+          phase: tests
+          tier: ${{ needs.changes.outputs.tests }}
+          scope: ${{ needs.changes.outputs.code }}
 
   # ── Windows x64 ────────────────────────────────────────────────────────────
   # Jail: Docker Windows container with --isolation process --network none.
@@ -289,17 +282,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     needs: [changes]
-    # Skip on a release-only PR (`changes.release_only`: a same-repo PR whose diff is
-    # version metadata only): the OS-sandbox behaviour cannot change from a version
-    # bump, and the same tree's proof already ran on the code PRs it contains.
-    if: >-
-      (
-      needs.changes.outputs.code == 'true'
-      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
-      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
-      )
-      && needs.changes.outputs.release_only != 'true'
-
+    if: needs.changes.outputs.post_merge == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -394,17 +377,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
-    # Skip on a release-only PR (`changes.release_only`: a same-repo PR whose diff is
-    # version metadata only): the OS-sandbox behaviour cannot change from a version
-    # bump, and the same tree's proof already ran on the code PRs it contains.
-    if: >-
-      (
-      needs.changes.outputs.code == 'true'
-      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
-      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
-      )
-      && needs.changes.outputs.release_only != 'true'
-
+    if: needs.changes.outputs.post_merge == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

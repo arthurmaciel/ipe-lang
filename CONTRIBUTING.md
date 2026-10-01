@@ -83,19 +83,36 @@ both before opening a pull request, then follow the steps below:
     gh pr create --base main --fill
     ```
 
+## CI phases
+
+Every CI job runs in exactly one phase, so no check runs twice for one change:
+
+| Phase | Runs on | What runs |
+|-------|---------|-----------|
+| **cheap** | pull request, merge queue | format, lint, quick-check, panic-scan, the lock/artifact/ruleset guards, the docs-drift and example gates, the first-party floors, the Windows/wasm/editor builds, and the security, grammar and manifest checks |
+| **tests** | merge queue | nextest, the SEAL e2e shards and their coverage proof, the SEAL smoke and vendored-emit gates, the runtime feature builds, registry admission, the Linux and macOS sandbox/jail proofs, the playground, and the browser e2e |
+| **post-merge** | push to `main`, schedule | the sanitizers, the arm64 Tier-2 proof, the Windows and FreeBSD jail proofs, the docs deploy, the release, and the nightly full gate |
+
+A manual dispatch runs every phase. A pull request therefore reports only the
+cheap phase; the tests phase runs once, in the merge queue, on the combined tree
+that is about to land, and a red there drops the change from the queue.
+
+GitHub reports a skipped required check as passing, so a required context over
+a tests or post-merge job is never that job itself. It is a verdict job that
+runs on every event (`.github/actions/phase-verdict`): outside its phase or its
+path scope it passes vacuously; inside them it passes only when every job it
+aggregates succeeded, so a failed, cancelled or wrongly skipped job fails it.
+`.github/ci/verify-manifest.py` check 11 holds every job to one phase, every
+required context to that verdict, and every tests-phase job to a required
+verdict that aggregates it, so a tests-phase red always blocks the merge.
+
 ## CI for external contributors
 
-An external PR (author association `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, or
-`NONE`) runs the **full** gate at PR time, so a broken or hostile change is
-surfaced before it can reach `main`. Two things gate it:
-
-- **Approval to run.** No CI runs on an external contributor's PR until a
-  maintainer approves the run, and each new push needs re-approval. Nothing is
-  spent on an unreviewed PR.
-- **Full gate once approved.** After approval the heavy suite (the full SEAL
-  e2e, the sanitizer and miri passes, the Tier-2 sandbox/jail proofs, the
-  registry-admission gate, and the browser e2e) runs on the PR, in addition to
-  the fast gate.
+No CI runs on an external contributor's PR (author association `CONTRIBUTOR`,
+`FIRST_TIME_CONTRIBUTOR`, or `NONE`) until a maintainer approves the run, and
+each new push needs re-approval, so nothing is spent on an unreviewed PR. Once
+approved it runs the cheap phase like any PR; the tests phase runs in the merge
+queue, which only a maintainer can enqueue.
 
 A green CI is necessary but not sufficient: a maintainer review and approval are
 still required to merge.

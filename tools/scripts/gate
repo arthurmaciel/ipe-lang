@@ -8,8 +8,9 @@ The commands are exactly the manifest's `local:` dispositions (see
 `.github/ci/local_gate.py`); nothing is listed here. The manifest is verified
 first, and a manifest whose `local:` blocks drift from CI refuses to run.
 
-  quick     fmt, clippy on the changed crates, workspace check, static guards,
-            panic-scan and every generated-doc drift check.
+  quick     fmt, clippy on the changed crates and over every CI runtime
+            feature combination, workspace check, static guards, panic-scan
+            and every generated-doc drift check.
   affected  quick and tests, both over the changed crates plus every crate
             that depends on one or names a path inside one in its sources,
             plus the example / admission / advisory gates.

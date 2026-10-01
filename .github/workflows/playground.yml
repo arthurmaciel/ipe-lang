@@ -3,33 +3,28 @@ name: Playground jail
 # Gate: build the playground bundle (ipe-wasm) + jail-runner and run the
 # sandbox security tests so a change that breaks either fails CI.
 #
-# Trigger strategy (mirrors the wasm-floor job in ci.yml):
-#   • On PRs: unless the fail-closed classifier (.github/ci/change_class.py,
-#     `playground` scope) proves every changed path irrelevant.
-#   • On push to main/master and nightly: always.
+# Both work jobs run in the tests phase (CONTRIBUTING.md "CI
+# phases"): in the merge queue on the combined tree unless the fail-closed
+# classifier (.github/ci/change_class.py, `playground` scope) proves every
+# changed path irrelevant, and nightly always. A pull request runs only
+# `playground-changes` and the `playground-jail` phase verdict.
 #
-# Two jobs:
-#   1. build  — cargo build -p ipe-wasm --target wasm32-unknown-unknown and
-#               cargo build -p playground-jail-runner.  Verifies the bundle
-#               and jail-runner compile end-to-end.
-#   2. sandbox-tests — cargo nextest run -p playground-jail-runner, which
-#               includes sandbox_security.rs (gated by IPE_PLAYGROUND_E2E=1
-#               when bwrap is available on the runner).
+#   build                — cargo build -p ipe-wasm (wasm32) and
+#                          -p playground-jail-runner: the bundle and jail-runner
+#                          compile end-to-end.
+#   playground-jail-run  — cargo nextest run -p playground-jail-runner, which
+#                          includes sandbox_security.rs (IPE_PLAYGROUND_E2E=1).
+#   playground-jail      — the required verdict over both.
 
 on:
-  push:
-    branches: [main]
   pull_request:
   merge_group:
   schedule:
     - cron: '37 4 * * *'   # nightly, offset from ci.yml
   workflow_dispatch: {}
 
-# A push run is keyed by its commit: GitHub replaces a queued run (and
-# cancel-in-progress cancels a running one) when a newer run joins its group,
-# so a per-ref push group would let one main commit go unbuilt.
 concurrency:
-  group: playground-${{ github.event_name == 'push' && github.sha || github.ref }}
+  group: playground-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 permissions:
@@ -40,7 +35,7 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  # Change classification: `playground` is `false` only when every changed path
+  # Change classification and phase membership: `playground` is `false` only when every changed path
   # is PROSE or an unrelated `src/` tree (.github/ci/change_class.py). Any other
   # path (examples/, .github/, tools/, root files), an unreadable diff, or a
   # classifier crash runs the jail.
@@ -49,6 +44,10 @@ jobs:
     name: playground-changes
     runs-on: ubuntu-latest
     outputs:
+      # Phase membership by event, as ci.yml's `changes` (verify-manifest check 11).
+      cheap: ${{ github.event_name != 'push' }}
+      tests: ${{ github.event_name != 'pull_request' && github.event_name != 'push' }}
+      post_merge: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
       # An unset output (classifier crash) reads as `true`: absent proof, run.
       playground: ${{ steps.classify.outputs.playground != 'false' }}
     steps:
@@ -72,7 +71,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.playground == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.playground == 'true'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -91,10 +90,10 @@ jobs:
 
   # Run the jail-runner unit tests and, when bwrap is available, the full
   # sandbox security proofs (IPE_PLAYGROUND_E2E=1).
-  playground-jail:
+  playground-jail-run:
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.playground == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.playground == 'true'
     timeout-minutes: 20
     env:
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -120,3 +119,24 @@ jobs:
           IPE_BIN: ${{ github.workspace }}/target/debug/ipe
           IPE_PLAYGROUND_E2E: "1"
         run: cargo nextest run -p playground-jail-runner --profile ci
+
+  # Required `playground-jail` context: the tests-phase verdict over both jobs.
+  playground-jail:
+    runs-on: ubuntu-latest
+    needs: [changes, build, playground-jail-run]
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/phase-verdict
+      - name: Judge the aggregated jobs
+        uses: ./.github/actions/phase-verdict
+        with:
+          results: >-
+            changes=${{ needs.changes.result }}
+            build=${{ needs.build.result }}
+            playground-jail-run=${{ needs.playground-jail-run.result }}
+          phase: tests
+          tier: ${{ needs.changes.outputs.tests }}
+          scope: ${{ needs.changes.outputs.playground }}

@@ -27,6 +27,13 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 # lives under this cap.
 slow-timeout = { period = "60s", terminate-after = 5 }
 
+# Per-test results (name, duration, outcome) as JUnit XML at
+# `target/nextest/ci/junit.xml` under the workspace root. The `test-run`,
+# `e2e` and `runtime-full-features-run` jobs upload it, so a slow test that
+# never fails is visible across runs.
+[profile.ci.junit]
+path = "junit.xml"
+
 # Serialized resource groups. A group caps how many of its members run at once;
 # use it only for tests that contend on a resource a code fix cannot isolate.
 #

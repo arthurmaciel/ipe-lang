@@ -3,9 +3,11 @@
 
 Every `gate` entry of the manifest declares exactly one local disposition:
 
-  local: {tier: quick|affected|full, run: [<command>, ...]}
+  local: {tier: quick|affected|full, run: [<command>, ...], complete: true}
       The gate is reproduced locally by these commands. Tiers nest:
       `affected` runs every `quick` command too, `full` runs all three.
+      The optional `complete: true` also holds the converse: every command
+      line CI runs for the gate has a token-equal local twin.
   local: {covered-by: <gate context>}
       Another gate's local commands already exercise this one (a matrix slice
       of a wider suite). The target must itself declare `run`.
@@ -23,8 +25,10 @@ match only; its `env` and `cwd` are still verified. So the local gate cannot
 run a command CI does not run, and CI cannot change a mirrored command without
 the manifest guard going red.
 
-LIMIT: the match is one-directional. A new CI step with no `local:` twin is
-not detected; the `local:` block of that gate must be extended by hand.
+LIMIT: without `complete: true` the match is one-directional. A new CI step
+with no `local:` twin is not detected; the `local:` block of that gate must be
+extended by hand. A gate whose CI job runs only commands the gate mirrors
+declares `complete: true`, so CI and the local gate are one set.
 
 `tools/scripts/gate` executes the plan built here and refuses to run when the
 manifest fails `check_local_dispositions`; `verify-manifest.py` runs the same
@@ -117,6 +121,7 @@ SHELL_GLOBS = frozenset("*?[")
 SHELL_WORD_START = frozenset("~#!")
 
 LOCAL_KEYS_RUN = frozenset({"tier", "run"})
+LOCAL_KEYS_RUN_OPTIONAL = frozenset({"complete"})
 COMMAND_KEYS = frozenset({"cmd", "env", "cwd", "differs"})
 ENV_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]*\Z")
 
@@ -137,6 +142,7 @@ class RunLocal:
 
     tier: Tier
     commands: tuple[Command, ...]
+    complete: bool = False
 
 
 @dataclass(frozen=True)
@@ -297,11 +303,15 @@ def parse_local(ctx: str, raw: object, errors: list[str]) -> LocalDisposition | 
             errors.append(f"{loc}: ci-only reason {reason!r} is not one of {sorted(CI_ONLY_REASONS)}")
             return None
         return CiOnly(reason)
-    if keys != LOCAL_KEYS_RUN:
+    if not LOCAL_KEYS_RUN <= keys or keys - LOCAL_KEYS_RUN - LOCAL_KEYS_RUN_OPTIONAL:
         errors.append(
             f"{loc}: keys {sorted(keys)} are not exactly one disposition "
-            "(`tier`+`run` | `covered-by` | `ci-only`)"
+            "(`tier`+`run`[+`complete`] | `covered-by` | `ci-only`)"
         )
+        return None
+    complete = raw.get("complete", False)
+    if complete is not True and "complete" in raw:
+        errors.append(f"{loc}: `complete` is `true` or absent, got {complete!r}")
         return None
     tier = TIER_NAMES.get(raw["tier"]) if isinstance(raw["tier"], str) else None
     if tier is None:
@@ -314,7 +324,11 @@ def parse_local(ctx: str, raw: object, errors: list[str]) -> LocalDisposition | 
     commands = [_parse_command(item, f"{loc} run[{i}]", errors) for i, item in enumerate(run)]
     if any(c is None for c in commands):
         return None
-    return RunLocal(tier, tuple(c for c in commands if c is not None))
+    cmds = tuple(c for c in commands if c is not None)
+    if complete and any(c.differs is not None for c in cmds):
+        errors.append(f"{loc}: a `complete` gate mirrors CI token for token; it has no `differs` command")
+        return None
+    return RunLocal(tier, cmds, complete)
 
 
 def parse_manifest_locals(entries: list[dict], errors: list[str]) -> dict[str, LocalDisposition]:
@@ -460,6 +474,15 @@ def check_drift(ctx: str, run: RunLocal, lines: list[CiLine], errors: list[str])
             expected = ci_env_value(value)
             if not any(ln.env.get(key) == expected for ln in candidates):
                 errors.append(f"{loc}: env {key}={value!r} is not the CI value of {key} for this gate")
+    if run.complete:
+        mirrored = {(ci_argv(cmd), cmd.cwd) for cmd in run.commands}
+        for ln in lines:
+            argv = tuple(t for t in ln.argv if t not in CI_ONLY_FLAGS)
+            if (argv, ln.cwd) not in mirrored:
+                errors.append(
+                    f"{ctx!r} local: CI runs {shlex.join(ln.argv)!r} (cwd {ln.cwd!r}) for this gate with no "
+                    "local twin — a `complete` gate mirrors every CI command"
+                )
 
 
 def load_workflow(producer: str, github_dir: str) -> dict | None:

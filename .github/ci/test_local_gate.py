@@ -321,6 +321,70 @@ class DriftAccepts(Fixture):
         )
 
 
+class CompleteMirror(Fixture):
+    """`complete: true` holds the converse: every CI command has a local twin."""
+
+    CLIPPY_JOB = (
+        "cargo clippy --all-targets {packages} -- -D warnings",
+        {
+            "cmd": "cargo run -p gen -- --repo-root {repo_root}",
+            "env": {"IPE_BIN": "{target_dir}/release/ipe"},
+        },
+        {"cmd": "tree-sitter test", "cwd": "editors/grammar"},
+    )
+
+    @staticmethod
+    def complete(*cmds: object, **extra: object) -> dict:
+        return {"tier": "quick", "run": list(cmds), "complete": True, **extra}
+
+    def test_every_ci_command_mirrored(self) -> None:
+        self.accepts(gate("fmt", self.complete("cargo fmt --all -- --check")))
+        self.accepts(gate("clippy", self.complete(*self.CLIPPY_JOB)))
+
+    def test_ci_command_without_twin(self) -> None:
+        self.refuses(
+            "CI runs 'tree-sitter test' (cwd 'editors/grammar') for this gate with no local twin",
+            gate("clippy", self.complete(*self.CLIPPY_JOB[:2])),
+        )
+
+    def test_twin_in_another_cwd_is_no_twin(self) -> None:
+        self.refuses(
+            "with no local twin",
+            gate("clippy", self.complete(*self.CLIPPY_JOB[:2], "tree-sitter test")),
+        )
+
+    def test_without_complete_the_match_stays_one_directional(self) -> None:
+        self.accepts(gate("clippy", run(*self.CLIPPY_JOB[:2])))
+
+    def test_complete_is_true_or_absent(self) -> None:
+        for value in (False, "yes", 1):
+            with self.subTest(value=value):
+                self.refuses(
+                    "`complete` is `true` or absent",
+                    gate("fmt", self.complete("cargo fmt --all -- --check", complete=value)),
+                )
+
+    def test_complete_refuses_differs(self) -> None:
+        self.refuses(
+            "a `complete` gate mirrors CI token for token",
+            gate("fmt", self.complete("cargo fmt --all -- --check", {"cmd": "x", "differs": "local variant"})),
+        )
+
+    def test_complete_only_on_run(self) -> None:
+        self.refuses("are not exactly one disposition", gate("fmt", {"ci-only": "platform", "complete": True}))
+
+    def test_runtime_feature_combos_is_one_set_at_quick(self) -> None:
+        """The lean gate runs exactly CI's runtime feature-combination clippy set."""
+        errs: list[str] = []
+        parsed = lg.parse_manifest_locals(lg.load_manifest_entries(), errs)
+        self.assertEqual(errs, [])
+        disp = parsed["runtime-feature-combos"]
+        assert isinstance(disp, lg.RunLocal)
+        self.assertIs(disp.tier, lg.Tier.QUICK)
+        self.assertTrue(disp.complete)
+        self.assertIn(("--features", "full"), {c.argv[4:6] for c in disp.commands})
+
+
 def workspace() -> lg.Workspace:
     return lg.Workspace(
         root="/r",
