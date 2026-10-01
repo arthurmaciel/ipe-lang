@@ -1215,6 +1215,7 @@ mod schema_tag_tests {
             false,
             None,
             false,
+            crate::BuildIntent::Release,
             String::new(),
             false,
             false,

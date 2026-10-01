@@ -781,7 +781,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         wasm_public_env: Vec::new(),
         wasm_hydrate_mode: false,
         // `ipe build` is a development artifact — Debug.* is permitted.
-        production: false,
+        intent: ipe_backend_rust::BuildIntent::Development,
         runtime_dep,
         // `ipe build` never tree-shakes the vendored tree — a dep-model build
         // carries no vendored source, and a vendored (`IPE_RUNTIME_VENDORED`)
@@ -1108,15 +1108,7 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     };
     let target = OutputRoot::fresh(&args.out, &paths)?.claim()?;
 
-    // Force the vendored, tree-shaken emit shape: a self-contained project names
-    // no runtime path dependency (`runtime_dep = false`) and carries only the
-    // reached runtime source (`tree_shake_vendored = true`). Static/wasm options
-    // stay at their defaults — eject is the plain native standalone shape.
-    let options = BuildOptions {
-        runtime_dep: false,
-        tree_shake_vendored: true,
-        ..BuildOptions::default()
-    };
+    let options = eject_options();
 
     let show_progress = {
         use std::io::IsTerminal as _;
@@ -1160,6 +1152,22 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The emit options `ipe eject` builds with.
+///
+/// Eject hands over a shipped project, so it is a release build. It forces the
+/// vendored, tree-shaken shape: a self-contained project names no runtime path
+/// dependency (`runtime_dep = false`) and carries only the reached runtime
+/// source (`tree_shake_vendored = true`). Static/wasm options stay at their
+/// defaults — eject is the plain native standalone shape.
+pub(super) fn eject_options() -> BuildOptions {
+    BuildOptions {
+        intent: ipe_backend_rust::BuildIntent::Release,
+        runtime_dep: false,
+        tree_shake_vendored: true,
+        ..BuildOptions::default()
+    }
+}
+
 /// `ipe release [<path>] [--out <dir>] [--target wasm|<triple>] [--embed]` —
 /// build the production artifact for every app kind.
 ///
@@ -1177,9 +1185,9 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
 ///   --target wasm` produces, but with the production flag set so the
 ///   `Ipe.Debug` gate (IPE-L0140) fires.
 ///
-/// Every path sets `production = true` so the `Ipe.Debug.*` gate fires for
-/// all app kinds. `ipe build` and `ipe run` leave `production = false`
-/// (development — `Debug.*` is permitted there).
+/// Every path states `BuildIntent::Release` so the `Ipe.Debug.*` gate fires
+/// for all app kinds. `ipe build` and `ipe run` state `Development`
+/// (`Debug.*` is permitted there).
 ///
 /// ## Honest limit (native-bearing)
 ///
@@ -1307,7 +1315,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             );
         }
 
-        // Emit the Rust wasm project with production=true so the Debug gate fires.
+        // Emit the Rust wasm project as a release build so the Debug gate fires.
         let options = BuildOptions {
             static_plan: None,
             target: ipe_ir::Target::WasmClient,
@@ -1318,7 +1326,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             wasm_hydrate_mode: manifest_wasm
                 .as_ref()
                 .is_some_and(|w| w.mode.as_deref() == Some("hydrate")),
-            production: true,
+            intent: ipe_backend_rust::BuildIntent::Release,
             runtime_dep,
             tree_shake_vendored: false,
             cargo_name: String::new(),
@@ -1408,7 +1416,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         let options = BuildOptions {
             static_plan: app_static_plan,
             target: ipe_ir::Target::Native,
-            production: true,
+            intent: ipe_backend_rust::BuildIntent::Release,
             runtime_dep: runtime_dep_from_env(),
             tree_shake_vendored: false,
             ..BuildOptions::default()
@@ -1497,7 +1505,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     let options = BuildOptions {
         static_plan: app_static_plan,
         target: ipe_ir::Target::Native,
-        production: true,
+        intent: ipe_backend_rust::BuildIntent::Release,
         runtime_dep: runtime_dep_from_env(),
         tree_shake_vendored: false,
         ..BuildOptions::default()
@@ -2888,7 +2896,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         target: compile_target.ir_target(),
         wasm_public_env: Vec::new(),
         wasm_hydrate_mode: false,
-        production: false,
+        intent: ipe_backend_rust::BuildIntent::Development,
         runtime_dep,
         // `ipe run` builds and executes; it never tree-shakes the vendored tree
         // (only `ipe eject` does).

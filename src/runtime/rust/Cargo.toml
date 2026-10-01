@@ -554,6 +554,13 @@ full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "cryp
 # `serde` (the frame derives).
 control-wire = ["json", "serde", "crypto-core", "tokio?/net", "tokio?/io-util"]
 debugger = ["control-wire", "async", "tokio/net", "tokio/io-util"]
+# The dev-loop build intent (`ipe build` / `ipe run` / `ipe test` / `ipe watch`).
+# With it on, an absent `ENV` / `IPE_ENV` reads as development and the operator
+# console may default open, on a loopback bind only. NOT in `full` and implied by
+# nothing: a binary built without it resolves every absent posture to
+# production, so a release artifact keeps the console closed until
+# `IPE_CONSOLE_AUTH` names a credential mode.
+dev-posture = []
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native
 # builds never link the wasm glue.

@@ -169,6 +169,74 @@ const SESSION_LOST_BODY: &str = "session not found";
 #[cfg(feature = "server")]
 const CLIENT_JS: &str = include_str!("client.js");
 
+/// The listen scope of this process's web listener, installed once at startup.
+static LISTEN_SCOPE: std::sync::OnceLock<crate::telemetry::ListenScope> =
+    std::sync::OnceLock::new();
+
+/// Record the listen scope of the bind host, before any console gate runs.
+///
+/// The first install wins; a later call leaves the recorded scope unchanged.
+pub fn install_listen_scope(host: &str) {
+    let _ = LISTEN_SCOPE.set(crate::telemetry::ListenScope::parse(host));
+}
+
+/// The installed listen scope; `Exposed` when none is installed.
+#[must_use]
+pub fn listen_scope() -> crate::telemetry::ListenScope {
+    scope_or_exposed(LISTEN_SCOPE.get())
+}
+
+/// An absent scope is `Exposed`: the console default never opens unproven.
+const fn scope_or_exposed(
+    installed: Option<&crate::telemetry::ListenScope>,
+) -> crate::telemetry::ListenScope {
+    match installed {
+        Some(scope) => *scope,
+        None => crate::telemetry::ListenScope::Exposed,
+    }
+}
+
+#[cfg(test)]
+mod listen_scope_tests {
+    use super::scope_or_exposed;
+    use crate::telemetry::ListenScope;
+
+    #[test]
+    fn uninstalled_scope_reads_exposed() {
+        assert_eq!(scope_or_exposed(None), ListenScope::Exposed);
+        assert_eq!(
+            scope_or_exposed(Some(&ListenScope::Loopback)),
+            ListenScope::Loopback
+        );
+    }
+
+    #[test]
+    fn only_a_literal_loopback_address_is_loopback() {
+        for host in [
+            "0.0.0.0",
+            "::",
+            "10.0.0.1",
+            "localhost",
+            "",
+            "not-an-ip",
+            "[::1]",
+        ] {
+            assert_eq!(
+                ListenScope::parse(host),
+                ListenScope::Exposed,
+                "bind host {host:?} must read as exposed"
+            );
+        }
+        for host in ["127.0.0.1", "::1", " 127.0.0.1 ", "127.1.2.3"] {
+            assert_eq!(
+                ListenScope::parse(host),
+                ListenScope::Loopback,
+                "bind host {host:?} must read as loopback"
+            );
+        }
+    }
+}
+
 /// Content-addressing for the client asset: computed ONCE at first access via
 /// `OnceLock`. Holds `(hex16, base64full)` where:
 ///   - `hex16` — first 16 hex chars of SHA-256(CLIENT_JS) → used in the URL
@@ -4319,6 +4387,12 @@ where
     // and the two never collide on `/_ipe/console`.
     // Only when `http_client` is active: the console proxy uses reqwest for
     // the reverse-proxy path. Without it, always use the in-process console.
+    //
+    // The bind host is resolved once, here, and its listen scope installed
+    // before any console gate reads it: the console default opens only for a
+    // dev posture on a loopback listener.
+    let host = crate::app_config::resolve_host_bind();
+    install_listen_scope(&host);
     #[cfg(feature = "http_client")]
     let use_console_proxy = console_proxy::ensure_console_proxy().await;
 
@@ -4343,7 +4417,7 @@ where
     // Honour the same host-bind precedence as the Ipe.Http.Server path
     // (`IPE_HTTP_BIND` > `Host.bind` setting > loopback-unless-production), so
     // an explicit loopback setting is never overridden into all-interfaces.
-    let host = crate::app_config::resolve_host_bind();
+    // `host` is the value resolved above, before the console gates.
     let addr = format!("{host}:{port}");
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
@@ -5072,8 +5146,9 @@ mod dev_banner_tests {
 
     #[test]
     fn banner_byte_matches_go_dev_banner_markup() {
-        //go devBannerHTML): same id, target/rel/title,
-        // monospace blue style, `&#128269;` ENTITY (not a literal emoji).
+        // Same id, target/rel/title, monospace blue style, `&#128269;` ENTITY
+        // (not a literal emoji). The banner renders only under a dev posture.
+        crate::system::locked_set_var("ENV", "dev");
         let b = dev_console_banner("");
         let expected = "<a id=\"__ipe-dev-console\" href=\"/_ipe/console\" target=\"_blank\" \
             rel=\"noopener\" title=\"Ipe Console (dev only)\" \
@@ -5180,6 +5255,8 @@ mod base_path_tests {
 
     #[test]
     fn cookie_name_is_ipe_sid_at_root_distinct_under_base() {
+        // Dev posture: the root cookie keeps its plain-http name.
+        crate::system::locked_set_var("ENV", "dev");
         assert_eq!(cookie_name_for(""), "ipe_sid");
         // Distinct from the parent's `ipe_sid` so the proxied child can't clobber it.
         assert_eq!(cookie_name_for("/_ipe/console"), "ipe_sid__ipe_console");
@@ -6137,10 +6214,10 @@ mod watch_status_handler_tests {
         locked_remove_var("ENV");
     }
 
-    /// In dev mode (ENV unset) with banner on, `watch_banner_active` is true.
+    /// In dev mode (`ENV=dev`) with banner on, `watch_banner_active` is true.
     #[test]
     fn watch_banner_active_true_in_dev() {
-        locked_remove_var("ENV");
+        locked_set_var("ENV", "dev");
         locked_remove_var("IPE_ENV");
         locked_remove_var("IPE_WEB_BANNER");
         assert!(
@@ -6152,7 +6229,7 @@ mod watch_status_handler_tests {
     /// With banner explicitly disabled, `watch_banner_active` is false even in dev.
     #[test]
     fn watch_banner_active_false_when_banner_disabled() {
-        locked_remove_var("ENV");
+        locked_set_var("ENV", "dev");
         locked_remove_var("IPE_ENV");
         for v in ["off", "0", "false"] {
             locked_set_var("IPE_WEB_BANNER", v);
@@ -6167,7 +6244,7 @@ mod watch_status_handler_tests {
     /// A non-root base (sub-app) → `watch_banner_active` is false.
     #[test]
     fn watch_banner_active_false_for_subapp() {
-        locked_remove_var("ENV");
+        locked_set_var("ENV", "dev");
         locked_remove_var("IPE_ENV");
         locked_remove_var("IPE_WEB_BANNER");
         assert!(
@@ -6959,6 +7036,8 @@ mod hot_init_session_scoping_tests {
         set_dev_overlay_active_for_test(Some(true));
         clear_dev_init_for_test();
         locked_set_var("IPE_WATCH_HOT_TOKEN", "seal-token");
+        // Dev posture: the session cookie keeps its plain-http name `ipe_sid`.
+        locked_set_var("ENV", "dev");
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -8087,6 +8166,8 @@ mod emitted_router_behavior_tests {
         // Serialize env mutation across these tests; `IPE_CSRF` is process-global.
         let _g = crate::web::literal_table::overlay_test_lock();
         crate::system::locked_set_var("IPE_CSRF", "off");
+        // Dev posture: plain-http cookie names (`ipe_sid`).
+        crate::system::locked_set_var("ENV", "dev");
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()

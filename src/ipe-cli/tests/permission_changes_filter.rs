@@ -83,7 +83,7 @@ fn compile_with_helper(main: &str, extras: &[(Vec<String>, String)]) -> Result<(
         ipe_ir::Target::Native,
         Vec::new(),
         false,
-        false,
+        ipe_backend_rust::BuildIntent::Development,
         None,
         false,
         String::new(),

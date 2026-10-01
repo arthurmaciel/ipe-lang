@@ -74,6 +74,11 @@ IPE_INDEX_DB=../../.ipe-index/index.db IPE_INDEX_ROOT=../.. ipe run
 `ipe run` builds and serves on <http://localhost:8000>. `ipe type-check` runs a
 fast check with no runtime, and `ipe build` compiles to a native binary.
 
+Both are development builds: with `IPE_CONSOLE_AUTH` unset, the embedded
+console at `/_ipe/console` is open only while the server binds loopback, and on
+an exposed bind (`IPE_HTTP_BIND=0.0.0.0`) it requires the admin token. An
+`ipe release` artifact keeps the console closed until `IPE_CONSOLE_AUTH` is set.
+
 A unit's source is shown, and can be approved or refused, only when its lines
 in the file re-hash to the `body_hash` the index recorded; the hash is checked
 again when the decision is saved. A unit whose file changed since indexing, or

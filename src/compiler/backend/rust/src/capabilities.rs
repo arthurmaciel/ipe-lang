@@ -56,9 +56,9 @@ pub struct RuntimeCapability {
 }
 
 /// Every runtime capability, one row per capability the feature-set walks select.
-/// The `Async`, `Debugger`, and `WasmClient` features are build-mode / target
-/// selections rather than reachability, so their rows carry the exact gates the
-/// native/wasm builders apply.
+/// The `Async`, `Debugger`, `DevPosture`, and `WasmClient` features are
+/// build-mode / target selections rather than reachability, so their rows carry
+/// the exact gates the native/wasm builders apply.
 ///
 /// Row order is irrelevant to correctness: the feature set is a sorted
 /// [`std::collections::BTreeSet`], so the emitted `features = [...]` list is
@@ -269,6 +269,15 @@ pub const CAPABILITIES: &[RuntimeCapability] = &[
         select: |_| RuntimeFeature::ControlWire,
         covers: &[RuntimeFeature::ControlWire],
         wasip1_legal: false,
+    },
+    // The dev-loop build intent: the one input that lets the runtime console
+    // default open (and only on a loopback bind). A release emit selects it not,
+    // so a shipped binary has no development console default.
+    RuntimeCapability {
+        gate: |ctx| ctx.build_intent == crate::BuildIntent::Development,
+        select: |_| RuntimeFeature::DevPosture,
+        covers: &[RuntimeFeature::DevPosture],
+        wasip1_legal: true,
     },
     RuntimeCapability {
         gate: |ctx| ctx.target == ipe_ir::Target::WasmClient,

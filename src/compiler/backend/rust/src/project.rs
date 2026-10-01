@@ -3117,6 +3117,14 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
+    // Build intent: a dev-verb emit promotes `dev-posture`, the one input that
+    // lets the vendored runtime's console default open (loopback only). A
+    // release emit leaves the feature declared but off.
+    let cargo_toml = if ctx.build_intent == crate::BuildIntent::Development {
+        dev_posture_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
     // Foreign-crate FFI: append the bound crates' pinned [dependencies] lines
     // (exact versions + effective feature sets, pre-merged by the driver).
     let cargo_toml = if ctx.uses_ffi {
@@ -5203,6 +5211,50 @@ fn secret_cargo_toml(base: &str) -> DResult<String> {
     Ok(out)
 }
 
+/// Promote the `dev-posture` feature into the vendored manifest's default list.
+///
+/// Called only for a [`crate::BuildIntent::Development`] emit. The feature is
+/// the vendored runtime's build-intent fact: with it on, an absent `ENV` /
+/// `IPE_ENV` reads as development and the operator console may default open on
+/// a loopback bind; with it off, every absent posture is production.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] when the `default = [` anchor or its
+/// closing `]` is absent — a golden-drift invariant violation. It never emits a
+/// development manifest without the feature.
+fn dev_posture_cargo_toml(base: &str) -> DResult<String> {
+    const DEFAULT_PREFIX: &str = "default = [";
+    const FEATURE: &str = "\"dev-posture\"";
+    let pfx = base
+        .find(DEFAULT_PREFIX)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::dev_posture_cargo_toml",
+            detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
+        })?;
+    let search_from = pfx + DEFAULT_PREFIX.len();
+    let close = base
+        .get(search_from..)
+        .and_then(|s| s.find(']'))
+        .map(|rel| search_from + rel)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::dev_posture_cargo_toml",
+            detail: "default feature list has no closing ']' — golden drifted".to_owned(),
+        })?;
+    if base
+        .get(search_from..close)
+        .is_some_and(|list| list.contains(FEATURE))
+    {
+        return Ok(base.to_owned());
+    }
+    let mut out = String::with_capacity(base.len() + FEATURE.len() + 2);
+    out.push_str(base.get(..close).unwrap_or(""));
+    out.push_str(", ");
+    out.push_str(FEATURE);
+    out.push_str(base.get(close..).unwrap_or(""));
+    Ok(out)
+}
+
 /// Slice each compiler-generated FFI interface-forwarder module down to the
 /// forwarders the rest of the program references.
 ///
@@ -5598,9 +5650,9 @@ mod tests {
         RUNTIME_CONFIG_RS_DB_SQLITE, RUNTIME_MOD_RS_WEB_APPEND, RUNTIME_MOD_RS_WEB_CORE_APPEND,
         WASM_ABSENT_MODULE_PATHS, WASM_CARGO_TOML, WASM_PRESENT_OVERRIDES,
         async_runtime_cargo_toml, crypto_core_heavy_cargo_toml, db_cargo_toml,
-        insert_wasi_linker_config, jwt_cargo_toml, runtime_bindings, server_cargo_toml,
-        shake_ffi_by_fn_ident, ssrf_cargo_toml, wasm_present_modules, wasm_runtime_bindings,
-        web_cargo_toml, wrapper_call_paths,
+        dev_posture_cargo_toml, insert_wasi_linker_config, jwt_cargo_toml, runtime_bindings,
+        server_cargo_toml, shake_ffi_by_fn_ident, ssrf_cargo_toml, wasm_present_modules,
+        wasm_runtime_bindings, web_cargo_toml, wrapper_call_paths,
     };
     use crate::DbDriver;
     use crate::crate_specs;
@@ -5912,6 +5964,45 @@ mod tests {
             "db+crypto default must contain crypto before json and secret alongside db: {}",
             default_line(&out)
         );
+    }
+
+    /// The vendored manifest declares `dev-posture` but leaves it off: a release
+    /// emit (which never runs the augmenter) carries no development default.
+    #[test]
+    fn vendored_manifest_declares_dev_posture_off_by_default() {
+        assert!(
+            CARGO_TOML.lines().any(|l| l == "dev-posture = []"),
+            "the vendored template must declare the `dev-posture` feature"
+        );
+        assert!(
+            !default_line(CARGO_TOML).contains("dev-posture"),
+            "the vendored default list must not carry `dev-posture`: {}",
+            default_line(CARGO_TOML)
+        );
+    }
+
+    /// A development emit promotes `dev-posture` into the default list, on the
+    /// synchronous base and on the async spine alike; a second run is a no-op.
+    #[test]
+    fn dev_posture_toml_promotes_the_feature() {
+        let sync = dev_posture_cargo_toml(CARGO_TOML).expect("sync base");
+        assert_eq!(default_line(&sync), r#"default = ["json", "dev-posture"]"#);
+        let async_base = async_runtime_cargo_toml(CARGO_TOML).expect("async base");
+        let out = dev_posture_cargo_toml(&async_base).expect("async base");
+        assert_eq!(
+            default_line(&out),
+            r#"default = ["tokio", "json", "dev-posture"]"#
+        );
+        let twice = dev_posture_cargo_toml(&out).expect("idempotent");
+        assert_eq!(twice, out);
+    }
+
+    /// Fail-closed: a development emit against a manifest whose `default` list
+    /// is gone is a `CompilerBug`, never a manifest silently missing the feature.
+    #[test]
+    fn dev_posture_toml_anchor_miss_is_a_compiler_bug() {
+        assert!(dev_posture_cargo_toml("[package]\nname = \"x\"\n").is_err());
+        assert!(dev_posture_cargo_toml("default = [\"json\"\n").is_err());
     }
 
     /// Fail-closed: an augmenter run against a manifest whose `default` list is

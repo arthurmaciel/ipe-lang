@@ -8,7 +8,7 @@
 //! proxies it), the Rust console is served in-process directly off the Web
 //! router — no extra process, same data. No panic vectors.
 
-use crate::telemetry::{self, ConsoleAuthMode};
+use crate::telemetry::{self, ConsoleAuthMode, ConsoleAuthResolution, Posture};
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 
@@ -25,8 +25,9 @@ const fn json_ct() -> (header::HeaderName, &'static str) {
 /// - explicit opt-out via `IPE_CONSOLE_EMBED=off|0|false`;
 /// - `IPE_CONSOLE_AUTH` resolving to `off` (operator declared the surface
 ///   absent, or set an unrecognised value — fail closed);
-/// - production without a usable admin credential (fail-closed — no silent
-///   open-to-world mount; a metrics credential never mounts the console).
+/// - production, or a dev posture off a loopback listener (`unset-prod`),
+///   without a usable admin credential (fail-closed — no silent open-to-world
+///   mount; a metrics credential never mounts the console).
 ///
 /// This function is reqwest-free; it lives here so the mount decision is
 /// available regardless of whether `http_client` is compiled in.
@@ -43,13 +44,13 @@ pub fn gate_allows() -> bool {
     ) {
         return false;
     }
-    if ConsoleAuthMode::from_env() == ConsoleAuthMode::Off {
+    let resolved = ConsoleAuthResolution::from_env();
+    if resolved.mode == ConsoleAuthMode::Off {
         return false;
     }
-    if telemetry::production_from_env() && !admin_credential().is_configured() {
-        return false;
-    }
-    true
+    let needs_credential =
+        resolved.posture == Posture::Production || resolved.mode == ConsoleAuthMode::UnsetProd;
+    !(needs_credential && !admin_credential().is_configured())
 }
 
 /// `GET /_ipe/console` — the plain-HTML dashboard shell (no framework, no CSS
@@ -589,7 +590,56 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::telemetry::{Posture, RawEnv};
+    use crate::telemetry::{ListenScope, RawEnv};
+
+    /// Parse `IPE_CONSOLE_AUTH` as a loopback listener would.
+    fn parse_loopback(raw: RawEnv<'_>, posture: Posture) -> ConsoleAuthMode {
+        ConsoleAuthMode::parse(raw, posture, ListenScope::Loopback)
+    }
+
+    /// Clear every input the console posture reads, then set `pairs`.
+    fn seed_console_env(pairs: &[(&str, &str)]) {
+        for key in ["ENV", "IPE_ENV", "IPE_CONSOLE_AUTH", "IPE_ADMIN_TOKEN"] {
+            crate::system::locked_remove_var(key);
+        }
+        for (key, value) in pairs {
+            crate::system::locked_set_var(key, value);
+        }
+    }
+
+    // A release binary with nothing set: posture production, mode
+    // `unset-prod`, no mount, and every unauthenticated request refused.
+    #[test]
+    fn release_with_nothing_set_keeps_console_closed() {
+        seed_console_env(&[]);
+        let resolved = ConsoleAuthResolution::from_env();
+        assert_eq!(resolved.mode, ConsoleAuthMode::UnsetProd);
+        if !cfg!(feature = "dev-posture") {
+            assert_eq!(resolved.posture, Posture::Production);
+        }
+        assert!(
+            !gate_allows(),
+            "no admin credential: the console must not mount"
+        );
+        for surface in [Surface::Console, Surface::Metrics] {
+            assert!(
+                gate_blocked(surface, &axum::http::HeaderMap::new()).is_some(),
+                "an unauthenticated {surface:?} request must be refused"
+            );
+        }
+    }
+
+    // A dev posture on a listener not installed as loopback fails closed.
+    #[test]
+    fn dev_posture_off_loopback_keeps_console_closed() {
+        seed_console_env(&[("ENV", "dev")]);
+        let resolved = ConsoleAuthResolution::from_env();
+        assert_eq!(resolved.posture, Posture::Dev);
+        assert_eq!(resolved.mode, ConsoleAuthMode::UnsetProd);
+        assert!(!gate_allows());
+        assert!(gate_blocked(Surface::Console, &axum::http::HeaderMap::new()).is_some());
+        seed_console_env(&[]);
+    }
 
     #[test]
     fn gate_skips_in_subapp_context() {
@@ -660,40 +710,40 @@ mod tests {
     fn auth_mode_explicit_value_wins_over_posture() {
         for posture in POSTURES {
             assert_eq!(
-                ConsoleAuthMode::parse(RawEnv::Value("token"), posture),
+                parse_loopback(RawEnv::Value("token"), posture),
                 ConsoleAuthMode::Token
             );
             assert_eq!(
-                ConsoleAuthMode::parse(RawEnv::Value("  ToKeN "), posture),
+                parse_loopback(RawEnv::Value("  ToKeN "), posture),
                 ConsoleAuthMode::Token
             );
             assert_eq!(
-                ConsoleAuthMode::parse(RawEnv::Value("off"), posture),
+                parse_loopback(RawEnv::Value("off"), posture),
                 ConsoleAuthMode::Off
             );
             assert_eq!(
-                ConsoleAuthMode::parse(RawEnv::Value("APP"), posture),
+                parse_loopback(RawEnv::Value("APP"), posture),
                 ConsoleAuthMode::App
             );
         }
         assert_eq!(
-            ConsoleAuthMode::parse(RawEnv::Absent, Posture::Dev),
+            parse_loopback(RawEnv::Absent, Posture::Dev),
             ConsoleAuthMode::DevOpen
         );
         assert_eq!(
-            ConsoleAuthMode::parse(RawEnv::Value("  "), Posture::Dev),
+            parse_loopback(RawEnv::Value("  "), Posture::Dev),
             ConsoleAuthMode::DevOpen
         );
         assert_eq!(
-            ConsoleAuthMode::parse(RawEnv::Value(""), Posture::Dev),
+            parse_loopback(RawEnv::Value(""), Posture::Dev),
             ConsoleAuthMode::DevOpen
         );
         assert_eq!(
-            ConsoleAuthMode::parse(RawEnv::Absent, Posture::Production),
+            parse_loopback(RawEnv::Absent, Posture::Production),
             ConsoleAuthMode::UnsetProd
         );
         assert_eq!(
-            ConsoleAuthMode::parse(RawEnv::Value(""), Posture::Production),
+            parse_loopback(RawEnv::Value(""), Posture::Production),
             ConsoleAuthMode::UnsetProd
         );
     }
@@ -703,13 +753,13 @@ mod tests {
         for raw in ["tokne", "open", "dev-open", "none", "true", "1"] {
             for posture in POSTURES {
                 assert_eq!(
-                    ConsoleAuthMode::parse(RawEnv::Value(raw), posture),
+                    parse_loopback(RawEnv::Value(raw), posture),
                     ConsoleAuthMode::Off,
                     "unknown IPE_CONSOLE_AUTH={raw:?} must resolve to off"
                 );
             }
             // Even a request carrying the right token is refused.
-            let mode = ConsoleAuthMode::parse(RawEnv::Value(raw), Posture::Dev);
+            let mode = parse_loopback(RawEnv::Value(raw), Posture::Dev);
             for surface in SURFACES {
                 assert_eq!(
                     status_of(gate_decision(
@@ -730,7 +780,7 @@ mod tests {
         let raw = RawEnv::from_read(&read);
         assert_eq!(raw, RawEnv::NotUnicode);
         for posture in POSTURES {
-            let mode = ConsoleAuthMode::parse(raw, posture);
+            let mode = parse_loopback(raw, posture);
             assert_eq!(
                 mode,
                 ConsoleAuthMode::Off,
@@ -750,7 +800,7 @@ mod tests {
 
     #[test]
     fn explicit_token_enforced_in_dev_posture() {
-        let mode = ConsoleAuthMode::parse(RawEnv::Value("token"), Posture::Dev);
+        let mode = parse_loopback(RawEnv::Value("token"), Posture::Dev);
         for refused in [
             None,
             Some("Bearer wrong"),
@@ -792,7 +842,7 @@ mod tests {
 
     #[test]
     fn explicit_token_without_configured_token_refuses_all() {
-        let mode = ConsoleAuthMode::parse(RawEnv::Value("token"), Posture::Dev);
+        let mode = parse_loopback(RawEnv::Value("token"), Posture::Dev);
         for surface in SURFACES {
             for header in [Some("Bearer "), Some(ADMIN_BEARER), None] {
                 assert_eq!(
@@ -805,9 +855,9 @@ mod tests {
 
     #[test]
     fn posture_default_applies_only_when_unset() {
-        let open = ConsoleAuthMode::parse(RawEnv::Absent, Posture::Dev);
+        let open = parse_loopback(RawEnv::Absent, Posture::Dev);
         assert!(gate_decision(open, Surface::Console, &auth_headers(None), configured).is_none());
-        let prod = ConsoleAuthMode::parse(RawEnv::Absent, Posture::Production);
+        let prod = parse_loopback(RawEnv::Absent, Posture::Production);
         assert_eq!(
             status_of(gate_decision(
                 prod,
@@ -1011,6 +1061,7 @@ mod tests {
     // would race other threads. Sets then clears the var within the test.
     #[test]
     fn ingest_token_gate() {
+        crate::system::locked_set_var("ENV", "dev");
         crate::system::locked_remove_var("IPE_INGEST_TOKEN");
         // Unset → endpoint open regardless of header, when same-origin (or no
         // Origin at all — curl / non-browser caller).
@@ -1057,5 +1108,6 @@ mod tests {
         );
 
         crate::system::locked_remove_var("IPE_INGEST_TOKEN");
+        crate::system::locked_remove_var("ENV");
     }
 }

@@ -71,6 +71,41 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
     if pb.is_file() { Some(pb) } else { None }
 }
 
+/// The console child's command: its port, base path, data store and bind.
+///
+/// The child always binds loopback (`IPE_HTTP_BIND=127.0.0.1`): it serves the
+/// console unauthenticated behind the gated parent proxy, so it is never
+/// reachable off the machine under any posture.
+fn console_command(
+    bin: &std::path::Path,
+    child_port: u16,
+    store: &str,
+    child_collects: bool,
+) -> Command {
+    let mut cmd = Command::new(bin);
+    cmd.env("IPE_WEB_PORT", child_port.to_string())
+        .env("IPE_WEB_BASE_PATH", "/_ipe/console")
+        .env("IPE_HTTP_BIND", "127.0.0.1")
+        // Belt-and-braces: suppress the child's own console auto-mount + banner.
+        .env("IPE_CONSOLE_EMBED", "off")
+        .kill_on_drop(true);
+    // hubStore read source.
+    if store.is_empty() {
+        cmd.env_remove("IPE_CONSOLE_HUB_DB");
+    } else {
+        cmd.env("IPE_CONSOLE_HUB_DB", store);
+    }
+    // Collector write source: only when the child collects (parent pushes).
+    // env_remove otherwise so an inherited IPE_CONSOLE_DB_PATH (the parent's own
+    // spill path) doesn't make the child double-write it.
+    if child_collects && !store.is_empty() {
+        cmd.env("IPE_CONSOLE_DB_PATH", store);
+    } else {
+        cmd.env_remove("IPE_CONSOLE_DB_PATH");
+    }
+    cmd
+}
+
 /// Spawn the pre-built console child on `child_port`, pointing it at the data
 /// `store`. Returns `Some(())` on a successful spawn (the `Child` is tracked in
 /// `CHILD`); `None` when the binary is absent or the spawn fails — the caller
@@ -90,32 +125,14 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
 /// / OOM / a crash the signal handler can't catch.
 pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Option<()> {
     let bin = console_bin_path()?;
-    let mut cmd = Command::new(&bin);
-    cmd.env("IPE_WEB_PORT", child_port.to_string())
-        .env("IPE_WEB_BASE_PATH", "/_ipe/console")
-        // Belt-and-braces: suppress the child's own console auto-mount + banner.
-        .env("IPE_CONSOLE_EMBED", "off")
-        .kill_on_drop(true);
-    // hubStore read source.
-    if store.is_empty() {
-        cmd.env_remove("IPE_CONSOLE_HUB_DB");
-    } else {
-        cmd.env("IPE_CONSOLE_HUB_DB", store);
-    }
-    // Collector write source: only when the child collects (parent pushes).
-    // env_remove otherwise so an inherited IPE_CONSOLE_DB_PATH (the parent's own
-    // spill path) doesn't make the child double-write it.
-    if child_collects && !store.is_empty() {
-        cmd.env("IPE_CONSOLE_DB_PATH", store);
-    } else {
-        cmd.env_remove("IPE_CONSOLE_DB_PATH");
-    }
+    let mut cmd = console_command(&bin, child_port, store, child_collects);
     // Parent-death signal: if the parent dies for ANY reason (SIGKILL, OOM,
     // panic-abort) the kernel SIGTERMs this child, so it can never outlive the
     // parent as an orphan. Routed through the SINGLE sanctioned `PR_SET_PDEATHSIG`
     // site (`system::harden_child_parent_death`) via tokio's std view — the
-    // `pre_exec` set there is honoured by tokio's spawn. `kill_on_drop` above
-    // remains the graceful-path floor tokio adds on top. No-op on non-Linux.
+    // `pre_exec` set there is honoured by tokio's spawn. `kill_on_drop` in
+    // `console_command` remains the graceful-path floor tokio adds on top.
+    // No-op on non-Linux.
     crate::system::harden_child_parent_death(cmd.as_std_mut());
     match cmd.spawn() {
         Ok(child) => {
@@ -515,6 +532,26 @@ mod tests {
         crate::system::locked_set_var(CONSOLE_BIN_ENV, "/nonexistent/ipe-console-xyz");
         assert!(spawn_console(9931, "", false).is_none());
         crate::system::locked_remove_var(CONSOLE_BIN_ENV);
+    }
+
+    // The unauthenticated console child binds loopback on every spawn shape,
+    // so it never listens beside the gated proxy on an exposed interface.
+    #[test]
+    fn console_child_binds_loopback() {
+        let bin = std::path::Path::new("/nonexistent/ipe-console");
+        for (store, collects) in [("", false), ("/tmp/hub.db", false), ("/tmp/hub.db", true)] {
+            let cmd = console_command(bin, 9931, store, collects);
+            let bind = cmd
+                .as_std()
+                .get_envs()
+                .find(|(key, _)| *key == "IPE_HTTP_BIND")
+                .and_then(|(_, value)| value);
+            assert_eq!(
+                bind,
+                Some(std::ffi::OsStr::new("127.0.0.1")),
+                "store {store:?} collects {collects}"
+            );
+        }
     }
 
     #[test]

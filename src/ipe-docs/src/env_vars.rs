@@ -358,11 +358,15 @@ pub static ENV_VARS: &[EnvVar] = &[
     },
     EnvVar {
         name: "IPE_CONSOLE_AUTH",
-        default: "unset (token in production, open in dev)",
+        default: "unset (token; open only in a dev build on loopback)",
         purpose: "Console authentication mode: `token` (admin-token gate, enforced in \
                   every posture, dev included), `off` (console disabled), `app` (app \
                   callback; mounted but answers 501 on the Rust runtime). The posture \
-                  picks the default only when the variable is unset or blank; any other \
+                  picks the default only when the variable is unset or blank: a binary \
+                  from `ipe build`, `ipe run`, `ipe test` or `ipe watch` in development \
+                  posture bound to loopback defaults open; every other binary, including \
+                  every `ipe release` artifact, and every exposed bind default to \
+                  `token`, so the console stays closed until a credential is set. Any other \
                   value (including a non-UTF-8 one) disables the console. The effective \
                   posture, mode, and source are logged once at startup \
                   (`[ipe.console] auth posture=… mode=… source=env|env-invalid|posture-default`); \
@@ -767,11 +771,13 @@ pub static ENV_VARS: &[EnvVar] = &[
     // ── Observability ─────────────────────────────────────────────────────────
     EnvVar {
         name: "IPE_ENV",
-        default: "unset (development)",
+        default: "unset (development in a dev build, production in a release build)",
         purpose: "Deployment environment marker. Any non-empty value other than `dev`, \
                   `development`, or `local` activates production mode: SSRF guard on, \
-                  console requires a token, Secure cookies, no dev banner. Also \
-                  accepted as bare `ENV`.",
+                  console requires a token, Secure cookies, no dev banner. Unset, the \
+                  build decides: `ipe build`, `ipe run`, `ipe test` and `ipe watch` \
+                  binaries read as development, `ipe release` artifacts as production. \
+                  Also accepted as bare `ENV`.",
         subsystem: Subsystem::Observability,
         class: Class::Tunable,
     },
