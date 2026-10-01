@@ -553,7 +553,7 @@ fn dev_console_banner(base: &str) -> String {
 // ─── web_app: axum mount + per-session TEA driver over SSE ─────────────────
 
 #[cfg(feature = "server")]
-use crate::tea::{IpeCmd, IpeSub};
+use crate::tea::{IpeCmd, IpeSub, SubRuntime, SubSink};
 #[cfg(feature = "server")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "server")]
@@ -974,62 +974,21 @@ fn run_cmd<Msg: Send + 'static>(cmd: IpeCmd<Msg>, tx: &Sender<Msg>, sid: &str) {
     }
 }
 
-/// (Re-)spawn subscription tasks. Aborts the previous handles first (one model
-/// re-evaluated each commit). When `subscriptions` is `Sub.none`, this is
-/// exercised mainly by the None arm.
+/// A session's message queue as a subscription sink.
+///
+/// A timer waits for queue room (backpressure on a slow session) and stops once
+/// the driver is gone; a source drops a message the full queue cannot take.
+/// Terminal input handlers in a Web session's `Sub` are dropped by
+/// [`SubRuntime::reconcile`]: a Web session has no terminal input.
 #[cfg(feature = "server")]
-fn spawn_subs<Msg: Clone + Send + 'static>(
-    sub: IpeSub<Msg>,
-    tx: &Sender<Msg>,
-    handles: &mut Vec<tokio::task::JoinHandle<()>>,
-) {
-    for h in handles.drain(..) {
-        h.abort();
+impl<Msg: Send + 'static> SubSink<Msg> for Sender<Msg> {
+    fn deliver(&self, msg: Msg) -> impl std::future::Future<Output = bool> + Send {
+        let tx = self.clone();
+        async move { tx.send(msg).await.is_ok() }
     }
-    fn go<Msg: Clone + Send + 'static>(
-        sub: IpeSub<Msg>,
-        tx: &Sender<Msg>,
-        handles: &mut Vec<tokio::task::JoinHandle<()>>,
-    ) {
-        match sub {
-            IpeSub::None => {}
-            IpeSub::Batch(items) => {
-                for s in items {
-                    go(s, tx, handles);
-                }
-            }
-            IpeSub::Every { ms, msg } => {
-                if ms <= 0 {
-                    return;
-                }
-                let tx = tx.clone();
-                let dur = std::time::Duration::from_millis(ms as u64);
-                let h = tokio::spawn(async move {
-                    loop {
-                        tokio::time::sleep(dur).await;
-                        // Bounded send: break when the session queue is full
-                        // or the receiver is gone (driver exited).
-                        if tx.send(msg.clone()).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-                handles.push(h);
-            }
-            IpeSub::Source(spawn) => {
-                let tx = tx.clone();
-                let emit: Arc<dyn Fn(Msg) + Send + Sync> = Arc::new(move |m| {
-                    let _ = tx.try_send(m);
-                });
-                handles.push(spawn(emit));
-            }
-            // Terminal input has no source in a Web session; the resolver and
-            // emitter refuse `Tui.Sub.onKey` / `Cli.Sub.onLine` outside their own
-            // terminal app, so these never reach here from Ipê source.
-            IpeSub::OnKey(_) | IpeSub::OnLine(_) => {}
-        }
+    fn emit(&self, msg: Msg) {
+        let _ = self.try_send(msg);
     }
-    go(sub, tx, handles);
 }
 
 /// What the session driver did with one queued [`EnterRequest`].
@@ -1153,7 +1112,9 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
 {
-    let mut sub_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    // One keyed subscription runtime per session: a re-evaluation keeps a
+    // still-requested `Sub.every` timer and its phase.
+    let mut sub_runtime = SubRuntime::new(msg_tx.clone());
 
     // `Ipe.Ffi.Js` port channel lifecycle. Open this session's inbound/outbound port
     // endpoints now (before the browser can POST to `/_ipe/port`) and close them
@@ -1199,7 +1160,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
                 .clone()
         };
         pubsub::with_session_sid(sid.clone(), || {
-            spawn_subs(subs(model0), &msg_tx, &mut sub_handles)
+            sub_runtime.reconcile(subs(model0));
         });
     }
     // Periodic liveness check: the driver holds only a Weak ref, but it also holds
@@ -1228,7 +1189,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
                     };
                 pubsub::with_session_sid(sid.clone(), || run_cmd(cmd, &msg_tx, &sid));
                 pubsub::with_session_sid(sid.clone(), || {
-                    spawn_subs(subs(next), &msg_tx, &mut sub_handles)
+                    sub_runtime.reconcile(subs(next));
                 });
                 continue;
             }
@@ -1339,12 +1300,10 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
 
         pubsub::with_session_sid(sid.clone(), || run_cmd(cmd, &msg_tx, &sid));
         pubsub::with_session_sid(sid.clone(), || {
-            spawn_subs(subs(next.clone()), &msg_tx, &mut sub_handles)
+            sub_runtime.reconcile(subs(next.clone()));
         });
     }
-    for h in sub_handles.drain(..) {
-        h.abort();
-    }
+    drop(sub_runtime);
 }
 
 /// A fresh session id: **128 bits from the OS CSPRNG**, as 32 lowercase-hex

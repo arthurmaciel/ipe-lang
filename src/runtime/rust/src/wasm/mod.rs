@@ -1020,9 +1020,9 @@ where
         run_cmd(app, cmd);
     }
     // Re-evaluate subscriptions against the new model, exactly like native's
-    // `SubManager::update` call after every `update` — tears down stale
-    // `Sub.every` timers/`Sub.subscribeTopic` registrations and respawns from
-    // the fresh `Sub` tree.
+    // `SubRuntime::reconcile` after every `update` — keeps each still-requested
+    // `Sub.every` timer, stops dropped ones, and tears down and respawns the
+    // `Sub.subscribeTopic` registrations from the fresh `Sub` tree.
     resync_subscriptions(app);
 
     // Refresh the overlay panel with the newly recorded step.

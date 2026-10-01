@@ -2,8 +2,9 @@
 //!
 //! Cmd/Sub are generic over the message type M (NOT `any`): the intermediate
 //! value `a` in `Cmd.perform` is erased inside a boxed M-producing future, but M
-//! stays concrete. This file ships the types, the kernels, the `SubManager`
-//! that drives `Sub.every` tickers / subscription sources and holds the active
+//! stays concrete. This file ships the types, the kernels, the keyed
+//! subscription reconcile every TEA loop re-evaluates `Sub.every` tickers and
+//! subscription sources through, the `SubManager` that also holds the active
 //! terminal input handlers (`Tui.Sub.onKey` / `Cli.Sub.onLine`), and the Cli.tea
 //! loop (stdin line -> active `onLine` handlers -> update -> view).
 
@@ -44,8 +45,9 @@ pub type SubSpawn<M> =
 /// wasm analogue of aborting the native `JoinHandle`). The M4 pub/sub broker
 /// (`wasm::pubsub::sub_subscribe_topic`) is the first constructor of this
 /// type on wasm; every source MUST return a real unregister thunk (never a
-/// no-op) so the scheduler's stop-all-then-respawn cycle (mirroring native's
-/// `SubManager::update`) cannot accumulate duplicate listeners.
+/// no-op) so the scheduler's teardown-then-respawn of sources on every
+/// re-evaluation (mirroring native's `SubRuntime`) cannot accumulate duplicate
+/// listeners.
 #[cfg(target_arch = "wasm32")]
 pub type SubSpawn<M> = Box<dyn FnOnce(std::rc::Rc<dyn Fn(M)>) -> Box<dyn FnOnce()>>;
 
@@ -333,6 +335,302 @@ where
 // now (alongside the stream registry it drains + the bridged `ChunkEvent` enum).
 // It returns a `IpeSub::Source` driven by this module's SubManager.
 
+// ─── Subscription reconciliation (shared by every TEA loop) ─────────────────
+
+/// A `Sub.every` period in milliseconds, always positive.
+///
+/// The key a running timer persists under while its interval stays requested.
+#[cfg(any(
+    all(feature = "tokio", not(target_arch = "wasm32")),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct EveryInterval(std::num::NonZeroU64);
+
+#[cfg(any(
+    all(feature = "tokio", not(target_arch = "wasm32")),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+impl EveryInterval {
+    /// The period of `Sub.every ms`, or `None` for a non-positive `ms` that never fires.
+    pub(crate) fn from_millis(ms: i64) -> Option<Self> {
+        u64::try_from(ms)
+            .ok()
+            .and_then(std::num::NonZeroU64::new)
+            .map(Self)
+    }
+
+    /// The period in milliseconds.
+    pub(crate) const fn millis(self) -> u64 {
+        self.0.get()
+    }
+
+    /// The period as a browser timer delay, saturated at the largest one browsers honour.
+    ///
+    /// `setInterval` treats a delay past `i32::MAX` milliseconds as 1 ms, so an
+    /// unsaturated long period would fire continuously.
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub(crate) fn browser_delay_ms(self) -> u32 {
+        const MAX_BROWSER_DELAY_MS: u32 = 2_147_483_647;
+        u32::try_from(self.millis()).map_or(MAX_BROWSER_DELAY_MS, |ms| ms.min(MAX_BROWSER_DELAY_MS))
+    }
+}
+
+/// The `Sub.every` messages requested per interval, in subscription order.
+#[cfg(any(
+    all(feature = "tokio", not(target_arch = "wasm32")),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+pub(crate) type EveryPlan<M> = std::collections::BTreeMap<EveryInterval, Vec<M>>;
+
+/// One evaluation of `subscriptions(model)`, flattened.
+///
+/// `Sub.every` messages are grouped by interval, so one timer per interval
+/// delivers every message requested at that period.
+#[cfg(any(
+    all(feature = "tokio", not(target_arch = "wasm32")),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+pub(crate) struct SubPlan<M> {
+    pub(crate) every: EveryPlan<M>,
+    pub(crate) sources: Vec<SubSpawn<M>>,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+    pub(crate) key_handlers: Vec<KeyHandler<M>>,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+    pub(crate) line_handlers: Vec<LineHandler<M>>,
+}
+
+#[cfg(any(
+    all(feature = "tokio", not(target_arch = "wasm32")),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+impl<M> SubPlan<M> {
+    /// Flatten a `Sub` tree into the subscriptions it requests.
+    pub(crate) fn of(sub: IpeSub<M>) -> Self {
+        let mut plan = Self {
+            every: EveryPlan::new(),
+            sources: Vec::new(),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+            key_handlers: Vec::new(),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+            line_handlers: Vec::new(),
+        };
+        plan.add(sub);
+        plan
+    }
+
+    fn add(&mut self, sub: IpeSub<M>) {
+        match sub {
+            IpeSub::None => {}
+            IpeSub::Batch(items) => {
+                for item in items {
+                    self.add(item);
+                }
+            }
+            IpeSub::Every { ms, msg } => {
+                // A non-positive interval never fires (no busy loop).
+                if let Some(interval) = EveryInterval::from_millis(ms) {
+                    self.every.entry(interval).or_default().push(msg);
+                }
+            }
+            IpeSub::Source(spawn) => self.sources.push(spawn),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+            IpeSub::OnKey(on_key) => self.key_handlers.push(on_key),
+            #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+            IpeSub::OnLine(on_line) => self.line_handlers.push(on_line),
+            // Terminal input exists only in a terminal app, so a loop built
+            // without one has no input to hand these handlers.
+            #[cfg(all(not(target_arch = "wasm32"), not(feature = "tui")))]
+            IpeSub::OnKey(_) | IpeSub::OnLine(_) => {}
+        }
+    }
+}
+
+/// A running `Sub.every` timer whose delivered messages can be swapped in place.
+#[cfg(any(
+    all(feature = "tokio", not(target_arch = "wasm32")),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+pub(crate) trait EveryTimer<M> {
+    /// Replace the messages each later tick delivers, keeping the timer's phase.
+    fn retarget(&self, msgs: Vec<M>);
+}
+
+/// The running `Sub.every` timers, one per requested interval.
+///
+/// Dropping a timer stops it. [`EveryTimers::reconcile`] is the one rule every
+/// TEA loop re-evaluates subscriptions through: a still-requested interval keeps
+/// its timer and phase and only swaps the messages it delivers, a newly
+/// requested one starts, and one no longer requested stops. Re-evaluating
+/// faster than an interval therefore never starves it.
+#[cfg(any(
+    all(feature = "tokio", not(target_arch = "wasm32")),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+pub(crate) struct EveryTimers<T> {
+    running: std::collections::BTreeMap<EveryInterval, T>,
+}
+
+#[cfg(any(
+    all(feature = "tokio", not(target_arch = "wasm32")),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+impl<T> Default for EveryTimers<T> {
+    fn default() -> Self {
+        Self {
+            running: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+#[cfg(any(
+    all(feature = "tokio", not(target_arch = "wasm32")),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+impl<T> EveryTimers<T> {
+    /// Bring the running timers in line with `wanted`, starting new intervals through `start`.
+    pub(crate) fn reconcile<M>(
+        &mut self,
+        wanted: EveryPlan<M>,
+        mut start: impl FnMut(EveryInterval, Vec<M>) -> T,
+    ) where
+        T: EveryTimer<M>,
+    {
+        self.running
+            .retain(|interval, _| wanted.contains_key(interval));
+        for (interval, msgs) in wanted {
+            match self.running.entry(interval) {
+                std::collections::btree_map::Entry::Occupied(timer) => {
+                    timer.get().retarget(msgs);
+                }
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    slot.insert(start(interval, msgs));
+                }
+            }
+        }
+    }
+
+    /// The number of running timers.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) const fn len(&self) -> usize {
+        self.running.len()
+    }
+}
+
+/// Where a native TEA loop's subscriptions deliver their messages.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+pub(crate) trait SubSink<M>: Clone + Send + Sync + 'static {
+    /// Deliver one timer message, resolving to `false` once the loop is gone.
+    fn deliver(&self, msg: M) -> impl Future<Output = bool> + Send;
+    /// Deliver one subscription-source message without waiting.
+    fn emit(&self, msg: M);
+}
+
+/// A spawned task aborted when its owner drops it.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// The messages a native timer delivers per tick, shared with its task.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+type TickMsgs<M> = std::sync::Arc<std::sync::Mutex<Vec<M>>>;
+
+/// A native `Sub.every` ticker task.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+struct NativeEvery<M> {
+    msgs: TickMsgs<M>,
+    _task: AbortOnDrop,
+}
+
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+impl<M> EveryTimer<M> for NativeEvery<M> {
+    fn retarget(&self, msgs: Vec<M>) {
+        *self
+            .msgs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = msgs;
+    }
+}
+
+/// The running subscriptions of one native TEA loop.
+///
+/// Timers persist across re-evaluation through [`EveryTimers`]. A subscription
+/// source has no identity to match a re-evaluated one against, so every
+/// re-evaluation stops the running sources and spawns the requested ones.
+/// Dropping the runtime stops everything.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+pub(crate) struct SubRuntime<M, S> {
+    sink: S,
+    every: EveryTimers<NativeEvery<M>>,
+    sources: Vec<AbortOnDrop>,
+}
+
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+impl<M: Clone + Send + 'static, S: SubSink<M>> SubRuntime<M, S> {
+    /// A runtime with nothing subscribed, delivering into `sink`.
+    pub(crate) fn new(sink: S) -> Self {
+        Self {
+            sink,
+            every: EveryTimers::default(),
+            sources: Vec::new(),
+        }
+    }
+
+    /// Re-evaluate the loop's subscriptions against a fresh `subscriptions(model)`.
+    pub(crate) fn reconcile(&mut self, sub: IpeSub<M>) {
+        let SubPlan { every, sources, .. } = SubPlan::of(sub);
+        self.apply(every, sources);
+    }
+
+    /// Re-evaluate against the timers and sources of an already flattened plan.
+    pub(crate) fn apply(&mut self, every: EveryPlan<M>, sources: Vec<SubSpawn<M>>) {
+        let sink = &self.sink;
+        self.every.reconcile(every, |interval, msgs| {
+            let msgs: TickMsgs<M> = std::sync::Arc::new(std::sync::Mutex::new(msgs));
+            let tick_msgs = std::sync::Arc::clone(&msgs);
+            let sink = sink.clone();
+            let period = std::time::Duration::from_millis(interval.millis());
+            // First tick one period after the interval is first requested.
+            let task = tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(period).await;
+                    let batch = tick_msgs
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    for msg in batch {
+                        if !sink.deliver(msg).await {
+                            return;
+                        }
+                    }
+                }
+            });
+            NativeEvery {
+                msgs,
+                _task: AbortOnDrop(task),
+            }
+        });
+        self.sources.clear();
+        for spawn in sources {
+            let sink = self.sink.clone();
+            let emit: std::sync::Arc<dyn Fn(M) + Send + Sync> =
+                std::sync::Arc::new(move |msg| sink.emit(msg));
+            self.sources.push(AbortOnDrop(spawn(emit)));
+        }
+    }
+
+    /// The number of running timers and sources, each of which can still deliver.
+    pub(crate) fn live(&self) -> usize {
+        self.every.len().saturating_add(self.sources.len())
+    }
+}
+
 // ─── TEA event loop plumbing (Sub.every tickers + Cmd firing) ───────────────
 
 /// Internal loop event: a raw stdin line (Cli), a decoded key as (kind, value)
@@ -511,20 +809,31 @@ pub(crate) fn read_bounded_line<R: std::io::BufRead>(
     ))
 }
 
-/// Tracks the running subscription tasks and the active terminal input handlers.
+/// The terminal loop as a subscription sink.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+impl<M: Send + 'static> SubSink<M> for tokio::sync::mpsc::UnboundedSender<CliEvent<M>> {
+    fn deliver(&self, msg: M) -> impl Future<Output = bool> + Send {
+        std::future::ready(self.send(CliEvent::Msg(msg)).is_ok())
+    }
+    fn emit(&self, msg: M) {
+        // A closed loop drops the message; the source is stopped with the loop.
+        let _ = self.send(CliEvent::Msg(msg));
+    }
+}
+
+/// Tracks the running subscriptions and the active terminal input handlers.
 ///
-/// The tasks are the goroutine-equivalent tickers of `Sub.every` and the
-/// subscription sources; the handlers are the `Tui.Sub.onKey` /
-/// `Cli.Sub.onLine` ones. `update` stops all + respawns from the new Sub (one
-/// program, one model, re-evaluated each tick), so an input event is always
-/// dispatched against the handlers the CURRENT model subscribes to.
+/// Timers and sources run in a [`SubRuntime`]; the handlers are the
+/// `Tui.Sub.onKey` / `Cli.Sub.onLine` ones. `update` re-evaluates against the
+/// new Sub (one program, one model, re-evaluated each update), so an input
+/// event is always dispatched against the handlers the CURRENT model
+/// subscribes to while a still-requested `Sub.every` keeps its phase.
 ///
 /// Terminal-loop-only (see [`CliEvent`]): both consuming drivers are
 /// `feature = "tui"`-gated.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub(crate) struct SubManager<M> {
-    tx: tokio::sync::mpsc::UnboundedSender<CliEvent<M>>,
-    handles: Vec<tokio::task::JoinHandle<()>>,
+    subs: SubRuntime<M, tokio::sync::mpsc::UnboundedSender<CliEvent<M>>>,
     key_handlers: Vec<KeyHandler<M>>,
     line_handlers: Vec<LineHandler<M>>,
 }
@@ -533,16 +842,13 @@ pub(crate) struct SubManager<M> {
 impl<M: Clone + Send + 'static> SubManager<M> {
     pub(crate) fn new(tx: tokio::sync::mpsc::UnboundedSender<CliEvent<M>>) -> Self {
         SubManager {
-            tx,
-            handles: Vec::new(),
+            subs: SubRuntime::new(tx),
             key_handlers: Vec::new(),
             line_handlers: Vec::new(),
         }
     }
     pub(crate) fn stop_all(&mut self) {
-        for h in self.handles.drain(..) {
-            h.abort();
-        }
+        self.subs.reconcile(IpeSub::None);
         self.key_handlers.clear();
         self.line_handlers.clear();
     }
@@ -566,45 +872,15 @@ impl<M: Clone + Send + 'static> SubManager<M> {
             .collect()
     }
     pub(crate) fn update(&mut self, sub: IpeSub<M>) {
-        self.stop_all();
-        self.spawn(sub);
-    }
-    fn spawn(&mut self, sub: IpeSub<M>) {
-        match sub {
-            IpeSub::None => {}
-            IpeSub::Batch(items) => {
-                for it in items {
-                    self.spawn(it);
-                }
-            }
-            IpeSub::Every { ms, msg } => {
-                if ms <= 0 {
-                    return;
-                }
-                let tx = self.tx.clone();
-                let dur = std::time::Duration::from_millis(ms as u64);
-                // First tick after `ms` (sleep-loop, matching  time.After).
-                let h = tokio::spawn(async move {
-                    loop {
-                        tokio::time::sleep(dur).await;
-                        if tx.send(CliEvent::Msg(msg.clone())).is_err() {
-                            break;
-                        }
-                    }
-                });
-                self.handles.push(h);
-            }
-            IpeSub::Source(spawn) => {
-                // Hand the source an emit callback that funnels Msgs into the loop.
-                let tx = self.tx.clone();
-                let emit: std::sync::Arc<dyn Fn(M) + Send + Sync> = std::sync::Arc::new(move |m| {
-                    let _ = tx.send(CliEvent::Msg(m));
-                });
-                self.handles.push(spawn(emit));
-            }
-            IpeSub::OnKey(on_key) => self.key_handlers.push(on_key),
-            IpeSub::OnLine(on_line) => self.line_handlers.push(on_line),
-        }
+        let SubPlan {
+            every,
+            sources,
+            key_handlers,
+            line_handlers,
+        } = SubPlan::of(sub);
+        self.subs.apply(every, sources);
+        self.key_handlers = key_handlers;
+        self.line_handlers = line_handlers;
     }
 }
 
@@ -1075,53 +1351,19 @@ fn worker_run_cmd<M: Send + 'static>(
     }
 }
 
-/// Spawn the ticker / source tasks for a worker's active `Sub`s, funnelling each
-/// produced message into the loop channel. Mirrors the terminal `SubManager` but
-/// view-less; pushes the spawned handles so a re-subscribe can abort them.
-/// Returns the number of live source tasks spawned, so the loop knows whether
-/// any subscription can still deliver a message.
+/// The worker loop as a subscription sink.
+///
+/// Terminal input handlers in a worker's `Sub` are dropped by
+/// [`SubRuntime::reconcile`]: a worker reads no stream, so they never deliver
+/// and never keep the worker alive.
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
-fn worker_spawn_subs<M: Clone + Send + 'static>(
-    sub: IpeSub<M>,
-    tx: &tokio::sync::mpsc::UnboundedSender<WorkerEvent<M>>,
-    handles: &mut Vec<tokio::task::JoinHandle<()>>,
-) -> usize {
-    match sub {
-        IpeSub::None => 0,
-        IpeSub::Batch(items) => items
-            .into_iter()
-            .map(|it| worker_spawn_subs(it, tx, handles))
-            .sum(),
-        IpeSub::Every { ms, msg } => {
-            if ms <= 0 {
-                return 0;
-            }
-            let tx = tx.clone();
-            let dur = std::time::Duration::from_millis(ms as u64);
-            let h = tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(dur).await;
-                    if tx.send(WorkerEvent::Msg(msg.clone())).is_err() {
-                        break;
-                    }
-                }
-            });
-            handles.push(h);
-            1
-        }
-        IpeSub::Source(spawn) => {
-            let tx = tx.clone();
-            let emit: std::sync::Arc<dyn Fn(M) + Send + Sync> = std::sync::Arc::new(move |m| {
-                let _ = tx.send(WorkerEvent::Msg(m));
-            });
-            handles.push(spawn(emit));
-            1
-        }
-        // Terminal input has no source in a worker (it reads no stream); the
-        // resolver and emitter refuse `Tui.Sub.onKey` / `Cli.Sub.onLine` outside
-        // their own terminal app, so these never reach here from Ipê source.
-        // Neither can deliver, so neither keeps the worker alive.
-        IpeSub::OnKey(_) | IpeSub::OnLine(_) => 0,
+impl<M: Send + 'static> SubSink<M> for tokio::sync::mpsc::UnboundedSender<WorkerEvent<M>> {
+    fn deliver(&self, msg: M) -> impl Future<Output = bool> + Send {
+        std::future::ready(self.send(WorkerEvent::Msg(msg)).is_ok())
+    }
+    fn emit(&self, msg: M) {
+        // A closed loop drops the message; the source is stopped with the loop.
+        let _ = self.send(WorkerEvent::Msg(msg));
     }
 }
 
@@ -1192,8 +1434,9 @@ where
         let mut recorder =
             crate::debugger::RecordBuffer::new(model.clone(), crate::debugger::DEFAULT_HISTORY_CAP);
         worker_run_cmd(cmd0, &tx, &outstanding);
-        let mut sub_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
-        let mut live_subs = worker_spawn_subs(subscriptions(model.clone()), &tx, &mut sub_handles);
+        let mut subs = SubRuntime::new(tx.clone());
+        subs.reconcile(subscriptions(model.clone()));
+        let mut live_subs = subs.live();
 
         // Settled at start: `init` issued no effect and no subscription, so no
         // event can ever arrive — terminate rather than block forever on `recv`.
@@ -1218,10 +1461,8 @@ where
             #[cfg(feature = "debugger")]
             recorder.record(msg_for_recorder, model.clone(), &update);
             worker_run_cmd(cmd, &tx, &outstanding);
-            for h in sub_handles.drain(..) {
-                h.abort();
-            }
-            live_subs = worker_spawn_subs(subscriptions(model.clone()), &tx, &mut sub_handles);
+            subs.reconcile(subscriptions(model.clone()));
+            live_subs = subs.live();
             // The model has settled: no live subscription can deliver again and no
             // one-shot effect is in flight, so no further event will arrive.
             // Terminate rather than block on a channel only this loop still holds.
@@ -1229,9 +1470,7 @@ where
                 break;
             }
         }
-        for h in sub_handles.drain(..) {
-            h.abort();
-        }
+        drop(subs);
         // Dump the recorded session (plain trace + typed log) to the
         // `IPE_DEBUGGER_RECORD` destination, a no-op when that env var is unset.
         // A worker has no view surface, so this dump is its only debugger output.
@@ -1497,6 +1736,148 @@ mod worker_appearance_na_tests {
         let _run: fn(WorkerApp) -> crate::IpeResult<crate::error::IpeError, ()> =
             WorkerApp::run_blocking;
         let _ = handle;
+    }
+}
+
+// ─── Subscription reconcile unit tests ──────────────────────────────────────
+
+// Every TEA loop re-evaluates `subscriptions(model)` after each update (and the
+// Web session driver on each page entry). A still-requested `Sub.every` must
+// keep its timer and phase across those re-evaluations, or a loop updating
+// faster than the interval never sees a tick. Paused tokio time makes each
+// expected tick instant exact.
+#[cfg(all(test, feature = "tokio", not(target_arch = "wasm32")))]
+mod sub_reconcile_tests {
+    use super::*;
+
+    use std::time::Duration;
+    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum Tick {
+        Fast,
+        Slow,
+        A,
+        B,
+    }
+
+    type Runtime = SubRuntime<Tick, UnboundedSender<WorkerEvent<Tick>>>;
+
+    fn runtime() -> (Runtime, UnboundedReceiver<WorkerEvent<Tick>>) {
+        let (tx, rx) = unbounded_channel();
+        (SubRuntime::new(tx), rx)
+    }
+
+    fn every(ms: i64, msg: Tick) -> IpeSub<Tick> {
+        IpeSub::Every { ms, msg }
+    }
+
+    /// Every message already delivered, in delivery order.
+    fn drain(rx: &mut UnboundedReceiver<WorkerEvent<Tick>>) -> Vec<Tick> {
+        let mut out = Vec::new();
+        while let Ok(WorkerEvent::Msg(msg)) = rx.try_recv() {
+            out.push(msg);
+        }
+        out
+    }
+
+    async fn sleep_ms(ms: u64) {
+        tokio::time::sleep(Duration::from_millis(ms)).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn re_evaluating_faster_than_the_interval_still_ticks() {
+        let (mut subs, mut rx) = runtime();
+        for _ in 0..20 {
+            subs.reconcile(every(100, Tick::A));
+            sleep_ms(50).await;
+        }
+        sleep_ms(10).await;
+        // Ticks at 100, 200, …, 1000 ms; a reset per re-evaluation yields none.
+        assert_eq!(drain(&mut rx), vec![Tick::A; 10]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_interval_fires_while_a_fast_one_drives_updates() {
+        let (mut subs, mut rx) = runtime();
+        let both = || IpeSub::Batch(vec![every(100, Tick::Fast), every(1000, Tick::Slow)]);
+        subs.reconcile(both());
+        let (mut fast, mut slow) = (0_u32, 0_u32);
+        while fast < 25 {
+            let received = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await;
+            let Ok(Some(WorkerEvent::Msg(msg))) = received else {
+                break;
+            };
+            match msg {
+                Tick::Fast => fast += 1,
+                Tick::Slow => slow += 1,
+                Tick::A | Tick::B => {}
+            }
+            // Each delivered message is an update, which re-evaluates.
+            subs.reconcile(both());
+        }
+        assert_eq!(fast, 25);
+        // The 1000 ms timer fired at 1000 and 2000 ms, before the 25th fast tick.
+        assert_eq!(slow, 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_dropped_interval_stops_its_timer() {
+        let (mut subs, mut rx) = runtime();
+        subs.reconcile(IpeSub::Batch(vec![
+            every(100, Tick::A),
+            every(300, Tick::B),
+        ]));
+        assert_eq!(subs.live(), 2);
+        subs.reconcile(every(100, Tick::A));
+        assert_eq!(subs.live(), 1);
+        sleep_ms(1010).await;
+        assert_eq!(drain(&mut rx), vec![Tick::A; 10]);
+        subs.reconcile(IpeSub::None);
+        assert_eq!(subs.live(), 0);
+        sleep_ms(1000).await;
+        assert_eq!(drain(&mut rx), Vec::<Tick>::new());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_kept_interval_delivers_its_new_msg_without_a_phase_reset() {
+        let (mut subs, mut rx) = runtime();
+        subs.reconcile(every(100, Tick::A));
+        sleep_ms(150).await;
+        subs.reconcile(every(100, Tick::B));
+        sleep_ms(60).await;
+        // B is due at 200 ms, on the original phase; a restarted timer would
+        // fire at 250 ms instead.
+        assert_eq!(drain(&mut rx), vec![Tick::A, Tick::B]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn one_interval_delivers_every_msg_requested_at_it() {
+        let (mut subs, mut rx) = runtime();
+        subs.reconcile(IpeSub::Batch(vec![
+            every(100, Tick::A),
+            every(100, Tick::B),
+        ]));
+        assert_eq!(subs.live(), 1);
+        sleep_ms(110).await;
+        assert_eq!(drain(&mut rx), vec![Tick::A, Tick::B]);
+    }
+
+    #[test]
+    fn a_non_positive_interval_never_runs() {
+        assert_eq!(EveryInterval::from_millis(0), None);
+        assert_eq!(EveryInterval::from_millis(-5), None);
+        let plan = SubPlan::of(IpeSub::Batch(vec![every(0, Tick::A), every(-1, Tick::B)]));
+        assert!(plan.every.is_empty());
+    }
+
+    #[test]
+    fn a_browser_delay_saturates_at_the_largest_honoured_one() {
+        let delay = |ms| EveryInterval::from_millis(ms).map(EveryInterval::browser_delay_ms);
+        assert_eq!(delay(1000), Some(1000));
+        assert_eq!(delay(2_147_483_647), Some(2_147_483_647));
+        assert_eq!(delay(2_147_483_648), Some(2_147_483_647));
+        assert_eq!(delay(i64::MAX), Some(2_147_483_647));
     }
 }
 

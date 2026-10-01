@@ -1,87 +1,80 @@
 //! Browser-WASM `Sub` bridge — the wasm analogue of `tea.rs`'s native
-//! `SubManager`. Drives `Sub.every`/`Time.every` via `gloo-timers` and any
+//! `SubRuntime`. Drives `Sub.every`/`Time.every` via `gloo-timers` and any
 //! `IpeSub::Source` (currently: `Sub.subscribeTopic`, `wasm::pubsub`) via its
 //! own teardown thunk.
 //!
-//! Same "stop everything, respawn from the new `Sub`" contract as native
-//! (one program, one model, re-evaluated each tick) — the
-//! scheduler calls [`SubManager::update`] once per `mount`/`flush` cycle with
-//! the freshly computed `subscriptions(model)`.
+//! Same contract as native (one program, one model, re-evaluated each
+//! update): the scheduler calls [`SubManager::update`] once per
+//! `mount`/`flush` cycle with the freshly computed `subscriptions(model)`.
+//! `Sub.every` timers go through the shared keyed reconcile
+//! ([`EveryTimers::reconcile`]), so a still-requested interval keeps its
+//! browser timer and phase; sources have no identity and are torn down and
+//! respawned.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::tea::IpeSub;
+use crate::tea::{EveryTimer, EveryTimers, IpeSub, SubPlan};
 
-/// One live `Sub.every` timer. Kept alive for as long as the subscription is
-/// active; `gloo_timers::callback::Interval`'s `Drop` cancels the browser
-/// timer automatically, so clearing this `Vec` IS the teardown.
-struct ActiveEvery {
+/// One live `Sub.every` browser timer and the messages each tick delivers.
+///
+/// `gloo_timers::callback::Interval`'s `Drop` cancels the browser timer, so
+/// dropping this IS the teardown.
+struct BrowserEvery<M> {
+    msgs: Rc<RefCell<Vec<M>>>,
     _interval: gloo_timers::callback::Interval,
 }
 
+impl<M> EveryTimer<M> for BrowserEvery<M> {
+    fn retarget(&self, msgs: Vec<M>) {
+        *self.msgs.borrow_mut() = msgs;
+    }
+}
+
 pub(crate) struct SubManager<M> {
-    everies: Vec<ActiveEvery>,
+    every: EveryTimers<BrowserEvery<M>>,
     teardowns: Vec<Box<dyn FnOnce()>>,
-    _marker: std::marker::PhantomData<M>,
 }
 
 impl<M: Clone + 'static> SubManager<M> {
     pub(crate) fn new() -> Self {
         SubManager {
-            everies: Vec::new(),
+            every: EveryTimers::default(),
             teardowns: Vec::new(),
-            _marker: std::marker::PhantomData,
         }
     }
 
-    /// Tear down every active timer/source, then rebuild from `sub`. `emit`
-    /// dispatches a produced `Msg` back into the TEA scheduler (the same
-    /// `enqueue` callback the delegated DOM listeners use).
+    /// Re-evaluate against `sub`, dispatching every produced `Msg` through `emit`.
+    ///
+    /// `emit` is the TEA scheduler's `enqueue` callback, the same one the
+    /// delegated DOM listeners use.
     pub(crate) fn update(&mut self, sub: IpeSub<M>, emit: &Rc<dyn Fn(M)>) {
-        self.stop_all();
-        self.spawn(sub, emit);
-    }
-
-    fn stop_all(&mut self) {
-        // `Interval::drop` cancels the underlying `clearInterval` — clearing
-        // the Vec IS the timer teardown.
-        self.everies.clear();
+        let SubPlan { every, sources } = SubPlan::of(sub);
         for teardown in self.teardowns.drain(..) {
             teardown();
         }
-    }
-
-    fn spawn(&mut self, sub: IpeSub<M>, emit: &Rc<dyn Fn(M)>) {
-        match sub {
-            IpeSub::None => {}
-            IpeSub::Batch(items) => {
-                for it in items {
-                    self.spawn(it, emit);
-                }
-            }
-            IpeSub::Every { ms, msg } => {
-                // Matches native's `ms <= 0` guard (a non-positive interval
-                // never fires, rather than a busy-loop / panic).
-                if ms <= 0 {
-                    return;
-                }
-                let emit = Rc::clone(emit);
-                // `setInterval` ticks first after `ms`, not at t=0 — the
-                // browser analogue of native's sleep-loop first-tick timing.
-                let interval = gloo_timers::callback::Interval::new(
-                    u32::try_from(ms).unwrap_or(u32::MAX),
-                    move || {
-                        (emit)(msg.clone());
-                    },
-                );
-                self.everies.push(ActiveEvery {
-                    _interval: interval,
+        self.every.reconcile(every, |interval, msgs| {
+            let msgs = Rc::new(RefCell::new(msgs));
+            let tick_msgs = Rc::clone(&msgs);
+            let emit = Rc::clone(emit);
+            // `setInterval` ticks first after one period, not at t=0 — the
+            // browser analogue of native's sleep-loop first-tick timing.
+            let interval =
+                gloo_timers::callback::Interval::new(interval.browser_delay_ms(), move || {
+                    // Copy out before emitting: `emit` may re-enter `update`,
+                    // which retargets this timer's messages.
+                    let batch = tick_msgs.borrow().clone();
+                    for msg in batch {
+                        (emit)(msg);
+                    }
                 });
+            BrowserEvery {
+                msgs,
+                _interval: interval,
             }
-            IpeSub::Source(spawn) => {
-                let teardown = spawn(Rc::clone(emit));
-                self.teardowns.push(teardown);
-            }
+        });
+        for spawn in sources {
+            self.teardowns.push(spawn(Rc::clone(emit)));
         }
     }
 }
