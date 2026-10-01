@@ -13,6 +13,10 @@ crate-type = ["cdylib"]
 [dependencies]
 zed_extension_api = "0.7.0"
 
+[lints.clippy]
+# Mirrors the workspace `mem_forget` deny: a forgotten `Drop` guard leaks.
+mem_forget = "deny"
+
 # A standalone crate Zed builds on its own, not a member of the repository's
 # workspace.
 [workspace]

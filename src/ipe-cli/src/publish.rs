@@ -1687,9 +1687,7 @@ mod tests {
         // each test), which is intentional: the RAII guard's drop is a
         // best-effort no-op when the directory is already gone.
         let sd = crate::scratch::ScratchDir::new("ipe-publish-test").expect("scratch dir");
-        let p = sd.path().to_path_buf();
-        std::mem::forget(sd); // caller's explicit remove_dir_all handles cleanup
-        p
+        sd.into_path()
     }
 
     /// The rendered single entry parses back through the index reader into an
@@ -2507,8 +2505,7 @@ mod tests {
     fn make_git_repo(tag: &str, content: &str) -> PathBuf {
         let sd = crate::scratch::ScratchDir::new(&format!("ipe-publish-test-{tag}"))
             .expect("scratch dir");
-        let repo = sd.path().to_path_buf();
-        std::mem::forget(sd);
+        let repo = sd.into_path();
         let git = |args: &[&str]| {
             crate::remote_ingest::fixture_git(&repo)
                 .args(args)
@@ -2525,9 +2522,7 @@ mod tests {
         let remote = {
             let sd2 = crate::scratch::ScratchDir::new(&format!("ipe-publish-remote-{tag}"))
                 .expect("scratch dir");
-            let p = sd2.path().to_path_buf();
-            std::mem::forget(sd2);
-            p
+            sd2.into_path()
         };
         assert!(
             crate::remote_ingest::fixture_git(&repo)

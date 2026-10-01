@@ -957,9 +957,9 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
                         // Counter decremented by the loop on `PerformDone` dequeue
                         // (below) for the delivered case; the guard covers only the
                         // panic-unwind case where no event reaches the loop.
-                        let guard = OutstandingGuard(Some(c));
+                        let mut guard = OutstandingGuard(Some(c));
                         let msg = thunk().await;
-                        std::mem::forget(guard); // delivered → loop owns the decrement
+                        guard.0 = None; // delivered → loop owns the decrement
                         // A send failure means the loop already exited (rx
                         // dropped); the leaked count is then unobservable, so it
                         // is intentionally not decremented here.
@@ -1333,15 +1333,17 @@ fn worker_run_cmd<M: Send + 'static>(
                 // Decrement on any exit (normal or panic-unwind) so a faulting
                 // effect can never wedge the drain invariant — the same
                 // Task-boundary recover contract the Cli loop uses.
-                struct OutstandingGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+                struct OutstandingGuard(Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>);
                 impl Drop for OutstandingGuard {
                     fn drop(&mut self) {
-                        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        if let Some(c) = &self.0 {
+                            c.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        }
                     }
                 }
-                let guard = OutstandingGuard(counter);
+                let mut guard = OutstandingGuard(Some(counter));
                 let msg = thunk().await;
-                std::mem::forget(guard); // delivered → loop owns the decrement
+                guard.0 = None; // delivered → loop owns the decrement
                 let _ = tx.send(WorkerEvent::PerformDone(msg));
             });
         }
