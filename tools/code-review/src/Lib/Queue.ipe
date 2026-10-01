@@ -1,4 +1,4 @@
-module Lib.Queue exposing (Progress, QueuePage, QueueState(..), QueuedUnit, UnitPageState(..), decide, loadPage, loadUnitView, pageHeaderText, queueStatusText, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
+module Lib.Queue exposing (Progress, QueuePage, QueueState(..), QueuedUnit, ResyncBound, UnitPageState(..), decide, loadPage, loadUnitView, pageHeaderText, queueStatusText, resyncBound, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
 
 import Ipe.Db as Db
 import Ipe.Error as Error
@@ -78,11 +78,29 @@ progressFrom row =
     { reviewed = row.reviewed, total = row.total }
 
 
--- The most review-database pages one rebuild of the `reviewed` copy reads,
--- `pairPageSize` pairs each.
+-- How far one rebuild of the `reviewed` copy may read: `pageCeiling` pages
+-- of at most `pageSize` decided pairs each. A record, so the two counts are
+-- named at every call and never swapped.
+type alias ResyncBound =
+    { pageSize : Int
+    , pageCeiling : Int
+    }
+
+
+-- The most review-database pages one rebuild reads. Each page nests two
+-- Task continuations whose futures are polled one inside the next, about
+-- 1.5 KiB of stack per page in a debug build; the runtime's 8 MiB threads
+-- trip the recursion guard near 5,000 pages. 1,000 pages keeps that trip
+-- five times out of reach, so the ceiling refusal below is the only outcome
+-- past the limit, never a recursion trip.
 resyncPageCeiling : Int
 resyncPageCeiling =
-    10000
+    1000
+
+
+resyncBound : ResyncBound
+resyncBound =
+    { pageSize = LibDb.pairPageSize, pageCeiling = resyncPageCeiling }
 
 
 -- The `reviewed` copy rebuilt from the review database: one index
@@ -90,49 +108,54 @@ resyncPageCeiling =
 -- undrained queue row leaves too. Returns the count of pairs copied.
 resyncReviewed : Db.Db -> Task.Task Error Int
 resyncReviewed db =
-    resyncReviewedWithin resyncPageCeiling db
+    resyncReviewedWithin resyncBound db
 
 
--- `resyncReviewed` reading at most `ceiling` pages of decided pairs. A review
--- database holding more refuses the rebuild and rolls it back, leaving the
--- copy as it was.
-resyncReviewedWithin : Int -> Db.Db -> Task.Task Error Int
-resyncReviewedWithin ceiling db =
-    Index.rebuildReviewed (\conn -> refillPages ceiling db conn 0 0 Nothing)
+-- `resyncReviewed` reading at most `bound.pageCeiling` pages of
+-- `bound.pageSize` decided pairs. A review database holding more refuses
+-- the rebuild and rolls it back, leaving the copy as it was. A bound below
+-- one page of one pair is refused before the copy is touched.
+resyncReviewedWithin : ResyncBound -> Db.Db -> Task.Task Error Int
+resyncReviewedWithin bound db =
+    if bound.pageSize < 1 || bound.pageCeiling < 1 then
+        Task.fail (Error.unexpected "a review progress rebuild needs a page size and a page ceiling of at least 1")
+
+    else
+        Index.rebuildReviewed (\conn -> refillPages bound db conn 0 0 Nothing)
 
 
 -- Page `pagesRead` of decided pairs after `cursor`, each drained on `conn`;
 -- `copied` counts the pairs drained so far. A short page is the last one. A
 -- non-empty page past the ceiling fails the whole rebuild.
-refillPages : Int -> Db.Db -> Db.Db -> Int -> Int -> Maybe ( String, String ) -> Task.Task Error Int
-refillPages ceiling db conn pagesRead copied cursor =
+refillPages : ResyncBound -> Db.Db -> Db.Db -> Int -> Int -> Maybe ( String, String ) -> Task.Task Error Int
+refillPages bound db conn pagesRead copied cursor =
     do
-        pairs <- LibDb.decidedPairsAfter db cursor
+        pairs <- LibDb.decidedPairsAfter db bound.pageSize cursor
         if List.isEmpty pairs then
             Task.succeed copied
 
-        else if pagesRead >= ceiling then
-            Task.fail (resyncCeilingRefusal ceiling)
+        else if pagesRead >= bound.pageCeiling then
+            Task.fail (resyncCeilingRefusal bound)
 
         else
             do
                 pairs
                     |> List.map (\( uid, hash ) -> Index.drainPair conn uid hash)
                     |> Task.sequence
-                if List.length pairs < LibDb.pairPageSize then
+                if List.length pairs < bound.pageSize then
                     Task.succeed (copied + List.length pairs)
 
                 else
-                    refillPages ceiling db conn (pagesRead + 1) (copied + List.length pairs) (List.head (List.reverse pairs))
+                    refillPages bound db conn (pagesRead + 1) (copied + List.length pairs) (List.head (List.reverse pairs))
 
 
-resyncCeilingRefusal : Int -> Error
-resyncCeilingRefusal ceiling =
+resyncCeilingRefusal : ResyncBound -> Error
+resyncCeilingRefusal bound =
     Error.unavailable
         ("the review database holds more than "
-            ++ String.fromInt (ceiling * LibDb.pairPageSize)
+            ++ String.fromInt (bound.pageCeiling * bound.pageSize)
             ++ " decisions, past the "
-            ++ String.fromInt ceiling
+            ++ String.fromInt bound.pageCeiling
             ++ "-page ceiling of a review progress rebuild; the progress copy is left unchanged"
         )
 

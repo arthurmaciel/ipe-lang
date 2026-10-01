@@ -3489,13 +3489,13 @@ resyncStopsAtCeiling =
             |> Task.sequence
         mirrorPair at.indexDb "pre" "hp"
         refusal <-
-            Queue.resyncReviewedWithin 1 db
+            Queue.resyncReviewedWithin { pageSize = LibDb.pairPageSize, pageCeiling = 1 } db
                 |> Task.map (\_ -> Nothing)
                 |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
         kept <- Index.loadProgress
         conn <- Db.open "sqlite" ("sqlite://" ++ at.indexDb ++ "?mode=rw")
         preRows <- Db.findWhere conn "reviewed" (Sql.eq (Sql.column "uid") (Sql.string "pre"))
-        copied <- Queue.resyncReviewedWithin 2 db
+        copied <- Queue.resyncReviewedWithin { pageSize = LibDb.pairPageSize, pageCeiling = 2 } db
         rebuilt <- Index.loadProgress
         preAfter <- Db.findWhere conn "reviewed" (Sql.eq (Sql.column "uid") (Sql.string "pre"))
         cleanupProgressScratch at
@@ -3507,6 +3507,66 @@ resyncStopsAtCeiling =
                 && rebuilt.mirrored == decisions
                 && List.isEmpty preAfter
             )
+
+
+-- A rebuild at the production page ceiling, one pair per page, so the walk
+-- nests as deep as a rebuild may: exactly `resyncPageCeiling` decisions are
+-- copied, and one more is refused with the ceiling text, never a recursion
+-- trip. Red if the ceiling sits past the depth the runtime's stack carries.
+resyncAtDeepestCeiling : Task.Task Error Bool
+resyncAtDeepestCeiling =
+    let
+        at =
+            scratchAt "ipe-index-progress-deepest"
+
+        bound =
+            { pageSize = 1, pageCeiling = Queue.resyncPageCeiling }
+
+        seed from to db =
+            List.range from to
+                |> List.map (\i -> insertReviewRow db ("d-" ++ String.fromInt i) "hd")
+                |> Task.sequence
+    in
+    do
+        db <- seedProgressScratch at
+        seed 1 Queue.resyncPageCeiling db
+        copied <- Queue.resyncReviewedWithin bound db
+        seed (Queue.resyncPageCeiling + 1) (Queue.resyncPageCeiling + 1) db
+        refusal <-
+            Queue.resyncReviewedWithin bound db
+                |> Task.map (\_ -> Nothing)
+                |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
+        kept <- Index.loadProgress
+        cleanupProgressScratch at
+        Task.succeed
+            (copied == Queue.resyncPageCeiling
+                && maybeContains (String.fromInt Queue.resyncPageCeiling ++ "-page ceiling") refusal
+                && kept.mirrored == Queue.resyncPageCeiling
+            )
+
+
+-- A bound below one pair per page or one page is refused before the copy is
+-- touched. Red if a zero page size reads an empty page as a finished rebuild.
+resyncRefusesEmptyBound : Task.Task Error Bool
+resyncRefusesEmptyBound =
+    let
+        at =
+            scratchAt "ipe-index-progress-empty-bound"
+
+        attempt bound db =
+            Queue.resyncReviewedWithin bound db
+                |> Task.map (\_ -> False)
+                |> Task.onError (\_ -> Task.succeed True)
+    in
+    do
+        db <- seedProgressScratch at
+        insertReviewRow db "e-1" "he"
+        mirrorPair at.indexDb "pre" "hp"
+        zeroSize <- attempt { pageSize = 0, pageCeiling = 1 } db
+        zeroPages <- attempt { pageSize = 1, pageCeiling = 0 } db
+        kept <- Index.loadProgress
+        cleanupProgressScratch at
+        Task.succeed (zeroSize && zeroPages && kept.mirrored == 1)
 
 
 -- A stored refusal whose reason no longer parses still counts as decided,
@@ -3547,6 +3607,8 @@ displayAndStartupChecks =
         , Task.map (\ok -> ( "a failed drain keeps the queue row", ok )) drainIsAtomic
         , Task.map (\ok -> ( "an index without the reviewed table fails the probe", ok )) probeRefusesIndexWithoutReviewed
         , Task.map (\ok -> ( "a progress rebuild stops at its page ceiling and rolls back", ok )) resyncStopsAtCeiling
+        , Task.map (\ok -> ( "a progress rebuild at the deepest allowed page count copies, one past it is refused", ok )) resyncAtDeepestCeiling
+        , Task.map (\ok -> ( "a progress rebuild refuses a bound below one pair or one page", ok )) resyncRefusesEmptyBound
         , Task.map (\ok -> ( "progress counts a refusal whose reason no longer parses", ok )) progressIgnoresUndecodableReason
         , Task.map (\ok -> ( "startup probes name the variable and the file", ok )) probesNameTheirVariable
         , Task.map (\ok -> ( "tag grammar matches the shared ipe-index tag vectors", ok )) tagGrammarMatchesVectors
