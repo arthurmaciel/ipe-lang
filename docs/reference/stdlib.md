@@ -3210,10 +3210,6 @@ Ipe.Ui.Tui — the Tui shape's view surface.
 | `reverse` | Render text in reverse video (swap foreground and background). |
 | `color` | `color c` — the foreground (text) colour, from the terminal palette. |
 | `bg` | `bg c` — the background colour, from the terminal palette. |
-| `rgb` | `rgb r g b` — a terminal colour from red/green/blue channels (0-255). |
-| `rgba` | `rgba r g b a` — a terminal colour with an alpha channel (0..1). |
-| `white` | Opaque white. |
-| `black` | Opaque black. |
 
 ## Url
 

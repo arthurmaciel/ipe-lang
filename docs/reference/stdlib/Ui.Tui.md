@@ -156,35 +156,3 @@ bg : AnsiColor -> Attribute msg
 
 `bg c` — the background colour, from the terminal palette.
 
-## `rgb`
-
-```ipe
-rgb : Int -> Int -> Int -> Color
-```
-
-`rgb r g b` — a terminal colour from red/green/blue channels (0-255).
-
-## `rgba`
-
-```ipe
-rgba : Int -> Int -> Int -> Float -> Color
-```
-
-`rgba r g b a` — a terminal colour with an alpha channel (0..1).
-
-## `white`
-
-```ipe
-white : Color
-```
-
-Opaque white.
-
-## `black`
-
-```ipe
-black : Color
-```
-
-Opaque black.
-
