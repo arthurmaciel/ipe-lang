@@ -116,7 +116,7 @@ type alias Row =
 -- A row as a codec read decodes it: every projected column keyed by its name,
 -- `Nothing` for SQL `NULL`. Distinct from `Row`, whose cells cannot express
 -- `NULL`, so a nullable column decodes `Nothing` only from a real `NULL`.
-type alias Cells =
+type alias RowCells =
     Dict String (Maybe String)
 
 
@@ -2386,9 +2386,9 @@ alwaysTrue =
 -- | `readCells conn store cond` — read the rows matching `cond` with SQL `NULL`
 -- kept: the explicit projection of the store's current columns runs through the
 -- NULL-preserving `Db.findWhereMasked` with no mask, and each row decodes into
--- `Cells`. Every codec-decoded app read goes through here, so a nullable field
+-- `RowCells`. Every codec-decoded app read goes through here, so a nullable field
 -- is `Just` only when its column is not `NULL`.
-readCells : Db -> Store a -> SqlFragment -> Task Error (List Cells)
+readCells : Db -> Store a -> SqlFragment -> Task Error (List RowCells)
 readCells conn store cond =
     case store of
         Store r ->
@@ -2399,11 +2399,11 @@ readCells conn store cond =
                 cellsDecoder
 
 
--- Decode one NULL-preserving row object into `Cells`: a JSON `null` is SQL
+-- Decode one NULL-preserving row object into `RowCells`: a JSON `null` is SQL
 -- `NULL`; every scalar becomes its text form (an integer in decimal, a float
 -- through `String.fromFloat`, a boolean as `"true"`/`"false"`, text verbatim),
 -- the same text the codec's per-column parser reads.
-cellsDecoder : Decoder Cells
+cellsDecoder : Decoder RowCells
 cellsDecoder =
     Config.dict
         (Config.nullable
@@ -2426,16 +2426,16 @@ boolCellText b =
         "false"
 
 
--- Lift an untyped `Row` to `Cells`, every cell present. The external
+-- Lift an untyped `Row` to `RowCells`, every cell present. The external
 -- (`Db.findWhereOn`) and join (`Db.findJoin`) kernels return `Row`, whose cells
 -- cannot express SQL `NULL` (it arrives as the empty string), so a nullable
 -- column read through them decodes `NULL` as `Just ""`.
-textCells : Row -> Cells
+textCells : Row -> RowCells
 textCells row =
     Dict.map (\_ cell -> Just cell) row
 
 
-decodeRows : Codec a -> List Cells -> Task Error (List a)
+decodeRows : Codec a -> List RowCells -> Task Error (List a)
 decodeRows codec rows =
     case rows of
         [] ->
@@ -2450,7 +2450,7 @@ decodeRows codec rows =
                     Task.map (\more -> value :: more) (decodeRows codec rest)
 
 
-firstDecoded : Codec a -> List Cells -> Task Error (Maybe a)
+firstDecoded : Codec a -> List RowCells -> Task Error (Maybe a)
 firstDecoded codec rows =
     case rows of
         [] ->
@@ -4274,7 +4274,7 @@ admitFragment admit =
 
 -- Order then paginate the raw rows: sort by each ordering key (numeric-aware for
 -- `CInt` / `CReal` columns), skip `off` rows, keep `lim` rows.
-paginateRows : List OrderKey -> Maybe Int -> Maybe Int -> List Cells -> List Cells
+paginateRows : List OrderKey -> Maybe Int -> Maybe Int -> List RowCells -> List RowCells
 paginateRows orderings off lim rows =
     applyLimit lim (applyOffset off (orderRowsWith orderings rows))
 
@@ -4283,7 +4283,7 @@ paginateRows orderings off lim rows =
 -- is applied first so a stable sort leaves the FIRST ordering as the dominant key
 -- (the primary sort). The sort compares each row's text cell, numerically when
 -- the column type is `CInt` / `CReal`; a `NULL` cell sorts before every value.
-orderRowsWith : List OrderKey -> List Cells -> List Cells
+orderRowsWith : List OrderKey -> List RowCells -> List RowCells
 orderRowsWith orderings rows =
     List.foldr
         (\ordering acc -> sortByOrdering ordering acc)
@@ -4291,14 +4291,14 @@ orderRowsWith orderings rows =
         orderings
 
 
-sortByOrdering : OrderKey -> List Cells -> List Cells
+sortByOrdering : OrderKey -> List RowCells -> List RowCells
 sortByOrdering ordering rows =
     case ordering of
         ( col, cellType, dir ) ->
             List.sortWith (\a b -> cellCompare cellType dir col a b) rows
 
 
-cellCompare : CellType -> SortDir -> String -> Cells -> Cells -> Order
+cellCompare : CellType -> SortDir -> String -> RowCells -> RowCells -> Order
 cellCompare cellType dir col a b =
     let
         base =
@@ -4313,7 +4313,7 @@ cellCompare cellType dir col a b =
 
 
 -- The cell a sort reads: `Nothing` for SQL `NULL` (or a column the row lacks).
-sortCell : String -> Cells -> Maybe String
+sortCell : String -> RowCells -> Maybe String
 sortCell col row =
     Maybe.withDefault Nothing (Dict.get col row)
 
@@ -4406,7 +4406,7 @@ flipOrder ord =
             LT
 
 
-applyOffset : Maybe Int -> List Cells -> List Cells
+applyOffset : Maybe Int -> List RowCells -> List RowCells
 applyOffset off rows =
     case off of
         Just n ->
@@ -4416,7 +4416,7 @@ applyOffset off rows =
             rows
 
 
-applyLimit : Maybe Int -> List Cells -> List Cells
+applyLimit : Maybe Int -> List RowCells -> List RowCells
 applyLimit lim rows =
     case lim of
         Just n ->
