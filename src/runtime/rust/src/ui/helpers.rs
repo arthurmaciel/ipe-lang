@@ -1485,15 +1485,15 @@ pub fn ui_disabled_() -> PseudoClass {
 ///
 /// Generic escape hatch — folds `attrs` into one CSS rules-string via the SAME
 /// style-collection logic used for the main `style=""` attribute
-/// (`render::build_style_string`), and attaches it as `AttrPseudoRule(pc,
-/// css)`. Sub-module helpers (`Background.hoverColor`, `Font.hoverColor`,
+/// (`render::block_style_string`: no flex parent, so a `fill` sizes the
+/// dimension only), and attaches it as `AttrPseudoRule(pc, css)`. Sub-module helpers (`Background.hoverColor`, `Font.hoverColor`,
 /// etc.) build on this exact primitive on the `../ipe` reference; mirrored
 /// here so both paths render through the identical collector + the
 /// `data-ipe-pc-rules` marker consumed by
 /// `ipe_runtime::web::style_inject::build_pc`.
 #[must_use]
 pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Attribute<M> {
-    Attribute::AttrPseudoRule(pc, super::render::build_style_string(&attrs))
+    Attribute::AttrPseudoRule(pc, super::render::block_style_string(&attrs))
 }
 
 /// `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
@@ -1501,9 +1501,10 @@ pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Att
 /// Raw-CSS-media-query escape hatch (mirrors `../ipe` `Ipe.Ui.ipe`'s
 /// `mediaQuery`): attaches to `child` the
 /// `data-ipe-mq-q` (the query) + `data-ipe-mq-rules` (the attrs folded
-/// through the SAME `render::build_style_string` collector as the inline
+/// through the SAME `render::block_style_string` collector as the inline
 /// `style=""` path and `Ui.onPseudo`, so every value-as-data attr inherits
-/// the `SafeCssValue` gate) marker pair.  The markers land on the child's own
+/// the `SafeCssValue` gate; a rule has no flex parent, so a `fill` there sizes
+/// the dimension only) marker pair.  The markers land on the child's own
 /// attribute list so the breakpoint rule targets the styled node (letting a
 /// media rule re-lay-out that node's own contents); a non-attributed leaf
 /// child falls back to a marker-carrying wrapper.  The Ipe.Web / Ipe.WebView render
@@ -1532,7 +1533,7 @@ pub fn ui_media_query_<M: Clone>(
 ) -> Element<M> {
     use crate::css_safety::SafeCssMediaQuery;
 
-    let rules = super::render::build_style_string(&attrs);
+    let rules = super::render::block_style_string(&attrs);
     let markers = match SafeCssMediaQuery::parse(&query) {
         Some(q) if !rules.is_empty() => vec![
             Attribute::AttrAttribute("data-ipe-mq-q".to_owned(), q.as_str().to_owned()),

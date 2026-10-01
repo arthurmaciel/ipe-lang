@@ -42,8 +42,8 @@ impl Length {
     /// `Ipe.Ui.Length` domain, shared by the inline-style and stylesheet paths.
     ///
     /// `Fill(n)` renders `100%`; the flex sizing (`flex-grow:n`, `flex-basis:0`)
-    /// that divides free space is emitted at the width/height attribute arms,
-    /// not here.
+    /// that divides free space depends on the parent's flex axis, so the
+    /// parent-aware `render::size_css` emits it, not this context-free renderer.
     ///
     /// The shared `Px`/`Vh`/`Vw` units are spelled by the one runtime renderer
     /// ([`crate::length::CssUnit`]); `Ipe.Ui`'s `Length` is a surface carrier
@@ -345,8 +345,9 @@ mod tests {
         assert_eq!(style, format!("background-color:{direct}"));
     }
 
-    // SSOT: a length formats identically through the inline-style path and the
-    // direct `Length::css` renderer, including the recursive `Min`/`Max` arms.
+    // SSOT: a length formats identically through the inline-style path (sized
+    // with no flex parent) and the direct `Length::css` renderer, including the
+    // recursive `Min`/`Max` arms.
     #[test]
     fn length_renders_identically_across_paths() {
         let len = Length::Max(320, Box::new(Length::Vh(80)));
@@ -354,7 +355,7 @@ mod tests {
 
         enum Msg {}
         let style =
-            super::super::render::build_style_string(&[Attribute::<Msg>::AttrWidth(len.clone())]);
+            super::super::render::block_style_string(&[Attribute::<Msg>::AttrWidth(len.clone())]);
 
         assert_eq!(direct, "max(320px,80vh)");
         assert_eq!(style, format!("width:{direct}"));
