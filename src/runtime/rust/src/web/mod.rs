@@ -220,6 +220,7 @@ mod listen_scope_tests {
             "",
             "not-an-ip",
             "[::1]",
+            "::ffff:127.0.0.1",
         ] {
             assert_eq!(
                 ListenScope::parse(host),

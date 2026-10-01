@@ -60,6 +60,56 @@ enum Entry {
 
 static SENDER: OnceLock<mpsc::Sender<Entry>> = OnceLock::new();
 
+/// The shared secret a push carries in `x-ipe-ingest-token`. Opaque: no
+/// `Debug`, `Display` or `Clone`, so formatting cannot carry it into a log line
+/// and only [`IngestToken::expose`] yields its text, at the header write.
+pub(crate) struct IngestToken(String);
+
+/// Entropy bytes in a minted token: 256 bits, rendered as 64 lowercase hex.
+const MINTED_TOKEN_BYTES: usize = 32;
+
+impl IngestToken {
+    /// A fresh token from the OS CSPRNG (`getrandom`). `None` when the entropy
+    /// source is unavailable; the caller refuses rather than run token-less.
+    pub(crate) fn mint() -> Option<Self> {
+        let mut buf = [0u8; MINTED_TOKEN_BYTES];
+        getrandom::getrandom(&mut buf).ok()?;
+        let mut hex = String::with_capacity(MINTED_TOKEN_BYTES * 2);
+        for byte in buf {
+            hex.push(hex_digit(byte >> 4));
+            hex.push(hex_digit(byte & 0x0f));
+        }
+        Some(Self(hex))
+    }
+
+    /// The operator-configured `IPE_INGEST_TOKEN`; `None` when unset or empty.
+    fn from_env() -> Option<Self> {
+        crate::system::read_env_var(TOKEN_ENV)
+            .ok()
+            .filter(|t| !t.is_empty())
+            .map(Self)
+    }
+
+    /// The token text, for the one header (or child env) write that carries it.
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The lowercase hex digit of a nibble (`0..=15`); total over `u8`.
+fn hex_digit(nibble: u8) -> char {
+    char::from_digit(u32::from(nibble & 0x0f), 16).unwrap_or('0')
+}
+
+/// What one batch POST came to. A refusal is the ingest answering with a
+/// non-2xx status (a 401 for a missing or wrong token); a transport failure is
+/// no answer at all.
+pub(crate) enum PushOutcome {
+    Accepted,
+    Refused(reqwest::StatusCode),
+    Transport(reqwest::Error),
+}
+
 /// Enable the push exporter from env. No-op unless `IPE_PARENT_URL` is set
 /// (i.e. this process runs as a sub-app pushing UP to its parent's ingest —
 /// federation). Idempotent. Call once at Web boot.
@@ -95,7 +145,12 @@ pub async fn enable_from_env() {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_INTERVAL_MS);
     let ingest_url = format!("{}/_ipe/observability/ingest", parent.trim_end_matches('/'));
-    enable("federation", ingest_url, interval_ms);
+    enable(
+        "federation",
+        ingest_url,
+        interval_ms,
+        IngestToken::from_env(),
+    );
 }
 
 /// Whether `url` is safe to carry `IPE_INGEST_TOKEN` on the wire: `https://`
@@ -141,15 +196,24 @@ pub(crate) fn redacted_origin(url: &str) -> String {
 /// `/_ipe/observability/ingest`, where the child (which owns sqlx + the store)
 /// records → spills → serves it. Called by the console mount after the child is
 /// ready, when the parent has no spill of its own.
-pub async fn enable_to_console(child_port: u16) {
+///
+/// `token` is the one `spawn_console` minted and handed the child as its
+/// `IPE_INGEST_TOKEN`, so the child's ingest gate admits these pushes under
+/// every build and posture.
+pub(crate) async fn enable_to_console(child_port: u16, token: IngestToken) {
     let ingest_url = format!("http://127.0.0.1:{child_port}/_ipe/observability/ingest");
-    enable("console-collector", ingest_url, DEFAULT_INTERVAL_MS);
+    enable(
+        "console-collector",
+        ingest_url,
+        DEFAULT_INTERVAL_MS,
+        Some(token),
+    );
 }
 
 /// Shared activation: bound the interval, claim the SENDER, spawn the batcher.
 /// Idempotent (first caller wins the OnceLock — a sub-app pushes to its parent
 /// OR a top-level app pushes to its console child, never both).
-fn enable(label: &str, ingest_url: String, interval_ms: u64) {
+fn enable(label: &str, ingest_url: String, interval_ms: u64, token: Option<IngestToken>) {
     if SENDER.get().is_some() {
         return;
     }
@@ -159,9 +223,6 @@ fn enable(label: &str, ingest_url: String, interval_ms: u64) {
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&c| c > 0)
         .unwrap_or(DEFAULT_QUEUE_CAP);
-    let token = crate::system::read_env_var(TOKEN_ENV)
-        .ok()
-        .filter(|t| !t.is_empty());
     let (tx, rx) = mpsc::channel::<Entry>(cap);
     if SENDER.set(tx).is_err() {
         return; // lost an enable race
@@ -206,7 +267,7 @@ fn exporter_client() -> reqwest::Client {
 async fn batcher(
     mut rx: mpsc::Receiver<Entry>,
     ingest_url: String,
-    token: Option<String>,
+    token: Option<IngestToken>,
     interval_ms: u64,
 ) {
     let client = exporter_client();
@@ -219,7 +280,7 @@ async fn batcher(
             maybe = rx.recv() => match maybe {
                 Some(Entry::Flush(ack)) => {
                     if !buf.is_empty() {
-                        flush(&client, &ingest_url, token.as_deref(), &buf).await;
+                        flush(&client, &ingest_url, token.as_ref().map(IngestToken::expose), &buf).await;
                         buf.clear();
                     }
                     // Best-effort ack — ignore send errors (caller may have timed out).
@@ -230,20 +291,20 @@ async fn batcher(
                     // Bound the accumulator: flush early at the cap rather than
                     // letting it grow until the next tick.
                     if buf.len() >= MAX_BATCH {
-                        flush(&client, &ingest_url, token.as_deref(), &buf).await;
+                        flush(&client, &ingest_url, token.as_ref().map(IngestToken::expose), &buf).await;
                         buf.clear();
                     }
                 }
                 None => {
                     if !buf.is_empty() {
-                        flush(&client, &ingest_url, token.as_deref(), &buf).await;
+                        flush(&client, &ingest_url, token.as_ref().map(IngestToken::expose), &buf).await;
                     }
                     break;
                 }
             },
             _ = tick.tick() => {
                 if !buf.is_empty() {
-                    flush(&client, &ingest_url, token.as_deref(), &buf).await;
+                    flush(&client, &ingest_url, token.as_ref().map(IngestToken::expose), &buf).await;
                     buf.clear();
                 }
             }
@@ -295,8 +356,23 @@ fn build_payload(buf: &[Entry]) -> String {
     serde_json::json!({ "logs": logs, "spans": spans }).to_string()
 }
 
-/// POST one batch to the parent ingest. Failures warn + drop (best-effort).
+/// POST one batch to the ingest and log anything but an acceptance. The batch
+/// is dropped either way (best-effort).
 async fn flush(client: &reqwest::Client, ingest_url: &str, token: Option<&str>, buf: &[Entry]) {
+    let outcome = send_batch(client, ingest_url, token, buf).await;
+    if let Some(line) = outcome_log_line(ingest_url, &outcome) {
+        crate::system::emit_runtime_log("push", &format!("{line}; batch dropped"));
+    }
+}
+
+/// POST one batch, carrying `token` in `x-ipe-ingest-token`, and classify the
+/// answer: only a 2xx status is an acceptance.
+async fn send_batch(
+    client: &reqwest::Client,
+    ingest_url: &str,
+    token: Option<&str>,
+    buf: &[Entry],
+) -> PushOutcome {
     let body = build_payload(buf);
     let mut req = client
         .post(ingest_url)
@@ -305,15 +381,31 @@ async fn flush(client: &reqwest::Client, ingest_url: &str, token: Option<&str>, 
     if let Some(t) = token {
         req = req.header("x-ipe-ingest-token", t);
     }
-    if let Err(e) = req.send().await {
-        crate::system::emit_runtime_log(
-            "push",
-            &format!(
-                "flush to {}: {}",
-                redacted_origin(ingest_url),
-                e.without_url()
-            ),
-        );
+    send_classified(req).await
+}
+
+/// Send one exporter request and classify the answer: only a 2xx status is an
+/// acceptance. The one classifier both exporters (this and `hub_exporter`)
+/// apply, so neither drops a refusal silently.
+pub(crate) async fn send_classified(req: reqwest::RequestBuilder) -> PushOutcome {
+    match req.send().await {
+        Ok(resp) if resp.status().is_success() => PushOutcome::Accepted,
+        Ok(resp) => PushOutcome::Refused(resp.status()),
+        Err(e) => PushOutcome::Transport(e.without_url()),
+    }
+}
+
+/// The log line for a push outcome: `None` for an acceptance. Names the
+/// endpoint by its redacted origin only and never carries a token.
+pub(crate) fn outcome_log_line(ingest_url: &str, outcome: &PushOutcome) -> Option<String> {
+    let origin = redacted_origin(ingest_url);
+    match outcome {
+        PushOutcome::Accepted => None,
+        PushOutcome::Refused(status) => Some(format!(
+            "push to {origin} refused with HTTP {}",
+            status.as_u16()
+        )),
+        PushOutcome::Transport(e) => Some(format!("push to {origin}: {e}")),
     }
 }
 
@@ -562,5 +654,97 @@ mod tests {
             deadline.is_ok(),
             "flush_now must not block when exporter is off"
         );
+    }
+
+    fn one_log() -> Vec<Entry> {
+        vec![Entry::Log {
+            ts_ms: 1,
+            level: "info".into(),
+            message: "hi".into(),
+        }]
+    }
+
+    /// A loopback ingest gated by the console's own receiver decision with
+    /// `want` configured and `dev_open` false (a Release child under any
+    /// posture). Returns its ingest URL.
+    #[cfg(feature = "server")]
+    async fn release_ingest(want: String) -> String {
+        use axum::extract::State;
+        use axum::response::IntoResponse;
+        use axum::{Router, routing::any};
+        async fn gate(
+            State(want): State<String>,
+            headers: axum::http::HeaderMap,
+        ) -> axum::response::Response {
+            match super::super::console::ingest_decision(&headers, Some(&want), false) {
+                Some(refusal) => refusal,
+                None => axum::http::StatusCode::NO_CONTENT.into_response(),
+            }
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ingest");
+        let port = listener.local_addr().expect("addr").port();
+        let app = Router::new().fallback(any(gate)).with_state(want);
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://127.0.0.1:{port}/_ipe/observability/ingest")
+    }
+
+    // The push carries the token in `x-ipe-ingest-token`, and the Release
+    // receiver admits it.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn push_with_the_minted_token_is_accepted_by_a_release_ingest() {
+        let token = IngestToken::mint().expect("entropy");
+        let url = release_ingest(token.expose().to_string()).await;
+        let outcome = send_batch(&exporter_client(), &url, Some(token.expose()), &one_log()).await;
+        assert!(
+            matches!(outcome, PushOutcome::Accepted),
+            "{:?}",
+            outcome_log_line(&url, &outcome)
+        );
+        assert!(outcome_log_line(&url, &outcome).is_none());
+    }
+
+    // A missing or wrong token is a 401 the exporter surfaces as a log line,
+    // never a silent drop; the line carries neither token.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn refused_push_is_logged_without_any_token() {
+        let token = IngestToken::mint().expect("entropy");
+        let wrong = IngestToken::mint().expect("entropy");
+        let url = release_ingest(token.expose().to_string()).await;
+        for sent in [None, Some(wrong.expose())] {
+            let outcome = send_batch(&exporter_client(), &url, sent, &one_log()).await;
+            assert!(
+                matches!(outcome, PushOutcome::Refused(s) if s == reqwest::StatusCode::UNAUTHORIZED),
+                "sent token: {}",
+                sent.is_some()
+            );
+            let line = outcome_log_line(&url, &outcome).expect("a refusal is logged");
+            assert!(line.contains("HTTP 401"), "{line}");
+            assert!(!line.contains(token.expose()), "{line}");
+            assert!(!line.contains(wrong.expose()), "{line}");
+        }
+    }
+
+    // A transport failure is logged too, and neither the header token nor a
+    // token placed in the URL reaches the line.
+    #[tokio::test]
+    async fn transport_failure_is_logged_without_the_token() {
+        let token = IngestToken::mint().expect("entropy");
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = closed.local_addr().expect("addr").port();
+        drop(closed);
+        let url = format!(
+            "http://127.0.0.1:{port}/_ipe/observability/ingest?t={}",
+            token.expose()
+        );
+        let outcome = send_batch(&exporter_client(), &url, Some(token.expose()), &one_log()).await;
+        assert!(matches!(outcome, PushOutcome::Transport(_)));
+        let line = outcome_log_line(&url, &outcome).expect("a transport failure is logged");
+        assert!(!line.contains(token.expose()), "{line}");
     }
 }

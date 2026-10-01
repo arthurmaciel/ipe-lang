@@ -543,7 +543,7 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
 /// unless `dev_open` holds (a dev-intent binary in a dev posture on a loopback
 /// listener); there, a cross-origin browser POST (log-injection CSRF shape —
 /// see `is_cross_origin_ingest`) is still refused.
-fn ingest_decision(
+pub(super) fn ingest_decision(
     headers: &axum::http::HeaderMap,
     want: Option<&str>,
     dev_open: bool,
@@ -1117,10 +1117,11 @@ mod tests {
         }
     }
 
-    // A dev posture on a listener not installed as loopback is not
-    // `dev_open`, so the env-driven gate refuses a token-less push.
+    // `ENV=dev` alone never opens a token-less ingest through the env-driven
+    // gate. A Release build fails the build axis; a dev-posture build fails
+    // the scope axis, since no loopback listener is installed here.
     #[test]
-    fn ingest_without_token_off_loopback_is_refused() {
+    fn env_dev_alone_does_not_open_token_less_ingest() {
         crate::system::locked_set_var("ENV", "dev");
         crate::system::locked_remove_var("IPE_INGEST_TOKEN");
         assert_eq!(
@@ -1128,6 +1129,48 @@ mod tests {
             Some(StatusCode::UNAUTHORIZED)
         );
         crate::system::locked_remove_var("ENV");
+    }
+
+    // Each axis refuses on its own: with the other two open, a Release build,
+    // a production posture, or an exposed listener alone keeps a token-less
+    // push out, on every compiled build.
+    #[test]
+    fn each_closed_axis_alone_refuses_token_less_ingest() {
+        use crate::telemetry::dev_open;
+        let open = dev_open(
+            BuildPosture::Development,
+            Posture::Dev,
+            ListenScope::Loopback,
+        );
+        assert!(ingest_decision(&origin_headers(None), None, open).is_none());
+        for (axis, closed) in [
+            (
+                "build",
+                dev_open(BuildPosture::Release, Posture::Dev, ListenScope::Loopback),
+            ),
+            (
+                "posture",
+                dev_open(
+                    BuildPosture::Development,
+                    Posture::Production,
+                    ListenScope::Loopback,
+                ),
+            ),
+            (
+                "scope",
+                dev_open(
+                    BuildPosture::Development,
+                    Posture::Dev,
+                    ListenScope::Exposed,
+                ),
+            ),
+        ] {
+            assert_eq!(
+                status_of(ingest_decision(&origin_headers(None), None, closed)),
+                Some(StatusCode::UNAUTHORIZED),
+                "{axis} axis"
+            );
+        }
     }
 
     #[test]

@@ -2,10 +2,10 @@
 //!
 //! Replaces the in-process `console.rs` plain-HTML shell with the **real bundled
 //! Ipe.Web console**, spawned as a child process and reverse-proxied at
-//! `/_ipe/console/*`. The console binary is **pre-built at the user's `ipe build`
-//! time** into a shared cache — at runtime this module only `exec`s it,
-//! never builds. The pre-built binary avoids the OOM risk a runtime-build would
-//! incur on memory-constrained hosts.
+//! `/_ipe/console/*`. This module only `exec`s a console binary already on
+//! disk (`IPE_CONSOLE_BIN`, else the version-keyed cache path); it never builds
+//! one, and no build step writes the cache path. Without a binary the
+//! in-process console serves.
 //!
 //! This module: gate + spawn + lifecycle + the reverse-proxy handler.
 //!
@@ -17,8 +17,12 @@ use std::time::{Duration, Instant};
 use tokio::process::{Child, Command};
 
 /// Override for the pre-built console binary path. When unset, the cache path
-/// (`~/.cache/ipe/rust-console/<ipe-version>/ipe-console`, written at build time) is used.
+/// `~/.cache/ipe/rust-console/<ipe-version>/ipe-console` is used if a binary is
+/// present there. No build step writes that path.
 const CONSOLE_BIN_ENV: &str = "IPE_CONSOLE_BIN";
+
+/// The child's ingest-token variable (the one its ingest gate reads).
+const INGEST_TOKEN_ENV: &str = "IPE_INGEST_TOKEN";
 
 /// The mount prefix. The parent proxies everything under this path to the child
 /// and STRIPS the prefix before forwarding (the strip convention — see the
@@ -48,9 +52,8 @@ static CHILD: Mutex<Option<Child>> = Mutex::new(None);
 static CONSOLE_SCRATCH: Mutex<Option<crate::scratch_core::ScratchDir>> = Mutex::new(None);
 
 /// Resolve the pre-built console binary path: `IPE_CONSOLE_BIN`, else the
-/// version-keyed cache path the build step populates. `None` when neither
-/// exists (→ the caller falls back to the in-process console; first build
-/// before the console is pre-built, or a build env where it couldn't be).
+/// version-keyed cache path. `None` when neither names a file (→ the caller
+/// falls back to the in-process console).
 pub fn console_bin_path() -> Option<std::path::PathBuf> {
     if let Ok(p) = crate::system::read_env_var(CONSOLE_BIN_ENV)
         && !p.is_empty()
@@ -60,9 +63,8 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
     }
     // Key on the IPE compiler version (same source as `/_ipe/buildinfo`), NOT
     // the generated crate's CARGO_PKG_VERSION (always "0.1.0"). The ipe build
-    // sets IPE_VERSION when compiling this app, and Ipe.Build.Rust.Console
-    // caches the console binary under the SAME version — so both agree on the
-    // `~/.cache/ipe/rust-console/<ver>/ipe-console` path.
+    // sets IPE_VERSION when compiling this app, so a console binary placed for
+    // one ipe version is never exec'd by an app built with another.
     let ver = option_env!("IPE_VERSION").unwrap_or("dev");
     let pb = crate::system::home_dir()?
         .join(".cache/ipe/rust-console")
@@ -71,21 +73,27 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
     if pb.is_file() { Some(pb) } else { None }
 }
 
-/// The console child's command: its port, base path, data store and bind.
+/// The console child's command: its port, base path, data store, bind and
+/// ingest token.
 ///
 /// The child always binds loopback (`IPE_HTTP_BIND=127.0.0.1`): it serves the
 /// console unauthenticated behind the gated parent proxy, so it is never
-/// reachable off the machine under any posture.
+/// reachable off the machine under any posture. Its ingest requires `token`
+/// (`IPE_INGEST_TOKEN`), which only this parent holds, so the parent's pushes
+/// are admitted under every build and posture and no other local process can
+/// write the store.
 fn console_command(
     bin: &std::path::Path,
     child_port: u16,
     store: &str,
     child_collects: bool,
+    token: &super::push_exporter::IngestToken,
 ) -> Command {
     let mut cmd = Command::new(bin);
     cmd.env("IPE_WEB_PORT", child_port.to_string())
         .env("IPE_WEB_BASE_PATH", "/_ipe/console")
         .env("IPE_HTTP_BIND", "127.0.0.1")
+        .env(INGEST_TOKEN_ENV, token.expose())
         // Belt-and-braces: suppress the child's own console auto-mount + banner.
         .env("IPE_CONSOLE_EMBED", "off")
         .kill_on_drop(true);
@@ -107,9 +115,10 @@ fn console_command(
 }
 
 /// Spawn the pre-built console child on `child_port`, pointing it at the data
-/// `store`. Returns `Some(())` on a successful spawn (the `Child` is tracked in
-/// `CHILD`); `None` when the binary is absent or the spawn fails — the caller
-/// falls back to the in-process console.
+/// `store`. Returns the ingest token minted for this child on a successful
+/// spawn (the `Child` is tracked in `CHILD`); `None` when the binary is absent,
+/// no entropy is available for the token, or the spawn fails — the caller falls
+/// back to the in-process console.
 ///
 /// `store` is the SQLite file the console renders from (`IPE_CONSOLE_HUB_DB` →
 /// hubStore). `child_collects` selects who WRITES it:
@@ -123,9 +132,20 @@ fn console_command(
 /// handler) cover the graceful paths, and on Linux `PR_SET_PDEATHSIG` makes the
 /// kernel SIGTERM the child if the parent dies by ANY means — including SIGKILL
 /// / OOM / a crash the signal handler can't catch.
-pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Option<()> {
+pub(crate) fn spawn_console(
+    child_port: u16,
+    store: &str,
+    child_collects: bool,
+) -> Option<super::push_exporter::IngestToken> {
     let bin = console_bin_path()?;
-    let mut cmd = console_command(&bin, child_port, store, child_collects);
+    let Some(token) = super::push_exporter::IngestToken::mint() else {
+        crate::system::emit_runtime_log(
+            "console",
+            "OS entropy source unavailable for the ingest token; falling back to in-process console",
+        );
+        return None;
+    };
+    let mut cmd = console_command(&bin, child_port, store, child_collects, &token);
     // Parent-death signal: if the parent dies for ANY reason (SIGKILL, OOM,
     // panic-abort) the kernel SIGTERMs this child, so it can never outlive the
     // parent as an orphan. Routed through the SINGLE sanctioned `PR_SET_PDEATHSIG`
@@ -146,7 +166,7 @@ pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Opti
                     bin.display()
                 ),
             );
-            Some(())
+            Some(token)
         }
         Err(e) => {
             crate::system::emit_runtime_log(
@@ -428,10 +448,10 @@ pub async fn ensure_console_proxy() -> bool {
         Some(p) => p,
         None => return false,
     };
-    if spawn_console(port, &store, /* child_collects = */ !parent_writes).is_none() {
+    let Some(token) = spawn_console(port, &store, /* child_collects = */ !parent_writes) else {
         // Binary absent (not pre-built / different ipe version) or spawn error.
         return false;
-    }
+    };
     if !wait_ready(port, READY_TIMEOUT).await {
         crate::system::emit_runtime_log(
             "console",
@@ -445,7 +465,7 @@ pub async fn ensure_console_proxy() -> bool {
     // Lean parent: start pushing our telemetry to the child collector now that
     // its ingest is up. (db parent already wrote the store directly.)
     if !parent_writes {
-        super::push_exporter::enable_to_console(port).await;
+        super::push_exporter::enable_to_console(port, token).await;
     }
     // Bound the upstream hop so a wedged child can't accumulate in-flight
     // requests without limit. `connect_timeout` caps the TCP handshake; a
@@ -540,7 +560,8 @@ mod tests {
     fn console_child_binds_loopback() {
         let bin = std::path::Path::new("/nonexistent/ipe-console");
         for (store, collects) in [("", false), ("/tmp/hub.db", false), ("/tmp/hub.db", true)] {
-            let cmd = console_command(bin, 9931, store, collects);
+            let token = super::super::push_exporter::IngestToken::mint().expect("entropy");
+            let cmd = console_command(bin, 9931, store, collects, &token);
             let bind = cmd
                 .as_std()
                 .get_envs()
@@ -552,6 +573,35 @@ mod tests {
                 "store {store:?} collects {collects}"
             );
         }
+    }
+
+    // The child's ingest demands the token the parent minted for it, on every
+    // spawn shape (the explicit `env` overrides any inherited value), so a
+    // Release child under any posture admits the parent's pushes and nothing
+    // else.
+    #[test]
+    fn console_child_carries_its_minted_ingest_token() {
+        use super::super::push_exporter::IngestToken;
+        let bin = std::path::Path::new("/nonexistent/ipe-console");
+        for (store, collects) in [("", false), ("/tmp/hub.db", false), ("/tmp/hub.db", true)] {
+            let token = IngestToken::mint().expect("entropy");
+            let cmd = console_command(bin, 9931, store, collects, &token);
+            let carried = cmd
+                .as_std()
+                .get_envs()
+                .find(|(key, _)| *key == INGEST_TOKEN_ENV)
+                .and_then(|(_, value)| value);
+            assert_eq!(
+                carried,
+                Some(std::ffi::OsStr::new(token.expose())),
+                "store {store:?} collects {collects}"
+            );
+        }
+        let first = IngestToken::mint().expect("entropy");
+        let second = IngestToken::mint().expect("entropy");
+        assert_eq!(first.expose().len(), 64);
+        assert!(first.expose().bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(first.expose(), second.expose(), "every spawn mints afresh");
     }
 
     #[test]

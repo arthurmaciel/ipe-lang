@@ -274,31 +274,31 @@ async fn flush(
     }
 }
 
-/// Push one OTLP batch. `true` on a 2xx; `false` (→ re-spool) on any error.
+/// Push one OTLP batch. `true` on a 2xx; `false` (→ re-spool) on a refusal or
+/// a transport failure, each logged by its redacted origin.
 async fn push_one(client: &reqwest::Client, base: &str, token: &str, batch: &OtlpBatch) -> bool {
     let url = format!("{base}{}", batch.path);
-    match client
+    let req = client
         .post(&url)
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {token}"))
-        .body(batch.json.clone())
-        .send()
-        .await
-    {
-        Ok(r) => r.status().is_success(),
-        Err(e) => {
-            crate::system::emit_runtime_log(
-                "hub",
-                &format!(
-                    "push {}{}: {}",
-                    super::push_exporter::redacted_origin(base),
-                    batch.path,
-                    e.without_url()
-                ),
-            );
-            false
-        }
+        .body(batch.json.clone());
+    let outcome = super::push_exporter::send_classified(req).await;
+    if let Some(line) = push_log_line(&url, batch.path, &outcome) {
+        crate::system::emit_runtime_log("hub", &line);
     }
+    matches!(outcome, super::push_exporter::PushOutcome::Accepted)
+}
+
+/// The hub's log line for a push outcome: `None` for an acceptance. Names the
+/// hub by its redacted origin and the OTLP path only, never the bearer.
+fn push_log_line(
+    url: &str,
+    path: &str,
+    outcome: &super::push_exporter::PushOutcome,
+) -> Option<String> {
+    super::push_exporter::outcome_log_line(url, outcome)
+        .map(|line| format!("{line} ({path}); batch re-spooled"))
 }
 
 /// Bounded spool insert (evict oldest on overflow — never grows unbounded).
@@ -597,6 +597,17 @@ mod tests {
         // A 307 is not a 2xx → push_one reports failure (batch would be re-spooled).
         let ok = push_one(&client, &base, &token, &batch).await;
         assert!(!ok, "a 3xx redirect must NOT count as a successful push");
+
+        // The refusal is surfaced as a log line naming the status, never the bearer.
+        let url = format!("{base}{}", batch.path);
+        let req = client
+            .post(&url)
+            .header("authorization", format!("Bearer {token}"));
+        let outcome = super::super::push_exporter::send_classified(req).await;
+        let line = push_log_line(&url, batch.path, &outcome).expect("a refusal is logged");
+        assert!(line.contains("HTTP 307"), "{line}");
+        assert!(line.contains("re-spooled"), "{line}");
+        assert!(!line.contains(&token), "{line}");
 
         // The load-bearing assertion: the redirect was NOT followed, so the leak
         // endpoint saw no request at all — the bearer never crossed to it.
