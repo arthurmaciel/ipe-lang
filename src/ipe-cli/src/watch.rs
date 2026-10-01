@@ -1311,7 +1311,7 @@ fn run_inner(
                         resolved.wasm_public_env.clone(),
                         false,
                         // `ipe watch` is a development loop — Debug.* is allowed.
-                        false,
+                        ipe_backend_rust::BuildIntent::Development,
                         // Dependency-model emit: the project links the runtime as a
                         // path dependency (what `ipe build` uses by default), so
                         // no runtime source is vendored into `src/ipe_runtime/`.

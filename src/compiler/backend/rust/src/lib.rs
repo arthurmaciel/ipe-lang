@@ -74,6 +74,23 @@ use ipe_ir::{
 pub use emit_doc::{SweepDivergence, native_vs_legacy_sweep};
 pub use preamble::{epilogue, preamble};
 
+/// Which `ipe` verb family an emit serves.
+///
+/// The verb, never the cargo profile, decides it. `Development` (`ipe build`,
+/// `ipe run`, `ipe test`, `ipe watch`) turns on the runtime `dev-posture`
+/// feature, the one input that lets the operator console default open, and only
+/// on a loopback bind. `Release` is the default, so an emit whose caller states
+/// no intent is a release emit: the console stays closed until
+/// `IPE_CONSOLE_AUTH` names a credential mode, and `Debug.*` is refused.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum BuildIntent {
+    /// A dev-loop verb: the runtime carries the `dev-posture` feature.
+    Development,
+    /// A shipped artifact (`ipe release`, `ipe eject`, the desktop bundle).
+    #[default]
+    Release,
+}
+
 /// Which SQL database driver the emitted project targets.
 ///
 /// Selected by `package.ipe`'s database driver setting
@@ -226,6 +243,9 @@ pub struct RustBackend<'a> {
     /// `ipe release` (the release command does not expose the flag), so no
     /// production artifact carries recorder code. Set via [`Self::with_debugger`].
     debugger: bool,
+    /// The verb family this emit serves; selects the `dev-posture` runtime
+    /// feature. Set via [`Self::with_build_intent`]; default `Release`.
+    build_intent: BuildIntent,
     /// The project name from `package.ipe`, sanitized into a valid Cargo package
     /// name via [`sanitize_cargo_name`]. Becomes the emitted crate's
     /// `[package] name`. Empty string signals "use the safe fallback
@@ -496,6 +516,7 @@ impl<'a> RustBackend<'a> {
             wasm_hydrate_mode: false,
             runtime_dep: None,
             debugger: false,
+            build_intent: BuildIntent::Release,
             cargo_name: String::new(),
             hot_appearance: false,
             webview_host: false,
@@ -537,6 +558,17 @@ impl<'a> RustBackend<'a> {
     #[must_use]
     pub const fn with_debugger(mut self, debugger: bool) -> Self {
         self.debugger = debugger;
+        self
+    }
+
+    /// State the verb family this emit serves.
+    ///
+    /// `Development` adds the runtime `dev-posture` feature (dependency model)
+    /// or promotes it into the vendored manifest's default list; `Release`
+    /// emits neither, so the shipped binary has no development console default.
+    #[must_use]
+    pub const fn with_build_intent(mut self, intent: BuildIntent) -> Self {
+        self.build_intent = intent;
         self
     }
 
@@ -643,6 +675,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
             self.debugger,
+            self.build_intent,
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
@@ -671,6 +704,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
             self.debugger,
+            self.build_intent,
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
@@ -699,6 +733,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
             self.debugger,
+            self.build_intent,
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
@@ -727,6 +762,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
             self.debugger,
+            self.build_intent,
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
@@ -770,6 +806,7 @@ impl<'a> RustBackend<'a> {
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
             self.debugger,
+            self.build_intent,
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
@@ -820,6 +857,7 @@ impl Backend for RustBackend<'_> {
             self.wasm_hydrate_mode,
             self.runtime_dep.clone(),
             self.debugger,
+            self.build_intent,
             self.cargo_name.clone(),
             self.hot_appearance,
             self.webview_host,
@@ -1441,6 +1479,10 @@ pub(crate) struct EmitCtx<'a> {
     /// both targets, so the TEA driver records each `(msg, model)` step. Never
     /// set for `ipe release`, so no production artifact carries recorder code.
     pub(crate) debugger: bool,
+    /// The verb family this emit serves. `Development` selects the runtime
+    /// `dev-posture` feature ([`crate::runtime_features`] on the dependency
+    /// model; the vendored manifest's default list otherwise).
+    pub(crate) build_intent: BuildIntent,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -1751,6 +1793,7 @@ impl<'a> EmitCtx<'a> {
         wasm_hydrate_mode: bool,
         runtime_dep: Option<RuntimeDep>,
         debugger: bool,
+        build_intent: BuildIntent,
         cargo_name: String,
         hot_appearance: bool,
         webview_host: bool,
@@ -2383,6 +2426,7 @@ impl<'a> EmitCtx<'a> {
             wasm_hydrate_mode,
             runtime_dep,
             debugger,
+            build_intent,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             hydration_state_rust_name: None,
@@ -5302,6 +5346,7 @@ mod record_struct_namespace_tests {
             false,
             None,
             false,
+            BuildIntent::Release,
             String::new(),
             false,
             false,
@@ -5408,6 +5453,7 @@ mod record_struct_namespace_tests {
             false,
             None,
             false,
+            BuildIntent::Release,
             String::new(),
             false,
             false,
@@ -5498,6 +5544,7 @@ mod record_struct_namespace_tests {
             false,
             None,
             false,
+            BuildIntent::Release,
             String::new(),
             false,
             false,

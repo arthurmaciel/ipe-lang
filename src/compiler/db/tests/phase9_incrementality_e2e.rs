@@ -96,7 +96,7 @@ fn body_edit_reexecutes_only_the_edited_module_file() {
         ipe_ir::Target::Native,
         Vec::new(),
         false,
-        false,
+        ipe_backend_rust::BuildIntent::Development,
         None,
         false,
         String::new(),

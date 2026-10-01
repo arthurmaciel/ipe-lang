@@ -1680,13 +1680,6 @@ async fn ws_loop<E: From<String> + Send + 'static>(
         .remove(&id);
 }
 
-fn ws_production() -> bool {
-    let v = crate::system::read_env_var("ENV")
-        .or_else(|_| crate::system::read_env_var("IPE_ENV"))
-        .unwrap_or_default();
-    !matches!(v.as_str(), "" | "dev" | "development" | "local")
-}
-
 fn ws_resp(status: i64, body: &str) -> ServerResponse {
     ServerResponse {
         status,
@@ -1786,7 +1779,7 @@ pub fn server_web_socket_upgrade<E: From<String> + Send + 'static>(
     Box::pin(async move {
         // Origin allowlist. Production with no patterns → reject ( With
         // patterns set (any mode), the request's Origin must match one of them.
-        if ws_production() && cfg.originPatterns.is_empty() {
+        if crate::telemetry::production_from_env() && cfg.originPatterns.is_empty() {
             return ok_res(ws_resp(
                 403,
                 "websocket: origin allowlist required in production",
@@ -3190,8 +3183,9 @@ mod tests {
 
     #[tokio::test]
     async fn to_axum_response_injects_dev_banner_into_html_before_body_close() {
-        // Default test env is dev (ENV/IPE_ENV unset), so the banner is emitted.
-        // injectDevBanner runs on every text/html buffered response.
+        // A dev posture emits the banner; injectDevBanner runs on every
+        // text/html buffered response.
+        crate::system::locked_set_var("ENV", "dev");
         let ipe = server_html("<html><body><h1>hi</h1></body></html>".to_string());
         let out = axum_body_string(to_axum_response(ipe)).await;
         assert!(
@@ -3316,10 +3310,10 @@ mod tests {
 
     #[tokio::test]
     async fn ws_upgrade_dev_rejects_cross_origin_without_allowlist() {
-        // No IPE_TRUSTED_PROXY / ENV involvement — this exercises the CSWSH
-        // default-deny path directly: dev mode (no ENV set in this test
-        // process), empty originPatterns, cross-origin Origin/Host pair. The
-        // pre-fix behaviour fell through with no check at all (allow-all).
+        // The CSWSH default-deny path: dev posture (`ENV=dev`), empty
+        // originPatterns, cross-origin Origin/Host pair.
+        crate::system::locked_set_var("ENV", "dev");
+        crate::system::locked_remove_var("IPE_ENV");
         let cfg = ws_server_default_cfg::<String>();
         let req = mk_ws_req(&[
             ("origin", "https://evil.example"),
@@ -3340,6 +3334,8 @@ mod tests {
 
     #[tokio::test]
     async fn ws_upgrade_dev_allows_same_origin_without_allowlist() {
+        crate::system::locked_set_var("ENV", "dev");
+        crate::system::locked_remove_var("IPE_ENV");
         let cfg = ws_server_default_cfg::<String>();
         let req = mk_ws_req(&[
             ("origin", "https://victim.example"),
@@ -3358,12 +3354,53 @@ mod tests {
         }
     }
 
+    /// The status a same-origin upgrade with no allowlist gets under the
+    /// given `ENV` / `IPE_ENV` (`None` = unset).
+    async fn same_origin_ws_status(env: Option<&str>, ipe_env: Option<&str>) -> i64 {
+        for (key, value) in [("ENV", env), ("IPE_ENV", ipe_env)] {
+            match value {
+                Some(v) => crate::system::locked_set_var(key, v),
+                None => crate::system::locked_remove_var(key),
+            }
+        }
+        let req = mk_ws_req(&[
+            ("origin", "https://victim.example"),
+            ("host", "victim.example"),
+        ]);
+        let result =
+            server_web_socket_upgrade::<String>(req, ws_server_default_cfg::<String>()).await;
+        crate::system::locked_remove_var("ENV");
+        crate::system::locked_remove_var("IPE_ENV");
+        let IpeResult::Ok(resp) = result else {
+            assert!(matches!(result, IpeResult::Ok(_)), "upgrade returned Err");
+            return 0;
+        };
+        resp.status
+    }
+
+    // The WS origin gate reads the one posture parse: a release binary with
+    // nothing set is production (403 without an allowlist); an empty `ENV`
+    // defers to `IPE_ENV`.
+    #[tokio::test]
+    async fn ws_origin_gate_reads_the_build_posture() {
+        if !cfg!(feature = "dev-posture") {
+            assert_eq!(same_origin_ws_status(None, None).await, 403);
+        }
+        assert_eq!(same_origin_ws_status(Some(""), Some("prod")).await, 403);
+        assert_eq!(same_origin_ws_status(Some("staging"), None).await, 403);
+        assert_eq!(same_origin_ws_status(Some(""), Some("dev")).await, 400);
+        assert_eq!(same_origin_ws_status(Some("dev"), None).await, 400);
+    }
+
     #[tokio::test]
     async fn ws_upgrade_rejects_when_at_capacity() {
         // Pre-fill the live-peer registry to the ceiling, then a valid
         // same-origin upgrade must be turned away with 503 BEFORE any id/channel
         // is minted — distinguished from the `400 no-upgrader` fall-through the
-        // same-origin path would otherwise hit in a unit test.
+        // same-origin path would otherwise hit in a unit test. Dev posture,
+        // so the no-allowlist origin gate passes a same-origin request.
+        crate::system::locked_set_var("ENV", "dev");
+        crate::system::locked_remove_var("IPE_ENV");
         crate::system::locked_remove_var("IPE_WS_MAX_CONNECTIONS");
         let ceiling = ws_max_connections();
         {
@@ -3579,6 +3616,8 @@ mod tests {
 
     #[tokio::test]
     async fn csrf_post_with_matching_cookie_and_header_allowed() {
+        // Dev posture: the CSRF cookie carries its plain-http name `ipe_csrf`.
+        crate::system::locked_set_var("ENV", "dev");
         let tok = "b".repeat(64);
         let mut cookies = HashMap::new();
         cookies.insert("ipe_csrf".to_string(), tok.clone());
@@ -3673,7 +3712,7 @@ mod tests {
         // (per-process under nextest, so mutating ENV here is safe).
         let tok = "a".repeat(64);
 
-        crate::system::locked_remove_var("ENV");
+        crate::system::locked_set_var("ENV", "dev");
         crate::system::locked_remove_var("IPE_ENV");
         // (a) not production, request IS https -> Secure.
         assert!(
@@ -3723,6 +3762,8 @@ mod tests {
     /// capture-before-move + thread-through-the-closure adaptation.
     #[tokio::test]
     async fn csrf_middleware_mints_secure_cookie_for_trusted_https_request() {
+        // Dev posture, so `Secure` can only come from the forwarded scheme.
+        crate::system::locked_set_var("ENV", "dev");
         let mut headers = HashMap::new();
         headers.insert("x-forwarded-proto".to_string(), "https".to_string());
         let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
@@ -3989,7 +4030,7 @@ mod tests {
         /// a re-issued cookie must never be less-Secure than the initial one.
         #[test]
         fn reissue_set_cookie_secure_matches_initial_gate() {
-            crate::system::locked_remove_var("ENV");
+            crate::system::locked_set_var("ENV", "dev");
             crate::system::locked_remove_var("IPE_ENV");
 
             // is_https=true, cookies_secure()=false → Secure must fire.
@@ -4016,7 +4057,7 @@ mod tests {
         /// `OnceLock`-cached `trust_proxy_headers()` without mutating process env.
         #[test]
         fn reissue_set_cookie_https_proxy_sets_secure() {
-            crate::system::locked_remove_var("ENV");
+            crate::system::locked_set_var("ENV", "dev");
             crate::system::locked_remove_var("IPE_ENV");
 
             let mut headers = HashMap::new();
@@ -4034,7 +4075,7 @@ mod tests {
         /// Non-proxy default: no `X-Forwarded-Proto`, trust=false → no Secure on reissue.
         #[test]
         fn reissue_set_cookie_plain_http_no_secure() {
-            crate::system::locked_remove_var("ENV");
+            crate::system::locked_set_var("ENV", "dev");
             crate::system::locked_remove_var("IPE_ENV");
 
             let headers = HashMap::new();

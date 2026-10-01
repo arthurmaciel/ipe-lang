@@ -513,7 +513,7 @@ pub fn compute_project_key(
     db_driver: DbDriver,
     target: ipe_ir::Target,
     wasm_public_env: &[String],
-    production: bool,
+    intent: ipe_backend_rust::BuildIntent,
     debugger: bool,
     hot_appearance: bool,
     webview_host: bool,
@@ -552,13 +552,15 @@ pub fn compute_project_key(
         None => hasher.update([0u8]),
     }
 
-    // `ipe release` rejects any `Debug.*` use (IPE-L0140), so its outcome
-    // differs from a development build for a Debug-using program (error vs
-    // emitted project). Keying on it keeps the two builds' cache entries
-    // disjoint — a dev-cached project is never served to a release build, and
-    // vice versa. (For a Debug-free program the emitted bytes are identical
-    // either way; the extra key bit only costs a one-time cold entry.)
-    hasher.update([u8::from(production)]);
+    // The build intent changes the emitted crate: a Development emit carries
+    // the runtime `dev-posture` feature (the console's loopback dev default),
+    // and a Release emit rejects any `Debug.*` use (IPE-L0140). Keying on it
+    // keeps the two builds' cache entries disjoint, so a dev-cached project is
+    // never served to a release build, and vice versa.
+    hasher.update([match intent {
+        ipe_backend_rust::BuildIntent::Development => 0u8,
+        ipe_backend_rust::BuildIntent::Release => 1u8,
+    }]);
 
     // `--debugger` changes the emitted crate: the runtime `debugger` feature,
     // the cli/worker entry's session-codec argument and the serde derives the
@@ -1388,7 +1390,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1401,7 +1403,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1420,7 +1422,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1436,7 +1438,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1455,7 +1457,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1468,7 +1470,7 @@ mod tests {
             DbDriver::Postgres,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1477,13 +1479,11 @@ mod tests {
         assert_ne!(sqlite, postgres, "the SQL driver is part of the key");
     }
 
-    /// `ipe release` rejects any `Debug.*` use (IPE-L0140), so its outcome
-    /// differs from a development build for a Debug-using program. The key must
-    /// separate the two so a dev-cached project is never served to a release
-    /// build (or vice versa) — the tier-1 proof of the emit demand's
-    /// production gate.
+    /// A Development emit carries `dev-posture` and a Release emit refuses
+    /// `Debug.*`, so the key separates the two intents: a dev-cached project is
+    /// never served to a release build, or vice versa.
     #[test]
-    fn key_changes_with_production() {
+    fn key_changes_with_build_intent() {
         let (sources, injected) = sample_sources();
         let dev = compute_project_key(
             &sources,
@@ -1492,7 +1492,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1505,13 +1505,13 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            true,
+            ipe_backend_rust::BuildIntent::Release,
             false,
             false,
             false,
             None,
         );
-        assert_ne!(dev, prod, "the production flag is part of the key");
+        assert_ne!(dev, prod, "the build intent is part of the key");
     }
 
     /// A `--debugger` emit differs from a plain one (runtime feature, session
@@ -1527,7 +1527,7 @@ mod tests {
                 DbDriver::Sqlite,
                 ipe_ir::Target::Native,
                 &[],
-                false,
+                ipe_backend_rust::BuildIntent::Development,
                 debugger,
                 false,
                 false,
@@ -1554,7 +1554,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1567,7 +1567,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             true,
             false,
@@ -1596,7 +1596,7 @@ mod tests {
                 DbDriver::Sqlite,
                 ipe_ir::Target::Native,
                 &[],
-                false,
+                ipe_backend_rust::BuildIntent::Development,
                 false,
                 false,
                 true,
@@ -1630,7 +1630,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1643,7 +1643,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &["API_BASE_URL".to_owned()],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1665,7 +1665,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1678,7 +1678,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1697,7 +1697,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1719,7 +1719,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1738,7 +1738,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1768,7 +1768,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1781,7 +1781,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1812,7 +1812,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,
@@ -1825,7 +1825,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
-            false,
+            ipe_backend_rust::BuildIntent::Development,
             false,
             false,
             false,

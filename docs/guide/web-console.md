@@ -89,10 +89,16 @@ Two credential roles guard the surface. The **admin** token opens
 only, so a Prometheus scrape credential can never read logs or spans. Either is
 presented as `Authorization: Bearer <token>` or as the password of HTTP Basic auth.
 
+`ipe build`, `ipe run`, `ipe test` and `ipe watch` produce development binaries:
+with `IPE_CONSOLE_AUTH` unset, their console is open only while the server is
+bound to loopback, and on an exposed bind it requires a credential. `ipe release`
+artifacts keep the console closed until `IPE_CONSOLE_AUTH` (with its admin token)
+is set, on every bind.
+
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `IPE_ADMIN_TOKEN` | unset | Admin token: opens the console and `/_ipe/metrics` in production or under `IPE_CONSOLE_AUTH=token`. Without it (or with a non-UTF-8 value) a production console is not mounted. |
-| `IPE_CONSOLE_AUTH` | auto (token in production, open in dev) | `token` requires a credential in every posture, dev included; `off` disables the console; `app` mounts it but answers 501 on the Rust runtime (the `consoleAuth` callback is not supported there). The posture picks the default only when the variable is unset or blank; any other value (including a non-UTF-8 one) disables it too. Startup logs the effective posture, mode, and source once (`[ipe.console] auth posture=… mode=… source=…`), never a token. |
+| `IPE_CONSOLE_AUTH` | auto (token; open only in a dev build on loopback) | `token` requires a credential in every posture, dev included; `off` disables the console; `app` mounts it but answers 501 on the Rust runtime (the `consoleAuth` callback is not supported there). The posture picks the default only when the variable is unset or blank; any other value (including a non-UTF-8 one) disables it too. Startup logs the effective posture, mode, and source once (`[ipe.console] auth posture=… mode=… source=…`), never a token. |
 | `IPE_CONSOLE_EMBED` | auto (on in dev) | Set to `off` to disable the embedded console. |
 | `IPE_CONSOLE_HUB` | unset | Base URL of a remote Ipê Hub OTLP collector. |
 | `IPE_DEV_BANNER` | auto (on in dev) | Set to `off` to suppress the dev-mode banner. |

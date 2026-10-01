@@ -1231,12 +1231,14 @@ pub struct BuildConfig {
     /// to emit the `#[wasm_bindgen] pub fn hydrate(…)` export (M7 SSR +
     /// hydration island parse + adopt path).
     pub wasm_hydrate_mode: bool,
-    /// `true` for a PRODUCTION build (`ipe release`). Development-only
-    /// escape hatches (`Debug.*`) are rejected at emit demand (IPE-L0140) so a
-    /// shipped program never carries a debug window. Lives on `BuildConfig`
-    /// (not `SourceRoot`) so toggling it re-runs only [`emit_project`], never
-    /// [`lower_program`] / [`typecheck`].
-    pub production: bool,
+    /// The verb family the build serves. A `Release` build rejects
+    /// development-only escape hatches (`Debug.*`) at emit demand (IPE-L0140)
+    /// so a shipped program never carries a debug window; a `Development`
+    /// build selects the runtime `dev-posture` feature (see
+    /// [`ipe_backend_rust::RustBackend::with_build_intent`]). Lives on
+    /// `BuildConfig` (not `SourceRoot`) so toggling it re-runs only
+    /// [`emit_project`], never [`lower_program`] / [`typecheck`].
+    pub intent: ipe_backend_rust::BuildIntent,
     /// The dependency-model emit selector (opt-in `IPE_RUNTIME_DEP`). `Some` —
     /// the emitted native project declares the runtime as the resolved path
     /// dependency with a `runtime_features`-selected feature list and vendors no
@@ -1304,7 +1306,7 @@ fn reject_dev_only_in_production(
     program: &ipe_ir::Program,
     config: BuildConfig,
 ) -> Result<(), (Diagnostic, Vec<Symbol>)> {
-    if *config.production(db)
+    if *config.intent(db) == ipe_backend_rust::BuildIntent::Release
         && let Some(home) = program
             .modules
             .iter()
@@ -1361,6 +1363,7 @@ pub fn emit_project(
     let cargo_name = config.cargo_name(db).clone();
     let hot_appearance = *config.hot_appearance(db);
     let webview_host = *config.webview_host(db);
+    let intent = *config.intent(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1373,6 +1376,7 @@ pub fn emit_project(
         .with_project_name(&cargo_name)
         .with_hot_appearance(hot_appearance)
         .with_webview_host(webview_host)
+        .with_build_intent(intent)
         .emit(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -1575,6 +1579,7 @@ pub fn emit_manifest(
     let debugger = *config.debugger(db);
     let hot_appearance = *config.hot_appearance(db);
     let webview_host = *config.webview_host(db);
+    let intent = *config.intent(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1586,6 +1591,7 @@ pub fn emit_manifest(
         .with_debugger(debugger)
         .with_hot_appearance(hot_appearance)
         .with_webview_host(webview_host)
+        .with_build_intent(intent)
         .assemble_split_manifest(&program, &spine, &module_texts)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))

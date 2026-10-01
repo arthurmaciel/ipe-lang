@@ -15,10 +15,10 @@ use crate::{
 /// and its on-disk caches stay untouched (their keys deliberately exclude
 /// the plan; the transform is a deterministic function of the plan applied
 /// on cache-hit and cache-miss paths alike).
-// The four `bool` fields (`wasm_hydrate_mode`, `production`, `runtime_dep`,
+// The three `bool` fields (`wasm_hydrate_mode`, `runtime_dep`,
 // `tree_shake_vendored`) are genuinely independent, orthogonal build toggles —
-// any combination is valid (a production dep-model build, a vendored tree-shaken
-// dev build, …). They are not the states of one machine, so collapsing them into
+// any combination is valid (a dep-model hydrate build, a vendored tree-shaken
+// build, …). They are not the states of one machine, so collapsing them into
 // a two-variant enum or a state enum would obscure their independence rather than
 // clarify it; the clippy heuristic's usual remedy does not apply here.
 #[allow(clippy::struct_excessive_bools)]
@@ -48,11 +48,14 @@ pub struct BuildOptions {
     /// to clean `ipe_main()` with a console warning (fault-tolerant hydrate — see
     /// spec Q6 §"Fault-tolerant hydrate — parse, don't unwrap").
     pub wasm_hydrate_mode: bool,
-    /// `true` for a production build (`ipe release` — any target). Threaded into
-    /// [`ipe_db::BuildConfig::production`] so the emit demand rejects any
-    /// development-only `Debug.*` escape hatch (IPE-L0140). Default `false`
-    /// (`ipe build` / `ipe run` are development builds — `Debug.*` permitted).
-    pub production: bool,
+    /// The verb family this build serves, threaded into
+    /// [`ipe_db::BuildConfig::intent`].
+    ///
+    /// `Release` (the default) rejects any development-only `Debug.*` escape
+    /// hatch (IPE-L0140) and omits the runtime `dev-posture` feature, so the
+    /// console stays closed until `IPE_CONSOLE_AUTH` is set. Only a dev verb
+    /// (`ipe build` / `run` / `test` / `watch`) states `Development`.
+    pub intent: ipe_backend_rust::BuildIntent,
     /// `true` (the DEFAULT) selects the dependency-model emit: the emitted
     /// project declares the runtime as a path dependency with a
     /// `runtime_features`-selected feature list and vendors no runtime source.
@@ -475,7 +478,10 @@ pub fn build_test_into(
         runtime_dir,
         test_entry,
         ipe_backend_rust::DbDriver::Sqlite,
-        BuildOptions::from_env(),
+        BuildOptions {
+            intent: ipe_backend_rust::BuildIntent::Development,
+            ..BuildOptions::from_env()
+        },
     )
 }
 
@@ -1004,7 +1010,7 @@ pub fn compile_modules_observed(
         db_driver,
         options.target,
         &options.wasm_public_env,
-        options.production,
+        options.intent,
         options.debugger,
         options.hot_appearance,
         options.webview_host,
@@ -1045,7 +1051,9 @@ pub fn compile_modules_observed(
             // cached IR that uses a development-only `Debug.*` escape hatch must
             // be rejected here too (IPE-L0140) — otherwise a cached dev artifact
             // could slip through a release build that hits this tier.
-            if options.production && program.modules.iter().any(|m| m.uses_debug) {
+            if options.intent == ipe_backend_rust::BuildIntent::Release
+                && program.modules.iter().any(|m| m.uses_debug)
+            {
                 let diag = Diagnostic::Lower {
                     span: ipe_diagnostics::Span::DUMMY,
                     msg: ipe_diagnostics::LowerError::DevOnlyKernelInProduction {
@@ -1077,6 +1085,7 @@ pub fn compile_modules_observed(
                     .with_hot_appearance(options.hot_appearance)
                     .with_webview_host(options.webview_host)
                     .with_webview_window(options.webview_window.clone())
+                    .with_build_intent(options.intent)
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
@@ -1128,7 +1137,7 @@ pub fn compile_modules_observed(
         options.target,
         options.wasm_public_env.clone(),
         options.wasm_hydrate_mode,
-        options.production,
+        options.intent,
         runtime_dep,
         options.debugger,
         options.cargo_name.clone(),
@@ -2693,6 +2702,19 @@ mod tests {
 
     use super::*;
     use crate::output_dir::OutputRefusal;
+
+    /// A build whose caller states no intent is a release build.
+    #[test]
+    fn unstated_build_intent_is_release() {
+        assert_eq!(
+            BuildOptions::default().intent,
+            ipe_backend_rust::BuildIntent::Release
+        );
+        assert_eq!(
+            BuildOptions::from_env().intent,
+            ipe_backend_rust::BuildIntent::Release
+        );
+    }
 
     /// A `src/` tree nested past [`MAX_PRUNE_DEPTH`] is refused with a typed
     /// refusal, while one exactly at the ceiling is pruned.

@@ -31,6 +31,17 @@ pub enum BundleProfile {
 }
 
 impl BundleProfile {
+    /// The build intent the bundle's crate is emitted with.
+    ///
+    /// The `release` bundle is a shipped artifact, so it is a release build;
+    /// the `build` bundle is a development build, like every `build` verb.
+    pub const fn build_intent(self) -> ipe_backend_rust::BuildIntent {
+        match self {
+            Self::Dev => ipe_backend_rust::BuildIntent::Development,
+            Self::Release => ipe_backend_rust::BuildIntent::Release,
+        }
+    }
+
     /// The cargo build the bundle's binary is compiled with: a plain debug build
     /// for [`Self::Dev`], an optimised `--release` build for [`Self::Release`].
     /// The one place the profile decides the compile, so the two bundle verbs
@@ -381,7 +392,10 @@ impl<'a> BundleAssembler<'a> {
             self.manifest_path,
             OutTarget::Proven(&rust_target),
             &runtime_dir,
-            &BuildOptions::from_env(),
+            &BuildOptions {
+                intent: self.profile.build_intent(),
+                ..BuildOptions::from_env()
+            },
         )?;
 
         let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
@@ -1497,7 +1511,15 @@ pub fn build_and_run_test_entry(
     let crate_dir = if project_src_root.is_dir() {
         build_test_into(project_src_root, tests_root, test_entry, out, runtime_dir)?
     } else {
-        build_loose_file_into(test_entry, out, runtime_dir, BuildOptions::from_env())?
+        build_loose_file_into(
+            test_entry,
+            out,
+            runtime_dir,
+            BuildOptions {
+                intent: ipe_backend_rust::BuildIntent::Development,
+                ..BuildOptions::from_env()
+            },
+        )?
     };
 
     // Compile the emitted Rust project.

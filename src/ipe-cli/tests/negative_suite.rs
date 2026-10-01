@@ -68,6 +68,7 @@ fn compile(name: &str, source: &str, target: Target) -> Outcome {
     let runtime = e2e_support::require_runtime().into_path_buf();
     let options = BuildOptions {
         target,
+        intent: ipe_backend_rust::BuildIntent::Development,
         ..BuildOptions::default()
     };
     match ipe::build_with_options(&entry, &out, &runtime, options) {
@@ -87,7 +88,7 @@ fn compile_production(name: &str, source: &str) -> Outcome {
     let _ = std::fs::remove_dir_all(&out);
     let runtime = e2e_support::require_runtime().into_path_buf();
     let options = BuildOptions {
-        production: true,
+        intent: ipe_backend_rust::BuildIntent::Release,
         ..BuildOptions::default()
     };
     match ipe::build_with_options(&entry, &out, &runtime, options) {

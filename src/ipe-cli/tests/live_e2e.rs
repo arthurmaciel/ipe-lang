@@ -7,7 +7,8 @@
 //! ## Architecture
 //!
 //! 1. A minimal Ipe.Web counter program is written to a temp dir.
-//! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
+//! 2. `ipe::build_with_options` compiles it with the dev-loop intent
+//!    (parse → canon → types → lower → emit Rust).
 //! 3. `e2e_support::build_rust_binary` runs `cargo build` on the emitted project —
 //!    the shared Cargo target (`~/.cargo/config.toml`) lets axum/tokio/serde
 //!    compile once and be reused.
@@ -334,6 +335,15 @@ main =
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// The `ipe build` dev-loop intent: these fixtures exercise the dev posture
+/// (plain cookie names, loopback upstreams), which a release binary refuses.
+fn dev_loop_options() -> ipe::BuildOptions {
+    ipe::BuildOptions {
+        intent: ipe_backend_rust::BuildIntent::Development,
+        ..ipe::BuildOptions::from_env()
+    }
+}
+
 /// Compile a Ipê program string, build the emitted Rust project, and return
 /// the path to the compiled binary.
 ///
@@ -358,7 +368,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
 
     let runtime = e2e_support::require_runtime().into_path_buf();
 
-    ipe::build(&entry, &out_dir, &runtime)
+    ipe::build_with_options(&entry, &out_dir, &runtime, dev_loop_options())
         .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
     let exe = e2e_support::build_rust_binary(test_name, &out_dir)
@@ -2514,8 +2524,8 @@ fn geo_clipboard_manifest() -> PathBuf {
 /// Compile and cargo-build the geo-clipboard example from its on-disk
 /// `package.ipe` manifest, returning the path to the compiled binary.
 ///
-/// Uses `ipe::build_project` (not `ipe::build`) so the capabilities consent
-/// gate is applied: without the `accepts = [JsPort Geolocation, JsPort
+/// Uses `ipe::build_project_with_options` (not `ipe::build_with_options`) so
+/// the capabilities consent gate is applied: without the `accepts = [JsPort Geolocation, JsPort
 /// Clipboard, JsPort Raw]` grant the build must fail closed (IPE-S0002).
 fn compile_and_build_geo_clipboard() -> Result<PathBuf, BoxError> {
     let manifest = geo_clipboard_manifest();
@@ -2534,9 +2544,9 @@ fn compile_and_build_geo_clipboard() -> Result<PathBuf, BoxError> {
 
     let runtime = e2e_support::require_runtime().into_path_buf();
 
-    ipe::build_project(&manifest, &out_dir, &runtime).map_err(|e| -> BoxError {
-        format!("geo-clipboard: ipe build_project failed: {e}").into()
-    })?;
+    ipe::build_project_with_options(&manifest, &out_dir, &runtime, &dev_loop_options()).map_err(
+        |e| -> BoxError { format!("geo-clipboard: ipe build_project failed: {e}").into() },
+    )?;
 
     let exe = e2e_support::build_rust_binary("geo_clipboard", &out_dir)
         .map_err(|e| -> BoxError { format!("geo-clipboard: cargo build failed: {e}").into() })?;
@@ -2680,9 +2690,9 @@ fn compile_and_build_gamepad_watch() -> Result<PathBuf, BoxError> {
 
     let runtime = e2e_support::require_runtime().into_path_buf();
 
-    ipe::build_project(&manifest, &out_dir, &runtime).map_err(|e| -> BoxError {
-        format!("gamepad-watch: ipe build_project failed: {e}").into()
-    })?;
+    ipe::build_project_with_options(&manifest, &out_dir, &runtime, &dev_loop_options()).map_err(
+        |e| -> BoxError { format!("gamepad-watch: ipe build_project failed: {e}").into() },
+    )?;
 
     let exe = e2e_support::build_rust_binary("gamepad_watch", &out_dir)
         .map_err(|e| -> BoxError { format!("gamepad-watch: cargo build failed: {e}").into() })?;
@@ -2758,9 +2768,9 @@ fn compile_and_build_recorder_stream() -> Result<PathBuf, BoxError> {
 
     let runtime = e2e_support::require_runtime().into_path_buf();
 
-    ipe::build_project(&manifest, &out_dir, &runtime).map_err(|e| -> BoxError {
-        format!("recorder-stream: ipe build_project failed: {e}").into()
-    })?;
+    ipe::build_project_with_options(&manifest, &out_dir, &runtime, &dev_loop_options()).map_err(
+        |e| -> BoxError { format!("recorder-stream: ipe build_project failed: {e}").into() },
+    )?;
 
     let exe = e2e_support::build_rust_binary("recorder_stream", &out_dir)
         .map_err(|e| -> BoxError { format!("recorder-stream: cargo build failed: {e}").into() })?;
@@ -2838,7 +2848,7 @@ fn compile_and_build_web_authn() -> Result<PathBuf, BoxError> {
 
     let runtime = e2e_support::require_runtime().into_path_buf();
 
-    ipe::build_project(&manifest, &out_dir, &runtime)
+    ipe::build_project_with_options(&manifest, &out_dir, &runtime, &dev_loop_options())
         .map_err(|e| -> BoxError { format!("web-authn: ipe build_project failed: {e}").into() })?;
 
     let exe = e2e_support::build_rust_binary("web_authn", &out_dir)

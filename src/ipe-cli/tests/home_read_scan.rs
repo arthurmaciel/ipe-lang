@@ -1168,6 +1168,11 @@ mod lexical {
             reason: "callers pass `IPE_*_TOKEN` literals, which the literal rule scans",
         },
         Allowed {
+            file: "src/runtime/rust/src/web/push_exporter.rs",
+            func: "read",
+            reason: "reads `ExporterEnv::name`, a closed match over fixed `IPE_*` literals",
+        },
+        Allowed {
             file: "src/ipe-cli/src/ffi.rs",
             func: "jail_limits",
             reason: "reads the fixed `IPE_FFI_*` cap overrides named in its own body",

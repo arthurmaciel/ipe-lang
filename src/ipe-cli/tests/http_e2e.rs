@@ -9,8 +9,8 @@
 //! Each test:
 //!
 //! 1. Writes a Ipê program to a fresh temp dir.
-//! 2. Compiles it through `ipe::build` (full pipeline: parse → canon → types →
-//!    lower → emit Rust).
+//! 2. Compiles it through `ipe::build_with_options` with the dev-loop intent
+//!    (full pipeline: parse → canon → types → lower → emit Rust).
 //! 3. Builds the emitted Cargo project with the shared target via
 //!    `e2e_support::build_rust_binary` — build-only, returns the binary path so the
 //!    test controls execution.
@@ -58,6 +58,15 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/// The `ipe build` dev-loop intent: these fixtures exercise the dev posture
+/// (plain cookie names, loopback upstreams), which a release binary refuses.
+fn dev_loop_options() -> ipe::BuildOptions {
+    ipe::BuildOptions {
+        intent: ipe_backend_rust::BuildIntent::Development,
+        ..ipe::BuildOptions::from_env()
+    }
+}
+
 /// Compile a Ipê program string, build the emitted Rust project, and return
 /// the path to the compiled binary.
 ///
@@ -85,7 +94,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
 
     let runtime = e2e_support::require_runtime().into_path_buf();
 
-    ipe::build(&entry, &out_dir, &runtime)
+    ipe::build_with_options(&entry, &out_dir, &runtime, dev_loop_options())
         .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
     let exe = e2e_support::build_rust_binary(test_name, &out_dir)
