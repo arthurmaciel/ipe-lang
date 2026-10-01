@@ -42,9 +42,12 @@ fn is_dangerous_url_scheme(url: &str) -> bool {
 
 // ── Attribute → (style entries, html attrs) ───────────────────────────────────
 
-/// Collect all CSS `key:value` pairs from a slice of `Attribute<M>` into a
-/// `style="…"` string.  Values that fail the CSS security gate are silently
-/// dropped (T3).
+/// Collect the parent-independent CSS `key:value` pairs of an attribute list.
+///
+/// Values that fail the CSS security gate are silently dropped (T3). Size
+/// attributes (`width` / `height`) are NOT collected here: their CSS depends
+/// on the parent's flex axis, which this flat collector cannot see, so
+/// [`size_css`] is their one emitter.
 ///
 /// `pub(crate)` so `ui::helpers::ui_on_pseudo_` can reuse the identical
 /// style-collection logic to build a pseudo-class rules-string (mirrors the
@@ -73,39 +76,8 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
 
     for attr in attrs {
         match attr {
-            Attribute::AttrWidth(len) => {
-                decl!("width:{}", len.css());
-                // A8's `flex-shrink:0` (honour a fixed px width in an
-                // over-constrained ROW) is NOT emitted here: whether the width
-                // is the flex MAIN axis (a row child, where shrinking would
-                // compress the declared px) or the CROSS axis (a column child,
-                // where shrink is irrelevant) depends on the parent direction,
-                // which this flat collector cannot see. It is applied by the
-                // parent-aware `overconstrain_css` at `render_node_as` instead.
-                if let Length::Fill(n) = len {
-                    // elm-ui portion model: `fillPortion n` divides the row's
-                    // free space, so the flex base size must be 0 and growth is
-                    // the portion. An explicit `flex-basis:0` overrides `width`
-                    // as the flex base inside a flex row (without it, `width:100%`
-                    // becomes the base size and every portioned column wants the
-                    // full row, wrapping under `flex-wrap:wrap`). Outside a flex
-                    // container `flex-basis` is inert and `width:100%` still fills.
-                    decl!("flex-grow:{n}");
-                    decl!("flex-basis:0");
-                    decl!("min-width:0");
-                }
-            }
-            Attribute::AttrHeight(len) => {
-                decl!("height:{}", len.css());
-                if let Length::Fill(n) = len {
-                    // Column main-axis analogue of the width portion model above:
-                    // `flex-basis:0` makes a portioned height divide the column's
-                    // free space instead of taking its content height as the base.
-                    decl!("flex-grow:{n}");
-                    decl!("flex-basis:0");
-                    decl!("min-height:0");
-                }
-            }
+            // Size is parent-axis dependent: emitted by `size_css` instead.
+            Attribute::AttrWidth(_) | Attribute::AttrHeight(_) => {}
             // `AttrAlignX` / `AttrAlignY` are layout-context-dependent: whether
             // an alignment is the CROSS axis (`align-self`) or the MAIN axis
             // (auto-margins) depends on the PARENT's flex direction, which this
@@ -514,7 +486,8 @@ fn render_element<M: Clone>(elem: Element<M>) -> Html<M> {
 
 /// Recursively convert a `Ipe.Ui` `Element<M>` to `Html<M>`.
 ///
-/// Security: all attribute values flow through `build_style_string` (which
+/// Security: all attribute values flow through `build_style_string` /
+/// `size_css` (which
 /// calls `sanitise_css_value`) or `collect_html_attrs` (which passes values to
 /// `html::Attribute::Attr` where `render_html` applies `SafeAttrName` +
 /// `sanitise_url_attr`).  No value reaches the HTML sink without one of these gates.
@@ -524,12 +497,13 @@ fn render_element<M: Clone>(elem: Element<M>) -> Html<M> {
 /// overflowing the thread stack. Same ceiling as `html.rs::render_into_ctx` and
 /// `html.rs::assign_ipe_ids_depth`.
 fn render_element_depth<M: Clone>(elem: Element<M>, depth: usize) -> Html<M> {
-    render_element_depth_in(elem, depth, FlexAxis::El)
+    render_element_depth_in(elem, depth, FlexAxis::Block)
 }
 
 /// As `render_element_depth`, but told the flex direction its PARENT lays it out
-/// along (`parent_axis`). A node uses this to emit its own child-alignment CSS
-/// (`alignment_css`), which is cross-axis vs main-axis dependent on the parent.
+/// along (`parent_axis`). A node uses this to emit its own size CSS
+/// (`size_css`) and child-alignment CSS (`alignment_css`), both of which depend
+/// on whether a dimension is the parent's main or cross axis.
 fn render_element_depth_in<M: Clone>(
     elem: Element<M>,
     depth: usize,
@@ -648,9 +622,9 @@ fn render_paragraph_child<M: Clone>(child: Element<M>, depth: usize) -> Html<M> 
                 );
             }
             // A paragraph lays its children out as inline flow, not a flex
-            // main/cross axis, so alignment is inert here — `El` is the neutral
-            // parent axis (no auto-margins, no align-self).
-            render_node_as("span", &attrs, kids, depth, FlexAxis::El)
+            // main/cross axis, so alignment is inert here — `Block` is the neutral
+            // parent axis (no auto-margins, no align-self, no flex sizing).
+            render_node_as("span", &attrs, kids, depth, FlexAxis::Block)
         }
         _ => render_element_depth(std::mem::replace(&mut child, Element::Empty), depth),
     }
@@ -671,16 +645,182 @@ fn inject_explain<M: Clone>(mut elem: Element<M>) -> Element<M> {
     elem
 }
 
-/// The flex direction a layout node imposes on ITS OWN children, decoded from
-/// the internal direction marker (`__row` / `__col` / `__wrappedrow`) prepended
-/// by `ui_row_` / `ui_column_` / `ui_wrapped_row_`. A plain `Ui.el` (single
-/// child, no marker) is `AsEl`; anything without a marker is treated as `AsEl`
-/// for child-alignment purposes (one-child block box).
-#[derive(Clone, Copy, PartialEq)]
+/// The flex direction a layout node imposes on its own children.
+///
+/// Decoded from the internal direction marker (`__row` / `__col` /
+/// `__wrappedrow`) prepended by `ui_row_` / `ui_column_` / `ui_wrapped_row_`.
+/// A node without a marker (a plain `Ui.el`, a paragraph span) is `Block`: it
+/// is not a flex container, so its children have no flex main axis.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum FlexAxis {
     Row,
     Column,
-    El,
+    Block,
+}
+
+/// The dimension a parent's flex main axis runs along.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MainAxis {
+    Width,
+    Height,
+    None,
+}
+
+/// Decode which dimension is the main axis of a child laid out by `parent`.
+///
+/// The one axis decoder shared by every parent-aware emitter (`size_css`,
+/// `alignment_css`, `overconstrain_css`).
+const fn main_dim(parent: FlexAxis) -> MainAxis {
+    match parent {
+        FlexAxis::Row => MainAxis::Width,
+        FlexAxis::Column => MainAxis::Height,
+        FlexAxis::Block => MainAxis::None,
+    }
+}
+
+/// The size dimension an `AttrWidth` / `AttrHeight` controls.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Dim {
+    Width,
+    Height,
+}
+
+impl Dim {
+    /// The CSS property name of this dimension.
+    const fn css_name(self) -> &'static str {
+        match self {
+            Self::Width => "width",
+            Self::Height => "height",
+        }
+    }
+}
+
+/// A `fill` length parsed once: its portion and the `minimum` / `maximum` px
+/// bounds wrapped around it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FillSpec {
+    /// Non-negative flex portion; a negative `fillPortion` clamps to 0.
+    portion: u32,
+    /// Largest `minimum` bound around the fill, in px.
+    lower: Option<i64>,
+    /// Smallest `maximum` bound around the fill, in px.
+    upper: Option<i64>,
+}
+
+/// Parse a `Length` into its `FillSpec`, or `None` when it is not a `fill`.
+///
+/// `Min` / `Max` wrappers are unwrapped iteratively (bounded stack on any
+/// nesting depth), matching the TUI's `fill_spec`.
+fn fill_spec(len: &Length) -> Option<FillSpec> {
+    let mut lower: Option<i64> = None;
+    let mut upper: Option<i64> = None;
+    let mut cur = len;
+    loop {
+        match cur {
+            Length::Fill(n) => {
+                let portion = u32::try_from((*n).max(0)).unwrap_or(u32::MAX);
+                return Some(FillSpec {
+                    portion,
+                    lower,
+                    upper,
+                });
+            }
+            Length::Min(n, inner) => {
+                lower = Some(lower.map_or(*n, |l| l.max(*n)));
+                cur = inner;
+            }
+            Length::Max(n, inner) => {
+                upper = Some(upper.map_or(*n, |u| u.min(*n)));
+                cur = inner;
+            }
+            Length::Px(_) | Length::Content | Length::Vh(_) | Length::Vw(_) => return None,
+        }
+    }
+}
+
+/// True when the node's `height` is a `fill` (possibly bounded).
+fn has_height_fill<M>(attrs: &[Attribute<M>]) -> bool {
+    attrs
+        .iter()
+        .any(|a| matches!(a, Attribute::AttrHeight(len) if fill_spec(len).is_some()))
+}
+
+/// Emit the CSS of one size attribute laid out by a parent with main axis `main`.
+///
+/// - main-axis `fill`: the dimension, the portion growth, `flex-basis:0`, and
+///   a `min-*` floor (the `minimum` bound, else 0) plus any `maximum` cap;
+/// - cross-axis `fill` in a row: `align-self:stretch` plus its bounds, never
+///   `height:100%` (inert in an auto-height row) nor a flex property;
+/// - any other case: the dimension's `Length::css` value only.
+fn dim_css(dim: Dim, len: &Length, main: MainAxis) -> String {
+    use crate::length::CssUnit;
+    use std::fmt::Write as _;
+    let name = dim.css_name();
+    let Some(fill) = fill_spec(len) else {
+        return format!("{name}:{}", len.css());
+    };
+    let mut out = match (dim, main) {
+        (Dim::Width, MainAxis::Width) | (Dim::Height, MainAxis::Height) => {
+            let floor = fill
+                .lower
+                .map_or_else(|| "0".to_owned(), |l| CssUnit::Px.css(l));
+            format!(
+                "{name}:{};flex-grow:{};flex-basis:0;min-{name}:{floor}",
+                len.css(),
+                fill.portion
+            )
+        }
+        (Dim::Height, MainAxis::Width) => {
+            let mut stretch = "align-self:stretch".to_owned();
+            if let Some(l) = fill.lower {
+                let _ = write!(stretch, ";min-{name}:{}", CssUnit::Px.css(l));
+            }
+            stretch
+        }
+        // `Length::css` already folds the bounds into `max()` / `min()`.
+        (Dim::Width, MainAxis::Height | MainAxis::None) | (Dim::Height, MainAxis::None) => {
+            return format!("{name}:{}", len.css());
+        }
+    };
+    if let Some(u) = fill.upper {
+        let _ = write!(out, ";max-{name}:{}", CssUnit::Px.css(u));
+    }
+    out
+}
+
+/// Emit the size CSS of a node laid out by a `parent` of the given flex axis.
+///
+/// The one emitter of `width`, `height`, `flex-grow`, `flex-basis` and the
+/// `min-*` / `max-*` / `align-self:stretch` a `fill` implies: each size fact
+/// lands only on the axis it controls, derived from the parent.
+fn size_css<M>(attrs: &[Attribute<M>], parent: FlexAxis) -> String {
+    let main = main_dim(parent);
+    let mut out = String::new();
+    for attr in attrs {
+        let (dim, len) = match attr {
+            Attribute::AttrWidth(len) => (Dim::Width, len),
+            Attribute::AttrHeight(len) => (Dim::Height, len),
+            _ => continue,
+        };
+        if !out.is_empty() {
+            out.push(';');
+        }
+        out.push_str(&dim_css(dim, len, main));
+    }
+    out
+}
+
+/// The full inline style of a node with no flex parent: its size CSS, then
+/// every parent-independent declaration.
+///
+/// `pub(crate)` for the context-free collectors in `ui::helpers`
+/// (`ui_on_pseudo_`, `ui_media_query_`), which have no parent to size against:
+/// a `fill` there emits the dimension only, never a flex portion.
+pub(crate) fn block_style_string<M>(attrs: &[Attribute<M>]) -> String {
+    join_style(
+        &size_css(attrs, FlexAxis::Block),
+        &build_style_string(attrs),
+    )
 }
 
 fn flex_axis_of<M>(attrs: &[Attribute<M>]) -> FlexAxis {
@@ -693,7 +833,7 @@ fn flex_axis_of<M>(attrs: &[Attribute<M>]) -> FlexAxis {
             }
         }
     }
-    FlexAxis::El
+    FlexAxis::Block
 }
 
 /// True when the node carries an explicit `width` (any `Length`, including
@@ -737,6 +877,19 @@ fn has_any_alignment<M>(attrs: &[Attribute<M>]) -> bool {
         .any(|a| matches!(a, Attribute::AttrAlignX(_) | Attribute::AttrAlignY(_)))
 }
 
+/// True when a block `el` is promoted to a flex row by A3.
+///
+/// A single-child block node whose only child carries an alignment becomes
+/// `display:flex` (a row), so its child is laid out with parent axis `Row`.
+fn is_promoted_el<M>(axis: FlexAxis, kids: &[Element<M>]) -> bool {
+    axis == FlexAxis::Block
+        && kids.len() == 1
+        && matches!(
+            kids.first(),
+            Some(Element::Node(_, ca, _) | Element::TaggedNode(_, _, ca, _)) if has_any_alignment(ca)
+        )
+}
+
 /// Compute the node-level layout-augmentation CSS declarations (A1/A2/A3-host)
 /// from a node's own attributes + its children. These are properties of the
 /// node itself, independent of the parent's direction.
@@ -768,7 +921,7 @@ where
     // ── A1: default width = shrink-wrap ──────────────────────────────────────
     // A layout element with no explicit `width` content-sizes. `fit-content`
     // shrink-wraps a block box AND a flex item's cross axis; an explicit
-    // `width:` / `fill` declaration (emitted by `build_style_string`) is a
+    // `width:` / `fill` declaration (emitted by `size_css`) is a
     // separate later property that overrides this in the cascade. Skipped for a
     // paragraph-inline child (`__inline*` markers): an inline / inline-flex box
     // already content-sizes, so `fit-content` would be a redundant declaration.
@@ -788,13 +941,7 @@ where
     // child (a flex item) can be placed by `alignment_css` (which sees this `el`
     // as a Row parent). `min-height:0` keeps the child from forcing the row's
     // own shrink; `height` unset ⇒ the box still hugs its content.
-    if axis == FlexAxis::El
-        && kids.len() == 1
-        && matches!(
-            kids.first(),
-            Some(Element::Node(_, ca, _) | Element::TaggedNode(_, _, ca, _)) if has_any_alignment(ca)
-        )
-    {
+    if is_promoted_el(axis, kids) {
         push!("display:flex");
     }
 
@@ -812,8 +959,12 @@ where
 ///   top/centre/bottom); `AttrAlignX` is the cross axis (`align-self`).
 ///
 /// An `el` container that has been promoted to `display:flex` (see
-/// `node_augmentations`) is a flex ROW, so its child is rendered with
-/// `parent_axis = Row` — the caller never passes `El` here.
+/// `is_promoted_el`) is a flex ROW, so its child is rendered with
+/// `parent_axis = Row`. A `Block` parent keeps the row spelling (inert there).
+///
+/// A `fill` height in a ROW parent is a cross-axis stretch (emitted by
+/// `size_css`), which overrides `alignY` as in elm-ui, so no `align-self` is
+/// emitted for that node's `AttrAlignY`.
 ///
 /// The auto-margin spelling matches elm-ui: a `centerX` item gets
 /// `margin-left:auto;margin-right:auto`, an `alignRight` item `margin-left:auto`,
@@ -829,8 +980,12 @@ fn alignment_css<M>(attrs: &[Attribute<M>], parent_axis: FlexAxis) -> String {
             let _ = write!(out, $($arg)*);
         }};
     }
-    // A row is the effective axis for a promoted `el` container too.
-    let row_like = matches!(parent_axis, FlexAxis::Row | FlexAxis::El);
+    let main = main_dim(parent_axis);
+    let row_like = match main {
+        MainAxis::Width | MainAxis::None => true,
+        MainAxis::Height => false,
+    };
+    let stretched = main == MainAxis::Width && has_height_fill(attrs);
     for a in attrs {
         match a {
             Attribute::AttrAlignX(h) => {
@@ -851,7 +1006,7 @@ fn alignment_css<M>(attrs: &[Attribute<M>], parent_axis: FlexAxis) -> String {
                     push!("align-self:{v}");
                 }
             }
-            Attribute::AttrAlignY(v) => {
+            Attribute::AttrAlignY(v) if !stretched => {
                 if row_like {
                     // Cross axis in a row → align-self.
                     let css = match v {
@@ -885,8 +1040,9 @@ fn alignment_css<M>(attrs: &[Attribute<M>], parent_axis: FlexAxis) -> String {
 /// model; `min`/`max`/`content` keep the default shrink so an intrinsic bound
 /// can still give.
 fn overconstrain_css<M>(attrs: &[Attribute<M>], parent_axis: FlexAxis) -> &'static str {
-    if !matches!(parent_axis, FlexAxis::Row) {
-        return "";
+    match main_dim(parent_axis) {
+        MainAxis::Width => {}
+        MainAxis::Height | MainAxis::None => return "",
     }
     let fixed_width = attrs
         .iter()
@@ -939,7 +1095,7 @@ fn explain_type_tag(axis: FlexAxis, tag: &str) -> &'static str {
         _ => match axis {
             FlexAxis::Row => "row",
             FlexAxis::Column => "column",
-            FlexAxis::El => "el",
+            FlexAxis::Block => "el",
         },
     }
 }
@@ -1006,7 +1162,7 @@ fn explain_overlay_css<M>(
 
     // Spacing tint: a faint fill behind a spaced container (only when it has no
     // background of its own) so the flex gaps between children show through.
-    if axis != FlexAxis::El && spacing_of(attrs) > 0 && !has_background(attrs) {
+    if axis != FlexAxis::Block && spacing_of(attrs) > 0 && !has_background(attrs) {
         push!("background-color:rgba(0,140,255,0.08)");
     }
 
@@ -1073,7 +1229,8 @@ fn render_node_as<M: Clone>(
     };
     let tag: &str = &tag_owned;
 
-    let mut style_str = build_style_string(attrs);
+    // Size first, so an author's raw `AttrStyle` for the same property wins.
+    let mut style_str = join_style(&size_css(attrs, parent_axis), &build_style_string(attrs));
     let mut html_attrs = collect_html_attrs(attrs);
     if let Some(role) = role_attr {
         html_attrs.push(HtmlAttribute::Attr("role".to_owned(), role.to_owned()));
@@ -1145,12 +1302,14 @@ fn render_node_as<M: Clone>(
     // paragraph, render each such child as an inline `<span>`.
     let inside_paragraph = has_paragraph_marker(attrs);
 
-    // The flex direction THIS node imposes on its children is its own `axis`.
-    // A promoted `el` container (single aligned child ⇒ `display:flex`, default
-    // row) reports `El`, which `alignment_css` treats row-like — so the child's
-    // main/cross axis resolves correctly. A plain block `el` also reports `El`,
-    // but its child (if any) is never aligned (`node_augmentations` promotes
-    // only when it is), so no alignment CSS is emitted for it.
+    // The flex direction THIS node imposes on its children is its own `axis`,
+    // except that an A3-promoted `el` (single aligned child ⇒ `display:flex`,
+    // default row) lays its child out as a `Row`.
+    let child_axis = if is_promoted_el(axis, &kids) {
+        FlexAxis::Row
+    } else {
+        axis
+    };
     // Rendered children in source order, each one level deeper.
     let child_depth = depth.saturating_add(1);
     let mut html_kids: Vec<Html<M>> = kids
@@ -1161,7 +1320,7 @@ fn render_node_as<M: Clone>(
             if inside_paragraph {
                 render_paragraph_child(k, child_depth)
             } else {
-                render_element_depth_in(k, child_depth, axis)
+                render_element_depth_in(k, child_depth, child_axis)
             }
         })
         .collect();
@@ -1188,15 +1347,23 @@ const VIEWPORT_WRAPPER_CSS: &str =
 const ROOT_FILL_CSS: &str =
     "display:flex;flex-direction:column;flex:1 1 0;min-height:0;min-width:0;overflow:auto";
 
-/// Join a base declaration list with an optional author declaration list.
+/// Join two `;`-separated declaration lists, either of which may be empty.
 ///
-/// The author list comes last, so its declarations win the cascade.
+/// `extra` comes last, so its declarations win the cascade.
 fn join_style(base: &str, extra: &str) -> String {
-    if extra.is_empty() {
-        base.to_owned()
-    } else {
-        format!("{base};{extra}")
+    match (base.is_empty(), extra.is_empty()) {
+        (_, true) => base.to_owned(),
+        (true, false) => extra.to_owned(),
+        (false, false) => format!("{base};{extra}"),
     }
+}
+
+/// The author style of a runtime div laid out by a flex column parent.
+fn column_child_style<M>(attrs: &[Attribute<M>]) -> String {
+    join_style(
+        &size_css(attrs, FlexAxis::Column),
+        &build_style_string(attrs),
+    )
 }
 
 /// Build the viewport wrapper and the root div around the author's element.
@@ -1208,7 +1375,8 @@ fn layout_shell<M: Clone>(
     root_attrs: &[Attribute<M>],
     elem: Element<M>,
 ) -> Html<M> {
-    let root_style = join_style(ROOT_FILL_CSS, &build_style_string(root_attrs));
+    // The wrapper is the root div's column parent.
+    let root_style = join_style(ROOT_FILL_CSS, &column_child_style(root_attrs));
     let mut root_html_attrs = collect_html_attrs(root_attrs);
     root_html_attrs.insert(0, HtmlAttribute::Attr("style".to_owned(), root_style));
     // The root div is a flex column, so the author's element is its column child.
@@ -1216,7 +1384,8 @@ fn layout_shell<M: Clone>(
     root_kids.extend(render_nearby_overlays(root_attrs));
     let root_div = Html::HElement("div".to_owned(), root_html_attrs, root_kids);
 
-    let wrapper_style = join_style(VIEWPORT_WRAPPER_CSS, &build_style_string(wrapper_attrs));
+    // `#ipe-root` (`web_page_core::BASE_CSS`) is the wrapper's column parent.
+    let wrapper_style = join_style(VIEWPORT_WRAPPER_CSS, &column_child_style(wrapper_attrs));
     let mut wrapper_html_attrs = collect_html_attrs(wrapper_attrs);
     wrapper_html_attrs.insert(0, HtmlAttribute::Attr("style".to_owned(), wrapper_style));
     let mut wrapper_kids: Vec<Html<M>> = vec![root_div];
@@ -1786,6 +1955,290 @@ mod tests {
             author.contains("flex-grow:1;flex-basis:0;min-height:0"),
             "author root must grow along the root column: {author}"
         );
+    }
+
+    // ── Axis-aware size emission (P2) ─────────────────────────────────────────
+
+    /// Style of the first child of `parent [] [child]` rendered as a top node.
+    fn first_child_style(parent: Element<TestMsg>) -> String {
+        let html = render_element_depth_in(parent, 0, FlexAxis::Block);
+        child_of(&html, 0)
+            .and_then(style_of)
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// A `fill` width in a row is the row's main axis: the portion bytes.
+    #[test]
+    fn fill_width_in_row_is_main_axis() {
+        use crate::ui::helpers::{ui_el_, ui_row_};
+        let child = ui_el_(
+            vec![Attribute::AttrWidth(Length::Fill(2))],
+            Element::Text("a".to_owned()),
+        );
+        let s = first_child_style(ui_row_(vec![], vec![child]));
+        assert!(
+            s.contains("width:100%;flex-grow:2;flex-basis:0;min-width:0"),
+            "row child width fill must be the main-axis portion: {s}"
+        );
+    }
+
+    /// A `fill` height in a column is the column's main axis: the portion bytes.
+    #[test]
+    fn fill_height_in_column_is_main_axis() {
+        use crate::ui::helpers::{ui_column_, ui_el_};
+        let child = ui_el_(
+            vec![Attribute::AttrHeight(Length::Fill(1))],
+            Element::Text("a".to_owned()),
+        );
+        let s = first_child_style(ui_column_(vec![], vec![child]));
+        assert!(
+            s.contains("height:100%;flex-grow:1;flex-basis:0;min-height:0"),
+            "column child height fill must be the main-axis portion: {s}"
+        );
+    }
+
+    /// Refusal: a `fill` height in a row is a cross-axis stretch, never a
+    /// flex portion (which would grow it horizontally and override its width).
+    #[test]
+    fn fill_height_in_row_emits_no_flex() {
+        use crate::ui::helpers::{ui_el_, ui_row_};
+        let child = ui_el_(
+            vec![
+                Attribute::AttrHeight(Length::Fill(1)),
+                Attribute::AttrWidth(Length::Px(40)),
+            ],
+            Element::Text("a".to_owned()),
+        );
+        let s = first_child_style(ui_row_(vec![], vec![child]));
+        assert!(s.contains("align-self:stretch"), "stretch expected: {s}");
+        assert!(s.contains("width:40px"), "explicit width kept: {s}");
+        assert!(!s.contains("flex-grow"), "no flex-grow on cross axis: {s}");
+        assert!(
+            !s.contains("flex-basis"),
+            "no flex-basis on cross axis: {s}"
+        );
+        assert!(!s.contains("height:100%"), "no height:100% in a row: {s}");
+    }
+
+    /// Refusal: a `fill` width in a column is the cross axis — `width:100%`
+    /// only, never a flex portion (which would grow it vertically).
+    #[test]
+    fn fill_width_in_column_emits_no_flex() {
+        use crate::ui::helpers::{ui_column_, ui_el_};
+        let child = ui_el_(
+            vec![Attribute::AttrWidth(Length::Fill(1))],
+            Element::Text("a".to_owned()),
+        );
+        let s = first_child_style(ui_column_(vec![], vec![child]));
+        assert!(s.contains("width:100%"), "cross-axis fill width: {s}");
+        assert!(!s.contains("flex-grow"), "no flex-grow on cross axis: {s}");
+        assert!(
+            !s.contains("flex-basis"),
+            "no flex-basis on cross axis: {s}"
+        );
+    }
+
+    /// Refusal: a `fill` under a block `el` (no flex parent) sizes the
+    /// dimension only.
+    #[test]
+    fn fill_in_block_parent_emits_no_flex() {
+        use crate::ui::helpers::ui_el_;
+        let child = ui_el_(
+            vec![
+                Attribute::AttrWidth(Length::Fill(1)),
+                Attribute::AttrHeight(Length::Fill(1)),
+            ],
+            Element::Text("a".to_owned()),
+        );
+        let s = first_child_style(ui_el_(vec![], child));
+        assert!(
+            s.starts_with("width:100%;height:100%"),
+            "block child fill is the dimension only: {s}"
+        );
+        assert!(!s.contains("flex-"), "no flex property under a block: {s}");
+        assert!(!s.contains("align-self"), "no stretch under a block: {s}");
+    }
+
+    /// `fillPortion 0` grows by 0, and a negative portion clamps to 0 (never a
+    /// negative `flex-grow`).
+    #[test]
+    fn fill_portion_zero_is_zero_grow() {
+        let s = size_css(
+            &[Attribute::<TestMsg>::AttrWidth(Length::Fill(0))],
+            FlexAxis::Row,
+        );
+        assert!(s.contains("flex-grow:0;"), "portion 0: {s}");
+    }
+
+    #[test]
+    fn fill_portion_negative_clamps() {
+        let s = size_css(
+            &[Attribute::<TestMsg>::AttrWidth(Length::Fill(-3))],
+            FlexAxis::Row,
+        );
+        assert!(s.contains("flex-grow:0;"), "negative portion clamps: {s}");
+        assert!(!s.contains("flex-grow:-"), "never a negative grow: {s}");
+        let max = size_css(
+            &[Attribute::<TestMsg>::AttrWidth(Length::Fill(i64::MAX))],
+            FlexAxis::Row,
+        );
+        assert!(
+            max.contains(&format!("flex-grow:{};", u32::MAX)),
+            "huge portion saturates: {max}"
+        );
+    }
+
+    /// A `fill` wrapped in `minimum` / `maximum` keeps its main-axis portion,
+    /// and the bounds become the flex item's `min-*` / `max-*`.
+    #[test]
+    fn fill_inside_min_max_keeps_portion() {
+        let min = size_css(
+            &[Attribute::<TestMsg>::AttrWidth(Length::Min(
+                100,
+                Box::new(Length::Fill(1)),
+            ))],
+            FlexAxis::Row,
+        );
+        assert!(
+            min.contains("flex-grow:1;flex-basis:0"),
+            "min fill grows: {min}"
+        );
+        assert!(min.ends_with("min-width:100px"), "minimum floors: {min}");
+
+        let max = size_css(
+            &[Attribute::<TestMsg>::AttrWidth(Length::Max(
+                200,
+                Box::new(Length::Fill(1)),
+            ))],
+            FlexAxis::Row,
+        );
+        assert!(
+            max.contains("flex-grow:1;flex-basis:0;min-width:0"),
+            "max fill grows: {max}"
+        );
+        assert!(max.ends_with(";max-width:200px"), "maximum caps: {max}");
+
+        let cross = size_css(
+            &[Attribute::<TestMsg>::AttrHeight(Length::Max(
+                8,
+                Box::new(Length::Min(4, Box::new(Length::Fill(1)))),
+            ))],
+            FlexAxis::Row,
+        );
+        assert_eq!(
+            cross, "align-self:stretch;min-height:4px;max-height:8px",
+            "a bounded cross-axis fill stretches within its bounds"
+        );
+    }
+
+    /// Nested bounds of one kind combine to the tightest: the largest floor and
+    /// the smallest cap.
+    #[test]
+    fn fill_spec_combines_nested_bounds() {
+        let len = Length::Min(
+            10,
+            Box::new(Length::Min(
+                30,
+                Box::new(Length::Max(
+                    90,
+                    Box::new(Length::Max(50, Box::new(Length::Fill(2)))),
+                )),
+            )),
+        );
+        assert_eq!(
+            fill_spec(&len),
+            Some(FillSpec {
+                portion: 2,
+                lower: Some(30),
+                upper: Some(50),
+            })
+        );
+        assert_eq!(fill_spec(&Length::Min(10, Box::new(Length::Px(5)))), None);
+    }
+
+    /// Refusal: `alignY` beside a `fill` height in a row yields to the stretch —
+    /// exactly one `align-self`, and it is `stretch`.
+    #[test]
+    fn fill_height_in_row_overrides_align_y() {
+        use crate::ui::helpers::{ui_el_, ui_row_};
+        let child = ui_el_(
+            vec![
+                Attribute::AttrAlignY(VAlign::CenterY),
+                Attribute::AttrHeight(Length::Fill(1)),
+            ],
+            Element::Text("a".to_owned()),
+        );
+        let s = first_child_style(ui_row_(vec![], vec![child]));
+        assert_eq!(s.matches("align-self").count(), 1, "one align-self: {s}");
+        assert!(s.contains("align-self:stretch"), "stretch wins: {s}");
+    }
+
+    /// An A3-promoted `el` lays its child out as a row: the child's aligned
+    /// `height fill` stretches instead of growing.
+    #[test]
+    fn promoted_el_child_sees_row() {
+        use crate::ui::helpers::ui_el_;
+        let child = ui_el_(
+            vec![
+                Attribute::AttrAlignX(HAlign::CenterX),
+                Attribute::AttrHeight(Length::Fill(1)),
+            ],
+            Element::Text("a".to_owned()),
+        );
+        let s = first_child_style(ui_el_(vec![], child));
+        assert!(s.contains("align-self:stretch"), "row cross stretch: {s}");
+        assert!(!s.contains("flex-grow"), "no main-axis grow: {s}");
+        assert!(
+            s.contains("margin-left:auto;margin-right:auto"),
+            "centerX is the row main axis: {s}"
+        );
+    }
+
+    /// A fixed width is pinned (`flex-shrink:0`) only on a row's main axis.
+    #[test]
+    fn overconstrain_only_on_row_main_axis() {
+        let attrs = [Attribute::<TestMsg>::AttrWidth(Length::Px(40))];
+        assert_eq!(overconstrain_css(&attrs, FlexAxis::Row), "flex-shrink:0");
+        assert_eq!(overconstrain_css(&attrs, FlexAxis::Column), "");
+        assert_eq!(overconstrain_css(&attrs, FlexAxis::Block), "");
+    }
+
+    /// The context-free collectors (`onPseudo`, `mediaQuery`) size with no flex
+    /// parent: a `fill` there never carries a portion.
+    #[test]
+    fn block_style_string_fill_has_no_portion() {
+        let s = block_style_string(&[
+            Attribute::<TestMsg>::AttrWidth(Length::Fill(3)),
+            Attribute::AttrPadding(1, 1, 1, 1),
+        ]);
+        assert_eq!(s, "width:100%;padding:1px 1px 1px 1px");
+    }
+
+    /// The parent-independent collector never emits a size property.
+    #[test]
+    fn build_style_string_emits_no_size() {
+        let s = build_style_string(&[
+            Attribute::<TestMsg>::AttrWidth(Length::Fill(1)),
+            Attribute::AttrHeight(Length::Px(9)),
+        ]);
+        assert_eq!(s, "");
+    }
+
+    /// An author raw style for a size property follows the typed size, so it
+    /// wins the cascade.
+    #[test]
+    fn raw_style_follows_typed_size() {
+        use crate::ui::helpers::{ui_el_, ui_row_};
+        let child = ui_el_(
+            vec![
+                Attribute::AttrStyle("width".to_owned(), "7px".to_owned()),
+                Attribute::AttrWidth(Length::Px(40)),
+            ],
+            Element::Text("a".to_owned()),
+        );
+        let s = first_child_style(ui_row_(vec![], vec![child]));
+        assert!(s.starts_with("width:40px;width:7px"), "raw style last: {s}");
     }
 
     // ── Follow-up 3: CSS injection hardening tests (T3/T4) ───────────────────
