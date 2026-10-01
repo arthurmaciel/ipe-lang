@@ -5682,19 +5682,6 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             desugar_multiline(raw, *anchor, span, env, interner)?
         }
         src::Expr_::Char(c) => canon::Expr_::Char(c.clone()),
-        // `path "…"` literal: validate at compile time, store the cleaned form.
-        src::Expr_::PathLit(raw) => match ipe_diagnostics::path_check::validate(raw) {
-            Ok(cleaned) => canon::Expr_::PathLit(cleaned),
-            Err(reason) => {
-                return Err(Diagnostic::Parse {
-                    span,
-                    msg: ParseError::InvalidPathLiteral {
-                        literal: raw.as_str().into(),
-                        reason,
-                    },
-                });
-            }
-        },
         src::Expr_::Unit => canon::Expr_::Unit,
         src::Expr_::VarLocal(name) => resolve_var(*name, span, env, interner)?,
         src::Expr_::VarQual(qual, name) => resolve_qual_var(*qual, *name, span, env, interner)?,
@@ -7438,7 +7425,7 @@ fn annotation_head_name<'a>(ann: &src::TypeAnnotation, interner: &'a Interner) -
 /// JS file. The two type parameters are the seal (down-state / up-event) only;
 /// the JS source is a value argument, never a type parameter. The literal is
 /// cleaned and traversal-checked at build time here (reusing the same
-/// `ipe_path_core` seal the `path "…"` literal uses); its existence inside the
+/// `ipe_path_core` seal); its existence inside the
 /// project root is verified later, at the build stage that owns the root.
 ///
 /// Returns:
@@ -7454,8 +7441,7 @@ fn annotation_head_name<'a>(ann: &src::TypeAnnotation, interner: &'a Interner) -
 /// # Errors
 /// [`NameError::CustomElementCtorMalformed`] (IPE-N0044) on any malformed use.
 /// A path that fails the traversal seal surfaces as [`ParseError::InvalidPathLiteral`]
-/// (IPE-P0063) — the same code the `path "…"` literal uses, shared through
-/// `ipe_diagnostics::path_check::validate`.
+/// (IPE-P0063), through `ipe_diagnostics::path_check::validate`.
 fn detect_custom_element_constructor(
     val: &src::Value,
     env: &Env,
@@ -7565,7 +7551,7 @@ fn detect_custom_element_constructor(
 /// Seal a `CustomElement.fromFile` argument list to a cleaned widget path.
 ///
 /// Enforces exactly one string-literal argument, cleans it through the shared
-/// `path "…"` seal (`ipe_path_core`), and tightens to a project-root-relative
+/// `ipe_path_core` seal, and tightens to a project-root-relative
 /// path. Every failure is the fail-closed IPE-N0044 (or the path-literal
 /// IPE-P0063 for a `..` escape); the caller is already committed to the
 /// constructor, so there is no fall-through.
@@ -7588,7 +7574,7 @@ fn custom_element_widget_path(args: &[src::Expr], body_span: Span) -> DResult<St
     };
 
     // Path seal: clean + all-targets traversal check, the SAME `ipe_path_core`
-    // source of truth the `path "…"` literal uses. A `..` escape is refused with
+    // source of truth. A `..` escape is refused with
     // IPE-P0063 (no arbitrary out-of-project file is read at build).
     let cleaned = match ipe_diagnostics::path_check::validate(raw) {
         Ok(cleaned) => cleaned,
@@ -7604,7 +7590,7 @@ fn custom_element_widget_path(args: &[src::Expr], body_span: Span) -> DResult<St
     };
 
     // constructor-specific tightening (Security #1, defence-in-depth): the widget
-    // path MUST be project-root-relative. The shared `path "…"` seal accepts an
+    // path MUST be project-root-relative. The shared `ipe_path_core` seal accepts an
     // absolute path by design (a `path` value may legitimately be absolute), but a
     // widget path is joined against the project root at the build gate — and
     // `Path::join` DISCARDS the base when its argument is absolute, so an absolute

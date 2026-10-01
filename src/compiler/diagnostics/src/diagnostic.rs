@@ -398,7 +398,7 @@ pub enum ParseError {
     MalformedLet(LetDefect),
     /// An `if … then … else …` expression is malformed. [IPE-P0062]
     MalformedIf(IfDefect),
-    /// A `path "…"` literal whose string fails compile-time validation.
+    /// A `CustomElement.fromFile` path literal that fails compile-time validation.
     ///
     /// `reason` names which check failed: [`PathRejection::Nul`] (a NUL byte
     /// in the string) or [`PathRejection::Traversal`] (the cleaned path

@@ -275,17 +275,11 @@ pub fn path_to_string(p: Path) -> String {
 
 /// Construct an already-validated `Path` from a pre-cleaned string.
 ///
-/// Only the compiler's code generator calls this — exclusively at sites where
-/// a `path "…"` literal has already been validated and cleaned at compile time.
-/// Never expose this function to user Ipê source or use it outside generated
-/// code: it bypasses the parse-don't-validate seal in [`path_from_string`].
-///
-/// The string MUST have come from [`path_from_string`]'s cleaned output (NUL-
-/// free, non-escaping); the compiler enforces this at compile time before
-/// emitting a call here, so no runtime re-check is needed.
+/// Crate-internal: it bypasses the parse-don't-validate seal in
+/// [`path_from_string`], so only runtime sites holding an already-trusted,
+/// already-cleaned string (NUL-free, non-escaping) call it.
 #[must_use]
-#[doc(hidden)]
-pub fn path_literal(cleaned: String) -> Path {
+pub(crate) fn path_literal(cleaned: String) -> Path {
     Path(cleaned)
 }
 

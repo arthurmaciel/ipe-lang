@@ -3363,7 +3363,7 @@ mod tests {
         }
     }
 
-    /// A `path "…"` literal containing a NUL byte renders its specific detail message.
+    /// A path literal containing a NUL byte renders its specific detail message.
     ///
     /// Uses `plain_message` (which includes the label from `parse_label`) because
     /// `render` with a `Span::DUMMY` suppresses the snippet+label band.
@@ -3383,7 +3383,7 @@ mod tests {
         );
     }
 
-    /// A `path "…"` literal with a traversal renders its specific detail message.
+    /// A path literal with a traversal renders its specific detail message.
     #[test]
     fn path_rejection_traversal_renders_traversal_message() {
         let diag = Diagnostic::Parse {

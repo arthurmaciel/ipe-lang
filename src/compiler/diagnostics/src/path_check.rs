@@ -1,4 +1,4 @@
-//! Compile-time validation for the `path "…"` literal gate (IPE-P0063).
+//! Compile-time validation for a literal path in source (IPE-P0063).
 //!
 //! The algorithm is NOT defined here — it lives once in the dependency-free
 //! `ipe_path_core` crate, which the runtime `Path.fromString` seal
@@ -12,7 +12,7 @@
 //! stricter than the runtime's per-target seal by construction, so a literal the
 //! compiler accepts is accepted by the runtime on every target.
 
-/// Compile-time validation for a `path "…"` literal — the all-targets gate.
+/// Compile-time validation for a literal path in source — the all-targets gate.
 ///
 /// Delegates to [`ipe_path_core::validate`]. Returns the cleaned path string on
 /// success, or a [`ipe_path_core::PathRejection`] that the canon stage renders

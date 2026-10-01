@@ -1092,8 +1092,7 @@ fn custom_element_ctor_missing_file_rejected() {
 }
 
 /// (d) `customElement "../escape.js"` is rejected by the shared path seal — a `..`
-/// that climbs out of the project root is refused at build (IPE-P0063), the same
-/// code the `path "…"` literal uses.
+/// that climbs out of the project root is refused at build (IPE-P0063).
 #[test]
 fn custom_element_ctor_path_traversal_rejected() {
     let src = format!(
@@ -1103,6 +1102,27 @@ fn custom_element_ctor_path_traversal_rejected() {
          main = 1\n"
     );
     assert_rejected("custom_element_traversal", &src, "IPE-P0063");
+}
+
+/// A `CustomElement.fromFile` path carrying a NUL byte is refused at build
+/// (IPE-P0063) before it can reach a syscall.
+#[test]
+fn custom_element_ctor_nul_path_rejected() {
+    let src = format!(
+        "{HEAD}import Ipe.Ffi.Js.CustomElement as CustomElement\n\
+         editor : CustomElement Int String\n\
+         editor = CustomElement.fromFile \"js/a\\0b.js\"\n\
+         main = 1\n"
+    );
+    assert_rejected("custom_element_nul", &src, "IPE-P0063");
+}
+
+/// Refusal: `path "…"` is no literal form, so with no `path` in scope it is an
+/// unresolved name (IPE-N0001).
+#[test]
+fn path_before_a_string_with_no_path_binder_is_unresolved() {
+    let src = format!("{HEAD}main = path \"src/Main.ipe\"\n");
+    assert_rejected("path_is_an_ordinary_name", &src, "IPE-N0001");
 }
 
 /// (e) A well-formed `customElement "js/x.js"` with the file PRESENT type-checks
@@ -1173,7 +1193,7 @@ fn custom_element_in_unused_binding_compiles_no_model_gate() {
 
 /// (g) `customElement "/etc/passwd"` (an ABSOLUTE path) is rejected at CANON with
 /// IPE-N0044 — the widget path must be project-root-relative. An absolute literal
-/// would survive the shared `path "…"` seal (which legitimately accepts absolute
+/// would survive the shared `ipe_path_core` seal (which legitimately accepts absolute
 /// paths) yet, joined at the build gate, `Path::join` discards the project root
 /// and stats an arbitrary out-of-project file. This closes that escape at the name
 /// stage, before any filesystem access.

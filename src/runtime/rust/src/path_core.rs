@@ -1,7 +1,7 @@
 // The single source of truth for Ipê's lexical path validation.
 //
 // Both the runtime `Path.fromString` seal (`crate::path`) and the compiler's
-// `path "…"` literal gate (`ipe_diagnostics::path_check`) validate the SAME
+// literal-path gate (`ipe_diagnostics::path_check`) validate the SAME
 // way, so the algorithm lives here ONCE and both consumers use this one file.
 // Neither keeps its own copy. The module is dependency-free (std only): the
 // runtime references it as a sibling module (`crate::path_core::…`), and the
