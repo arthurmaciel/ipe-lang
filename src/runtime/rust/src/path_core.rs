@@ -1,49 +1,128 @@
-// The single source of truth for Ipê's lexical path validation.
+// The single source of truth for Ipê's lexical path seal.
 //
-// Both the runtime `Path.fromString` seal (`crate::path`) and the compiler's
-// `path "…"` literal gate (`ipe_diagnostics::path_check`) validate the SAME
-// way, so the algorithm lives here ONCE and both consumers use this one file.
-// Neither keeps its own copy. The module is dependency-free (std only): the
-// runtime references it as a sibling module (`crate::path_core::…`), and the
-// standalone `ipe_path_core` crate `include!`s this exact file so the compiler
-// can validate a literal without pulling in the runtime's heavy optional
-// dependencies (tokio, serde, sqlx, …).
+// Every `Path` value is text produced by `seal(text, regime)`: the runtime
+// `Path.fromString` seal (`crate::path`) calls it with the host regime, and the
+// compiler's `path "…"` literal gate (`ipe_diagnostics::path_check`) calls it
+// under BOTH regimes through `PathLitText::seal`, emitting both results so the
+// runtime selects the host one without re-cleaning. The module is
+// dependency-free (std only): the runtime references it as a sibling module
+// (`crate::path_core::…`), and the standalone `ipe_path_core` crate `include!`s
+// this exact file so the compiler seals a literal without pulling in the
+// runtime's heavy optional dependencies (tokio, serde, sqlx, …).
 //
 // Regular (`//`) comments, not inner docs (`//!`): this file is `include!`d
 // verbatim into the `ipe_path_core` crate root, where a leading `//!` after the
 // `include!` item would be an illegal mid-file inner attribute. The crate-level
 // docs live in `ipe_path_core`'s `lib.rs`.
 //
-// # Two entry points, one algorithm
+// # One seal, two regimes
 //
-// * `validate` — the COMPILE-TIME gate. The compiler does not know the final
-//   target OS, so it rejects a path that would traverse under EITHER separator
-//   regime (Unix `/` or Windows `\`/`/`). This is deliberately stricter than
-//   the runtime's target-specific check: a compile-time reject can only ever be
-//   a superset of what the runtime rejects, so nothing the runtime would refuse
-//   is ever emitted as a validated literal.
-// * `clean_with` / `escapes_root` / `has_nul`
-//   — the target-specific primitives the runtime seal drives with its own
-//   host separator regime (`clean_with(s, cfg!(windows))`), keeping the runtime
-//   behaviour byte-identical per platform.
-// * `ElementClass` — the one per-element classifier under Windows filename
-//   canonicalisation, read by the seal, the compile-time gate and the runtime
-//   child-join parse alike (`ElementClass::of` per element,
-//   `ElementClass::windows_elements` over a whole path).
+// * `seal` — THE constructor: NUL refusal, the Windows dot/space `..` disguise
+//   refusal, lexical cleaning and the escape check, all under one `Regime`.
+// * `PathLitText` — a literal sealed under both regimes; its only builder is
+//   `PathLitText::seal`, so the two forms always come from one raw text.
+// * `clean_with` / `escapes_root` / `Volume` / `ElementClass` — the regime-
+//   parametrised primitives the seal and the runtime child-join parse share.
 
-/// Why a `path "…"` literal was rejected by [`validate`].
+/// The separator regime a path is read under.
 ///
-/// Each variant names one distinct rejection class; an exhaustive `match` on
-/// this type forces every consumer to handle every class explicitly — a new
-/// variant is a compile-time error at every call site, never a silent catch-all.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PathRejection {
-    /// The string contains a NUL byte — a C-string terminator that truncates a
-    /// path at the syscall boundary, enabling a poisoned-NUL bypass.
+/// An enum rather than a `bool` so a call site names the regime it means and
+/// can never pass it negated or in the wrong argument slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Regime {
+    /// `/` alone separates elements; no volume prefix exists.
+    Unix,
+    /// `\` and `/` both separate elements; a drive / UNC / namespace volume may
+    /// lead the path.
+    Windows,
+}
+
+/// The separator regime of the build target.
+pub const HOST: Regime = if cfg!(windows) {
+    Regime::Windows
+} else {
+    Regime::Unix
+};
+
+impl Regime {
+    /// Does this regime honour `\` and volume prefixes?
+    #[must_use]
+    pub const fn is_windows(self) -> bool {
+        matches!(self, Self::Windows)
+    }
+
+    /// The canonical separator a cleaned path is written with.
+    #[must_use]
+    pub const fn separator(self) -> u8 {
+        match self {
+            Self::Unix => b'/',
+            Self::Windows => b'\\',
+        }
+    }
+
+    /// The regime's name as a diagnostic spells it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Unix => "Unix",
+            Self::Windows => "Windows",
+        }
+    }
+}
+
+/// Why [`seal`] refused a text.
+///
+/// Each variant names one refusal class; an exhaustive `match` forces every
+/// consumer (the runtime `Display`, the compiler diagnostic) to handle each one.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum SealRefusal {
+    /// The text holds a NUL byte — a C-string terminator that truncates a path
+    /// at the syscall boundary, enabling a poisoned-NUL bypass.
     Nul,
-    /// The path escapes its root via `..` traversal (under Unix or Windows
-    /// separators), or carries a Windows trailing-dot/space `..` disguise.
-    Traversal,
+    /// An element Windows strips to `..` (trailing dots / spaces).
+    DisguisedParent,
+    /// The cleaned form climbs above its root.
+    Escape {
+        /// The cleaned form whose first element is the climb.
+        cleaned: String,
+    },
+}
+
+impl SealRefusal {
+    /// The refusal's runtime message for the refused `path`.
+    #[must_use]
+    pub const fn describe<'a>(&'a self, path: &'a str) -> SealRefusalText<'a> {
+        SealRefusalText { why: self, path }
+    }
+}
+
+/// A [`SealRefusal`] paired with the text it refused, rendered by `Display`.
+///
+/// The one message table for a seal refusal at the Ipê-facing boundary.
+#[derive(Clone, Copy, Debug)]
+pub struct SealRefusalText<'a> {
+    why: &'a SealRefusal,
+    path: &'a str,
+}
+
+impl std::fmt::Display for SealRefusalText<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let path = self.path;
+        match self.why {
+            SealRefusal::Nul => f.write_str(
+                "Ipe.Path: path contains a NUL byte (a syscall-boundary truncation / traversal risk)",
+            ),
+            SealRefusal::DisguisedParent => write!(
+                f,
+                "Ipe.Path: path element resolves to `..` after Windows trailing dot/space \
+                 stripping (a traversal disguise): {path:?}"
+            ),
+            SealRefusal::Escape { cleaned } => write!(
+                f,
+                "Ipe.Path: path escapes its root via `..` traversal: {path:?} (cleaned: {cleaned:?})"
+            ),
+        }
+    }
 }
 
 /// Does `s` contain a NUL byte?
@@ -51,53 +130,107 @@ pub enum PathRejection {
 /// A NUL is a C-string terminator that truncates a path at the syscall boundary
 /// (`"safe.txt\0../../etc/passwd"` reaches the kernel as `"safe.txt"` on one code
 /// path and the full string on another — a classic poisoned-NUL bypass), so it
-/// is rejected under every regime.
+/// is refused under every regime.
 #[must_use]
 pub fn has_nul(s: &str) -> bool {
     s.as_bytes().contains(&0)
 }
 
-/// Compile-time validation for a `path "…"` literal.
+/// Seal `text` into a path's one representation under `regime`.
 ///
-/// The compiler cannot know the final target OS, so this rejects `s` if it is a
-/// traversal or injection surface under EITHER separator regime — a NUL byte, a
-/// Windows trailing-dot/space `..` disguise, or a `..` escape under either the
-/// Unix (`/`) or the Windows (`\`/`/`) cleaner. Stricter than the runtime's
-/// per-target [`escapes_root`] check by construction, so a literal that passes
-/// here is accepted by the runtime seal on every target.
-///
-/// Returns the Unix-cleaned path string on success (the Rust backend's
-/// equivalence target is Linux, so the emitted literal is the Unix form), or a
-/// [`PathRejection`] on failure.
+/// Refuses a NUL byte, (under Windows) an element Windows strips to `..`, and a
+/// cleaned form that climbs above its root; otherwise returns the cleaned form.
+/// The empty text cleans to `"."`.
 ///
 /// # Errors
 ///
-/// Returns `Err(PathRejection::Nul)` for a NUL byte, or
-/// `Err(PathRejection::Traversal)` for any `..` escape (either separator
-/// regime) or Windows dot/space disguise.
+/// Returns the [`SealRefusal`] naming the first refusal met.
 ///
 /// # Examples (illustrative only — `text`, not a compiled doctest)
 ///
 /// ```text
-/// validate("src/Main.ipe")   // Ok("src/Main.ipe")
-/// validate("../etc/passwd")  // Err(PathRejection::Traversal)
-/// validate("..\secret")      // Err(PathRejection::Traversal) — Windows separator
-/// validate("a\0b")           // Err(PathRejection::Nul)
+/// seal("a\\b/../c", Regime::Unix)     // Ok("c")    — `\` is a filename byte
+/// seal("a\\b/../c", Regime::Windows)  // Ok("a\\c") — `\` separates
+/// seal("..\\secret", Regime::Windows) // Err(SealRefusal::Escape { .. })
+/// seal("a\0b", Regime::Unix)          // Err(SealRefusal::Nul)
 /// ```
-pub fn validate(s: &str) -> Result<String, PathRejection> {
-    if has_nul(s) {
-        return Err(PathRejection::Nul);
+pub fn seal(text: &str, regime: Regime) -> Result<String, SealRefusal> {
+    if has_nul(text) {
+        return Err(SealRefusal::Nul);
     }
-    if ElementClass::windows_elements(s).any(|c| c == ElementClass::DisguisedParent) {
-        return Err(PathRejection::Traversal);
+    // Windows strips trailing dots and spaces from every path element at the
+    // syscall, so `".. "` and `"..."` name the parent directory even though the
+    // lexical scan sees a literal filename. Refused before cleaning so the
+    // disguise never resolves into a traversal the `..` scan failed to count.
+    if regime.is_windows()
+        && ElementClass::windows_elements(text).any(|c| c == ElementClass::DisguisedParent)
+    {
+        return Err(SealRefusal::DisguisedParent);
     }
-    // Reject if the path escapes under EITHER separator regime: a Windows target
-    // honours `\` as a separator, so a `..\` climb Unix cleaning would miss must
-    // still fail the compile-time gate.
-    if escapes_root(&clean_with(s, false), false) || escapes_root(&clean_with(s, true), true) {
-        return Err(PathRejection::Traversal);
+    let cleaned = clean_with(text, regime);
+    if escapes_root(&cleaned, regime) {
+        return Err(SealRefusal::Escape { cleaned });
     }
-    Ok(clean_with(s, false))
+    Ok(cleaned)
+}
+
+/// A `path "…"` literal sealed under every separator regime.
+///
+/// The compiler cannot know the final target, so a literal carries the sealed
+/// form for each regime and the runtime selects the host one. The fields are
+/// private and [`PathLitText::seal`] is the only builder, so both forms always
+/// come from the same raw text.
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+pub struct PathLitText {
+    raw: String,
+    unix: String,
+    windows: String,
+}
+
+/// Why [`PathLitText::seal`] refused a literal: the regime and its refusal.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct LiteralRefusal {
+    /// The regime whose seal refused (Unix is tried first).
+    pub regime: Regime,
+    /// That regime's refusal.
+    pub why: SealRefusal,
+}
+
+impl PathLitText {
+    /// Seal `raw` under both regimes; a refusal under either refuses the literal.
+    ///
+    /// A literal illegal on any target is illegal, so the compile-time gate is
+    /// the union of both regimes' refusals.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first regime's [`LiteralRefusal`] (Unix, then Windows).
+    pub fn seal(raw: &str) -> Result<Self, LiteralRefusal> {
+        let under =
+            |regime: Regime| seal(raw, regime).map_err(|why| LiteralRefusal { regime, why });
+        let unix = under(Regime::Unix)?;
+        let windows = under(Regime::Windows)?;
+        Ok(Self {
+            raw: raw.to_owned(),
+            unix,
+            windows,
+        })
+    }
+
+    /// The raw source text the literal was sealed from.
+    #[must_use]
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    /// The literal's sealed form under `regime`.
+    #[must_use]
+    pub fn sealed(&self, regime: Regime) -> &str {
+        match regime {
+            Regime::Unix => &self.unix,
+            Regime::Windows => &self.windows,
+        }
+    }
 }
 
 /// Is byte `c` an element separator under the active separator set?
@@ -105,8 +238,8 @@ pub fn validate(s: &str) -> Result<String, PathRejection> {
 /// Unix honours only `/`; Windows ALSO honours `\`, because Windows accepts
 /// either at a syscall — so both must count, or the un-honoured one smuggles a
 /// `..` past the traversal scan.
-pub(crate) const fn is_sep(c: u8, windows: bool) -> bool {
-    c == b'/' || (windows && c == b'\\')
+pub(crate) const fn is_sep(c: u8, regime: Regime) -> bool {
+    c == b'/' || (regime.is_windows() && c == b'\\')
 }
 
 /// The namespace tag of a `\\?\…` / `\\.\…` prefix.
@@ -156,9 +289,9 @@ pub enum Volume<'a> {
 
 /// Split `s` at its first regime separator: the component before it, and the
 /// text after it (`None` when `s` holds no separator).
-fn split_component(s: &str, windows: bool) -> (&str, Option<&str>) {
+fn split_component(s: &str, regime: Regime) -> (&str, Option<&str>) {
     s.bytes()
-        .position(|c| is_sep(c, windows))
+        .position(|c| is_sep(c, regime))
         .map_or((s, None), |i| {
             // A separator is one ASCII byte, so `i` and `i + 1` are char boundaries.
             (s.get(..i).unwrap_or(""), s.get(i + 1..))
@@ -173,24 +306,24 @@ fn tail_len(component: Option<&str>) -> usize {
 impl<'a> Volume<'a> {
     /// Parse the leading volume of `path`; always [`Volume::None`] on Unix.
     #[must_use]
-    pub fn parse(path: &'a str, windows: bool) -> Self {
-        if !windows {
+    pub fn parse(path: &'a str, regime: Regime) -> Self {
+        if !regime.is_windows() {
             return Self::None;
         }
         let mut chars = path.chars();
         if let (Some(c), Some(':')) = (chars.next(), chars.next())
-            && !u8::try_from(c).is_ok_and(|c| is_sep(c, windows))
+            && !u8::try_from(c).is_ok_and(|c| is_sep(c, regime))
             && c.len_utf16() == 1
         {
             return Self::Drive(c);
         }
         let b = path.as_bytes();
-        let lead = |i: usize| b.get(i).is_some_and(|&c| is_sep(c, windows));
+        let lead = |i: usize| b.get(i).is_some_and(|&c| is_sep(c, regime));
         if !(lead(0) && lead(1)) {
             return Self::None;
         }
-        let (first, after) = split_component(path.get(2..).unwrap_or(""), windows);
-        let component = |s: &'a str| split_component(s, windows).0;
+        let (first, after) = split_component(path.get(2..).unwrap_or(""), regime);
+        let component = |s: &'a str| split_component(s, regime).0;
         let tag = match first {
             "?" => Namespace::Verbatim,
             "." => Namespace::Device,
@@ -203,10 +336,10 @@ impl<'a> Volume<'a> {
         };
         if tag == Namespace::Verbatim
             && let Some(a) = after
-            && let (name, Some(unc)) = split_component(a, windows)
+            && let (name, Some(unc)) = split_component(a, regime)
             && name.eq_ignore_ascii_case("UNC")
         {
-            let (server, share) = split_component(unc, windows);
+            let (server, share) = split_component(unc, regime);
             return Self::VerbatimUnc {
                 server,
                 share: share.map(component),
@@ -270,14 +403,14 @@ impl<'a> Volume<'a> {
 /// never pop below — so `..` can neither delete a drive letter nor climb out of
 /// a UNC share.
 #[must_use]
-pub fn volume_name_len(path: &str, windows: bool) -> usize {
-    Volume::parse(path, windows).byte_len()
+pub fn volume_name_len(path: &str, regime: Regime) -> usize {
+    Volume::parse(path, regime).byte_len()
 }
 
 /// How Windows filename canonicalisation reads one raw path element (the bytes
 /// between two separators).
 ///
-/// THE element classifier: the runtime seal, the compile-time [`validate`] gate
+/// THE element classifier: the seal under either regime
 /// and the runtime child-join parse all read an element through
 /// [`ElementClass::of`], so the dot-and-space rule is stated once. Each consumer
 /// decides which classes it refuses; the classes themselves never differ.
@@ -336,7 +469,9 @@ impl ElementClass {
     /// consumer refusing the disguise leaves an in-bounds `a\..\b` to the
     /// lexical `..` scan and [`escapes_root`].
     pub fn windows_elements(path: &str) -> impl Iterator<Item = Self> + '_ {
-        path.as_bytes().split(|&c| is_sep(c, true)).map(Self::of)
+        path.as_bytes()
+            .split(|&c| is_sep(c, Regime::Windows))
+            .map(Self::of)
     }
 }
 
@@ -416,12 +551,12 @@ fn device_fold(stem: &[u8]) -> impl Iterator<Item = u8> + '_ {
 /// matches the Windows [`ElementClass::DisguisedParent`] refusal, which already
 /// rejects the same all-dots family (Windows canonicalisation would alias it to `..`).
 #[must_use]
-pub fn escapes_root(cleaned: &str, windows: bool) -> bool {
-    let vol = volume_name_len(cleaned, windows);
+pub fn escapes_root(cleaned: &str, regime: Regime) -> bool {
+    let vol = volume_name_len(cleaned, regime);
     let rest = cleaned.get(vol..).unwrap_or("");
     let rb = rest.as_bytes();
     // The FIRST element of the remainder: bytes up to the first separator.
-    let first = rb.split(|&c| is_sep(c, windows)).next().unwrap_or(&[]);
+    let first = rb.split(|&c| is_sep(c, regime)).next().unwrap_or(&[]);
     // Layer 1: the exact `..` climb token.
     if first == b".." {
         return true;
@@ -450,7 +585,7 @@ pub fn escapes_root(cleaned: &str, windows: bool) -> bool {
 /// multi-byte UTF-8 path elements are copied intact (their bytes are never a
 /// separator or ASCII `.`), so the result is valid UTF-8.
 #[must_use]
-pub fn clean_with(path: &str, windows: bool) -> String {
+pub fn clean_with(path: &str, regime: Regime) -> String {
     if path.is_empty() {
         return ".".to_string();
     }
@@ -459,9 +594,9 @@ pub fn clean_with(path: &str, windows: bool) -> String {
     // Total byte access (no `[]` indexing — clippy::indexing_slicing / no-panic
     // gate). Out-of-range reads as `None`, never panics.
     let at = |i: usize| -> Option<u8> { b.get(i).copied() };
-    let sep = if windows { b'\\' } else { b'/' };
+    let sep = regime.separator();
 
-    let vol = volume_name_len(path, windows);
+    let vol = volume_name_len(path, regime);
     let mut out: Vec<u8> = Vec::with_capacity(n + 1);
     // Copy the volume prefix through verbatim, normalising its separators (a UNC
     // `//server/share` becomes `\\server\share`). The `..` scan's floor,
@@ -469,7 +604,7 @@ pub fn clean_with(path: &str, windows: bool) -> String {
     // drive/UNC root.
     for i in 0..vol {
         match at(i) {
-            Some(c) if is_sep(c, windows) => out.push(sep),
+            Some(c) if is_sep(c, regime) => out.push(sep),
             Some(c) => out.push(c),
             None => {}
         }
@@ -483,7 +618,7 @@ pub fn clean_with(path: &str, windows: bool) -> String {
     // BARE drive (`C:` with no following separator) is drive-RELATIVE, not
     // rooted — so `C:..\x` keeps its leading `..` and is rejected as an escape,
     // never silently resolved against the drive root.
-    let rooted = at(vol).is_some_and(|c| is_sep(c, windows));
+    let rooted = at(vol).is_some_and(|c| is_sep(c, regime));
     if rooted {
         out.push(sep);
         r += 1;
@@ -493,17 +628,17 @@ pub fn clean_with(path: &str, windows: bool) -> String {
     // crosses it. Anchored AFTER the root separator (if any) is written.
     let mut dotdot = out.len();
     while r < n {
-        if at(r).is_some_and(|c| is_sep(c, windows)) {
+        if at(r).is_some_and(|c| is_sep(c, regime)) {
             // empty path element → skip
             r += 1;
         } else if at(r) == Some(b'.')
-            && (r + 1 == n || at(r + 1).is_some_and(|c| is_sep(c, windows)))
+            && (r + 1 == n || at(r + 1).is_some_and(|c| is_sep(c, regime)))
         {
             // `.` element → skip
             r += 1;
         } else if at(r) == Some(b'.')
             && at(r + 1) == Some(b'.')
-            && (r + 2 == n || at(r + 2).is_some_and(|c| is_sep(c, windows)))
+            && (r + 2 == n || at(r + 2).is_some_and(|c| is_sep(c, regime)))
         {
             // `..` element → back up
             r += 2;
@@ -528,7 +663,7 @@ pub fn clean_with(path: &str, windows: bool) -> String {
             if (rooted && out.len() != dotdot) || (!rooted && out.len() != volw) {
                 out.push(sep);
             }
-            while r < n && !at(r).is_some_and(|c| is_sep(c, windows)) {
+            while r < n && !at(r).is_some_and(|c| is_sep(c, regime)) {
                 if let Some(c) = at(r) {
                     out.push(c);
                 }
@@ -546,144 +681,208 @@ pub fn clean_with(path: &str, windows: bool) -> String {
 mod tests {
     use super::*;
 
-    // ── validate: accepted paths ─────────────────────────────────────────────
+    /// Seal `raw` as a literal, returning its (Unix, Windows) forms.
+    fn literal(raw: &str) -> Result<(String, String), LiteralRefusal> {
+        PathLitText::seal(raw).map(|t| {
+            (
+                t.sealed(Regime::Unix).to_owned(),
+                t.sealed(Regime::Windows).to_owned(),
+            )
+        })
+    }
+
+    /// Does the literal `raw` refuse under `regime` for the class `class`?
+    fn literal_refused(raw: &str, regime: Regime, class: fn(&SealRefusal) -> bool) -> bool {
+        literal(raw).is_err_and(|r| r.regime == regime && class(&r.why))
+    }
+
+    const fn is_nul(r: &SealRefusal) -> bool {
+        matches!(r, SealRefusal::Nul)
+    }
+
+    const fn is_escape(r: &SealRefusal) -> bool {
+        matches!(r, SealRefusal::Escape { .. })
+    }
+
+    const fn is_disguise(r: &SealRefusal) -> bool {
+        matches!(r, SealRefusal::DisguisedParent)
+    }
+
+    // ── seal: one text, two regimes ──────────────────────────────────────────
 
     #[test]
-    fn plain_relative_accepted() {
-        assert_eq!(validate("src/Main.ipe"), Ok("src/Main.ipe".to_string()));
+    fn seal_reads_backslash_per_regime() {
+        // `\` is a filename byte under Unix and a separator under Windows, so
+        // the same text names a different file per regime.
+        assert_eq!(seal("a\\b/../c", Regime::Unix), Ok("c".to_string()));
+        assert_eq!(seal("a\\b/../c", Regime::Windows), Ok("a\\c".to_string()));
     }
 
     #[test]
-    fn absolute_accepted() {
+    fn seal_refuses_nul_under_both_regimes() {
+        for regime in [Regime::Unix, Regime::Windows] {
+            assert_eq!(
+                seal("safe\0bad", regime),
+                Err(SealRefusal::Nul),
+                "{regime:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn seal_refuses_disguise_only_under_windows() {
         assert_eq!(
-            validate("/usr/share/data"),
-            Ok("/usr/share/data".to_string())
+            seal(".. \\x", Regime::Windows),
+            Err(SealRefusal::DisguisedParent)
+        );
+        assert!(seal(".. \\x", Regime::Unix).is_ok());
+    }
+
+    #[test]
+    fn seal_escape_carries_the_cleaned_form() {
+        assert_eq!(
+            seal("a/../../etc", Regime::Unix),
+            Err(SealRefusal::Escape {
+                cleaned: "../etc".to_string()
+            })
         );
     }
 
     #[test]
-    fn interior_dotdot_that_stays_in_bounds_accepted() {
-        assert_eq!(validate("a/b/../c"), Ok("a/c".to_string()));
+    fn host_regime_matches_the_build_target() {
+        assert_eq!(HOST.is_windows(), cfg!(windows));
+    }
+
+    // ── PathLitText: accepted literals carry each regime's seal ──────────────
+
+    #[test]
+    fn literal_pair_is_each_regimes_seal() {
+        for raw in [
+            "src/Main.ipe",
+            "/usr/share/data",
+            "a/b/../c",
+            "/a/../../b",
+            "",
+            "a\\b/../c",
+            "a\\..\\b",
+            "C:\\x\\..\\y",
+            "\\\\srv\\shr\\x",
+        ] {
+            let pair = literal(raw);
+            let expected =
+                seal(raw, Regime::Unix).and_then(|u| seal(raw, Regime::Windows).map(|w| (u, w)));
+            assert_eq!(pair.ok(), expected.ok(), "{raw:?}");
+        }
     }
 
     #[test]
-    fn rooted_dotdot_cannot_escape_accepted() {
-        assert_eq!(validate("/a/../../b"), Ok("/b".to_string()));
+    fn literal_keeps_its_raw_text() {
+        let text = PathLitText::seal("a/./b").ok();
+        assert_eq!(text.as_ref().map(PathLitText::raw), Some("a/./b"));
     }
 
     #[test]
-    fn empty_cleans_to_dot() {
-        assert_eq!(validate(""), Ok(".".to_string()));
-    }
-
-    // ── validate: rejected under the Unix regime ─────────────────────────────
-
-    #[test]
-    fn nul_byte_rejected() {
-        assert_eq!(validate("safe\0bad"), Err(PathRejection::Nul));
-    }
-
-    #[test]
-    fn leading_dotdot_rejected() {
-        assert_eq!(validate("../secret"), Err(PathRejection::Traversal));
+    fn literal_forms_differ_where_the_regimes_do() {
+        assert_eq!(
+            literal("a\\b/../c").ok(),
+            Some(("c".to_string(), "a\\c".to_string()))
+        );
+        assert_eq!(
+            literal("a\\..\\b").ok(),
+            Some(("a\\..\\b".to_string(), "b".to_string()))
+        );
     }
 
     #[test]
-    fn bare_dotdot_rejected() {
-        assert_eq!(validate(".."), Err(PathRejection::Traversal));
+    fn literal_empty_cleans_to_dot() {
+        assert_eq!(literal("").ok(), Some((".".to_string(), ".".to_string())));
+    }
+
+    // ── PathLitText: refused under the Unix regime ───────────────────────────
+
+    #[test]
+    fn literal_nul_refused() {
+        assert!(literal_refused("safe\0bad", Regime::Unix, is_nul));
     }
 
     #[test]
-    fn dotdot_that_resolves_to_escape_rejected() {
-        // "a/../../etc" cleans to "../etc"
-        assert_eq!(validate("a/../../etc"), Err(PathRejection::Traversal));
+    fn literal_leading_dotdot_refused() {
+        assert!(literal_refused("../secret", Regime::Unix, is_escape));
+        assert!(literal_refused("..", Regime::Unix, is_escape));
+        // "a/../../etc" cleans to "../etc".
+        assert!(literal_refused("a/../../etc", Regime::Unix, is_escape));
     }
 
-    // ── validate: rejected under the Windows regime (the all-targets guarantee) ─
+    // ── PathLitText: refused ONLY under the Windows regime ───────────────────
     //    Each of these is a Unix-clean no-op (a `\` is a plain filename byte on
-    //    Unix) yet a traversal on Windows. The all-targets gate must reject them
-    //    at compile time so no such literal is ever emitted for a Windows build.
+    //    Unix) yet a traversal on Windows, so the literal is refused on every
+    //    host at compile time.
 
     #[test]
-    fn win_backslash_traversal_rejected() {
-        assert_eq!(validate("..\\secret"), Err(PathRejection::Traversal));
+    fn literal_windows_only_refusals() {
+        for raw in ["..\\secret", "C:..\\x", "a\\..\\..\\b"] {
+            assert!(seal(raw, Regime::Unix).is_ok(), "{raw:?} is Unix-legal");
+            assert!(literal_refused(raw, Regime::Windows, is_escape), "{raw:?}");
+        }
+        assert!(literal_refused(".. \\x", Regime::Windows, is_disguise));
     }
 
     #[test]
-    fn win_drive_relative_dotdot_rejected() {
-        assert_eq!(validate("C:..\\x"), Err(PathRejection::Traversal));
-    }
-
-    #[test]
-    fn win_trailing_dot_space_disguise_rejected() {
-        assert_eq!(validate(".. \\x"), Err(PathRejection::Traversal));
-    }
-
-    #[test]
-    fn win_triple_dot_disguise_rejected() {
-        assert_eq!(validate("..."), Err(PathRejection::Traversal));
-    }
-
-    #[test]
-    fn win_mixed_separator_traversal_rejected() {
-        assert_eq!(validate("a\\..\\..\\b"), Err(PathRejection::Traversal));
-    }
-
-    #[test]
-    fn win_in_bounds_backslash_dotdot_accepted() {
-        // `a\..\b` resolves in-bounds on Windows; on Unix `\` is a filename byte,
-        // so the whole thing is a single element. Neither regime escapes, so the
-        // all-targets gate accepts it. Cleaned form is the Unix reading.
-        assert_eq!(validate("a\\..\\b"), Ok("a\\..\\b".to_string()));
+    fn literal_all_dots_refused_under_unix_first() {
+        // `...` escapes under Unix's glued-dot layer before Windows is tried.
+        assert!(literal_refused("...", Regime::Unix, is_escape));
     }
 
     // ── clean_with: Unix / Windows byte-for-byte spot checks ──────────────────
 
     #[test]
     fn clean_collapses_repeated_separators() {
-        assert_eq!(clean_with("a//b///c", false), "a/b/c");
+        assert_eq!(clean_with("a//b///c", Regime::Unix), "a/b/c");
     }
 
     #[test]
     fn clean_empty_gives_dot() {
-        assert_eq!(clean_with("", false), ".");
+        assert_eq!(clean_with("", Regime::Unix), ".");
     }
 
     #[test]
     fn win_unc_root_not_escapable() {
-        let cleaned = clean_with("\\\\server\\share\\..\\..\\x", true);
+        let cleaned = clean_with("\\\\server\\share\\..\\..\\x", Regime::Windows);
         assert_eq!(cleaned, "\\\\server\\share\\x");
-        assert!(!escapes_root(&cleaned, true));
+        assert!(!escapes_root(&cleaned, Regime::Windows));
     }
 
     #[test]
     fn volume_name_len_recognises_drive_and_unc() {
-        assert_eq!(volume_name_len("C:\\x", true), 2);
-        assert_eq!(volume_name_len("\\\\srv\\shr\\x", true), 9);
-        assert_eq!(volume_name_len("relative\\x", true), 0);
-        assert_eq!(volume_name_len("C:\\x", false), 0);
+        assert_eq!(volume_name_len("C:\\x", Regime::Windows), 2);
+        assert_eq!(volume_name_len("\\\\srv\\shr\\x", Regime::Windows), 9);
+        assert_eq!(volume_name_len("relative\\x", Regime::Windows), 0);
+        assert_eq!(volume_name_len("C:\\x", Regime::Unix), 0);
     }
 
     #[test]
     fn volume_parse_follows_the_win32_drive_and_verbatim_unc_grammar() {
         // Any single-UTF-16-unit character before `:` is a drive, as in Win32.
-        assert_eq!(volume_name_len("é:\\x", true), 3);
-        assert_eq!(volume_name_len("1:x", true), 2);
-        assert!(Volume::parse("é:", true).is_drive());
+        assert_eq!(volume_name_len("é:\\x", Regime::Windows), 3);
+        assert_eq!(volume_name_len("1:x", Regime::Windows), 2);
+        assert!(Volume::parse("é:", Regime::Windows).is_drive());
         // A non-BMP character is two UTF-16 units: never a drive.
-        assert_eq!(volume_name_len("𝒳:x", true), 0);
+        assert_eq!(volume_name_len("𝒳:x", Regime::Windows), 0);
         // A verbatim UNC root keeps its server and share inside the volume.
-        assert_eq!(volume_name_len("\\\\?\\UNC\\srv\\shr\\x", true), 15);
-        assert!(Volume::parse("\\\\?\\UNC\\srv\\shr\\x", true).anchors());
         assert_eq!(
-            clean_with("\\\\?\\UNC\\srv\\shr\\..\\..", true),
+            volume_name_len("\\\\?\\UNC\\srv\\shr\\x", Regime::Windows),
+            15
+        );
+        assert!(Volume::parse("\\\\?\\UNC\\srv\\shr\\x", Regime::Windows).anchors());
+        assert_eq!(
+            clean_with("\\\\?\\UNC\\srv\\shr\\..\\..", Regime::Windows),
             "\\\\?\\UNC\\srv\\shr\\"
         );
-        assert_eq!(volume_name_len("\\\\?\\C:\\x", true), 6);
+        assert_eq!(volume_name_len("\\\\?\\C:\\x", Regime::Windows), 6);
         // A device-namespace UNC and an incomplete UNC name no anchoring volume.
-        assert!(!Volume::parse("\\\\.\\UNC\\srv\\shr\\x", true).anchors());
-        assert!(!Volume::parse("\\\\srv", true).anchors());
-        assert!(!Volume::parse("\\x", true).anchors());
+        assert!(!Volume::parse("\\\\.\\UNC\\srv\\shr\\x", Regime::Windows).anchors());
+        assert!(!Volume::parse("\\\\srv", Regime::Windows).anchors());
+        assert!(!Volume::parse("\\x", Regime::Windows).anchors());
     }
 
     // ── ElementClass: the one element classifier ──────────────────────────────
@@ -780,14 +979,14 @@ mod tests {
     fn escapes_root_rejects_exact_leading_dotdot() {
         // Layer 1: the exact `..` token, whole or as a leading element.
         for (regime, s) in [
-            (false, ".."),
-            (false, "../x"),
-            (true, ".."),
-            (true, "..\\x"),
+            (Regime::Unix, ".."),
+            (Regime::Unix, "../x"),
+            (Regime::Windows, ".."),
+            (Regime::Windows, "..\\x"),
         ] {
             assert!(
                 escapes_root(s, regime),
-                "leading `..` must escape ({s:?}, windows={regime})"
+                "leading `..` must escape ({s:?}, {regime:?})"
             );
         }
     }
@@ -798,16 +997,16 @@ mod tests {
         // rejected DIRECTLY, without the cleaner having to split it into `..`
         // tokens. These are the shapes a broken cleaner might glue together.
         for (regime, s) in [
-            (false, "..."),
-            (false, "...."),
-            (false, ".../x"),
-            (false, "..../x"),
-            (true, "..."),
-            (true, "....\\x"),
+            (Regime::Unix, "..."),
+            (Regime::Unix, "...."),
+            (Regime::Unix, ".../x"),
+            (Regime::Unix, "..../x"),
+            (Regime::Windows, "..."),
+            (Regime::Windows, "....\\x"),
         ] {
             assert!(
                 escapes_root(s, regime),
-                "leading glued-dot run must escape ({s:?}, windows={regime})"
+                "leading glued-dot run must escape ({s:?}, {regime:?})"
             );
         }
     }
@@ -818,20 +1017,23 @@ mod tests {
         // not escape; and a name that has dots PLUS other chars (`..foo`) is a
         // real filename, not an all-dots run, so it is NOT rejected.
         for (regime, s) in [
-            (false, "a/b"),
-            (false, "."),
-            (false, "..foo"),
-            (false, "..foo/bar"),
-            (false, "foo.."),
-            (true, "..foo\\bar"),
+            (Regime::Unix, "a/b"),
+            (Regime::Unix, "."),
+            (Regime::Unix, "..foo"),
+            (Regime::Unix, "..foo/bar"),
+            (Regime::Unix, "foo.."),
+            (Regime::Windows, "..foo\\bar"),
         ] {
             assert!(
                 !escapes_root(s, regime),
-                "in-bounds / dotted-name path must NOT escape ({s:?}, windows={regime})"
+                "in-bounds / dotted-name path must NOT escape ({s:?}, {regime:?})"
             );
         }
         // `a/../b` resolves in-bounds and does not escape after cleaning.
-        assert_eq!(clean_with("a/../b", false), "b");
-        assert!(!escapes_root(&clean_with("a/../b", false), false));
+        assert_eq!(clean_with("a/../b", Regime::Unix), "b");
+        assert!(!escapes_root(
+            &clean_with("a/../b", Regime::Unix),
+            Regime::Unix
+        ));
     }
 }

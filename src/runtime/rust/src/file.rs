@@ -7,8 +7,8 @@
 // here unwraps the already-validated `Path` to its cleaned string via
 // `.into_string()` and proceeds — it never re-validates, because the type is
 // the proof.
-use super::path::Path;
-use super::{IpeResult, IpeTask, from_u8_slice, ok_res, str_err};
+use super::path::{OsOrigin, Path, from_os, join_entry, name_from_os};
+use super::{IpeError, IpeResult, IpeTask, from_u8_slice, ok_res, str_err};
 
 // ── shared blocking-pool helper ───────────────────────────────────────
 //
@@ -38,14 +38,15 @@ use super::{IpeResult, IpeTask, from_u8_slice, ok_res, str_err};
 // wasm32 the synchronous fallback runs even when `feature = "tokio"` is set —
 // the browser has no blocking-thread pool to offload to.
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
-async fn run_blocking<T, F>(f: F) -> Result<T, String>
+async fn run_blocking<T, Er, F>(f: F) -> Result<T, Er>
 where
-    F: FnOnce() -> Result<T, String> + Send + 'static,
+    F: FnOnce() -> Result<T, Er> + Send + 'static,
     T: Send + 'static,
+    Er: From<String> + Send + 'static,
 {
     match tokio::task::spawn_blocking(f).await {
         Ok(r) => r,
-        Err(_) => Err("background file task panicked".to_string()),
+        Err(_) => Err(Er::from("background file task panicked".to_string())),
     }
 }
 
@@ -53,10 +54,11 @@ where
 // `async` is required here to match the tokio variant's signature; callers
 // always use `.await` to work with both feature configurations uniformly.
 #[allow(clippy::unused_async)]
-async fn run_blocking<T, F>(f: F) -> Result<T, String>
+async fn run_blocking<T, Er, F>(f: F) -> Result<T, Er>
 where
-    F: FnOnce() -> Result<T, String> + Send + 'static,
+    F: FnOnce() -> Result<T, Er> + Send + 'static,
     T: Send + 'static,
+    Er: From<String> + Send + 'static,
 {
     f()
 }
@@ -100,7 +102,7 @@ impl ReadCeiling {
 fn parse_read_ceiling(raw: Result<String, std::env::VarError>) -> Result<ReadCeiling, String> {
     let shown = match raw {
         Err(std::env::VarError::NotPresent) => return Ok(ReadCeiling::Unset),
-        Err(std::env::VarError::NotUnicode(os)) => os.to_string_lossy().into_owned(),
+        Err(std::env::VarError::NotUnicode(os)) => shown_env_value(os.as_encoded_bytes()),
         Ok(v) => {
             if !v.is_empty()
                 && v.bytes().all(|b| b.is_ascii_digit())
@@ -108,13 +110,40 @@ fn parse_read_ceiling(raw: Result<String, std::env::VarError>) -> Result<ReadCei
             {
                 return Ok(ReadCeiling::Bytes(n));
             }
-            v
+            shown_env_value(v.as_bytes())
         }
     };
-    let shown: String = shown.chars().take(READ_CEILING_SHOWN_CHARS).collect();
     Err(format!(
-        "IPE_FILE_READ_MAX must be a decimal byte count (got {shown:?})"
+        "IPE_FILE_READ_MAX must be a decimal byte count (got \"{shown}\")"
     ))
+}
+
+/// Renders a refused environment value for its error text without losing or
+/// smuggling a byte: valid UTF-8 keeps its printable characters and escapes
+/// every other one (`char::escape_debug` — controls, ESC, CR/LF, bidi
+/// overrides, `"` and `\`), and each byte that is not UTF-8 shows as `\xNN`.
+/// At most `READ_CEILING_SHOWN_CHARS` source characters or bytes are shown.
+fn shown_env_value(raw: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let mut budget = READ_CEILING_SHOWN_CHARS;
+    for chunk in raw.utf8_chunks() {
+        for c in chunk.valid().chars() {
+            let Some(left) = budget.checked_sub(1) else {
+                return out;
+            };
+            budget = left;
+            out.extend(c.escape_debug());
+        }
+        for b in chunk.invalid() {
+            let Some(left) = budget.checked_sub(1) else {
+                return out;
+            };
+            budget = left;
+            let _ = write!(out, "\\x{b:02X}");
+        }
+    }
+    out
 }
 
 /// Resolves the `File.readFile` ceiling from `IPE_FILE_READ_MAX`.
@@ -186,7 +215,7 @@ pub fn file_exists<E: Send + 'static>(path: Path) -> IpeTask<E, bool> {
         // a hypothetical `JoinError` (task panicked) falls back to `false`
         // rather than propagating — there is no `Err` channel on this
         // kernel's existing `IpeTask<E, bool>` signature to propagate into.
-        let exists = run_blocking(move || Ok(std::path::Path::new(&path).exists()))
+        let exists = run_blocking(move || Ok::<_, String>(std::path::Path::new(&path).exists()))
             .await
             .unwrap_or(false);
         ok_res(exists)
@@ -365,16 +394,17 @@ pub fn file_remove<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, (
 
 // ─── Directory queries ─────────────────────────────────────────────────────
 
-fn file_read_dir_sync(path: &str) -> Result<Vec<String>, String> {
+fn file_read_dir_sync(path: &str) -> Result<Vec<String>, IpeError> {
     // Propagate per-entry read errors instead of silently dropping them
     // (`rd.flatten()` would discard `Err` items mid-walk, omitting entries
     // a transient stat/readdir failure touched —  `os.ReadDir` surfaces
     // such an error rather than returning a truncated list).
-    let rd = std::fs::read_dir(path).map_err(|e| format!("{e}"))?;
+    // A name that is not valid UTF-8 is refused, never rewritten lossily.
+    let rd = std::fs::read_dir(path).map_err(|e| IpeError::from(format!("{e}")))?;
     let mut names: Vec<String> = Vec::new();
     for entry in rd {
-        let entry = entry.map_err(|e| format!("{e}"))?;
-        names.push(entry.file_name().to_string_lossy().into_owned());
+        let entry = entry.map_err(|e| IpeError::from(format!("{e}")))?;
+        names.push(name_from_os(&entry.file_name(), OsOrigin::ReadDir)?);
     }
     Ok(names)
 }
@@ -383,12 +413,12 @@ fn file_read_dir_sync(path: &str) -> Result<Vec<String>, String> {
 /// Return the names (not full paths) of all entries in the directory at
 /// `path`, in filesystem order. Implements `os.ReadDir` → `e.Name()`.
 #[must_use]
-pub fn file_read_dir<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, Vec<String>> {
+pub fn file_read_dir<E: Send + From<IpeError> + 'static>(path: Path) -> IpeTask<E, Vec<String>> {
     let path = path.into_string();
     Box::pin(async move {
         match run_blocking(move || file_read_dir_sync(&path)).await {
             Ok(names) => ok_res(names),
-            Err(e) => IpeResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(e.into()),
         }
     })
 }
@@ -402,9 +432,11 @@ pub fn file_is_dir<E: Send + 'static>(path: Path) -> IpeTask<E, bool> {
     let path = path.into_string();
     Box::pin(async move {
         // Same infallible-closure shape as `file_exists` above.
-        let is_dir = run_blocking(move || Ok(std::fs::metadata(&path).is_ok_and(|m| m.is_dir())))
-            .await
-            .unwrap_or(false);
+        let is_dir = run_blocking(move || {
+            Ok::<_, String>(std::fs::metadata(&path).is_ok_and(|m| m.is_dir()))
+        })
+        .await
+        .unwrap_or(false);
         ok_res(is_dir)
     })
 }
@@ -420,11 +452,11 @@ pub fn file_is_dir<E: Send + 'static>(path: Path) -> IpeTask<E, bool> {
 /// temp base, exclusively, never through a symlink, mode 0600, with a name
 /// carrying 128 bits of OS CSPRNG entropy.
 #[must_use]
-pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
+pub fn file_temp_file<E: Send + From<IpeError> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
-        match run_blocking(move || temp_file_sync(&prefix).map_err(|e| e.to_string())).await {
+        match run_blocking(move || temp_file_sync(&prefix)).await {
             Ok(p) => ok_res(p),
-            Err(e) => IpeResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(e.into()),
         }
     })
 }
@@ -438,25 +470,48 @@ pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTa
 /// verified temp base, exclusively, mode 0700, re-verified as the effective
 /// user's, with a name carrying 128 bits of OS CSPRNG entropy.
 #[must_use]
-pub fn file_temp_dir<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
+pub fn file_temp_dir<E: Send + From<IpeError> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
-        match run_blocking(move || temp_dir_sync(&prefix).map_err(|e| e.to_string())).await {
+        match run_blocking(move || temp_dir_sync(&prefix)).await {
             Ok(p) => ok_res(p),
-            Err(e) => IpeResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(e.into()),
         }
     })
 }
 
 /// A private temp file tagged with `prefix`, kept past this call.
-fn temp_file_sync(prefix: &str) -> std::io::Result<String> {
-    super::scratch_core::private_temp_file(prefix)
-        .map(|(path, _file)| path.to_string_lossy().into_owned())
+///
+/// The created path passes the host seal like every other `Path`-shaped value;
+/// a location the seal refuses (not UTF-8, say) is removed again and reported,
+/// never rewritten lossily.
+fn temp_file_sync(prefix: &str) -> Result<String, IpeError> {
+    let (path, _file) = super::scratch_core::private_temp_file(prefix)
+        .map_err(|e| IpeError::from(e.to_string()))?;
+    sealed_temp(&path, OsOrigin::TempFile)
 }
 
 /// A private temp directory tagged with `prefix`, kept past this call.
-fn temp_dir_sync(prefix: &str) -> std::io::Result<String> {
-    super::scratch_core::ScratchDir::new(prefix)
-        .map(|dir| dir.into_path().to_string_lossy().into_owned())
+///
+/// Sealed under the host regime exactly as [`temp_file_sync`].
+fn temp_dir_sync(prefix: &str) -> Result<String, IpeError> {
+    let dir =
+        super::scratch_core::ScratchDir::new(prefix).map_err(|e| IpeError::from(e.to_string()))?;
+    sealed_temp(&dir.into_path(), OsOrigin::TempDir)
+}
+
+/// Seal a freshly created temp entry, removing it again when the seal refuses.
+fn sealed_temp(path: &std::path::Path, origin: OsOrigin) -> Result<String, IpeError> {
+    from_os(path, origin)
+        .map(Path::into_string)
+        .inspect_err(|_| {
+            // Best-effort cleanup of an entry the caller can never name; the
+            // refusal is the error reported either way.
+            let _ = if matches!(origin, OsOrigin::TempDir) {
+                std::fs::remove_dir(path)
+            } else {
+                std::fs::remove_file(path)
+            };
+        })
 }
 
 // ─── Copy / rename ─────────────────────────────────────────────────────────
@@ -516,16 +571,16 @@ pub fn file_rename<E: Send + From<String> + 'static>(src: Path, dst: Path) -> Ip
 /// `Some(f)` includes only those where `f(path)` is `true`. The predicate
 /// borrows the `Path` by reference; the caller clones only if it keeps it.
 fn walk_dir(
-    dir: &std::path::Path,
+    dir: &Path,
     visited: &mut std::collections::HashSet<std::path::PathBuf>,
     pred: Option<&dyn Fn(&Path) -> bool>,
     out: &mut Vec<Path>,
-) -> Result<(), String> {
+) -> Result<(), IpeError> {
     // Guard against symlink cycles: canonicalize this directory's real path
     // and skip if already seen. `canonicalize` follows all symlinks; if it
     // fails (broken symlink, permission denied, path does not exist), skip
     // this subtree rather than erroring.
-    let real = match std::fs::canonicalize(dir) {
+    let real = match std::fs::canonicalize(dir.as_str()) {
         Ok(p) => p,
         Err(_) => return Ok(()),
     };
@@ -534,36 +589,31 @@ fn walk_dir(
         return Ok(());
     }
 
-    let rd = match std::fs::read_dir(dir) {
+    let rd = match std::fs::read_dir(dir.as_str()) {
         Ok(rd) => rd,
-        Err(e) => return Err(format!("{e}")),
+        Err(e) => return Err(IpeError::from(format!("{e}"))),
     };
 
     for entry in rd {
-        let entry = entry.map_err(|e| format!("{e}"))?;
-        let entry_path = entry.path();
+        let entry = entry.map_err(|e| IpeError::from(format!("{e}")))?;
+        // Every yielded `Path` is the sealed join of the sealed root and the
+        // entry name: a name that is not UTF-8, or that the join refuses, fails
+        // the walk rather than being rewritten or skipped.
+        let name = name_from_os(&entry.file_name(), OsOrigin::Walk)?;
+        let entry_path = join_entry(dir, &name)?;
 
         // Use `metadata()` (follows symlinks) so symlinks to files and
         // symlinks to directories are classified correctly. Symlink-to-
         // directory cycles are caught by the `canonicalize` guard above.
-        let meta = match std::fs::metadata(&entry_path) {
+        let meta = match std::fs::metadata(entry_path.as_str()) {
             Ok(m) => m,
             Err(_) => continue, // broken symlink or permission denied — skip
         };
 
         if meta.is_dir() {
             walk_dir(&entry_path, visited, pred, out)?;
-        } else if meta.is_file() {
-            // `entry_path` is `dir.join(entry.file_name())` — rooted when
-            // `dir` is rooted. The root was validated by `path_from_string`;
-            // entry names come from the OS (not user input), so they cannot
-            // carry `..` or NUL. `path_literal` is the correct constructor
-            // for already-trusted, already-cleaned path strings.
-            let path_str = entry_path.to_string_lossy().into_owned();
-            let ipe_path = super::path::path_literal(path_str);
-            if pred.is_none_or(|f| f(&ipe_path)) {
-                out.push(ipe_path);
-            }
+        } else if meta.is_file() && pred.is_none_or(|f| f(&entry_path)) {
+            out.push(entry_path);
         }
         // Symlinks to files: covered by `meta.is_file()` above.
         // Symlinks to directories: covered by `meta.is_dir()` + cycle guard.
@@ -572,26 +622,33 @@ fn walk_dir(
     Ok(())
 }
 
-fn file_walk_sync(root: &str) -> Result<Vec<Path>, String> {
-    let root_path = std::path::Path::new(root);
-    if !root_path.is_dir() {
-        return Err(format!("not a directory: {root}"));
+fn file_walk_sync(root: &Path) -> Result<Vec<Path>, IpeError> {
+    if !std::path::Path::new(root.as_str()).is_dir() {
+        return Err(IpeError::from(format!(
+            "not a directory: {}",
+            root.as_str()
+        )));
     }
     let mut visited = std::collections::HashSet::new();
     let mut out = Vec::new();
-    walk_dir(root_path, &mut visited, None, &mut out)?;
+    walk_dir(root, &mut visited, None, &mut out)?;
     out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     Ok(out)
 }
 
-fn file_walk_matching_sync(root: &str, pred: &dyn Fn(&Path) -> bool) -> Result<Vec<Path>, String> {
-    let root_path = std::path::Path::new(root);
-    if !root_path.is_dir() {
-        return Err(format!("not a directory: {root}"));
+fn file_walk_matching_sync(
+    root: &Path,
+    pred: &dyn Fn(&Path) -> bool,
+) -> Result<Vec<Path>, IpeError> {
+    if !std::path::Path::new(root.as_str()).is_dir() {
+        return Err(IpeError::from(format!(
+            "not a directory: {}",
+            root.as_str()
+        )));
     }
     let mut visited = std::collections::HashSet::new();
     let mut out = Vec::new();
-    walk_dir(root_path, &mut visited, Some(pred), &mut out)?;
+    walk_dir(root, &mut visited, Some(pred), &mut out)?;
     out.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     Ok(out)
 }
@@ -606,12 +663,11 @@ fn file_walk_matching_sync(root: &str, pred: &dyn Fn(&Path) -> bool) -> Result<V
 /// subtrees are silently skipped (fail-closed for traversal safety). An error
 /// is returned only if `root` itself is not a readable directory.
 #[must_use]
-pub fn file_walk<E: Send + From<String> + 'static>(root: Path) -> IpeTask<E, Vec<Path>> {
-    let root = root.into_string();
+pub fn file_walk<E: Send + From<IpeError> + 'static>(root: Path) -> IpeTask<E, Vec<Path>> {
     Box::pin(async move {
         match run_blocking(move || file_walk_sync(&root)).await {
             Ok(paths) => ok_res(paths),
-            Err(e) => IpeResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(e.into()),
         }
     })
 }
@@ -622,11 +678,10 @@ pub fn file_walk<E: Send + From<String> + 'static>(root: Path) -> IpeTask<E, Vec
 /// during the walk (no `Task`, no I/O inside the predicate). Returns files in
 /// deterministic (lexicographically sorted) order.
 #[must_use]
-pub fn file_walk_matching<E: Send + From<String> + 'static>(
+pub fn file_walk_matching<E: Send + From<IpeError> + 'static>(
     root: Path,
     pred: Box<dyn Fn(Path) -> bool + Send + Sync + 'static>,
 ) -> IpeTask<E, Vec<Path>> {
-    let root = root.into_string();
     Box::pin(async move {
         // Bridge: the emitted predicate owns its `Path` argument, but
         // `walk_dir` borrows. Wrap in an adapter that clones the borrow into
@@ -635,7 +690,7 @@ pub fn file_walk_matching<E: Send + From<String> + 'static>(
             Box::new(move |p: &Path| pred(p.clone()));
         match run_blocking(move || file_walk_matching_sync(&root, adapter.as_ref())).await {
             Ok(paths) => ok_res(paths),
-            Err(e) => IpeResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(e.into()),
         }
     })
 }
@@ -645,7 +700,7 @@ pub fn file_walk_matching<E: Send + From<String> + 'static>(
 /// tests construct one through the same validated seal a real program uses.
 #[cfg(test)]
 fn tp(p: &std::path::Path) -> Path {
-    match super::path::path_from_string::<String>(p.to_string_lossy().into_owned()) {
+    match super::path::path_from_string::<IpeError>(p.to_string_lossy().into_owned()) {
         IpeResult::Ok(path) => path,
         IpeResult::Err(e) => panic!("test temp path failed Path validation: {e}"),
     }
@@ -749,6 +804,33 @@ mod read_ceiling_tests {
         assert!(
             matches!(&res, Err(e) if e.contains("IPE_FILE_READ_MAX")),
             "{res:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ceiling_non_unicode_shows_every_byte_escaped() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let raw = std::ffi::OsString::from_vec(vec![b'1', 0xff, 0x1b, b'[', b'2', b'J', 0xfe]);
+        let res = parse_read_ceiling(Err(std::env::VarError::NotUnicode(raw)));
+        assert_eq!(
+            res,
+            Err(
+                r#"IPE_FILE_READ_MAX must be a decimal byte count (got "1\xFF\u{1b}[2J\xFE")"#
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn ceiling_refusal_escapes_controls_and_quotes() {
+        let res = parse_read_ceiling(Ok("1\n\"\u{202e}\\".into()));
+        assert_eq!(
+            res,
+            Err(
+                r#"IPE_FILE_READ_MAX must be a decimal byte count (got "1\n\"\u{202e}\\")"#
+                    .to_string()
+            )
         );
     }
 
@@ -1108,7 +1190,7 @@ mod walk_tests {
     #[test]
     fn walk_returns_files_only_no_dirs() {
         let root = make_tree();
-        let res: IpeResult<String, Vec<Path>> = block(file_walk(tp(&root)));
+        let res: IpeResult<IpeError, Vec<Path>> = block(file_walk(tp(&root)));
         let names: Vec<String> = match res {
             IpeResult::Ok(paths) => paths.into_iter().map(|p| p.into_string()).collect(),
             IpeResult::Err(e) => panic!("unexpected Err: {e}"),
@@ -1126,7 +1208,7 @@ mod walk_tests {
     #[test]
     fn walk_order_is_deterministic_lexicographic() {
         let root = make_tree();
-        let res: IpeResult<String, Vec<Path>> = block(file_walk(tp(&root)));
+        let res: IpeResult<IpeError, Vec<Path>> = block(file_walk(tp(&root)));
         let paths: Vec<String> = match res {
             IpeResult::Ok(ps) => ps.into_iter().map(|p| p.into_string()).collect(),
             IpeResult::Err(e) => panic!("unexpected Err: {e}"),
@@ -1144,7 +1226,7 @@ mod walk_tests {
         // Keep only files ending in b.txt.
         let pred: Box<dyn Fn(Path) -> bool + Send + Sync + 'static> =
             Box::new(|p: Path| p.as_str().ends_with("b.txt"));
-        let res: IpeResult<String, Vec<Path>> = block(file_walk_matching(tp(&root), pred));
+        let res: IpeResult<IpeError, Vec<Path>> = block(file_walk_matching(tp(&root), pred));
         let paths: Vec<String> = match res {
             IpeResult::Ok(ps) => ps.into_iter().map(|p| p.into_string()).collect(),
             IpeResult::Err(e) => panic!("unexpected Err: {e}"),
@@ -1165,7 +1247,7 @@ mod walk_tests {
     #[test]
     fn walk_on_nonexistent_root_errs() {
         let root = crate::scratch_core::test_temp_root().join("ipe_walk_nonexistent_38291");
-        let res: IpeResult<String, Vec<Path>> = block(file_walk(tp(&root)));
+        let res: IpeResult<IpeError, Vec<Path>> = block(file_walk(tp(&root)));
         assert!(
             matches!(res, IpeResult::Err(_)),
             "walk on non-existent root should Err"
@@ -1192,7 +1274,7 @@ mod walk_tests {
         let link_path = root.join("loop");
         let _ = symlink(&root, &link_path);
 
-        let res: IpeResult<String, Vec<Path>> = block(file_walk(tp(&root)));
+        let res: IpeResult<IpeError, Vec<Path>> = block(file_walk(tp(&root)));
         let paths: Vec<String> = match res {
             IpeResult::Ok(ps) => ps.into_iter().map(|p| p.into_string()).collect(),
             IpeResult::Err(e) => panic!("unexpected Err from cyclic walk: {e}"),
@@ -1213,10 +1295,69 @@ mod walk_tests {
         // `path_from_string` rejects relative paths that `..`-escape their
         // base. Construct the attempt and assert it fails at the seal.
         let escape_attempt = "../..".to_string();
-        let seal_result = super::super::path::path_from_string::<String>(escape_attempt);
+        let seal_result = super::super::path::path_from_string::<IpeError>(escape_attempt);
         assert!(
             matches!(seal_result, IpeResult::Err(_)),
             "path_from_string must reject `../..` traversal"
         );
+    }
+
+    /// An entry name that is not valid UTF-8 fails the walk and `readDir` as
+    /// an input refusal; it is never rewritten lossily nor silently skipped.
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_entry_names_are_refused_as_invalid_input() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = crate::scratch_core::test_temp_root().join(format!(
+            "ipe_walk_non_utf8_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.subsec_nanos())
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let bad = root.join(std::ffi::OsStr::from_bytes(b"a\xff"));
+        if std::fs::write(&bad, b"x").is_err() {
+            // A filesystem that itself refuses non-UTF-8 names cannot host
+            // the case; there is nothing for the kernel to refuse.
+            cleanup(&root);
+            return;
+        }
+        let walked: IpeResult<IpeError, Vec<Path>> = block(file_walk(tp(&root)));
+        let listed: IpeResult<IpeError, Vec<String>> = block(file_read_dir(tp(&root)));
+        cleanup(&root);
+        assert!(
+            matches!(
+                walked,
+                IpeResult::Err(IpeError::Error(super::super::IpeErrorKind::InvalidInput, _))
+            ),
+            "walk must refuse a non-UTF-8 entry name"
+        );
+        assert!(
+            matches!(
+                listed,
+                IpeResult::Err(IpeError::Error(super::super::IpeErrorKind::InvalidInput, _))
+            ),
+            "readDir must refuse a non-UTF-8 entry name"
+        );
+    }
+
+    #[test]
+    fn temp_paths_pass_the_seal() {
+        let file: IpeResult<IpeError, String> = block(file_temp_file("ipe_seal_".to_string()));
+        let dir: IpeResult<IpeError, String> = block(file_temp_dir("ipe_seal_".to_string()));
+        for made in [file, dir] {
+            assert!(made.is_ok(), "temp creation failed");
+            let IpeResult::Ok(text) = made else {
+                return;
+            };
+            let resealed = super::super::path::path_from_string::<IpeError>(text.clone());
+            let _ = std::fs::remove_file(&text);
+            let _ = std::fs::remove_dir(&text);
+            assert!(
+                matches!(resealed, IpeResult::Ok(ref p) if p.as_str() == text),
+                "{text:?} is not its own seal"
+            );
+        }
     }
 }
