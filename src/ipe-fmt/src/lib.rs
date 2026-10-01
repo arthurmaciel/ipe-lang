@@ -522,17 +522,73 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// Render the node whose first token starts at `lo`, returning the comments
-    /// anchored there for the caller to place, plus the rendering.
+    /// The comments above the `)` that closes a parenthesised group spanning
+    /// `[lo, hi)`, or none when `[lo, hi)` is not one matched group.
     ///
+    /// Parentheses are not in the tree, so no node starts at a `)`: the group
+    /// node, which the parser stamps with the parentheses' span, owns them.
+    fn paren_closer(&self, lo: usize, hi: usize) -> &'a [Comment] {
+        let first = self.code.partition_point(|t| t.lo < lo);
+        let last = self.code.partition_point(|t| t.hi < hi);
+        let (Some(open), Some(close)) = (self.code.get(first), self.code.get(last)) else {
+            return &[];
+        };
+        let shaped = open.lo == lo
+            && close.hi == hi
+            && matches!(open.kind, TokenKind::LParen)
+            && matches!(close.kind, TokenKind::RParen);
+        let comments = if shaped { self.anchored(close.lo) } else { &[] };
+        if comments.is_empty() {
+            return &[];
+        }
+        // The `(` matches this `)` only if the depth first returns to zero at it.
+        let mut depth = 0usize;
+        let group = self.code.get(first..=last).unwrap_or_default();
+        for (offset, t) in group.iter().enumerate() {
+            match t.kind {
+                TokenKind::LParen => depth = depth.saturating_add(1),
+                TokenKind::RParen => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            if depth == 0 {
+                return if offset + 1 == group.len() {
+                    comments
+                } else {
+                    &[]
+                };
+            }
+        }
+        &[]
+    }
+
+    /// The span end that makes `e` own a closing parenthesis's comments: any
+    /// node but a tuple or unit, which print their own `)`.
+    const fn closer_of(e: &Expr) -> Option<usize> {
+        match e.value {
+            Expr_::Tuple(_) | Expr_::Unit => None,
+            _ => Some(e.span.hi as usize),
+        }
+    }
+
+    /// Render the node whose first token starts at `lo`, returning its
+    /// comments for the caller to place, plus the rendering.
+    ///
+    /// A node's comments are those anchored at its first token and, when
+    /// `closer` gives the end of a parenthesised group, those above its `)`.
     /// Inside `render`, every nested node starting at `lo` prints no comments:
     /// they are this claim's. When an enclosing node already claimed `lo`, the
     /// comment list is empty.
-    fn claim<T>(&self, lo: usize, render: impl FnOnce() -> T) -> (&'a [Comment], T) {
+    fn claim<T>(
+        &self,
+        lo: usize,
+        closer: Option<usize>,
+        render: impl FnOnce() -> T,
+    ) -> (Comments<'a>, T) {
         let comments = if self.claimed.get() == Some(lo) {
-            &[]
+            Vec::new()
         } else {
-            self.anchored(lo)
+            let closing = closer.map_or(&[][..], |hi| self.paren_closer(lo, hi));
+            self.anchored(lo).iter().chain(closing).collect()
         };
         let outer = self.claimed.replace(Some(lo));
         let rendered = render();
@@ -541,8 +597,13 @@ impl<'a> Printer<'a> {
     }
 
     /// `body` preceded by `comments`, one per line, continuing at `indent`.
-    fn with_comments(comments: &[Comment], body: &str, indent: usize) -> String {
-        if comments.is_empty() {
+    fn with_comments<'c>(
+        comments: impl IntoIterator<Item = &'c Comment>,
+        body: &str,
+        indent: usize,
+    ) -> String {
+        let mut comments = comments.into_iter().peekable();
+        if comments.peek().is_none() {
             return body.to_owned();
         }
         let pad = pad(indent);
@@ -1279,7 +1340,9 @@ impl<'a> Printer<'a> {
     /// The comments anchored at the expression's first token print above it,
     /// each on its own line at `indent`.
     fn expr(&self, e: &Expr, indent: usize) -> String {
-        let (comments, body) = self.claim(e.span.lo as usize, || self.expr_shape(e, indent));
+        let (comments, body) = self.claim(e.span.lo as usize, Self::closer_of(e), || {
+            self.expr_shape(e, indent)
+        });
         Self::with_comments(comments, &body, indent)
     }
 
@@ -1506,7 +1569,9 @@ impl<'a> Printer<'a> {
     ///
     /// Leading comments print above the parentheses, not inside them.
     fn expr_atom(&self, e: &Expr, indent: usize) -> String {
-        let (comments, body) = self.claim(e.span.lo as usize, || self.atom_shape(e, indent));
+        let (comments, body) = self.claim(e.span.lo as usize, Self::closer_of(e), || {
+            self.atom_shape(e, indent)
+        });
         Self::with_comments(comments, &body, indent)
     }
 
@@ -1668,7 +1733,7 @@ impl<'a> Printer<'a> {
             })
             .collect();
         let right_operand = |operand: &Expr, is_last: bool, at: usize| {
-            self.claim(operand.span.lo as usize, || {
+            self.claim(operand.span.lo as usize, Self::closer_of(operand), || {
                 if is_last {
                     self.binop_last_operand(operand, at)
                 } else {
@@ -1942,7 +2007,11 @@ impl<'a> Printer<'a> {
     fn elements(&self, elems: &[Expr], indent: usize) -> Vec<Item<'a>> {
         elems
             .iter()
-            .map(|e| self.claim(e.span.lo as usize, || self.expr(e, indent)))
+            .map(|e| {
+                self.claim(e.span.lo as usize, Self::closer_of(e), || {
+                    self.expr(e, indent)
+                })
+            })
             .collect()
     }
 
@@ -1955,7 +2024,7 @@ impl<'a> Printer<'a> {
         fields
             .iter()
             .map(|(n, v)| {
-                self.claim(n.span.lo as usize, || {
+                self.claim(n.span.lo as usize, None, || {
                     format!("{} = {}", self.sym(n.value), self.expr(v, indent))
                 })
             })
@@ -2010,7 +2079,7 @@ impl<'a> Printer<'a> {
         let mut out = format!("{{ {base_s}");
         for (i, (comments, p)) in items.iter().enumerate() {
             let lead = if i == 0 { "|" } else { "," };
-            push_indented_comments(&mut out, comments, &inner);
+            push_indented_comments(&mut out, comments.iter().copied(), &inner);
             let _ = write!(out, "\n{inner}{lead} {p}");
         }
         push_indented_comments(&mut out, closing, &inner);
@@ -2141,7 +2210,10 @@ fn record_field_anchors(t: &TypeAnnotation, out: &mut Vec<usize>) {
 }
 
 /// A collection element, rendered, with the comments printed above it.
-type Item<'c> = (&'c [Comment], String);
+type Item<'c> = (Comments<'c>, String);
+
+/// The comments a node prints above itself.
+type Comments<'c> = Vec<&'c Comment>;
 
 /// Push each comment on its own line, ending each with a newline.
 fn push_comment_lines(out: &mut String, comments: &[Comment]) {
@@ -2152,7 +2224,11 @@ fn push_comment_lines(out: &mut String, comments: &[Comment]) {
 }
 
 /// Push each comment on a fresh line at `pad`.
-fn push_indented_comments(out: &mut String, comments: &[Comment], pad: &str) {
+fn push_indented_comments<'c>(
+    out: &mut String,
+    comments: impl IntoIterator<Item = &'c Comment>,
+    pad: &str,
+) {
     for c in comments {
         let _ = write!(out, "\n{pad}{}", c.text);
     }
@@ -2178,7 +2254,7 @@ fn comma_multiline(
     let inner = pad_in(indent);
     let mut out = String::from(open);
     for (i, (comments, part)) in items.iter().enumerate() {
-        push_indented_comments(&mut out, comments, &inner);
+        push_indented_comments(&mut out, comments.iter().copied(), &inner);
         let part = hang_element(part);
         match (i, comments.is_empty()) {
             (0, true) => {
@@ -3001,6 +3077,17 @@ mod tests {
         let out = format_source(src).expect("formats");
         assert_eq!(out.matches("-- after a").count(), 1, "{out}");
         assert_eq!(out.matches("-- after parallel").count(), 1, "{out}");
+        assert_eq!(format_source(&out).expect("second pass"), out);
+    }
+
+    /// A comment above a group's closing `)` belongs to the group and prints
+    /// with it, once.
+    #[test]
+    fn comment_before_a_closing_paren_is_kept() {
+        let src =
+            "module M exposing (f)\n\n\nf x =\n    g (h x\n        -- before the paren\n      )\n";
+        let out = format_source(src).expect("formats");
+        assert_eq!(out.matches("-- before the paren").count(), 1, "{out}");
         assert_eq!(format_source(&out).expect("second pass"), out);
     }
 }
