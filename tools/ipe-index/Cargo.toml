@@ -20,6 +20,10 @@ tree-sitter-typescript = "0.21"
 # Mirrors the compiler workspace's `unsafe_code` deny for this standalone tool.
 unsafe_code = "deny"
 
+[lints.clippy]
+# Mirrors the workspace `mem_forget` deny: a forgotten `Drop` guard leaks.
+mem_forget = "deny"
+
 [profile.dev]
 debug = 0
 
