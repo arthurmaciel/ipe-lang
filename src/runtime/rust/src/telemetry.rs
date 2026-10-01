@@ -1193,6 +1193,7 @@ pub fn entries_json(entries: &[LogEntry]) -> String {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
 
@@ -1744,7 +1745,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod listen_scope_tests {
     use super::ListenScope;
     use super::scope_or_exposed;

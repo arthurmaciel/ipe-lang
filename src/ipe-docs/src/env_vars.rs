@@ -1246,6 +1246,7 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_JUNCTION_TO",  // Windows junction test helper: PowerShell script input
     "IPE_LOAD_ENV_PROBE_VAR",
     "IPE_ORACLE_SHARED_TARGET",
+    "IPE_PDEATH_PROBE", // parent-death spawner test: selects the re-executed probe mode
     "IPE_RUN_WITH_TEST_VAR",
     "IPE_SECRET_E2E",                   // Windows jail e2e test sentinel
     "IPE_TEMP_ROOT_ENV_TEST_NEIGHBOUR", // temp-root refusal test: a key that only contains a temp-root name
