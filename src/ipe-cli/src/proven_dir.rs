@@ -518,11 +518,6 @@ mod sys {
             .map_err(Into::into)
     }
 
-    /// Whether the mode `st_mode` is that of a regular file.
-    fn is_regular(st_mode: u32) -> bool {
-        FileType::from_raw_mode(st_mode) == FileType::RegularFile
-    }
-
     /// Open the regular file `name` under `dir`, shown as `shown`, read-only.
     ///
     /// The entry is inspected by `fstatat` without following a link before
@@ -547,7 +542,7 @@ mod sys {
             .map(File::from)
             .map_err(|errno| io_at(shown, errno))?;
         let opened = rustix::fs::fstat(&file).map_err(|errno| io_at(shown, errno))?;
-        if is_regular(opened.st_mode) {
+        if FileType::from_raw_mode(opened.st_mode) == FileType::RegularFile {
             Ok(file)
         } else {
             Err(not_regular())
