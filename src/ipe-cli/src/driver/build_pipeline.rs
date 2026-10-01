@@ -2682,7 +2682,8 @@ mod tests {
     /// refusal, while one exactly at the ceiling is pruned.
     #[test]
     fn prune_refuses_a_tree_deeper_than_the_ceiling() {
-        let dir = std::env::temp_dir().join(format!("ipe_prune_depth_{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipe_prune_depth_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let owned = OwnedDir::claim(&dir).expect("claim temp dir");
         let manifest = BTreeMap::new();
@@ -2729,7 +2730,7 @@ mod tests {
     /// of the length pre-check in [`write_if_changed`].
     #[test]
     fn write_if_changed_length_precheck() {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe_write_if_changed_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -2779,7 +2780,7 @@ mod tests {
 
     /// A fresh scratch directory unique to this test run.
     fn loose_scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe_loose_build_{tag}_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()

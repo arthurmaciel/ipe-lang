@@ -15,11 +15,10 @@ serde = { version = "1", features = ["derive"] }
 # `getrandom::Error` -> `io::Error` conversion.
 getrandom = { version = "0.3", features = ["std"] }
 
-# `O_NOFOLLOW` for the private-scratch exclusive file open.
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
-# The effective uid/gid the private-scratch and jail-dir ownership checks compare
-# against, obtained without `unsafe`.
+# The private-scratch exclusive `O_NOFOLLOW` open, and the effective uid/gid the
+# private-scratch and jail-dir ownership checks compare against, obtained
+# without `unsafe`.
 rustix = { version = "0.38", features = ["fs", "process"] }
 
 # The Windows run-jail arm builds its confinement primitives through the Win32
@@ -47,6 +46,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_SystemServices",
     "Win32_Storage_FileSystem",
 ] }
+
+[dev-dependencies]
+ipe-test-temp = { path = "../../../tools/test-temp" }
 
 # `rerun_this_test_exact`: the Windows e2e env test's re-exec must prove the
 # child ran its test, not merely exited 0.

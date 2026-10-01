@@ -2041,7 +2041,7 @@ mod tests {
     /// Create a fresh temp project directory with a minimal `src/Main.ipe`, so
     /// the reader's source-root existence check passes. Returns the project root.
     fn fresh_project(test_name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("ipe_pkg_manifest_{test_name}"));
+        let root = ipe_test_temp::temp_root().join(format!("ipe_pkg_manifest_{test_name}"));
         let _ = std::fs::remove_dir_all(&root);
         let src = root.join("src");
         std::fs::create_dir_all(&src).expect("create src/");

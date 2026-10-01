@@ -1287,7 +1287,11 @@ pub(crate) fn format_task_error(msg: &str, use_color: bool) -> String {
 /// print with a readable, consistently styled failure.
 pub fn eprint_task_error(msg: &str) {
     use std::io::{IsTerminal as _, Write as _};
-    let use_color = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let use_color = std::io::stderr().is_terminal()
+        && matches!(
+            super::system::read_env_var("NO_COLOR"),
+            Err(std::env::VarError::NotPresent)
+        );
     let formatted = format_task_error(msg, use_color);
     let _ = std::io::stderr().write_all(formatted.as_bytes());
 }

@@ -47,7 +47,8 @@ fn e2e_enabled() -> bool {
 /// A per-test scratch under the process temp dir (NTFS on the hosted image, so
 /// the container-SID ACL is meaningful).
 fn scratch_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ipe-run-win-e2e-{}-{}", tag, std::process::id()));
+    let dir =
+        ipe_test_temp::temp_root().join(format!("ipe-run-win-e2e-{}-{}", tag, std::process::id()));
     std::fs::create_dir_all(&dir).expect("scratch");
     dir
 }
@@ -244,7 +245,7 @@ fn an_out_of_scratch_write_is_denied_under_the_appcontainer_but_succeeds_under_c
     let scratch = scratch_dir("fs");
     // A target OUTSIDE the ACLed scratch/working-tree: the process temp dir root.
     let outside =
-        std::env::temp_dir().join(format!("ipe-fs-e2e-outside-{}.txt", std::process::id()));
+        ipe_test_temp::temp_root().join(format!("ipe-fs-e2e-outside-{}.txt", std::process::id()));
     let outside_str = outside.to_string_lossy().replace('\'', "''");
     let write = format!(
         "try {{ Set-Content -Path '{outside_str}' -Value 'x' -ErrorAction Stop; exit 0 }} catch {{ exit 13 }}"

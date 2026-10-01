@@ -277,7 +277,8 @@ mod load_from_file_tests {
     /// both paths must return the same decoded result).
     #[test]
     fn loads_and_decodes_json() {
-        let p = std::env::temp_dir().join(format!("ipe_cfg_json_{}.json", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_cfg_json_{}.json", std::process::id()));
         std::fs::write(&p, r#"{"name": "ipe"}"#).unwrap();
         let res: IpeResult<String, String> = block(config_load_from_file(
             make_path(&p.to_string_lossy()),
@@ -292,7 +293,8 @@ mod load_from_file_tests {
 
     #[test]
     fn loads_and_decodes_toml() {
-        let p = std::env::temp_dir().join(format!("ipe_cfg_toml_{}.toml", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_cfg_toml_{}.toml", std::process::id()));
         std::fs::write(&p, "name = \"ipe\"\n").unwrap();
         let res: IpeResult<String, String> = block(config_load_from_file(
             make_path(&p.to_string_lossy()),
@@ -307,7 +309,8 @@ mod load_from_file_tests {
 
     #[test]
     fn over_cap_file_errs() {
-        let p = std::env::temp_dir().join(format!("ipe_cfg_over_cap_{}.json", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_cfg_over_cap_{}.json", std::process::id()));
         std::fs::write(&p, vec![b'a'; 8192]).unwrap();
         crate::system::locked_set_var("IPE_CONFIG_MAX_BYTES", "1024");
         let res: IpeResult<String, String> = block(config_load_from_file(
@@ -355,7 +358,7 @@ mod load_from_file_spawn_blocking_tests {
             .enable_all()
             .build()
             .unwrap();
-        let p = std::env::temp_dir().join(format!(
+        let p = crate::scratch_core::test_temp_root().join(format!(
             "ipe_cfg_spawn_blocking_probe_{}.json",
             std::process::id()
         ));

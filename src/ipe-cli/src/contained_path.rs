@@ -150,7 +150,8 @@ mod tests {
 
     /// Build a fresh temp dir with an `src/` subdirectory and return the root.
     fn fresh_root(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("ipe_crp_{name}_{}", std::process::id()));
+        let root =
+            ipe_test_temp::temp_root().join(format!("ipe_crp_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("create src/");
         root
@@ -280,7 +281,7 @@ mod tests {
     #[test]
     fn accepts_new_path_under_symlinked_root() {
         let real = fresh_root("symlinked_root_real");
-        let link = std::env::temp_dir().join(format!(
+        let link = ipe_test_temp::temp_root().join(format!(
             "ipe_crp_symlinked_root_link_{}",
             std::process::id()
         ));

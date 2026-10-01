@@ -7,7 +7,8 @@ const REL: &str = ".ipe/cache/ffi/rust";
 
 /// A fresh, empty scratch directory unique to `name` and this process.
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ipe-owner-trust-{name}-{}", std::process::id()));
+    let dir =
+        ipe_test_temp::temp_root().join(format!("ipe-owner-trust-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create scratch dir");
     dir

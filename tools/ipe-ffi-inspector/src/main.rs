@@ -688,16 +688,19 @@ fn run_rustdoc_source(
     // root so cargo's own fingerprinting reuses dep builds and the rustdoc
     // JSON across inspection passes and repeated runs (staleness is cargo's
     // decision, never ours). The jail scrubs the environment, so sandboxed
-    // runs always take the self-deleting tempdir.
-    let (probe_root, _tempdir_guard): (std::path::PathBuf, Option<tempfile::TempDir>) =
-        if let Some(root) = ipe_env::var_os("IPE_FFI_PROBE_DIR") {
-            let d = std::path::Path::new(&root).join(&safe_name);
-            std::fs::create_dir_all(&d).map_err(|e| format!("probe dir: {e}"))?;
-            (d, None)
-        } else {
-            let t = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
-            (t.path().to_path_buf(), Some(t))
-        };
+    // runs always take the self-deleting private scratch directory.
+    let (probe_root, _tempdir_guard): (
+        std::path::PathBuf,
+        Option<ipe_sandbox::scratch::ScratchDir>,
+    ) = if let Some(root) = ipe_env::var_os("IPE_FFI_PROBE_DIR") {
+        let d = std::path::Path::new(&root).join(&safe_name);
+        std::fs::create_dir_all(&d).map_err(|e| format!("probe dir: {e}"))?;
+        (d, None)
+    } else {
+        let t = ipe_sandbox::scratch::ScratchDir::new("ipe-ffi-probe")
+            .map_err(|e| format!("probe scratch dir: {e}"))?;
+        (t.path().to_path_buf(), Some(t))
+    };
     let dir = probe_root.as_path();
 
     let target_dir = dir.join("target");
@@ -13964,7 +13967,7 @@ mod tests {
 
     /// A written probe manifest in a fresh temporary directory.
     fn temp_written_manifest() -> (tempfile::TempDir, WrittenManifest) {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = tempfile::tempdir_in(ipe_test_temp::temp_root()).expect("tempdir");
         let written = WrittenManifest::create(ProbeDir::new(dir.path().to_path_buf()), "")
             .expect("write probe manifest");
         (dir, written)
@@ -14053,7 +14056,7 @@ mod tests {
 
     #[test]
     fn written_manifest_refuses_an_unwritable_directory() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = tempfile::tempdir_in(ipe_test_temp::temp_root()).expect("tempdir");
         let missing = dir.path().join("absent");
         let created = WrittenManifest::create(ProbeDir::new(missing), "");
         assert!(
@@ -14231,7 +14234,7 @@ mod tests {
     #[test]
     fn run_rustdoc_source_refuses_an_unconsented_build_script() {
         drop(consented_manifest::drain_refusals());
-        let krate = tempfile::tempdir().expect("tempdir");
+        let krate = tempfile::tempdir_in(ipe_test_temp::temp_root()).expect("tempdir");
         std::fs::write(
             krate.path().join("Cargo.toml"),
             "[package]\nname = \"consent_probe_wrapper\"\nversion = \"0.1.0\"\n\

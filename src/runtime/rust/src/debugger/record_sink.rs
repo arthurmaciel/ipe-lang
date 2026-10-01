@@ -95,9 +95,11 @@ where
     out
 }
 
-/// Write an already-plain replay `blob` to `dest`. A write error is swallowed —
-/// the record dump is advisory dev tooling and must never turn a working app
-/// into a failing one over a closed pipe or an unwritable path.
+/// Write an already-plain replay `blob` to `dest`.
+///
+/// A write error never fails the program — the record dump is advisory dev tooling and must never turn a
+/// working app into a failing one over a closed pipe or an unwritable path —
+/// but a file that cannot be written is reported once (see [`report_unwritten`]).
 fn write_blob(dest: &RecordDest, blob: &str) {
     match dest {
         RecordDest::Stderr => {
@@ -106,55 +108,62 @@ fn write_blob(dest: &RecordDest, blob: &str) {
             let _ = lock.write_all(blob.as_bytes());
             let _ = lock.flush();
         }
-        // A path destination: replace the file with the plain dump. A failure is
-        // swallowed like any write error.
         RecordDest::Path(path) => {
-            let _ = replace_file(path, blob.as_bytes());
+            if let Err(e) = replace_file(path, blob.as_bytes()) {
+                report_unwritten(path, &e);
+            }
         }
     }
 }
 
-/// Replace `path` with `bytes` through an exclusively created sibling temp file.
+/// Report, on the runtime log, a record file that was not written and why.
+fn report_unwritten(path: &std::path::Path, err: &std::io::Error) {
+    crate::system::emit_runtime_log(
+        "debugger",
+        &format!("record file {} not written: {err}", path.display()),
+    );
+}
+
+/// The refusal of a record destination that is a symbolic link.
+#[derive(Debug)]
+struct SymlinkedDestination;
+
+impl std::fmt::Display for SymlinkedDestination {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the destination is a symbolic link; name a regular file instead")
+    }
+}
+
+impl std::error::Error for SymlinkedDestination {}
+
+/// Replace `path` with `bytes` through an [`AtomicSibling`](crate::scratch_core::AtomicSibling).
 ///
-/// The temp file is created with `create_new` (never opening an existing file or
-/// symlink) and renamed over `path`, so the dump never writes through a symlink
-/// planted at the destination; a symlinked destination is refused outright.
+/// The sibling has an unguessable hidden name, is created exclusively, never
+/// through a symlink, with mode 0600, and is renamed over `path`, so the dump
+/// never writes through a symlink planted at the destination; a symlinked
+/// destination is refused outright. A refused or failed write removes the
+/// sibling.
+///
+/// # Errors
+/// `InvalidInput` carrying [`SymlinkedDestination`] when `path` is a symbolic
+/// link; any sibling creation, write or rename error.
 fn replace_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     if std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
-        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            SymlinkedDestination,
+        ));
     }
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let name = path
-        .file_name()
-        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let tmp = parent.join(format!(".{name}.ipe-tmp.{}", std::process::id()));
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .and_then(|mut file| {
-            file.write_all(bytes)?;
-            file.flush()
-        });
-    if let Err(e) = written {
-        if e.kind() != std::io::ErrorKind::AlreadyExists {
-            let _ = std::fs::remove_file(&tmp);
-        }
-        return Err(e);
-    }
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
+    let mut sibling = crate::scratch_core::AtomicSibling::create(path)?;
+    sibling.write_all(bytes)?;
+    sibling.commit()
 }
 
 /// Write the typed log for `buf` beside the trace at `trace`.
 ///
 /// A program with no typed log removes any stale one instead, so a replay can
-/// never pick up a log an earlier build of the program wrote. Failures are
-/// swallowed like every record write.
+/// never pick up a log an earlier build of the program wrote. A typed log that
+/// cannot be written is reported like the trace (see [`report_unwritten`]).
 fn write_typed_log<Msg, Model, C>(
     trace: &std::path::Path,
     buf: &RecordBuffer<Msg, Model>,
@@ -168,7 +177,9 @@ fn write_typed_log<Msg, Model, C>(
     }
     match codec.encode(buf) {
         Ok(bytes) => {
-            let _ = replace_file(&typed, &bytes);
+            if let Err(e) = replace_file(&typed, &bytes) {
+                report_unwritten(&typed, &e);
+            }
         }
         Err(_) => {
             // `remove_file` on a symlink removes the link, never its target.
@@ -193,7 +204,7 @@ where
     F: Fn(Msg, Model) -> (Model, IpeCmd<Msg>),
     C: SessionCodec<Msg, Model>,
 {
-    let Ok(raw) = std::env::var(RECORD_ENV) else {
+    let Ok(raw) = crate::system::read_env_var(RECORD_ENV) else {
         return;
     };
     let dest = RecordDest::parse(&raw);
@@ -314,7 +325,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn replace_file_never_writes_through_a_symlink() {
-        let dir = std::env::temp_dir().join(format!("ipe_record_sink_{}", std::process::id()));
+        let dir = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_record_sink_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(std::fs::create_dir_all(&dir).is_ok(), "make scratch dir");
 
@@ -333,13 +345,51 @@ mod tests {
             std::os::unix::fs::symlink(&victim, &link).is_ok(),
             "plant link"
         );
-        assert!(
-            replace_file(&link, b"evil").is_err(),
+        let refused = replace_file(&link, b"evil").err();
+        assert_eq!(
+            refused.as_ref().map(std::io::Error::kind),
+            Some(std::io::ErrorKind::InvalidInput),
             "a symlinked log is refused"
+        );
+        assert!(
+            refused
+                .as_ref()
+                .and_then(std::io::Error::get_ref)
+                .is_some_and(|e| e.is::<SymlinkedDestination>()),
+            "the refusal is typed"
         );
         assert_eq!(
             std::fs::read_to_string(&victim).ok().as_deref(),
             Some("keep")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Neither a written dump nor a failed one leaves its temp sibling behind.
+    #[test]
+    fn replace_file_leaves_only_the_destination() {
+        let dir = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_record_sink_tmp_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let log = dir.join("session.ipelog");
+        let blocked = dir.join("blocked.ipelog");
+        assert!(
+            std::fs::create_dir_all(blocked.join("x")).is_ok(),
+            "make a non-empty dir at the blocked destination"
+        );
+        assert!(replace_file(&log, b"dump\n").is_ok(), "fresh write");
+        assert!(replace_file(&blocked, b"dump\n").is_err(), "rename refused");
+        let mut left: Vec<_> = std::fs::read_dir(&dir).map_or_else(
+            |_| Vec::new(),
+            |it| it.filter_map(|e| e.ok().map(|e| e.file_name())).collect(),
+        );
+        left.sort();
+        assert_eq!(
+            left,
+            vec![
+                std::ffi::OsString::from("blocked.ipelog"),
+                std::ffi::OsString::from("session.ipelog")
+            ]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -349,7 +399,8 @@ mod tests {
     #[test]
     fn trace_only_program_removes_stale_typed_log() {
         use crate::debugger::session_log::{TraceOnly, Unreplayable};
-        let dir = std::env::temp_dir().join(format!("ipe_record_typed_{}", std::process::id()));
+        let dir = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_record_typed_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(std::fs::create_dir_all(&dir).is_ok(), "make scratch dir");
         let trace = dir.join("session.ipelog");

@@ -946,7 +946,7 @@ fn explain_type_tag(axis: FlexAxis, tag: &str) -> &'static str {
 /// `IPE_EXPLAIN_VERBOSE` environment variable (`1`/`true`/`on`, case-insensitive)
 /// at render time — a dev-only, off-by-default switch that needs no ADT change.
 fn explain_verbose_enabled() -> bool {
-    std::env::var("IPE_EXPLAIN_VERBOSE")
+    super::super::system::read_env_var("IPE_EXPLAIN_VERBOSE")
         .ok()
         .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on"))
 }

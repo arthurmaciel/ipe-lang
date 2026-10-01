@@ -710,7 +710,7 @@ fixed_in    = "not-a-version"
     // ── check_dep_advisories (fs-backed) ─────────────────────────────────────
 
     fn temp_advisory_db(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe-advisory-test-{}-{}-{}",
             std::process::id(),
             tag,

@@ -4097,7 +4097,7 @@ version = \"1\"
     #[test]
     fn manifest_chunk_is_a_single_crate_array_with_pin_and_features() {
         let scratch =
-            std::env::temp_dir().join(format!("ipe-chunk-manifest-{}", std::process::id()));
+            ipe_test_temp::temp_root().join(format!("ipe-chunk-manifest-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&scratch);
         std::fs::create_dir_all(&scratch).expect("mk scratch");
         let spec = CrateSpec::parse("async-stripe-checkout@=1.0.0-rc.6").expect("spec parses");
@@ -4182,7 +4182,7 @@ version = \"1\"
     /// This is the common case for every project that has never run `ipe add`.
     #[test]
     fn prepare_ffi_no_cache_returns_empty_prep() {
-        let tmp = std::env::temp_dir();
+        let tmp = ipe_test_temp::temp_root();
         let mut sources: BTreeMap<Vec<String>, (std::path::PathBuf, String)> = BTreeMap::new();
         let prep = super::prepare_ffi(&mut sources, &tmp.join("Main.ipe"))
             .expect("prepare_ffi on a no-cache path must not error");
@@ -4193,7 +4193,8 @@ version = \"1\"
 
     #[test]
     fn cache_root_walk_stops_at_the_ipe_toml_project_root() {
-        let tmp = std::env::temp_dir().join(format!("ipe-t1-cacheroot-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-t1-cacheroot-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         // Ancestor cache (a planted vector) ABOVE the project root.
         let ancestor_cache = tmp.join(CACHE_REL);
@@ -4218,7 +4219,8 @@ version = \"1\"
     #[cfg(unix)]
     #[test]
     fn owned_project_cache_is_discovered() {
-        let tmp = std::env::temp_dir().join(format!("ipe-t1-owncache-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-t1-owncache-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&cache).expect("mk cache");
@@ -4241,7 +4243,8 @@ version = \"1\"
     #[cfg(not(unix))]
     #[test]
     fn owned_project_cache_is_refused_when_unverifiable() {
-        let tmp = std::env::temp_dir().join(format!("ipe-t1-owncache-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-t1-owncache-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&cache).expect("mk cache");
@@ -4266,7 +4269,7 @@ version = \"1\"
     #[test]
     fn world_writable_cache_is_refused() {
         use std::os::unix::fs::PermissionsExt as _;
-        let tmp = std::env::temp_dir().join(format!("ipe-t1-wwcache-{}", std::process::id()));
+        let tmp = ipe_test_temp::temp_root().join(format!("ipe-t1-wwcache-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&cache).expect("mk cache");
@@ -4317,7 +4320,8 @@ version = \"1\"
 
     /// A fresh scratch root per test, so parallel tests never share homes.
     fn toolbinds_root(tag: &str) -> PathBuf {
-        let tmp = std::env::temp_dir().join(format!("ipe-toolbinds-{tag}-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-toolbinds-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).expect("mk scratch root");
         tmp
@@ -5122,7 +5126,7 @@ version = \"1\"
     /// jailed into typed wrapper entries; returns the project root and the entries.
     fn jailed_wrappers(tag: &str, dirs: &[&str]) -> (PathBuf, Vec<CargoDep>) {
         let project =
-            std::env::temp_dir().join(format!("ipe-cli-wrap-{tag}-{}", std::process::id()));
+            ipe_test_temp::temp_root().join(format!("ipe-cli-wrap-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&project);
         let deps = dirs
             .iter()
@@ -5745,7 +5749,7 @@ version = \"1\"
     fn scan_foreign_defines_skips_files_without_foreign_keyword() {
         use std::io::Write as _;
         // Write a plain .ipe file (no `foreign` keyword) to a temp directory.
-        let dir = std::env::temp_dir().join("ipe_lane1_no_foreign_test_ae3338f3");
+        let dir = ipe_test_temp::temp_root().join("ipe_lane1_no_foreign_test_ae3338f3");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         let mut f = std::fs::File::create(dir.join("Main.ipe")).expect("create file");

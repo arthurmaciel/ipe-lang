@@ -20,6 +20,7 @@ ipe_env = { path = "../../../../src/compiler/env" }
 ipe_sandbox = { path = "../../../../src/compiler/sandbox" }
 
 [dev-dependencies]
+ipe-test-temp = { path = "../../../../tools/test-temp" }
 tempfile = "3"
 ipe_sandbox = { path = "../../../../src/compiler/sandbox" }
 

@@ -258,7 +258,7 @@ mod tests {
     /// it is trivial). Cross-process visibility is a standard SQLite guarantee.
     #[tokio::test]
     async fn write_entry_maps_to_hub_schema() {
-        let path = std::env::temp_dir()
+        let path = crate::scratch_core::test_temp_root()
             .join(format!("spill-we-{}.db", std::process::id()))
             .to_string_lossy()
             .to_string();

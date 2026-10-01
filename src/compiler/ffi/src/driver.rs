@@ -2178,7 +2178,8 @@ mod tests {
 
     #[test]
     fn cache_round_trip_writes_and_removes_the_four_artifacts() {
-        let tmp = std::env::temp_dir().join(format!("ipe-ffi-cache-test-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-ffi-cache-test-{}", std::process::id()));
         let cache = FfiCache::at_project_root(&tmp);
         let pkg = semver_pkg();
         let paths = cache.write_package(&pkg, &semver_json()).expect("writes");
@@ -2206,7 +2207,8 @@ mod tests {
 
     #[test]
     fn install_refuses_a_failed_closed_inspection() {
-        let tmp = std::env::temp_dir().join(format!("ipe-ffi-refuse-test-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-ffi-refuse-test-{}", std::process::id()));
         let cache = FfiCache::at_project_root(&tmp);
         let failed = json!({
             "pkg": "semver",
@@ -2229,7 +2231,8 @@ mod tests {
         // A normal warm build must produce the SAME src/ffi.rs the install
         // wrote — the re-derivation from pkg.json is byte-identical to the
         // emit_bindings output persisted on disk (the SEAL on the warm path).
-        let tmp = std::env::temp_dir().join(format!("ipe-ffi-warm-test-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-ffi-warm-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = FfiCache::at_project_root(&tmp);
         let (_pkg, paths) = install_from_inspection(&cache, &semver_json()).expect("installs");
@@ -2249,7 +2252,8 @@ mod tests {
         // re-derivation gracefully falls back to the stored _bindings.rs text
         // (trust then rests on the discovery ownership gate + the injection-free
         // emitter). Removing pkg.json models the legacy layout.
-        let tmp = std::env::temp_dir().join(format!("ipe-ffi-legacy-test-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-ffi-legacy-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = FfiCache::at_project_root(&tmp);
         let (_pkg, paths) = install_from_inspection(&cache, &semver_json()).expect("installs");
@@ -2294,7 +2298,8 @@ mod tests {
     /// result never converts to — an E0308 after `ipe` exit 0.
     #[test]
     fn legacy_torn_transparent_union_is_refused() {
-        let tmp = std::env::temp_dir().join(format!("ipe-ffi-torn-enum-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-ffi-torn-enum-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = FfiCache::at_project_root(&tmp);
         let (_pkg, paths) =
@@ -2347,8 +2352,8 @@ mod tests {
     /// result-conversion marker.
     #[test]
     fn legacy_transparent_define_round_trips_through_the_consumer_manifest() {
-        let tmp =
-            std::env::temp_dir().join(format!("ipe-ffi-define-legacy-{}", std::process::id()));
+        let tmp = ipe_test_temp::temp_root()
+            .join(format!("ipe-ffi-define-legacy-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = FfiCache::at_project_root(&tmp);
         let (_pkg, paths) =
@@ -2381,7 +2386,8 @@ mod tests {
     /// record as a native app type.
     #[test]
     fn legacy_torn_transparent_define_is_refused() {
-        let tmp = std::env::temp_dir().join(format!("ipe-ffi-torn-define-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-ffi-torn-define-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = FfiCache::at_project_root(&tmp);
         let (_pkg, paths) =
@@ -2410,7 +2416,8 @@ mod tests {
 
     #[test]
     fn load_catalog_ignores_a_planted_bindings_file_and_re_derives() {
-        let tmp = std::env::temp_dir().join(format!("ipe-ffi-plant-test-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-ffi-plant-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = FfiCache::at_project_root(&tmp);
         let (_pkg, paths) = install_from_inspection(&cache, &semver_json()).expect("installs");
@@ -2443,7 +2450,8 @@ mod tests {
         // A projection claiming a member the authoritative catalog lacks
         // (torn write, mixed-run cache, hand edit) must never reach the
         // loaded view: everything re-derives from pkg.json.
-        let tmp = std::env::temp_dir().join(format!("ipe-ffi-diverge-test-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-ffi-diverge-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = FfiCache::at_project_root(&tmp);
         let (_pkg, paths) = install_from_inspection(&cache, &semver_json()).expect("installs");
@@ -2476,7 +2484,8 @@ mod tests {
 
     #[test]
     fn load_catalog_rejects_an_injection_bearing_planted_pkg_json() {
-        let tmp = std::env::temp_dir().join(format!("ipe-ffi-badpkg-test-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-ffi-badpkg-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let cache = FfiCache::at_project_root(&tmp);
         let (_pkg, paths) = install_from_inspection(&cache, &semver_json()).expect("installs");
@@ -2896,7 +2905,8 @@ mod tests {
             ]
         })
         .to_string();
-        let tmp = std::env::temp_dir().join(format!("ipe-ffi-syslib-test-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-ffi-syslib-test-{}", std::process::id()));
         let cache = FfiCache::at_project_root(&tmp);
         let err = install_from_inspection(&cache, &json).expect_err("must fail");
         match err {
@@ -2991,8 +3001,8 @@ mod tests {
             ]
         })
         .to_string();
-        let tmp =
-            std::env::temp_dir().join(format!("ipe-ffi-syslib-hostile-{}", std::process::id()));
+        let tmp = ipe_test_temp::temp_root()
+            .join(format!("ipe-ffi-syslib-hostile-{}", std::process::id()));
         let cache = FfiCache::at_project_root(&tmp);
         let err = install_from_inspection(&cache, &json).expect_err("must fail");
         assert!(
@@ -3060,8 +3070,8 @@ mod tests {
     /// and return the cache root path, so `load_catalog` exercises the
     /// consumer-JSON decode path (the one that was fail-open on `opaqueTypeIds`).
     fn write_legacy_cache(test_name: &str, consumer_json: &str) -> std::path::PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("ipe-ffi-legacy-{test_name}-{}", std::process::id()));
+        let root = ipe_test_temp::temp_root()
+            .join(format!("ipe-ffi-legacy-{test_name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create cache dir");
         // Write the minimum artifacts the legacy path reads (no `.pkg.json`).
@@ -3150,8 +3160,8 @@ mod tests {
     /// A scratch project root holding the `engine_wrap` crate at
     /// `wrappers/engine`, plus the canonical form of that wrapper directory.
     fn scratch_project(test_name: &str) -> (PathBuf, PathBuf) {
-        let project =
-            std::env::temp_dir().join(format!("ipe-ffi-jail-{test_name}-{}", std::process::id()));
+        let project = ipe_test_temp::temp_root()
+            .join(format!("ipe-ffi-jail-{test_name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&project);
         std::fs::create_dir_all(project.join("wrappers/engine")).expect("scratch wrapper dir");
         std::fs::write(project.join("wrappers/engine/Cargo.toml"), ENGINE_MANIFEST)

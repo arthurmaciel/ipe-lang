@@ -142,8 +142,8 @@ fn async_closure_adapter_builds_and_runs() {
     );
     let result_fn = wrapper_region(&result_region, "handler_fn");
 
-    let dir =
-        std::env::temp_dir().join(format!("ipe_ffi_async_closure_seal_{}", std::process::id()));
+    let dir = ipe_test_temp::temp_root()
+        .join(format!("ipe_ffi_async_closure_seal_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).expect("mkdir");
     std::fs::write(

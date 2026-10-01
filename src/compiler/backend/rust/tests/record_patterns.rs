@@ -316,7 +316,7 @@ fn end_to_end_builds_and_prints_seven() -> DResult<()> {
     let prog = getx_program(&mut interner)?;
     let emitted = RustBackend::new(&interner).emit(&prog)?;
 
-    let out = std::env::temp_dir().join("ipe_backend_record_patterns_e2e");
+    let out = ipe_test_temp::temp_root().join("ipe_backend_record_patterns_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let src = out.join("src");
     std::fs::create_dir_all(&src).map_err(|e| seal_e2e::io_bug(&src, &e))?;

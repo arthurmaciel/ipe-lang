@@ -568,7 +568,7 @@ fn generic_record_program_builds_and_prints_forty_two() {
         return;
     }
 
-    let dir = std::env::temp_dir().join("ipec_generic_record_src_e2e");
+    let dir = ipe_test_temp::temp_root().join("ipec_generic_record_src_e2e");
     let _ = fs::remove_dir_all(&dir);
     let entry = dir.join("Main.ipe");
     let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
@@ -622,7 +622,7 @@ fn false_marker() -> bool {
 #[cfg(unix)]
 #[test]
 fn find_manifest_walks_up_to_project_root() {
-    let tmp = std::env::temp_dir().join("ipec_find_manifest_test");
+    let tmp = ipe_test_temp::temp_root().join("ipec_find_manifest_test");
     let _ = fs::remove_dir_all(&tmp);
     let src = tmp.join("src");
     fs::create_dir_all(&src).expect("create src/");
@@ -650,7 +650,7 @@ fn find_manifest_walks_up_to_project_root() {
 #[cfg(not(unix))]
 #[test]
 fn find_manifest_refuses_an_unverifiable_manifest() {
-    let tmp = std::env::temp_dir().join("ipec_find_manifest_unverifiable_test");
+    let tmp = ipe_test_temp::temp_root().join("ipec_find_manifest_unverifiable_test");
     let _ = fs::remove_dir_all(&tmp);
     let src = tmp.join("src");
     fs::create_dir_all(&src).expect("create src/");
@@ -669,7 +669,8 @@ fn find_manifest_refuses_an_unverifiable_manifest() {
 
 /// A fresh scratch tree for one manifest-walk test, holding `src/Main.ipe` under `project`.
 fn manifest_walk_tree(tag: &str, project: &str) -> (PathBuf, PathBuf) {
-    let tmp = std::env::temp_dir().join(format!("ipec_manifest_walk_{tag}_{}", std::process::id()));
+    let tmp =
+        ipe_test_temp::temp_root().join(format!("ipec_manifest_walk_{tag}_{}", std::process::id()));
     let _ = fs::remove_dir_all(&tmp);
     let src = tmp.join(project).join("src");
     fs::create_dir_all(&src).expect("create src/");
@@ -921,7 +922,7 @@ fn find_manifest_under_an_unreadable_home_examines_only_the_start_directory() {
 /// No configured home, or a home that does not exist, sets no ceiling.
 #[test]
 fn a_missing_home_sets_no_ceiling() {
-    let missing = std::env::temp_dir().join(format!(
+    let missing = ipe_test_temp::temp_root().join(format!(
         "ipec_manifest_walk_missing_home_{}",
         std::process::id()
     ));
@@ -989,7 +990,7 @@ Task.fail (Error.unexpected \"intentional\")
     }
     let Ok(runtime) = runtime else { return };
 
-    let dir = std::env::temp_dir().join("ipec_panything_regression");
+    let dir = ipe_test_temp::temp_root().join("ipec_panything_regression");
     let _ = fs::remove_dir_all(&dir);
     let entry = dir.join("Main.ipe");
     let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
@@ -1028,7 +1029,7 @@ Io.println \"hello from main task\"
     }
     let Ok(runtime) = runtime else { return };
 
-    let dir = std::env::temp_dir().join("ipec_taskrun_elision_regression");
+    let dir = ipe_test_temp::temp_root().join("ipec_taskrun_elision_regression");
     let _ = fs::remove_dir_all(&dir);
     let entry = dir.join("Main.ipe");
     let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
@@ -1141,7 +1142,7 @@ Web.tea
 /// without an installed runtime crate).
 fn emit_web_app_source(hot_appearance: bool, tag: &str) -> Option<String> {
     let runtime = resolve_runtime().ok()?;
-    let dir = std::env::temp_dir().join(format!("ipec_hot_appearance_{tag}"));
+    let dir = ipe_test_temp::temp_root().join(format!("ipec_hot_appearance_{tag}"));
     let _ = fs::remove_dir_all(&dir);
     let entry = dir.join("Main.ipe");
     fs::create_dir_all(&dir).ok()?;
@@ -1217,7 +1218,7 @@ fn watch_mode_emit_hoists_literal_table() {
 /// When no package.ipe exists in any parent directory, returns None.
 #[test]
 fn find_manifest_returns_none_when_absent() {
-    let tmp = std::env::temp_dir().join("ipec_no_manifest_test");
+    let tmp = ipe_test_temp::temp_root().join("ipec_no_manifest_test");
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).expect("create dir");
     let ipe = tmp.join("Standalone.ipe");
@@ -1246,7 +1247,7 @@ fn sibling_discovery_compiles_two_module_program() {
     }
     let Ok(runtime) = runtime else { return };
 
-    let tmp = std::env::temp_dir().join("ipec_sibling_disc_test");
+    let tmp = ipe_test_temp::temp_root().join("ipec_sibling_disc_test");
     let _ = fs::remove_dir_all(&tmp);
     let src = tmp.join("src");
     fs::create_dir_all(&src).expect("create src/");
@@ -1284,7 +1285,7 @@ fn test_stage_build_resolves_src_modules_from_tests_dir() {
     let runtime = resolve_runtime();
     let Ok(runtime) = runtime else { return };
 
-    let tmp = std::env::temp_dir().join("ipec_verify_test_stage_src_disc");
+    let tmp = ipe_test_temp::temp_root().join("ipec_verify_test_stage_src_disc");
     let _ = fs::remove_dir_all(&tmp);
     let src = tmp.join("src");
     let tests = tmp.join("tests");
@@ -1334,7 +1335,7 @@ fn test_stage_build_resolves_src_modules_from_tests_dir() {
 /// resolution the build depends on, asserted without a runtime.
 #[test]
 fn collect_test_sources_unions_src_and_tests_trees() {
-    let tmp = std::env::temp_dir().join("ipec_collect_test_sources_union");
+    let tmp = ipe_test_temp::temp_root().join("ipec_collect_test_sources_union");
     let _ = fs::remove_dir_all(&tmp);
     let src = tmp.join("src");
     let tests = tmp.join("tests");
@@ -1385,7 +1386,7 @@ fn collect_test_sources_unions_src_and_tests_trees() {
 /// Runtime is not reached (infer aborts first), so we pass a dummy path.
 #[test]
 fn infer_error_in_dep_module_names_dep_file() {
-    let tmp = std::env::temp_dir().join("ipec_144_dep_err_test");
+    let tmp = ipe_test_temp::temp_root().join("ipec_144_dep_err_test");
     let _ = fs::remove_dir_all(&tmp);
     let src = tmp.join("src");
     fs::create_dir_all(&src).expect("create src/");
@@ -1407,7 +1408,7 @@ fn infer_error_in_dep_module_names_dep_file() {
     .expect("write Main.ipe");
 
     // Runtime is never accessed: a type error fires at infer, before lower/emit.
-    let dummy_runtime = std::env::temp_dir();
+    let dummy_runtime = ipe_test_temp::temp_root();
     let out = tmp.join("out");
     let result = build_loose_file(&main_path, &out, &dummy_runtime);
 
@@ -1466,7 +1467,7 @@ fn infer_error_in_dep_module_names_dep_file() {
 /// would be ambiguous.  The discriminant is the only reliable resolver.
 #[test]
 fn home_discriminant_cross_module_type_error_names_correct_file() {
-    let tmp = std::env::temp_dir().join("ipec_home_disc_test");
+    let tmp = ipe_test_temp::temp_root().join("ipec_home_disc_test");
     let _ = fs::remove_dir_all(&tmp);
     let src = tmp.join("src");
     fs::create_dir_all(&src).expect("create src/");
@@ -1512,7 +1513,7 @@ fn home_discriminant_cross_module_type_error_names_correct_file() {
     )
     .expect("write Main.ipe");
 
-    let dummy_runtime = std::env::temp_dir();
+    let dummy_runtime = ipe_test_temp::temp_root();
     let out = tmp.join("out");
     let result = build_loose_file(&src.join("Main.ipe"), &out, &dummy_runtime);
 
@@ -1594,7 +1595,7 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
         return; // No in-repo runtime tree in this environment — see other tests' pattern.
     };
 
-    let tmp = std::env::temp_dir().join(format!("ipe-cache-e2e-{}", std::process::id()));
+    let tmp = ipe_test_temp::temp_root().join(format!("ipe-cache-e2e-{}", std::process::id()));
     let cache_dir = tmp.join("cache");
     let cache_site = crate::cache::CacheSite::Explicit(cache_dir.clone());
     let out_a = tmp.join("out-a");
@@ -1693,7 +1694,7 @@ fn cold_build_with_the_cache_inside_a_fresh_output_dir_claims_it() {
         return;
     };
 
-    let tmp = std::env::temp_dir().join(format!("ipe-cache-in-out-{}", std::process::id()));
+    let tmp = ipe_test_temp::temp_root().join(format!("ipe-cache-in-out-{}", std::process::id()));
     let _ = fs::remove_dir_all(&tmp);
     let out = tmp.join("out");
     let cache_dir = out.join(".ipe-cache").join("salt");
@@ -1778,7 +1779,8 @@ fn build_through_planted_cache_link(tag: &str, planted: PlantedCacheLink) {
     assert!(runtime.is_ok(), "runtime must resolve: {runtime:?}");
     let Ok(runtime) = runtime else { return };
 
-    let tmp = std::env::temp_dir().join(format!("ipe-cache-link-{tag}-{}", std::process::id()));
+    let tmp =
+        ipe_test_temp::temp_root().join(format!("ipe-cache-link-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&tmp);
     let out = tmp.join("out");
     let elsewhere = tmp.join("elsewhere");
@@ -1903,7 +1905,8 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
     let Ok(runtime) = resolve_runtime() else {
         return;
     };
-    let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-driver-{}", std::process::id()));
+    let tmp =
+        ipe_test_temp::temp_root().join(format!("ipec-ir-cache-driver-{}", std::process::id()));
     let cache_dir = tmp.join("cache");
     let cache_site = crate::cache::CacheSite::Explicit(cache_dir.clone());
     let out_a = tmp.join("out-a");
@@ -1995,7 +1998,8 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
     let Ok(runtime) = resolve_runtime() else {
         return;
     };
-    let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-tamper-{}", std::process::id()));
+    let tmp =
+        ipe_test_temp::temp_root().join(format!("ipec-ir-cache-tamper-{}", std::process::id()));
     let cache_dir = tmp.join("cache");
     let cache_site = crate::cache::CacheSite::Explicit(cache_dir.clone());
     let out_a = tmp.join("out-a");
@@ -2094,7 +2098,8 @@ fn production_ir_cache_hit_blames_the_in_memory_entry_source() {
     let Ok(runtime) = resolve_runtime() else {
         return;
     };
-    let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-blame-{}", std::process::id()));
+    let tmp =
+        ipe_test_temp::temp_root().join(format!("ipec-ir-cache-blame-{}", std::process::id()));
     let cache_dir = tmp.join("cache");
     let cache_site = crate::cache::CacheSite::Explicit(cache_dir);
     let _ = fs::remove_dir_all(&tmp);
@@ -2175,7 +2180,7 @@ fn cache_dir_none_disables_caching_entirely() {
     let Ok(runtime) = resolve_runtime() else {
         return;
     };
-    let tmp = std::env::temp_dir().join(format!("ipe-cache-disabled-{}", std::process::id()));
+    let tmp = ipe_test_temp::temp_root().join(format!("ipe-cache-disabled-{}", std::process::id()));
     let out_dir = tmp.join("out");
     let _ = fs::remove_dir_all(&tmp);
 
@@ -2380,7 +2385,7 @@ pub mod route;
 /// compile.
 #[test]
 fn reachable_runtime_copy_takes_declared_files_and_whole_reached_dirs() {
-    let tmp = std::env::temp_dir().join("ipe_eject_reach_copy");
+    let tmp = ipe_test_temp::temp_root().join("ipe_eject_reach_copy");
     let _ = fs::remove_dir_all(&tmp);
     let rt = tmp.join("ipe_runtime");
     fs::create_dir_all(rt.join("web")).expect("create web/");
@@ -2428,7 +2433,7 @@ fn reachable_runtime_copy_takes_declared_files_and_whole_reached_dirs() {
 /// fires before any file is written.
 #[test]
 fn eject_refuses_a_wasm_mode_project_from_the_manifest_tier() {
-    let tmp = std::env::temp_dir().join("ipe_eject_wasm_mode_refuse");
+    let tmp = ipe_test_temp::temp_root().join("ipe_eject_wasm_mode_refuse");
     let _ = fs::remove_dir_all(&tmp);
     let src = tmp.join("src");
     fs::create_dir_all(&src).expect("create src/");
@@ -2466,7 +2471,7 @@ fn eject_refuses_a_wasm_mode_project_from_the_manifest_tier() {
 #[test]
 fn analysis_root_prefers_main_then_program_then_exposed() {
     // An application with a src/Main.ipe uses it as the analysis root.
-    let app = std::env::temp_dir().join("ipe_analysis_root_app");
+    let app = ipe_test_temp::temp_root().join("ipe_analysis_root_app");
     let _ = fs::remove_dir_all(&app);
     let app_src = app.join("src");
     fs::create_dir_all(&app_src).expect("create src/");
@@ -2488,7 +2493,7 @@ fn analysis_root_prefers_main_then_program_then_exposed() {
     let _ = fs::remove_dir_all(&app);
 
     // A library (exposedModules, no Main) uses its first exposed module's file.
-    let lib = std::env::temp_dir().join("ipe_analysis_root_lib");
+    let lib = ipe_test_temp::temp_root().join("ipe_analysis_root_lib");
     let _ = fs::remove_dir_all(&lib);
     let lib_src = lib.join("src");
     fs::create_dir_all(&lib_src).expect("create src/");
@@ -2520,7 +2525,7 @@ fn analysis_root_rejects_a_program_entry_that_escapes_the_source_root() {
     // traversal) must not let `ipe type-check` read a file outside the
     // project: analysis_root_of routes the entry through the same containment
     // gate the build path uses, so the escape is a typed refusal.
-    let proj = std::env::temp_dir().join("ipe_analysis_root_escape");
+    let proj = ipe_test_temp::temp_root().join("ipe_analysis_root_escape");
     let _ = fs::remove_dir_all(&proj);
     let proj_src = proj.join("src");
     fs::create_dir_all(&proj_src).expect("create src/");
@@ -2558,7 +2563,7 @@ fn analysis_root_rejects_a_program_entry_that_escapes_the_source_root() {
 
 #[test]
 fn build_refuses_a_pure_library_with_a_clean_message() {
-    let tmp = std::env::temp_dir().join("ipe_build_refuse_library");
+    let tmp = ipe_test_temp::temp_root().join("ipe_build_refuse_library");
     let _ = fs::remove_dir_all(&tmp);
     let src = tmp.join("src");
     fs::create_dir_all(&src).expect("create src/");
@@ -2589,7 +2594,7 @@ fn build_refuses_a_pure_library_with_a_clean_message() {
 // =========================================================================
 
 fn temp_dir_unique(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = ipe_test_temp::temp_root().join(format!(
         "ipe-audit-entry-test-{tag}-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
@@ -2919,7 +2924,7 @@ fn audit_entry_rejects_on_hash_mismatch() {
 fn unsafe_scan_test_dir(tag: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir().join(format!(
+    let dir = ipe_test_temp::temp_root().join(format!(
         "ipe-unsafe-scan-{tag}-{}-{}",
         std::process::id(),
         N.fetch_add(1, Ordering::Relaxed)
@@ -3282,7 +3287,7 @@ fn homeless_span_resolves_byte_stably_regardless_of_def_order() {
 /// home is the only signal that recovers `Lib.ipe`.
 #[test]
 fn obligation_error_blames_owning_module_not_narrower_padded_sibling() {
-    let tmp = std::env::temp_dir().join("ipec_obligation_home_test");
+    let tmp = ipe_test_temp::temp_root().join("ipec_obligation_home_test");
     let _ = fs::remove_dir_all(&tmp);
     let src = tmp.join("src");
     fs::create_dir_all(&src).expect("create src/");
@@ -3313,7 +3318,7 @@ fn obligation_error_blames_owning_module_not_narrower_padded_sibling() {
     )
     .expect("write Main.ipe");
 
-    let dummy_runtime = std::env::temp_dir();
+    let dummy_runtime = ipe_test_temp::temp_root();
     let out = tmp.join("out");
     let result = build_loose_file(&src.join("Main.ipe"), &out, &dummy_runtime);
 
@@ -3369,7 +3374,8 @@ fn format_artifact_size_keeps_the_kib_fraction() {
 fn artifact_size_bytes_reports_a_real_files_length() {
     // The probe reads the real file: a nonzero artifact yields its true byte
     // length, so the reported size is accurate rather than a hardcoded `0`.
-    let tmp = std::env::temp_dir().join(format!("artifact_size_probe_{}", std::process::id()));
+    let tmp =
+        ipe_test_temp::temp_root().join(format!("artifact_size_probe_{}", std::process::id()));
     let _ = fs::create_dir_all(&tmp);
     let file = tmp.join("module.wasm");
     let bytes = vec![0u8; 2500];
@@ -3396,7 +3402,7 @@ fn artifact_size_bytes_surfaces_a_missing_artifact_as_a_typed_error() {
     // A size probe reading a real artifact must SURFACE an absent path as a
     // typed `Io` error — never paper it over as a plausible `0 KB` (the old
     // `metadata().map_or(0, …)` hid a missing module behind a fake size).
-    let missing = std::env::temp_dir()
+    let missing = ipe_test_temp::temp_root()
         .join(format!("artifact_absent_{}", std::process::id()))
         .join("nonexistent.wasm");
     let err = artifact_size_bytes(&missing)
@@ -3501,7 +3507,7 @@ fn session_is_refused_for_a_native_bearing_program() {
 // path and the way to record one.
 #[test]
 fn replay_of_a_missing_log_is_refused_before_building() {
-    let dir = std::env::temp_dir().join(format!("ipe_replay_missing_{}", std::process::id()));
+    let dir = ipe_test_temp::temp_root().join(format!("ipe_replay_missing_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     for absent in ["absent.ipemsgs", "absent.ipelog"] {
         let result = replay_plan(dir.join(absent));
@@ -3590,7 +3596,7 @@ fn gate_terminal_admits_a_tui_app_with_an_interactive_terminal() {
 
 /// A fresh scratch directory for a session-log test.
 fn session_scratch(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ipe_session_{tag}_{}", std::process::id()));
+    let dir = ipe_test_temp::temp_root().join(format!("ipe_session_{tag}_{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     assert!(fs::create_dir_all(&dir).is_ok(), "make scratch dir");
     dir
@@ -3742,7 +3748,8 @@ fn shown_trace_not_utf8_is_refused() {
 // -----------------------------------------------------------------------
 
 fn user_project(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ipe_user_files_{tag}_{}", std::process::id()));
+    let dir =
+        ipe_test_temp::temp_root().join(format!("ipe_user_files_{tag}_{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("src")).expect("make src");
     fs::write(
@@ -3892,7 +3899,7 @@ fn atomic_write_never_writes_through_a_planted_temp_symlink() {
 /// exactly its own files.
 #[test]
 fn an_emit_target_overlapping_the_project_is_refused() {
-    let base = std::env::temp_dir().join(format!("ipe_emit_overlap_{}", std::process::id()));
+    let base = ipe_test_temp::temp_root().join(format!("ipe_emit_overlap_{}", std::process::id()));
     let _ = fs::remove_dir_all(&base);
     let project_dir = base.join("app");
     fs::create_dir_all(&project_dir).expect("project dir");
@@ -3943,7 +3950,7 @@ fn an_emit_target_overlapping_the_project_is_refused() {
 /// write fails closed and the planted directory stays empty.
 #[test]
 fn a_replaced_claimed_target_is_refused_untouched() {
-    let base = std::env::temp_dir().join(format!("ipe_emit_replaced_{}", std::process::id()));
+    let base = ipe_test_temp::temp_root().join(format!("ipe_emit_replaced_{}", std::process::id()));
     let _ = fs::remove_dir_all(&base);
     let out = base.join("out");
     let claimed = emit_target(&out).claim().expect("claim out");
@@ -3981,7 +3988,7 @@ fn a_replaced_claimed_target_is_refused_untouched() {
 #[cfg(unix)]
 #[test]
 fn emitting_into_a_marked_dir_with_planted_links_is_refused() {
-    let base = std::env::temp_dir().join(format!("ipe_planted_emit_{}", std::process::id()));
+    let base = ipe_test_temp::temp_root().join(format!("ipe_planted_emit_{}", std::process::id()));
     let _ = fs::remove_dir_all(&base);
     let victim = base.join("victim");
     fs::create_dir_all(&victim).expect("victim dir");

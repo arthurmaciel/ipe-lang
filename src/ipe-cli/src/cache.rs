@@ -1071,7 +1071,7 @@ mod tests {
     /// A fresh, empty scratch directory for one salt test, held as a secret dir.
     #[cfg(unix)]
     fn salt_test_dir(tag: &str) -> (PathBuf, OwnerDir) {
-        let base = std::env::temp_dir()
+        let base = ipe_test_temp::temp_root()
             .canonicalize()
             .expect("canonical temp dir");
         let dir = base.join(format!(
@@ -1704,7 +1704,7 @@ mod tests {
     #[cfg(unix)] // a cache hit needs a file identity check
     #[test]
     fn store_and_load_round_trip() {
-        let dir = std::env::temp_dir().join(format!("ipe-cache-test-{}", std::process::id()));
+        let dir = ipe_test_temp::temp_root().join(format!("ipe-cache-test-{}", std::process::id()));
         let cache_root = dir.join("cache-root-round-trip");
         let mut files = BTreeMap::new();
         files.insert(
@@ -1735,8 +1735,8 @@ mod tests {
 
     #[test]
     fn try_load_treats_corrupt_entry_as_a_miss() {
-        let dir =
-            std::env::temp_dir().join(format!("ipe-cache-test-corrupt-{}", std::process::id()));
+        let dir = ipe_test_temp::temp_root()
+            .join(format!("ipe-cache-test-corrupt-{}", std::process::id()));
         let cache_root = dir.join("cache-root-corrupt");
         let path = entry_file_path(&cache_root, "epoch", "key");
         fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
@@ -1758,8 +1758,8 @@ mod tests {
         // rejects_a_poisoned_key`); this test proves the cache layer
         // inherits that rejection via `.ok()` rather than accidentally
         // routing around it.
-        let dir =
-            std::env::temp_dir().join(format!("ipe-cache-test-poison-{}", std::process::id()));
+        let dir = ipe_test_temp::temp_root()
+            .join(format!("ipe-cache-test-poison-{}", std::process::id()));
         let cache_root = dir.join("cache-root-poison");
         let path = entry_file_path(&cache_root, "epoch", "key");
         fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
@@ -1804,7 +1804,8 @@ mod tests {
 
     /// A claimed `out/` in a fresh scratch base, plus a directory outside it.
     fn claimed_out_and_elsewhere(tag: &str) -> (PathBuf, OwnedDir, PathBuf) {
-        let base = std::env::temp_dir().join(format!("ipe-cache-{tag}-{}", std::process::id()));
+        let base =
+            ipe_test_temp::temp_root().join(format!("ipe-cache-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let elsewhere = base.join("elsewhere");
         fs::create_dir_all(&elsewhere).expect("create the outside dir");
@@ -1960,7 +1961,8 @@ mod tests {
     /// An unmarked dir is not ipe's, so its cache is never read.
     #[test]
     fn in_output_load_needs_a_marked_output_dir() {
-        let base = std::env::temp_dir().join(format!("ipe-cache-unmarked-{}", std::process::id()));
+        let base =
+            ipe_test_temp::temp_root().join(format!("ipe-cache-unmarked-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let out = base.join("out");
         plant_entry(
@@ -2138,7 +2140,8 @@ mod tests {
         let program = sample_ir_program(&mut plain)?;
         let interner = Arc::new(Mutex::new(plain));
 
-        let dir = std::env::temp_dir().join(format!("ipec-ir-cache-test-{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipec-ir-cache-test-{}", std::process::id()));
         let cache_root = dir.join("cache-root-ir-round-trip");
         let _ = fs::remove_dir_all(&dir);
 
@@ -2177,7 +2180,8 @@ mod tests {
     #[cfg(unix)] // a cache hit needs a file identity check
     #[test]
     fn ir_cache_hit_survives_cross_process_symbol_id_drift() -> ipe_diagnostics::DResult<()> {
-        let dir = std::env::temp_dir().join(format!("ipec-ir-cache-drift-{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipec-ir-cache-drift-{}", std::process::id()));
         let cache_root = dir.join("cache-root-drift");
         let _ = fs::remove_dir_all(&dir);
 
@@ -2232,8 +2236,8 @@ mod tests {
 
     #[test]
     fn ir_try_load_treats_corrupt_entry_as_a_miss() {
-        let dir =
-            std::env::temp_dir().join(format!("ipec-ir-cache-corrupt-{}", std::process::id()));
+        let dir = ipe_test_temp::temp_root()
+            .join(format!("ipec-ir-cache-corrupt-{}", std::process::id()));
         let cache_root = dir.join("cache-root-corrupt");
         let path = ir_entry_file_path(&cache_root, "epoch", "key");
         fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
@@ -2256,7 +2260,8 @@ mod tests {
     /// entry_as_a_miss` gives for the `EmittedProject` tier).
     #[test]
     fn ir_try_load_treats_a_poisoned_symbol_entry_as_a_miss() {
-        let dir = std::env::temp_dir().join(format!("ipec-ir-cache-poison-{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipec-ir-cache-poison-{}", std::process::id()));
         let cache_root = dir.join("cache-root-poison");
         let path = ir_entry_file_path(&cache_root, "epoch", "key");
         fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
@@ -2312,7 +2317,7 @@ mod tests {
     fn hash_tree_rejects_symlink() {
         use std::os::unix::fs::symlink;
 
-        let base = std::env::temp_dir().join(format!(
+        let base = ipe_test_temp::temp_root().join(format!(
             "ipe-cache-test-symlink-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -2341,7 +2346,7 @@ mod tests {
     /// result on a second call (deterministic, no symlinks → no rejection).
     #[test]
     fn hash_tree_plain_tree_is_deterministic() {
-        let base = std::env::temp_dir().join(format!(
+        let base = ipe_test_temp::temp_root().join(format!(
             "ipe-cache-test-plain-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -2362,7 +2367,7 @@ mod tests {
     /// ceiling on a fetched, still-untrusted checkout.
     #[test]
     fn hash_tree_rejects_a_file_over_the_per_file_ceiling() {
-        let base = std::env::temp_dir().join(format!(
+        let base = ipe_test_temp::temp_root().join(format!(
             "ipe-cache-test-bigfile-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -2388,7 +2393,7 @@ mod tests {
     /// is inclusive — a file at the cap succeeds, one byte over fails).
     #[test]
     fn hash_tree_accepts_a_file_at_the_per_file_ceiling() {
-        let base = std::env::temp_dir().join(format!(
+        let base = ipe_test_temp::temp_root().join(format!(
             "ipe-cache-test-atcap-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -2412,7 +2417,7 @@ mod tests {
     /// overflows.
     #[test]
     fn hash_tree_rejects_a_tree_over_the_depth_ceiling() {
-        let base = std::env::temp_dir().join(format!(
+        let base = ipe_test_temp::temp_root().join(format!(
             "ipe-cache-test-deep-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -2444,7 +2449,7 @@ mod tests {
     /// same value the resolver hash-verifies.
     #[test]
     fn tree_hasher_finalized_equals_hash_tree() {
-        let base = std::env::temp_dir().join(format!(
+        let base = ipe_test_temp::temp_root().join(format!(
             "ipe-cache-test-hasher-eq-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -2471,7 +2476,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn write_entry_never_follows_an_epoch_swapped_for_a_link_mid_walk() {
-        let base = std::env::temp_dir().join(format!("ipe_cache_swap_{}", std::process::id()));
+        let base =
+            ipe_test_temp::temp_root().join(format!("ipe_cache_swap_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let root = base.join("cache");
         let victim = base.join("victim");
@@ -2515,7 +2521,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn write_entry_never_follows_an_epoch_junctioned_in_place_mid_walk() {
-        let base = std::env::temp_dir().join(format!("ipe_cache_junction_{}", std::process::id()));
+        let base =
+            ipe_test_temp::temp_root().join(format!("ipe_cache_junction_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let root = base.join("cache");
         let victim = base.join("victim");
@@ -2547,7 +2554,8 @@ mod tests {
     /// An epoch or file name that is not one plain component is never written.
     #[test]
     fn write_entry_refuses_a_non_plain_name() {
-        let base = std::env::temp_dir().join(format!("ipe_cache_plain_{}", std::process::id()));
+        let base =
+            ipe_test_temp::temp_root().join(format!("ipe_cache_plain_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let root = base.join("cache");
         write_entry(&root, "../escape", "k.json", b"x");
@@ -2568,7 +2576,7 @@ mod tests {
     /// A cache entry one byte past the cap is a miss; one at the cap is read whole.
     #[test]
     fn a_cache_entry_past_the_cap_is_a_miss() {
-        let base = std::env::temp_dir().join(format!("ipe_cache_cap_{}", std::process::id()));
+        let base = ipe_test_temp::temp_root().join(format!("ipe_cache_cap_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("e1")).unwrap();
         fs::write(base.join("e1").join("at.json"), [b'x'; 8]).unwrap();
@@ -2598,7 +2606,8 @@ mod tests {
     /// A planted entry past the build-cache cap is never loaded through the site.
     #[test]
     fn a_planted_oversized_entry_is_never_loaded() {
-        let base = std::env::temp_dir().join(format!("ipe_cache_oversized_{}", std::process::id()));
+        let base =
+            ipe_test_temp::temp_root().join(format!("ipe_cache_oversized_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("e1")).unwrap();
         let file = fs::File::create(base.join("e1").join("big.json")).unwrap();

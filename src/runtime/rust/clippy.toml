@@ -5,7 +5,23 @@ allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 
 # The home directory is read only through `system::home_dir` (overlay-aware,
-# absolute or nothing).
+# absolute or nothing). Every other environment read goes through
+# `system::read_env_var`/`read_env_var_os`, which answer the Ipe overlay first
+# and never answer a temp-root name. The OS temp root is resolved only by
+# `scratch_core`, behind its base checks; test code reads it through
+# `scratch_core::test_temp_root`.
 disallowed-methods = [
+    # The abrupt-failure constructs the root `clippy.toml` bans, mirrored here
+    # because this crate reads its own config.
+    { path = "core::option::Option::unwrap_unchecked", reason = "UB on None; return a Result or model the invariant in a type" },
+    { path = "core::result::Result::unwrap_unchecked", reason = "UB on Err; return a Result or model the invariant in a type" },
+    { path = "std::process::abort", reason = "abrupt termination that skips Drop; return a Result" },
+    { path = "std::panic::panic_any", reason = "a panic; return a Result" },
+    { path = "core::hint::unreachable_unchecked", reason = "UB; model the invariant in a type instead" },
     { path = "std::env::home_dir", reason = "an unvalidated home; read it through `system::home_dir`" },
+    { path = "std::env::var", reason = "read through `system::read_env_var` (overlay first, temp roots refused)" },
+    { path = "std::env::var_os", reason = "read through `system::read_env_var_os` (overlay first, temp roots refused)" },
+    { path = "std::env::vars", reason = "a whole-environment iterator bypasses the overlay and hands out the temp root; read named keys through `system::read_env_var`" },
+    { path = "std::env::vars_os", reason = "a whole-environment iterator bypasses the overlay and hands out the temp root; read named keys through `system::read_env_var`" },
+    { path = "std::env::temp_dir", reason = "a base other users can write; create temporary entries through `scratch_core` (tests: `scratch_core::test_temp_root`)" },
 ]

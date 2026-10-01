@@ -1174,7 +1174,7 @@ mod tests {
     }
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe-index-test-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()

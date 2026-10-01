@@ -138,6 +138,25 @@ mod task_tests {
         assert!(run(t).is_err());
     }
 
+    /// `System.getenv` and `getenvOr` never answer a temp-root key, even one
+    /// the program set itself with `System.setenv`: the temp root is resolved
+    /// only by the scratch primitive.
+    #[test]
+    fn system_getenv_refuses_temp_root_keys() {
+        for key in ["TMPDIR", "TMP", "TEMP", "tmpdir"] {
+            let set: IpeTask<IpeError, ()> =
+                system_setenv::<IpeError>(key.to_string(), "/attacker/base".to_string());
+            assert!(run(set).is_ok(), "{key:?}");
+            let got: IpeTask<IpeError, String> = system_getenv::<IpeError>(key.to_string());
+            assert!(run(got).is_err(), "{key:?}");
+            assert_eq!(
+                system_getenv_or(key.to_string(), "fallback".to_string()),
+                "fallback",
+                "{key:?}"
+            );
+        }
+    }
+
     // System.getenvInt / getenvBool / getArg — golden-verified semantics (unset → Err
     // NotFound; non-int / non-bool → Err Ffi; getArg indexes the FULL arg vector
     // and is out-of-range → Ok Nothing, never Err).

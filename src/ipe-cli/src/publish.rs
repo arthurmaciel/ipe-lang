@@ -36,7 +36,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::scratch::{ScratchDir, ScratchFile};
+use crate::scratch::{LeafName, ScratchDir, ScratchFile};
 
 use crate::CliError;
 use crate::index::{self, CommitId, EntryVersion, IndexEntry, PinnedRev, SourceUrl};
@@ -822,7 +822,8 @@ fn open_pr(
     let fork_url = format!("https://github.com/{fork_owner}/{index_name}.git");
 
     let scratch = ScratchDir::new("ipe-publish").map_err(|e| scratch_io(&e))?;
-    let clone = scratch.child(index_name);
+    let clone = scratch
+        .child(&LeafName::new(index_name).map_err(|e| scratch_io(&std::io::Error::from(e)))?);
 
     // Shallow-clone the fork — it carries the index's `main` history, which the
     // branch must descend from for the compare page to work.

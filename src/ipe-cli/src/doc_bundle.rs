@@ -1120,8 +1120,8 @@ mod tests {
     use std::fs;
 
     fn tempdir(name: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("ipe-doc-bundle-{name}-{}", std::process::id()));
+        let dir = ipe_test_temp::temp_root()
+            .join(format!("ipe-doc-bundle-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

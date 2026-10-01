@@ -992,7 +992,7 @@ mod tests {
     fn shared_target_never_masks_a_broken_crate() {
         use std::process::Command;
 
-        let root = std::env::temp_dir().join(format!(
+        let root = ipe_test_temp::temp_root().join(format!(
             "e2e_support_soundness_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()

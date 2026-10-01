@@ -659,8 +659,8 @@ mod tests {
 
     #[test]
     fn last_good_hash_is_deterministic() {
-        let dir =
-            std::env::temp_dir().join(format!("ipe_watch_process_hash_{}", std::process::id()));
+        let dir = ipe_test_temp::temp_root()
+            .join(format!("ipe_watch_process_hash_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("bin");
         std::fs::write(&f, b"hello world").unwrap();
@@ -798,8 +798,8 @@ mod tests {
         // failure — fully deterministic, no OS timing involved.  The state
         // machine then respawns the last-good artifact (`/bin/sleep 5`)
         // which stays alive and passes readiness.
-        let dir =
-            std::env::temp_dir().join(format!("ipe_watch_process_fallback_{}", std::process::id()));
+        let dir = ipe_test_temp::temp_root()
+            .join(format!("ipe_watch_process_fallback_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let bad_candidate = dir.join("bad-candidate");
         std::fs::write(&bad_candidate, b"not actually executed").unwrap();
@@ -914,7 +914,8 @@ mod tests {
 
         // Now a candidate whose spawn fails immediately (nonexistent binary) —
         // readiness can never pass.
-        let dir = std::env::temp_dir().join(format!("ipe_watch_bg_fail_{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipe_watch_bg_fail_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let bad = dir.join("bad");
         std::fs::write(&bad, b"distinct-bytes").unwrap();
@@ -1001,7 +1002,8 @@ mod tests {
         // A distinct-content candidate that spawns ALIVE (`/bin/sleep`) but never
         // opens a socket. `TcpConnect { port: free_port }` can never connect, so
         // readiness fails within the budget and the last-good binary is kept.
-        let dir = std::env::temp_dir().join(format!("ipe_watch_tcp_ready_{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipe_watch_tcp_ready_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let candidate = dir.join("alive-but-silent");
         std::fs::write(&candidate, b"tcp-readiness-distinct-bytes").unwrap();

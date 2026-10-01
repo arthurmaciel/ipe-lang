@@ -18,5 +18,8 @@ sha2 = "0.10"
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
 
+[dev-dependencies]
+ipe-test-temp = { path = "../../../tools/test-temp" }
+
 [lints]
 workspace = true

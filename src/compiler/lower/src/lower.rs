@@ -8179,7 +8179,7 @@ struct KernelUsage {
     uuid: bool,
     /// Any `Ipe.Random` kernel — gates the `random.rs` runtime module (the
     /// `random` feature). A standalone leaf; no other surface reaches it. Does NOT
-    /// gate `getrandom` (kept by the `crypto_core` floor).
+    /// gate `getrandom` (every runtime carries it).
     random: bool,
     /// Any `Ipe.Log` kernel — gates the `log.rs` runtime module (the `log`
     /// feature) and the base `chrono` crate (via `log = ["dep:chrono"]`).
@@ -8200,7 +8200,7 @@ struct KernelUsage {
     /// Any crypto-FLOOR kernel (SHA-2 hash, the HMAC family, RSA sign/verify,
     /// constant-time compare, the entropy pair, the `Key`/`Mac` newtypes) — gates
     /// the `crypto_core.rs` runtime module (the `crypto-core` feature) and its
-    /// `sha2` + `hmac` + `subtle` + `getrandom` dependencies. The heavy `crypto`
+    /// `sha2` + `hmac` + `subtle` dependencies. The heavy `crypto`
     /// surface and the `jwt`/`db`/`web`/`webview`/`email`/`server` surfaces reach
     /// the floor transitively (folded in by the backend's `reaches_crypto_core`),
     /// so this flag alone gates only the direct crypto-floor reach.
@@ -15203,8 +15203,7 @@ impl<'a> Lowerer<'a> {
         // detect crypto-FLOOR usage — any SHA-2 / HMAC / RSA / constant-time /
         // entropy / `Key`/`Mac` kernel. The backend uses this flag (folded with the
         // crypto/jwt/db/web/webview/email/server surfaces in `reaches_crypto_core`)
-        // to select the `crypto-core` feature (`sha2` + `hmac` + `subtle` +
-        // `getrandom`). The `Key`/`Mac` opaque newtypes each have a crypto-floor
+        // to select the `crypto-core` feature (`sha2` + `hmac` + `subtle`). The `Key`/`Mac` opaque newtypes each have a crypto-floor
         // constructor kernel (`Key.fromString`/`fromBytes`, and a `Mac` is produced
         // by an HMAC-with-key kernel), so a signature naming a `Key`/`Mac` never
         // reaches the floor without a call site setting this flag — no type-mention

@@ -169,7 +169,7 @@ fn run_jailed_inner(
     let seccomp = ipe_sandbox::run_jail::write_seccomp_memfd(&bytes).expect("seccomp memfd");
     let fd = seccomp.make_inheritable().expect("seccomp fd inheritable");
 
-    let scoped = std::env::temp_dir().join(format!("ipe-e2e-{}", std::process::id()));
+    let scoped = ipe_test_temp::temp_root().join(format!("ipe-e2e-{}", std::process::id()));
     std::fs::create_dir_all(&scoped).expect("scoped tmp");
     let scoped = CanonicalPath::resolve(&scoped).expect("scoped tmp resolves");
     let system_bins = [Path::new("/usr/bin"), Path::new("/bin")]
