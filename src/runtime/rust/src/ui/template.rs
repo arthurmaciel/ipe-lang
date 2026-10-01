@@ -1306,6 +1306,7 @@ fn static_ui_children_holed<M: Clone>(
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::{
         MAX_UI_TEMPLATE_DEPTH, TemplateFills, UiHandlerMap, UiTemplate, UiTemplateAttr,

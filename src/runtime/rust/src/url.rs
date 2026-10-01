@@ -407,6 +407,7 @@ pub fn url_relative_to_string(r: UrlRelative) -> String {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
 

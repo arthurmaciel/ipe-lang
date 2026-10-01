@@ -1075,6 +1075,7 @@ pub fn entries_json(entries: &[LogEntry]) -> String {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
 

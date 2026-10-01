@@ -1391,6 +1391,7 @@ fn web_max_body_bytes() -> usize {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod web_max_body_bytes_tests {
     // IPE_WEB_MAX_BODY_BYTES=0 must floor at the default, not disable the
     // body (matching server::max_body's `.filter(|&n| n > 0)`). Without the
@@ -5983,6 +5984,7 @@ mod static_noise_mime_tests {
 // driver while the process — and every other session's driver — survives. This
 // module pins that isolation at the spawn boundary the driver uses.
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod recursion_session_isolation_tests {
     // A session-`update` that trips the recursion guard, spawned exactly as
     // `drive_session` spawns its fold task, dies as a panicking `JoinError`
@@ -7935,6 +7937,7 @@ mod hot_wiring_handler_tests {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod bind_error_tests {
     /// The port-taken error message must name `IPE_WEB_PORT` and use an 8xxx example port.
     #[test]

@@ -325,6 +325,7 @@ impl<M> crate::stringify::IpeStringify for Element<M> {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
 

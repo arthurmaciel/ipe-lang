@@ -749,6 +749,7 @@ pub fn path_absolute<E: Send + From<String> + 'static>(p: Path) -> IpeTask<E, Pa
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
 

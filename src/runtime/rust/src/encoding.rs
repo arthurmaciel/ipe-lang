@@ -599,6 +599,7 @@ pub fn ipe_encoding_hex_decode(s: String) -> IpeResult<crate::error::IpeError, S
 // `compression.rs`, `ws_client.rs`, `server.rs`, and `email.rs`.
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
     use proptest::prelude::*;

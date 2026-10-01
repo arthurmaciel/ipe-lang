@@ -27,6 +27,7 @@
 //! is honoured, since the macro decides what its attributes mean. Syntax `syn`
 //! keeps only as tokens (a verbatim item or expression) is scanned token by
 //! token too.
+#![cfg(not(target_arch = "wasm32"))]
 
 use proc_macro2::{TokenStream, TokenTree};
 use std::path::Path;
