@@ -19,7 +19,7 @@ use ipe_intern::Interner;
 use ipe_parse::{LiteralQuote, TokenClass, literal_source};
 use ipe_syntax::{
     Ctor, Exposed, Exposing, Expr, Expr_, ForeignDecl, Import, LetBinding, Module, Pattern,
-    Pattern_, Privacy, TypeAlias, TypeAnnotation, Union, Value,
+    Pattern_, Privacy, TypeAlias, TypeAnnotation, Union, Value, strip_anchor_margin,
 };
 
 /// The column budget elm-format targets before breaking a construct onto
@@ -71,6 +71,15 @@ struct Comment {
     /// belongs to the node it precedes, and re-rendering a node never loses or
     /// repeats one.
     anchor: Option<usize>,
+}
+
+/// A matched `(` … `)` group: its first inner token and its `)`.
+#[derive(Clone, Copy, Debug)]
+struct ParenGroup {
+    /// The offset of the first token after the group's leading `(` run.
+    inner: usize,
+    /// The offset of the closing `)`.
+    close: usize,
 }
 
 /// A code token: a token of the program, doc comments excluded.
@@ -320,6 +329,23 @@ fn skip_block_comment_body(mut rest: &str) -> &str {
 /// formatted output loses, adds or alters a comment, or does not re-parse to
 /// the same AST (a formatter bug — caught rather than written).
 pub fn format_source(src: &str) -> Result<String, FmtError> {
+    format_guarded(src, render_module)
+}
+
+/// The printer's rendering of a whole module: what [`format_source`] writes.
+fn render_module(printer: &Printer<'_>, module: &Module) -> String {
+    printer.module(module)
+}
+
+/// Print `src` with `render`, then refuse the output unless it carries the
+/// input's comments and re-parses to the input's AST.
+///
+/// [`format_source`] renders with [`Printer::module`]; a test passes a faulty
+/// renderer to drive each refusal through the same guards.
+fn format_guarded(
+    src: &str,
+    render: impl FnOnce(&Printer<'_>, &Module) -> String,
+) -> Result<String, FmtError> {
     let mut interner = Interner::new();
     let module = ipe_parse::parse_module(src, &mut interner).map_err(|diag| FmtError::Parse {
         src: src.to_owned(),
@@ -328,7 +354,7 @@ pub fn format_source(src: &str) -> Result<String, FmtError> {
     let input = scan_trivia(src).ok_or_else(|| FmtError::RoundTrip {
         detail: "source parsed but did not lex".to_owned(),
     })?;
-    let out = Printer::new(&interner, &input, Some(src)).module(&module);
+    let out = render(&Printer::new(&interner, &input, Some(src)), &module);
 
     // Comment guard: the formatted output carries exactly the input's comments.
     // It fires BEFORE the AST equivalence check so a comment bug surfaces as a
@@ -392,8 +418,121 @@ pub(crate) fn format_source_unchecked(src: &str) -> Result<String, FmtError> {
 /// structural equivalence, resolving symbols to their strings so that a
 /// different interning ORDER between the two parses does not read as a
 /// difference. Spans are ignored throughout.
+///
+/// Two independent projections must agree: the printer's canonical text, and
+/// the [`ModuleTree`] of every AST field. The printer reads a node only as far
+/// as it prints it, so a field it does not print can differ under an equal
+/// canonical text; the tree compares every field. A triple-quoted string's
+/// value depends on its column: the canonical text prints that value, so a
+/// formatter that moves the string to another margin is refused rather than
+/// changing what the program means.
 fn modules_equivalent(a: &Module, ai: &Interner, b: &Module, bi: &Interner) -> bool {
     ModuleText::of(a, ai) == ModuleText::of(b, bi)
+        && ModuleTree::of(a, ai).is_some_and(|tree| ModuleTree::of(b, bi) == Some(tree))
+}
+
+/// Every field of a module's AST, with byte positions erased and symbols
+/// resolved to their text, imports sorted (the formatter sorts them).
+///
+/// Built from the derived `Debug` form, so a field added to the AST is compared
+/// without a change here. Positions are erased because formatting moves every
+/// node.
+#[derive(PartialEq, Debug)]
+struct ModuleTree(Vec<String>);
+
+impl ModuleTree {
+    /// `None` when the `Debug` form holds a shape this projection does not
+    /// recognise; [`modules_equivalent`] then treats the modules as different.
+    fn of(m: &Module, i: &Interner) -> Option<Self> {
+        // Destructured with no `..`: a new module field is a build error here
+        // until it is compared.
+        let Module {
+            module_kw: _,
+            name,
+            exposing,
+            imports,
+            values,
+            unions,
+            aliases,
+            foreigns,
+        } = m;
+        let mut sorted_imports = imports
+            .iter()
+            .map(|imp| erase_positions(&format!("{imp:?}"), i))
+            .collect::<Option<Vec<String>>>()?;
+        sorted_imports.sort_unstable();
+        let mut parts = vec![
+            erase_positions(&format!("{name:?}"), i)?,
+            erase_positions(&format!("{exposing:?}"), i)?,
+        ];
+        parts.extend(sorted_imports);
+        parts.push(erase_positions(&format!("{values:?}"), i)?);
+        parts.push(erase_positions(&format!("{unions:?}"), i)?);
+        parts.push(erase_positions(&format!("{aliases:?}"), i)?);
+        parts.push(erase_positions(&format!("{foreigns:?}"), i)?);
+        Some(Self(parts))
+    }
+}
+
+/// `debug` with every `Span { lo: …, hi: … }` and triple-quoted string
+/// `anchor: …` column replaced by `_`, and every `Symbol(n)` by
+/// `Symbol("text")`, leaving the contents of string literals untouched; `None`
+/// on a shape the rewrite does not recognise.
+///
+/// The anchor is a position: what it means, the margin stripped from the
+/// string's value, is compared by [`ModuleText`], which prints that value.
+fn erase_positions(debug: &str, interner: &Interner) -> Option<String> {
+    let mut out = String::with_capacity(debug.len());
+    let mut rest = debug;
+    while let Some(c) = rest.chars().next() {
+        if c == '"' {
+            let (literal, after) = rest.split_at_checked(debug_string_len(rest)?)?;
+            out.push_str(literal);
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix("Span { lo: ") {
+            let (_, after) = split_digits(after)?;
+            let (_, after) = split_digits(after.strip_prefix(", hi: ")?)?;
+            out.push('_');
+            rest = after.strip_prefix(" }")?;
+        } else if let Some(after) = rest.strip_prefix("anchor: ") {
+            let (_, after) = split_digits(after)?;
+            out.push_str("anchor: _");
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix("Symbol(") {
+            let (digits, after) = split_digits(after)?;
+            let text = interner.resolve(ipe_intern::Symbol::from_raw(digits.parse().ok()?))?;
+            let _ = write!(out, "Symbol({text:?})");
+            rest = after.strip_prefix(')')?;
+        } else {
+            out.push(c);
+            rest = rest.get(c.len_utf8()..)?;
+        }
+    }
+    Some(out)
+}
+
+/// The byte length of the `Debug` string literal opening `s`, quotes included.
+fn debug_string_len(s: &str) -> Option<usize> {
+    let mut chars = s.char_indices().skip(1);
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next()?;
+            }
+            '"' => return Some(i + 1),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The leading run of ASCII digits of `s` (at least one) and what follows it.
+fn split_digits(s: &str) -> Option<(&str, &str)> {
+    let n = s.bytes().take_while(u8::is_ascii_digit).count();
+    if n == 0 {
+        return None;
+    }
+    s.split_at_checked(n)
 }
 
 /// A fully symbol-resolved, span-free projection of a module, used only for the
@@ -433,14 +572,17 @@ struct Printer<'a> {
     /// equivalence guard, where a purely width-driven canonical form is wanted
     /// (the guard compares STRUCTURE, so it must not depend on original layout).
     src: Option<&'a str>,
-    /// The anchor whose comments the node being printed has already claimed.
+    /// The anchors whose comments the node being printed has already claimed:
+    /// its first token's offset and the last offset of the claimed run.
     ///
     /// A node and its first child begin at the same token (`f x` and `f`), so
     /// the outermost node at an anchor prints its comments and every nested
-    /// node starting there prints none. Set and restored around each render,
-    /// so rendering is pure: a trial render (to measure a layout) never consumes
-    /// a comment its final render then lacks.
-    claimed: Cell<Option<usize>>,
+    /// node starting there prints none. A parenthesised group also claims the
+    /// tokens up to its first inner one (`(` `(` `f`), where no node of its own
+    /// may start. Set and restored around each render, so rendering is pure: a
+    /// trial render (to measure a layout) never consumes a comment its final
+    /// render then lacks.
+    claimed: Cell<Option<(usize, usize)>>,
 }
 
 impl<'a> Printer<'a> {
@@ -522,28 +664,26 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// The comments above the `)` that closes a parenthesised group spanning
-    /// `[lo, hi)`, or none when `[lo, hi)` is not one matched group.
+    /// The `(` … `)` group spanning exactly `[lo, hi)`, or `None` when the `(`
+    /// at `lo` does not match the `)` ending at `hi`.
     ///
-    /// Parentheses are not in the tree, so no node starts at a `)`: the group
-    /// node, which the parser stamps with the parentheses' span, owns them.
-    fn paren_closer(&self, lo: usize, hi: usize) -> &'a [Comment] {
+    /// Parentheses are not in the tree, so no node starts at a `)`, nor at a
+    /// `(` inside the group's leading run: the group node, which the parser
+    /// stamps with the parentheses' span, owns the comments anchored there.
+    fn paren_group(&self, lo: usize, hi: usize) -> Option<ParenGroup> {
         let first = self.code.partition_point(|t| t.lo < lo);
         let last = self.code.partition_point(|t| t.hi < hi);
-        let (Some(open), Some(close)) = (self.code.get(first), self.code.get(last)) else {
-            return &[];
-        };
+        let group = self.code.get(first..=last)?;
+        let (open, close) = (group.first()?, group.last()?);
         let shaped = open.lo == lo
             && close.hi == hi
             && matches!(open.kind, TokenKind::LParen)
             && matches!(close.kind, TokenKind::RParen);
-        let comments = if shaped { self.anchored(close.lo) } else { &[] };
-        if comments.is_empty() {
-            return &[];
+        if !shaped {
+            return None;
         }
         // The `(` matches this `)` only if the depth first returns to zero at it.
         let mut depth = 0usize;
-        let group = self.code.get(first..=last).unwrap_or_default();
         for (offset, t) in group.iter().enumerate() {
             match t.kind {
                 TokenKind::LParen => depth = depth.saturating_add(1),
@@ -551,14 +691,26 @@ impl<'a> Printer<'a> {
                 _ => {}
             }
             if depth == 0 {
-                return if offset + 1 == group.len() {
-                    comments
-                } else {
-                    &[]
-                };
+                if offset + 1 != group.len() {
+                    return None;
+                }
+                let inner = group
+                    .iter()
+                    .find(|t| !matches!(t.kind, TokenKind::LParen))?;
+                return Some(ParenGroup {
+                    inner: inner.lo,
+                    close: close.lo,
+                });
             }
         }
-        &[]
+        None
+    }
+
+    /// Whether an enclosing node already claimed the comments anchored at `pos`.
+    fn is_claimed(&self, pos: usize) -> bool {
+        self.claimed
+            .get()
+            .is_some_and(|(start, end)| start <= pos && pos <= end)
     }
 
     /// The span end that makes `e` own a closing parenthesis's comments: any
@@ -584,13 +736,29 @@ impl<'a> Printer<'a> {
         closer: Option<usize>,
         render: impl FnOnce() -> T,
     ) -> (Comments<'a>, T) {
-        let comments = if self.claimed.get() == Some(lo) {
-            Vec::new()
+        let outer = self.claimed.get();
+        let group = closer.and_then(|hi| self.paren_group(lo, hi));
+        // The run this node claims: its first token, through the group's first
+        // inner token when it is a parenthesised group.
+        let end = group.map_or(lo, |g| g.inner.max(lo));
+        let inside = self.is_claimed(lo);
+        let leading: &[Comment] = if inside {
+            &[]
         } else {
-            let closing = closer.map_or(&[][..], |hi| self.paren_closer(lo, hi));
-            self.anchored(lo).iter().chain(closing).collect()
+            self.anchored_in(lo, end.saturating_add(1))
         };
-        let outer = self.claimed.replace(Some(lo));
+        // The same node claimed twice (`expr` then `expr_atom`) owns its `)`
+        // once; a nested group inside a claimed run still owns its own `)`.
+        let closing: &[Comment] = match group {
+            Some(g) if outer.map(|(start, _)| start) != Some(lo) => self.anchored(g.close),
+            _ => &[],
+        };
+        let comments = leading.iter().chain(closing).collect();
+        let run_end = match outer {
+            Some((_, outer_end)) if inside => outer_end.max(end),
+            _ => end,
+        };
+        self.claimed.set(Some((lo, run_end)));
         let rendered = render();
         self.claimed.set(outer);
         (comments, rendered)
@@ -681,21 +849,25 @@ impl<'a> Printer<'a> {
         // — or inside it, since an import prints on one line — travels with it
         // through the sort, except the comments above the FIRST import in the
         // source, which describe the module (or the whole import block) and
-        // stay above the block.
+        // stay above the block. A blank line between those comments and the
+        // block is kept exactly when the source had one, so the comments of an
+        // import sorted to the front print the same on every pass.
         if !imports.is_empty() {
             let first_in_source = imports
                 .iter()
                 .enumerate()
                 .min_by_key(|(_, imp)| imp.import_kw.lo)
                 .map(|(i, _)| i);
+            out.push('\n');
             if let Some(first) = first_in_source.and_then(|i| imports.get(i)) {
                 let above = self.anchored_in(first.import_kw.lo as usize, first.span.hi as usize);
                 if !above.is_empty() {
-                    out.push('\n');
                     push_comment_lines(&mut out, above);
+                    if self.blank_line_before(first.import_kw.lo as usize) {
+                        out.push('\n');
+                    }
                 }
             }
-            out.push('\n');
             let mut order: Vec<usize> = (0..imports.len()).collect();
             order.sort_by_key(|&i| imports.get(i).map(|imp| self.dotted(&imp.name.value)));
             for i in order {
@@ -806,6 +978,21 @@ impl<'a> Printer<'a> {
 
     /// The 1-based source line containing byte offset `pos` (0 when no source is
     /// threaded, as in the round-trip guard).
+    /// Whether a blank line ends right before byte `pos` in the source: the
+    /// whitespace directly before it holds two newlines.
+    fn blank_line_before(&self, pos: usize) -> bool {
+        let Some(before) = self.src.and_then(|src| src.get(..pos)) else {
+            return false;
+        };
+        before
+            .chars()
+            .rev()
+            .take_while(|c| c.is_whitespace())
+            .filter(|&c| c == '\n')
+            .nth(1)
+            .is_some()
+    }
+
     fn line_of(&self, pos: u32) -> usize {
         let Some(src) = self.src else { return 0 };
         let pos = (pos as usize).min(src.len());
@@ -1474,7 +1661,7 @@ impl<'a> Printer<'a> {
         // A parenthesised block's node starts at its `(`: a comment between
         // the `(` and the keyword attaches to the keyword.
         let keyword_lo = view.keyword_end.saturating_sub("do".len());
-        let mut out = if self.claimed.get() == Some(keyword_lo) {
+        let mut out = if self.is_claimed(keyword_lo) {
             String::from("do")
         } else {
             Self::with_comments(self.anchored(keyword_lo), "do", indent)
@@ -1537,7 +1724,13 @@ impl<'a> Printer<'a> {
             Expr_::Int(n) => n.to_string(),
             Expr_::Float(f) => format_float(*f),
             Expr_::Str(s) => format!("\"{}\"", literal_source(s, LiteralQuote::Str)),
-            Expr_::MultilineStr { raw, .. } => format!("\"\"\"{raw}\"\"\""),
+            // The equivalence projection (no source) prints the string's value,
+            // its margin stripped at its anchor column: a printed string moved to
+            // another column strips another margin, and must read as different.
+            Expr_::MultilineStr { raw, anchor } => match self.src {
+                Some(_) => format!("\"\"\"{raw}\"\"\""),
+                None => format!("\"\"\"{}\"\"\"", strip_anchor_margin(raw, *anchor)),
+            },
             Expr_::Char(c) => format!("'{}'", literal_source(c, LiteralQuote::Char)),
             Expr_::Unit => "()".to_owned(),
             Expr_::Call(head, args) => self.call(head, args, indent, e.span),
@@ -3047,6 +3240,90 @@ mod tests {
         assert!(scan_comments("-- a\n").len() < input.len());
     }
 
+    /// The `RoundTrip` detail of formatting `src` with `render`.
+    fn refusal(src: &str, render: impl FnOnce(&Printer<'_>, &Module) -> String) -> String {
+        match format_guarded(src, render) {
+            Err(FmtError::RoundTrip { detail }) => detail,
+            other => format!("not a refusal: {other:?}"),
+        }
+    }
+
+    /// A renderer that loses, rewrites or adds a comment is refused by the
+    /// guards `format_source` runs, and so is one that changes the program.
+    #[test]
+    fn format_guards_refuse_a_faulty_renderer() {
+        let src = "module M exposing (x)\n\n\n-- about x\nx =\n    1\n";
+        let good = format_source(src).expect("formats");
+        assert_eq!(good, src);
+        let dropped = refusal(src, |p, m| p.module(m).replace("-- about x\n", ""));
+        assert!(
+            dropped.starts_with("formatter dropped comments"),
+            "{dropped}"
+        );
+        let changed = refusal(src, |p, m| p.module(m).replace("about x", "about y"));
+        assert!(
+            changed.starts_with("formatter changed comments"),
+            "{changed}"
+        );
+        let added = refusal(src, |p, m| format!("{}-- extra\n", p.module(m)));
+        assert!(added.starts_with("formatter changed comments"), "{added}");
+        let meaning = refusal(src, |p, m| p.module(m).replace("    1", "    2"));
+        assert_eq!(meaning, "formatted output parsed to a different AST");
+    }
+
+    /// A triple-quoted string strips the margin of its anchor column from
+    /// every later line, so moving it to another column changes its value:
+    /// the formatter refuses rather than printing the moved string.
+    #[test]
+    fn a_triple_quoted_string_moved_to_another_margin_is_refused() {
+        let src = "module M exposing (x)\n\n\nx =\n    foo  \"\"\"abc\n            def\"\"\"\n";
+        let detail = match format_source(src) {
+            Err(FmtError::RoundTrip { detail }) => detail,
+            other => format!("not a refusal: {other:?}"),
+        };
+        assert_eq!(detail, "formatted output parsed to a different AST");
+    }
+
+    /// A one-line triple-quoted string has no margin, so its column is free.
+    #[test]
+    fn a_one_line_triple_quoted_string_moves_freely() {
+        let src = "module M exposing (x)\n\n\nx =\n    let\n        msg = \"\"\"n={{n}}\"\"\"\n    in\n    msg\n";
+        let once = format_source(src).expect("formats");
+        assert_eq!(format_source(&once).expect("second pass"), once);
+    }
+
+    /// The structural projection erases positions and resolves symbols, but
+    /// never rewrites inside a string literal.
+    #[test]
+    fn module_tree_erases_positions_outside_strings_only() {
+        let mut interner = Interner::new();
+        let name = interner.intern("name").expect("interns");
+        let debug = format!(
+            "Located {{ span: Span {{ lo: 3, hi: 9 }}, value: {name:?} }} {:?}",
+            "Span { lo: 1, hi: 2 } Symbol(0) anchor: 4"
+        );
+        assert_eq!(
+            erase_positions(&debug, &interner).as_deref(),
+            Some(
+                "Located { span: _, value: Symbol(\"name\") } \"Span { lo: 1, hi: 2 } Symbol(0) anchor: 4\""
+            )
+        );
+        assert_eq!(erase_positions("Symbol(99)", &interner), None);
+        assert_eq!(erase_positions("\"open", &interner), None);
+    }
+
+    /// Comments above the first import keep their source spacing, so an
+    /// import sorted to the front prints the same on every pass.
+    #[test]
+    fn comments_above_the_first_import_keep_their_spacing() {
+        for src in [
+            "module M exposing (x)\n\n-- about A\nimport A\nimport B\n\n\nx =\n    1\n",
+            "module M exposing (x)\n\n{-| Doc. -}\n\nimport A\nimport B\n\n\nx =\n    1\n",
+        ] {
+            assert_fixed_point(src);
+        }
+    }
+
     /// A comment marker inside a char literal is not a comment.
     #[test]
     fn comment_scan_ignores_char_contents() {
@@ -3089,5 +3366,23 @@ mod tests {
         let out = format_source(src).expect("formats");
         assert_eq!(out.matches("-- before the paren").count(), 1, "{out}");
         assert_eq!(format_source(&out).expect("second pass"), out);
+    }
+
+    /// A comment after a group's opening `(` belongs to the group, whether
+    /// the group holds a lone literal (no node of its own starts after the
+    /// `(`) or an application (whose head does), and prints with it, once.
+    #[test]
+    fn comment_after_an_opening_paren_is_kept() {
+        for body in [
+            "(\n        -- inner\n        1\n    )",
+            "((\n        -- inner\n        1\n    ))",
+            "g (\n        -- inner\n        h x\n      )",
+            "g ((\n        -- inner\n        h\n      ) x)",
+        ] {
+            let src = format!("module M exposing (x)\n\n\nx =\n    {body}\n");
+            let out = format_source(&src).expect("formats");
+            assert_eq!(out.matches("-- inner").count(), 1, "{out}");
+            assert_eq!(format_source(&out).expect("second pass"), out);
+        }
     }
 }
