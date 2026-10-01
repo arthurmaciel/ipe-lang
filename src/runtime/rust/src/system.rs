@@ -347,8 +347,45 @@ pub(crate) fn locked_remove_var(key: &str) {
 }
 
 #[must_use]
-pub fn system_args<E: Send + 'static>(_: ()) -> IpeTask<E, Vec<String>> {
-    Box::pin(async move { ok_res(std::env::args().skip(1).collect()) })
+pub fn system_args<E: Send + From<IpeError> + 'static>(_: ()) -> IpeTask<E, Vec<String>> {
+    Box::pin(async move {
+        match decode_args(std::env::args_os()) {
+            Ok(args) => ok_res(args),
+            Err(e) => IpeResult::Err(e.into()),
+        }
+    })
+}
+
+/// The one UTF-8 decode an OS argument passes through. The refusal names the
+/// argument's position only: argv can carry a credential, so its bytes never
+/// reach an error message.
+fn utf8_arg(arg: std::ffi::OsString, index: usize) -> Result<String, IpeError> {
+    arg.into_string().map_err(|_| {
+        IpeError::invalid_input(format!("command-line argument {index} is not valid UTF-8"))
+    })
+}
+
+/// Every argument after the program name, each decoded as UTF-8.
+fn decode_args(argv: impl Iterator<Item = std::ffi::OsString>) -> Result<Vec<String>, IpeError> {
+    argv.enumerate()
+        .skip(1)
+        .map(|(index, arg)| utf8_arg(arg, index))
+        .collect()
+}
+
+/// The argument at `n` of the full vector (index 0 is the program name). A
+/// negative `n`, or one past the target's `usize`, is out of range.
+fn decode_arg_at(
+    mut argv: impl Iterator<Item = std::ffi::OsString>,
+    n: i64,
+) -> Result<IpeMaybe<String>, IpeError> {
+    let Ok(index) = usize::try_from(n) else {
+        return Ok(IpeMaybe::Nothing);
+    };
+    match argv.nth(index) {
+        Some(arg) => utf8_arg(arg, index).map(IpeMaybe::Just),
+        None => Ok(IpeMaybe::Nothing),
+    }
 }
 
 // ── shared blocking-pool helper ───────────────────────────────────────
@@ -1212,21 +1249,16 @@ pub fn system_getenv_bool<E: Send + From<String> + 'static>(key: String) -> IpeT
 }
 
 /// `System.getArg n : Int -> Task Error (Maybe String)`. Indexes the FULL arg
-/// vector (`std::env::args()`), where index 0 is the program name (unlike
-/// `System.args`, which skips it); out-of-range or negative → `Ok Nothing`.
-/// Never `Err`.
+/// vector, where index 0 is the program name (unlike `System.args`, which
+/// skips it); out-of-range or negative → `Ok Nothing`; an argument that is not
+/// valid UTF-8 → `Err` `InvalidInput`.
 #[must_use]
-pub fn system_get_arg<E: Send + 'static>(n: i64) -> IpeTask<E, IpeMaybe<String>> {
+pub fn system_get_arg<E: Send + From<IpeError> + 'static>(n: i64) -> IpeTask<E, IpeMaybe<String>> {
     Box::pin(async move {
-        let out = if n < 0 {
-            IpeMaybe::Nothing
-        } else {
-            match std::env::args().nth(n as usize) {
-                Some(a) => IpeMaybe::Just(a),
-                None => IpeMaybe::Nothing,
-            }
-        };
-        ok_res(out)
+        match decode_arg_at(std::env::args_os(), n) {
+            Ok(out) => ok_res(out),
+            Err(e) => IpeResult::Err(e.into()),
+        }
     })
 }
 
@@ -2257,5 +2289,76 @@ mod system_load_env_spawn_blocking_tests {
              the blocking .env read is starving the single-threaded executor \
              (spawn_blocking missing or not taking effect)"
         );
+    }
+}
+
+#[cfg(test)]
+mod argv_tests {
+    use super::super::IpeErrorKind;
+    use super::{IpeError, IpeMaybe, decode_arg_at, decode_args};
+    use std::ffi::OsString;
+
+    fn argv(items: &[&str]) -> Vec<OsString> {
+        items.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn args_skip_the_program_name() {
+        assert!(matches!(
+            decode_args(argv(&["prog", "a", "b"]).into_iter()).as_deref(),
+            Ok([a, b]) if a == "a" && b == "b"
+        ));
+    }
+
+    #[test]
+    fn arg_indexes_outside_the_vector_are_nothing() {
+        let v = argv(&["prog", "a"]);
+        assert!(matches!(
+            decode_arg_at(v.clone().into_iter(), -1),
+            Ok(IpeMaybe::Nothing)
+        ));
+        assert!(matches!(
+            decode_arg_at(v.clone().into_iter(), 2),
+            Ok(IpeMaybe::Nothing)
+        ));
+        // One past `u32::MAX`: a narrowing cast would wrap it to index 0.
+        assert!(matches!(
+            decode_arg_at(v.clone().into_iter(), i64::from(u32::MAX) + 1),
+            Ok(IpeMaybe::Nothing)
+        ));
+        assert!(matches!(
+            decode_arg_at(v.into_iter(), i64::MAX),
+            Ok(IpeMaybe::Nothing)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_arguments_are_refused_without_echoing_their_bytes() {
+        use std::os::unix::ffi::OsStringExt;
+        let bad = || {
+            vec![
+                OsString::from("prog"),
+                OsString::from_vec(b"secret\xff".to_vec()),
+            ]
+        };
+        let all = decode_args(bad().into_iter()).map(|_| ());
+        let one = decode_arg_at(bad().into_iter(), 1).map(|_| ());
+        for refused in [all, one] {
+            match refused {
+                Err(IpeError::Error(IpeErrorKind::InvalidInput, info)) => {
+                    assert!(
+                        !info.message.contains("secret"),
+                        "refusal echoed argv bytes: {}",
+                        info.message
+                    );
+                }
+                other => panic!("non-UTF-8 argument must be refused, got {other:?}"),
+            }
+        }
+        assert!(matches!(
+            decode_arg_at(bad().into_iter(), 0),
+            Ok(IpeMaybe::Just(p)) if p == "prog"
+        ));
     }
 }
