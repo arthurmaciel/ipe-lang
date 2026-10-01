@@ -26,7 +26,7 @@ import Lib.Highlight as Highlight exposing (Token(..))
 import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
-import Lib.Queue as Queue exposing (QueueState(..))
+import Lib.Queue as Queue exposing (QueueState(..), UnitPageState(..))
 import Lib.SafeText as SafeText
 import Lib.Settings as Settings
 
@@ -63,9 +63,7 @@ type alias Model =
     , decisionError : Maybe Error
     , history : List HistoryRow
     , historyError : Maybe Error
-    , unitPage : Maybe Index.Unit
-    , unitLinks : List Links.Link
-    , unitError : Maybe Error
+    , unitPage : Queue.UnitPageState
     , selected : Int
     }
 
@@ -82,9 +80,7 @@ init req =
       , decisionError = Nothing
       , history = []
       , historyError = Nothing
-      , unitPage = Nothing
-      , unitLinks = []
-      , unitError = Nothing
+      , unitPage = UnitLoading
       , selected = 0
       }
     , Cmd.batch
@@ -112,7 +108,7 @@ pageCmd path =
         Cmd.perform loadHistory HistoryLoaded
 
     else if String.startsWith "/unit/" path then
-        Cmd.perform (loadUnitView (String.dropLeft 6 path)) UnitLoaded
+        Cmd.perform (Queue.loadUnitView (String.dropLeft 6 path)) UnitViewLoaded
 
     else
         Cmd.none
@@ -130,7 +126,7 @@ type Msg
     | ShowQueue
     | ShowHistory
     | HistoryLoaded (Result Error (List HistoryRow))
-    | UnitLoaded (Result Error ( Maybe Index.Unit, List Links.Link ))
+    | UnitViewLoaded (Result Error (Maybe ( Index.Unit, List Links.Link )))
     | KeyDown String
     | SelectUnit Int
 
@@ -187,13 +183,8 @@ update msg model =
                 Err e ->
                     ( { model | historyError = Just e }, Cmd.none )
 
-        UnitLoaded result ->
-            case result of
-                Ok ( mb, links ) ->
-                    ( { model | unitPage = mb, unitLinks = links, unitError = Nothing }, Cmd.none )
-
-                Err e ->
-                    ( { model | unitError = Just e }, Cmd.none )
+        UnitViewLoaded result ->
+            ( { model | unitPage = Queue.unitPageFromResult result }, Cmd.none )
 
         KeyDown key ->
             keyActionMsg (Keys.keyAction (model.refusingUid /= Nothing) (List.length (queueList model)) model.selected key) model
@@ -353,37 +344,6 @@ enrich conn row =
             }
         )
         (Index.nameFor conn row.uid)
-
-
--- The unit page loads the unit by uid (decided units have no change_queue
--- row, so the page queries units directly) and resolves every identifier
--- token of its source against the index's qualified names.
-loadUnitView : String -> Task Error ( Maybe Index.Unit, List Links.Link )
-loadUnitView uid =
-    do
-        mb <- Index.loadUnitByUid uid
-        case mb of
-            Just unit ->
-                do
-                    qs <- Index.qualifiedUids
-                    Task.succeed ( Just unit, linksFor unit qs )
-
-            Nothing ->
-                Task.succeed ( Nothing, [] )
-
-
--- Jump links come only from verified source; a withheld view links nothing.
-linksFor : Index.Unit -> List ( String, String ) -> List Links.Link
-linksFor unit qs =
-    case unit.view of
-        Shown shown ->
-            Links.resolve unit.qualified qs (Index.shownText shown)
-
-        Stale _ ->
-            []
-
-        Unreadable _ ->
-            []
 
 
 header : Model -> Ui.Element Msg
@@ -690,23 +650,34 @@ nameOf row =
 -- no decision buttons, no change state; the unit is read-only here.
 unitPageBody : Model -> Ui.Element Msg
 unitPageBody model =
-    case model.unitError of
-        Just err ->
-            Ui.text ("Unit load failed: " ++ SafeText.toString (SafeText.renderForeign (Error.toString err)))
+    case model.unitPage of
+        UnitLoaded unit links ->
+            Ui.column
+                [ Ui.width Ui.fill, Ui.spacing 16, Ui.scrollbars ]
+                [ unitPageCard links unit ]
+
+        UnitLoading ->
+            unitPageStatus model.unitPage
+
+        UnitNotFound ->
+            unitPageStatus model.unitPage
+
+        UnitFailed _ ->
+            unitPageStatus model.unitPage
+
+
+unitPageStatus : Queue.UnitPageState -> Ui.Element Msg
+unitPageStatus state =
+    case Queue.unitPageStatusText state of
+        Just text ->
+            Ui.text text
 
         Nothing ->
-            case model.unitPage of
-                Just unit ->
-                    Ui.column
-                        [ Ui.width Ui.fill, Ui.spacing 16, Ui.scrollbars ]
-                        [ unitPageCard model unit ]
-
-                Nothing ->
-                    Ui.text "Loading unit…"
+            Ui.none
 
 
-unitPageCard : Model -> Index.Unit -> Ui.Element Msg
-unitPageCard model unit =
+unitPageCard : List Links.Link -> Index.Unit -> Ui.Element Msg
+unitPageCard links unit =
     Ui.column
         [ Ui.width Ui.fill
         , Ui.padding 16
@@ -726,7 +697,7 @@ unitPageCard model unit =
         , Ui.el
             [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
             (Ui.text (SafeText.toString (SafeText.renderForeign unit.path) ++ " · lines " ++ String.fromInt unit.lineStart ++ "-" ++ String.fromInt unit.lineEnd))
-        , referencesRow model.unitLinks
+        , referencesRow links
         , sourceBlock unit
         ]
 
@@ -927,8 +898,20 @@ chipColored label bg =
         (Ui.text label)
 
 
+-- Approve and Refuse exist only for a verified view; any other view shows why
+-- it cannot be decided instead.
 decisionButtons : Model -> Index.Unit -> Ui.Element Msg
 decisionButtons model unit =
+    case Queue.sourceStatusText unit.view of
+        Just why ->
+            Ui.el [ Font.size 12, Font.color (Ui.rgb 220 170 90) ] (Ui.text why)
+
+        Nothing ->
+            verifiedDecisionButtons model unit
+
+
+verifiedDecisionButtons : Model -> Index.Unit -> Ui.Element Msg
+verifiedDecisionButtons model unit =
     if model.refusingUid == Just unit.uid then
         refusePanel model unit.uid
 
@@ -1013,12 +996,22 @@ sourceBlock unit =
                     List.map (numberedLine (Highlight.langFor unit.kind)) (Format.numberedLines unit.lineStart (Index.shownText shown))
 
                 Stale _ ->
-                    []
+                    withheldSource unit.view
 
                 Unreadable _ ->
-                    []
+                    withheldSource unit.view
             )
         )
+
+
+withheldSource : Index.SourceView -> List (Ui.Element Msg)
+withheldSource view =
+    case Queue.sourceStatusText view of
+        Just why ->
+            [ Ui.el [ Font.size 12, Font.color (Ui.rgb 220 170 90) ] (Ui.text why) ]
+
+        Nothing ->
+            []
 
 
 numberedLine : Highlight.Lang -> ( Int, String ) -> Ui.Element Msg

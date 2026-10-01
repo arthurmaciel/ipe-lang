@@ -1,4 +1,4 @@
-module Lib.Queue exposing (QueuePage, QueueState(..), QueuedUnit, decide, loadPage, pageHeaderText, queueStatusText, stateFromResult)
+module Lib.Queue exposing (QueuePage, QueueState(..), QueuedUnit, UnitPageState(..), decide, loadPage, loadUnitView, pageHeaderText, queueStatusText, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
 
 import Ipe.Db as Db
 import Ipe.Error as Error
@@ -10,6 +10,7 @@ import Ipe.Task as Task
 import Lib.Db as LibDb
 import Lib.Format as Format
 import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
+import Lib.Links as Links
 import Lib.SafeText as SafeText
 import Lib.Settings as Settings
 
@@ -66,6 +67,99 @@ decide db unit decision =
 notDecidable : Error
 notDecidable =
     Error.conflict "this unit's source is not verified, so it cannot be decided"
+
+
+-- The unit page: loading, the unit with its links, no such unit, or a failed
+-- load. A missing unit is its own state, never shown as still loading.
+type UnitPageState
+    = UnitLoading
+    | UnitLoaded Index.Unit (List Links.Link)
+    | UnitNotFound
+    | UnitFailed Error
+
+
+unitPageFromResult : Result Error (Maybe ( Index.Unit, List Links.Link )) -> UnitPageState
+unitPageFromResult result =
+    case result of
+        Ok (Just ( unit, links )) ->
+            UnitLoaded unit links
+
+        Ok Nothing ->
+            UnitNotFound
+
+        Err e ->
+            UnitFailed e
+
+
+-- The one-line text for a unit page that has no unit to show; Nothing once
+-- the unit is loaded.
+unitPageStatusText : UnitPageState -> Maybe String
+unitPageStatusText state =
+    case state of
+        UnitLoading ->
+            Just "Loading unit…"
+
+        UnitNotFound ->
+            Just "No unit with this id is in the index."
+
+        UnitFailed e ->
+            Just ("Unit load failed: " ++ SafeText.toString (SafeText.renderForeign (Error.toString e)))
+
+        UnitLoaded _ _ ->
+            Nothing
+
+
+-- Why a unit's source is withheld, in place of the source and the decision
+-- buttons; Nothing only for a verified view.
+sourceStatusText : Index.SourceView -> Maybe String
+sourceStatusText view =
+    case view of
+        Shown _ ->
+            Nothing
+
+        Stale Drifted ->
+            Just "Source changed since it was indexed; re-run `ipe-index index` to review it."
+
+        Stale (RangeOutOfFile r) ->
+            Just ("The file now has " ++ String.fromInt r.lineCount ++ " lines, fewer than this unit's range; re-run `ipe-index index` to review it.")
+
+        Stale UnverifiableHash ->
+            Just "This unit's hash predates source attestation; re-run `ipe-index index` to verify it."
+
+        Unreadable e ->
+            Just ("Source unreadable: " ++ SafeText.toString (SafeText.renderForeign (Error.toString e)))
+
+
+-- The unit page loads the unit by uid (decided units have no change_queue
+-- row, so the page queries units directly) and resolves every identifier
+-- token of its verified source against the index's qualified names. Nothing
+-- when no unit has this uid.
+loadUnitView : String -> Task.Task Error (Maybe ( Index.Unit, List Links.Link ))
+loadUnitView uid =
+    do
+        mb <- Index.loadUnitByUid uid
+        case mb of
+            Just unit ->
+                do
+                    qs <- Index.qualifiedUids
+                    Task.succeed (Just ( unit, linksFor unit qs ))
+
+            Nothing ->
+                Task.succeed Nothing
+
+
+-- Jump links come only from verified source; a withheld view links nothing.
+linksFor : Index.Unit -> List ( String, String ) -> List Links.Link
+linksFor unit qs =
+    case unit.view of
+        Shown shown ->
+            Links.resolve unit.qualified qs (Index.shownText shown)
+
+        Stale _ ->
+            []
+
+        Unreadable _ ->
+            []
 
 
 stateFromResult : Result Error QueuePage -> QueueState

@@ -23,7 +23,7 @@ import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
 import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
-import Lib.Queue as Queue exposing (QueueState(..))
+import Lib.Queue as Queue exposing (QueueState(..), UnitPageState(..))
 import Lib.RepoPath as RepoPath exposing (PathError(..), Root, RootMap)
 import Lib.SafeText as SafeText
 import Lib.Settings as Settings
@@ -2151,6 +2151,65 @@ drainKeepsRequeuedChange =
         |> Task.map (\o -> o.drained == 0 && o.stillQueued && o.total == 3)
 
 
+-- R10: an unknown uid is its own unit-page state, and every state that
+-- withholds a unit or its source says so in its own words. Red if a missing
+-- unit collapses to the loading state.
+unitPageStatesDistinct : Task.Task Error Bool
+unitPageStatesDistinct =
+    let
+        at =
+            scratchAt "ipe-index-unit-page-states"
+
+        pageTexts =
+            List.filterMap Queue.unitPageStatusText [ UnitLoading, UnitNotFound, UnitFailed (Error.conflict "boom") ]
+
+        sourceTexts =
+            List.filterMap Queue.sourceStatusText
+                [ Stale Drifted
+                , Stale (RangeOutOfFile { lineCount = 3 })
+                , Stale UnverifiableHash
+                , Unreadable (Error.conflict "boom")
+                ]
+    in
+    do
+        removeFileIfAny at.indexDb
+        seedIndex at.indexDb at.repo
+        loaded <- Queue.loadUnitView "no-such-uid"
+        cleanupIndex at.indexDb at.repo
+        Task.succeed
+            (isNotFound (Queue.unitPageFromResult (Ok loaded))
+                && List.length pageTexts == 3
+                && List.length sourceTexts == 4
+                && pairwiseDistinct (pageTexts ++ sourceTexts)
+            )
+
+
+isNotFound : Queue.UnitPageState -> Bool
+isNotFound state =
+    case state of
+        UnitNotFound ->
+            True
+
+        UnitLoading ->
+            False
+
+        UnitLoaded _ _ ->
+            False
+
+        UnitFailed _ ->
+            False
+
+
+pairwiseDistinct : List String -> Bool
+pairwiseDistinct texts =
+    case texts of
+        [] ->
+            True
+
+        t :: rest ->
+            not (List.member t rest) && pairwiseDistinct rest
+
+
 requeueB : Scratch -> Task.Task Error ()
 requeueB at =
     execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString "sha256:other", SqlString "u-b" ]
@@ -2891,6 +2950,11 @@ main =
             (\results ->
                 drainKeepsRequeuedChange
                     |> Task.map (\ok -> results ++ [ ( "re-queued change survives the drain", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                unitPageStatesDistinct
+                    |> Task.map (\ok -> results ++ [ ( "unit page states are distinct", ok ) ])
             )
         |> Task.andThen
             (\results ->
