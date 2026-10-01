@@ -27,11 +27,14 @@ use e2e_support::wait_for;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
+/// The supervisor's listener relocation var `ipe watch` places its child with.
+const RELOCATION_ENV: &str = ipe_runtime_rust::LISTEN_PORT_RELOCATION_ENV;
+
 /// A minimal `Ipe.Http.Server` fixture, parameterised on the response body
-/// so a test can edit it in place and observe the swap. Reads its port from
-/// `IPE_SERVER_PORT` — the SAME convention `server_e2e.rs` already
-/// establishes in this repo, and what `watch::child_env` drives from
-/// `WatchOptions::port`.
+/// so a test can edit it in place and observe the swap. Passes the operator
+/// `IPE_SERVER_PORT` (the `server_e2e.rs` convention) as its source port; under
+/// watch the supervisor's relocation var outranks both, so the child binds the
+/// port `watch::child_env` derives from `WatchOptions::port`.
 fn server_fixture(body: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
@@ -50,7 +53,7 @@ fn server_fixture(body: &str) -> String {
 
 /// A server whose port is a HARDCODED literal (`8000`) — it never reads the
 /// environment. Under blue-green the app must relocate to an internal port
-/// dictated only by `IPE_SERVER_PORT` (T1), and the proxy must front it on
+/// dictated only by the listener relocation var (T1), and the proxy must front it on
 /// `opts.port` (T2). If the runtime ignored the env, the app would bind `8000`
 /// and collide with the proxy → the permanent `502 no upstream ready` this
 /// guards against.
@@ -261,8 +264,9 @@ fn stop_and_join(
 
 /// Find a live process whose `/proc/<pid>/environ` contains the exact
 /// `key=value` pair `ipe watch` injects into its supervised child's
-/// environment (`watch::child_env` sets `IPE_WEB_PORT`/`IPE_SERVER_PORT`
-/// to the configured port — see `watch.rs`). Matching on the environment
+/// environment (`watch::child_env` sets the listener relocation var
+/// `ipe_runtime_rust::LISTEN_PORT_RELOCATION_ENV` to the child's port — see
+/// `watch.rs`). Matching on the environment
 /// rather than `cmdline`/the executable PATH is deliberate: the emitted
 /// binary's actual on-disk location depends on where `cargo build` puts it
 /// (honouring `CARGO_TARGET_DIR` if the test-runner's own environment sets
@@ -457,11 +461,11 @@ fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Re
         "initial cold build+spawn must serve v1"
     );
 
-    // `watch::child_env` sets `IPE_WEB_PORT=<port>` in the supervised
+    // `watch::child_env` sets the relocation var to `<port>` in the supervised
     // child's own environment, unique to this test's port — a stronger
     // handle on the right PID than the executable's on-disk path (which
     // moves if the test-runner's own environment sets `CARGO_TARGET_DIR`).
-    let child_pid = find_pid_by_environ_kv("IPE_WEB_PORT", &port.to_string())
+    let child_pid = find_pid_by_environ_kv(RELOCATION_ENV, &port.to_string())
         .expect("the supervised child process must be discoverable via /proc once v1 is serving");
     assert!(
         pid_is_alive(child_pid),
@@ -515,10 +519,10 @@ fn watch_does_not_bind_a_proxy_for_a_non_http_shape() -> Result<(), BoxError> {
     let (join, handle) = start_watch_bluegreen(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink);
 
     // Wait for the cold build to spawn the worker (its child carries the
-    // injected IPE_WEB_PORT/IPE_SERVER_PORT — discoverable via /proc).
+    // injected relocation var — discoverable via /proc).
     let deadline = Instant::now() + Duration::from_mins(4);
     let child_pid = loop {
-        if let Some(pid) = find_pid_by_environ_kv("IPE_SERVER_PORT", &port.to_string()) {
+        if let Some(pid) = find_pid_by_environ_kv(RELOCATION_ENV, &port.to_string()) {
             break pid;
         }
         if Instant::now() > deadline {
@@ -587,4 +591,77 @@ fn watch_proxies_a_hardcoded_port_server_on_an_internal_port() -> Result<(), Box
     );
 
     stop_and_join(&handle, join)
+}
+
+/// E1 (prove the refusal): operator port vars in `ipe watch`'s own environment
+/// can neither relocate nor collide with the supervised child. A real
+/// `ipe watch` subprocess (blue-green, the CLI default) runs with
+/// `IPE_SERVER_PORT` and `IPE_WEB_PORT` set to `operator`; the fixture even
+/// passes that value as its source port. The proxy on `port` must serve the
+/// body, and nothing may listen on `operator`: the child binds the internal
+/// port the supervisor chose through the relocation var, which outranks both.
+#[cfg(target_os = "linux")]
+#[test]
+fn operator_port_vars_never_relocate_a_watched_child() -> Result<(), BoxError> {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    let (ipe_dir, out_dir) = fresh_dirs("operator_port_vars")?;
+    write_main(&ipe_dir, &server_fixture("OPERATOR-V1"))?;
+    let port: u16 = 19165;
+    let operator: u16 = 19166;
+    let runtime_dir = e2e_support::require_runtime().into_path_buf();
+    let mut cmd = std::process::Command::new(e2e_support::cargo_bin!("ipe").into_path_buf());
+    cmd.arg("watch")
+        .arg(ipe_dir.join("Main.ipe"))
+        .arg("--out")
+        .arg(&out_dir)
+        .arg("--runtime")
+        .arg(&runtime_dir)
+        .arg("--port")
+        .arg(port.to_string())
+        .env("IPE_SERVER_PORT", operator.to_string())
+        .env("IPE_WEB_PORT", operator.to_string())
+        .env_remove(RELOCATION_ENV)
+        .env_remove("IPE_WATCH_NO_BLUEGREEN")
+        .env_remove("IPE_WATCH_BLUEGREEN")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let Some(target) = e2e_support::child_shared_target_from_env() {
+        cmd.env("CARGO_TARGET_DIR", target);
+    }
+    let mut watch = cmd
+        .spawn()
+        .map_err(|e| -> BoxError { format!("ipe watch must spawn: {e}").into() })?;
+
+    let served = wait_for_body(port, "OPERATOR-V1", Duration::from_mins(4));
+    let operator_refused = TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], operator)),
+        Duration::from_millis(500),
+    )
+    .is_err();
+    let operator_free = port_is_free(operator);
+
+    // Orderly teardown (SIGTERM reaps the supervised child), bounded; a watch
+    // that outlives the grace is killed so the test never hangs.
+    let _ = std::process::Command::new("kill")
+        .arg("-TERM")
+        .arg(watch.id().to_string())
+        .status();
+    let exited = wait_for(Duration::from_secs(30), || {
+        matches!(watch.try_wait(), Ok(Some(_)))
+    });
+    if !exited {
+        let _ = watch.kill();
+        let _ = watch.wait();
+    }
+
+    assert!(served, "the proxy on --port must serve the body");
+    assert!(
+        operator_refused && operator_free,
+        "nothing may listen on the operator port under watch \
+         (refused {operator_refused}, free {operator_free})"
+    );
+    Ok(())
 }

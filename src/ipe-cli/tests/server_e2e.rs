@@ -1177,9 +1177,8 @@ fn release_web_app_keeps_console_closed_without_auth() -> Result<(), BoxError> {
 }
 
 /// A server whose source hardcodes a LITERAL port and never reads the
-/// environment. Under `ipe watch`'s blue-green proxy the app must relocate to an
-/// internal port dictated only by `IPE_SERVER_PORT` — so the runtime, not the
-/// program, must honour that env. This is the T1 regression fixture: `8000` is a
+/// environment. The runtime, not the program, must honour the operator
+/// `IPE_SERVER_PORT`. This is the T1 regression fixture: `8000` is a
 /// bare literal, so if `server_listen` ignored `IPE_SERVER_PORT` the app would
 /// bind `8000`, never the ephemeral port the test connects to.
 const IPE_SERVER_HARDCODED_PORT_PROGRAM: &str = r#"module Main exposing (main)
@@ -1193,11 +1192,112 @@ main =
         ]
 "#;
 
+/// A server whose source port comes from `E2E_SOURCE_PORT`, a name outside the
+/// runtime's port precedence, so a test sets the source, operator and
+/// relocation layers independently on one binary.
+const IPE_SERVER_SOURCE_PORT_PROGRAM: &str = r#"module Main exposing (main)
+
+import Ipe.Http.Server as Server
+import Ipe.Maybe
+import Ipe.String
+import Ipe.System
+import Ipe.Task
+
+main =
+    let port = Maybe.withDefault 8000 (String.toInt (System.getenvOr "E2E_SOURCE_PORT" "8000"))
+    in
+    Server.listen port
+        [ Server.get "/" (\req -> Task.succeed (Server.text "source ok"))
+        ]
+"#;
+
+/// Two distinct free loopback ports.
+fn pick_two_ports() -> Result<(u16, u16), BoxError> {
+    let first = pick_ephemeral_port()?;
+    for _ in 0..16 {
+        let second = pick_ephemeral_port()?;
+        if second != first {
+            return Ok((first, second));
+        }
+    }
+    Err("cannot pick two distinct ephemeral ports".into())
+}
+
+/// Whether a loopback connect to `port` is refused (nothing listens on it).
+fn connect_refused(port: u16) -> bool {
+    TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(500),
+    )
+    .is_err()
+}
+
+/// E2 (prove the refusal): the operator `IPE_SERVER_PORT` loses to the
+/// supervisor's relocation var, and a malformed operator value falls back to
+/// the source port, never to `0` or a refusal to bind.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, or HTTP error as a test error.
+#[test]
+fn server_port_precedence_is_relocation_then_operator_then_source() -> Result<(), BoxError> {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
+        return Ok(());
+    }
+    let test_name = "server_port_precedence_is_relocation_then_operator_then_source";
+    let relocation = ipe_runtime_rust::LISTEN_PORT_RELOCATION_ENV;
+    let exe = compile_and_build(test_name, IPE_SERVER_SOURCE_PORT_PROGRAM)?;
+
+    // Garbage operator value over a free source port: the source port binds.
+    let source = pick_ephemeral_port()?;
+    let source_text = source.to_string();
+    {
+        let _guard = spawn_and_wait_ready_with_env(
+            test_name,
+            &exe,
+            source,
+            &[
+                ("IPE_SERVER_PORT", "80a0"),
+                ("E2E_SOURCE_PORT", source_text.as_str()),
+            ],
+        )?;
+        let body = http_get(test_name, &format!("127.0.0.1:{source}"), "/")?;
+        assert_eq!(
+            body, "source ok",
+            "{test_name}: garbage IPE_SERVER_PORT must fall back to the source port"
+        );
+    }
+
+    // A valid operator value and a relocation: the relocation binds and the
+    // operator port stays closed.
+    let (relocated, operator) = pick_two_ports()?;
+    let relocated_text = relocated.to_string();
+    let operator_text = operator.to_string();
+    let _guard = spawn_and_wait_ready_with_env(
+        test_name,
+        &exe,
+        operator,
+        &[
+            (relocation, relocated_text.as_str()),
+            ("E2E_SOURCE_PORT", operator_text.as_str()),
+        ],
+    )?;
+    let body = http_get(test_name, &format!("127.0.0.1:{relocated}"), "/")?;
+    assert_eq!(
+        body, "source ok",
+        "{test_name}: the relocation port must serve"
+    );
+    assert!(
+        connect_refused(operator),
+        "{test_name}: the operator port must stay closed under relocation"
+    );
+    Ok(())
+}
+
 /// T1 (prove the refusal): `IPE_SERVER_PORT` overrides a HARDCODED literal port
 /// in `server_listen`. The program passes `8000` literally; the runtime must
 /// bind the ephemeral `IPE_SERVER_PORT` value instead, so the ephemeral port —
-/// not `8000` — answers. Guards the permanent `502 no upstream ready`
-/// regression: watch places the app on an internal port only the env names.
+/// not `8000` — answers.
 ///
 /// # Errors
 ///

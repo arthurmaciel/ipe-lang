@@ -88,6 +88,15 @@ pub const RECORD_ENV: &str = "IPE_DEBUGGER_RECORD";
 ///
 /// Ungated for the same single-wire-name reason as [`RECORD_ENV`].
 pub const REPLAY_ENV: &str = "IPE_DEBUGGER_REPLAY";
+/// Env var a supervisor (`ipe watch`, the dev console proxy) sets on the child
+/// it spawns to place that child's HTTP listener on a port the supervisor chose.
+///
+/// Internal plumbing, never operator configuration: it outranks the operator
+/// port var (`IPE_WEB_PORT` / `IPE_SERVER_PORT`) and the source port, is left
+/// out of the documented env registry, and is removed from every `Process.*`
+/// child. Ungated so the `ipe` CLI, which links the runtime without the
+/// `server` feature, and the runtime listeners share ONE wire name.
+pub const LISTEN_PORT_RELOCATION_ENV: &str = "IPE_INTERNAL_LISTEN_PORT";
 /// File extension of the typed session log written beside the [`RECORD_ENV`] trace.
 ///
 /// `session.ipelog` gets the sibling `session.ipemsgs`.

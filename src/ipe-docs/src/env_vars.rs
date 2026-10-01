@@ -768,6 +768,17 @@ pub static ENV_VARS: &[EnvVar] = &[
         subsystem: Subsystem::Http,
         class: Class::SecurityTunable,
     },
+    EnvVar {
+        name: "IPE_SERVER_PORT",
+        default: "the port passed to `Server.listen`",
+        purpose: "TCP port an `Ipe.Http.Server` app listens on. A value outside \
+                  `1..=65535` (empty, non-numeric, signed, `0`, or too large) is \
+                  ignored and the port passed to `Server.listen` is used. Under \
+                  `ipe watch` the supervisor chooses the port, so this value has \
+                  no effect there.",
+        subsystem: Subsystem::Http,
+        class: Class::Tunable,
+    },
     // ── Observability ─────────────────────────────────────────────────────────
     EnvVar {
         name: "IPE_ENV",
@@ -1034,7 +1045,10 @@ pub static ENV_VARS: &[EnvVar] = &[
     EnvVar {
         name: "IPE_WEB_PORT",
         default: "8000",
-        purpose: "TCP port the web server listens on. Deprecated alias: `IPE_LIVE_PORT`.",
+        purpose: "TCP port an `Ipe.Web` app listens on. A value outside `1..=65535` \
+                  (empty, non-numeric, signed, `0`, or too large) is ignored and \
+                  8000 is used. Under `ipe watch` the supervisor chooses the port, \
+                  so this value has no effect there.",
         subsystem: Subsystem::Web,
         class: Class::Tunable,
     },
@@ -1287,11 +1301,13 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_LIVE_STORE",
     "IPE_LIVE_STORE_PATH",
     "IPE_LIVE_TTL",
-    // Test-only server port var — set by the watch driver in tests.
-    "IPE_SERVER_PORT",
+    // Dev-loop-internal listener relocation port — set by `ipe watch` and the
+    // dev console proxy on the child they spawn (never operator-set); it
+    // outranks the operator port vars and is removed from `Process.*` children.
+    "IPE_INTERNAL_LISTEN_PORT",
     // Dev-loop-internal control-channel port — allocated and injected by
-    // `ipe watch` into the spawned child (never operator-set), like the port
-    // vars above. Present only in a dev-loop (web/debugger) build.
+    // `ipe watch` into the spawned child (never operator-set), like the relocation
+    // port above. Present only in a dev-loop (web/debugger) build.
     "IPE_CONTROL_PORT",
     // Dev-loop-internal record-log destination — set by `ipe run --record` on
     // the executed child (the log always lands in the ipe-owned output root; the
@@ -1352,6 +1368,29 @@ mod tests {
         for v in ENV_VARS {
             assert!(seen.insert(v.name), "ENV_VARS: duplicate name '{}'", v.name);
         }
+    }
+
+    /// The operator listen-port vars are documented; the supervisor's
+    /// relocation var is internal and never documented.
+    #[test]
+    fn operator_port_vars_registered_relocation_var_excluded() {
+        for name in ["IPE_SERVER_PORT", "IPE_WEB_PORT"] {
+            assert!(
+                ENV_VARS.iter().any(|v| v.name == name),
+                "{name} is an operator var and must be registered"
+            );
+            assert!(
+                !EXCLUDED_NAMES.contains(&name),
+                "{name} must not be excluded"
+            );
+        }
+        assert!(EXCLUDED_NAMES.contains(&"IPE_INTERNAL_LISTEN_PORT"));
+        assert!(
+            ENV_VARS
+                .iter()
+                .all(|v| v.name != "IPE_INTERNAL_LISTEN_PORT"),
+            "the relocation var is internal and must never be documented"
+        );
     }
 
     #[test]
