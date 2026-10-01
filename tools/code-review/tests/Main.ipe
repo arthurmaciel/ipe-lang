@@ -2139,7 +2139,7 @@ oversizedSourceRefused =
 drainFlow : Task.Task Error Bool
 drainFlow =
     drainAfter "ipe-index-drain" noChange
-        |> Task.map (\o -> o.drained == 1 && o.cursorRows == 1 && not o.stillQueued && o.total == 2)
+        |> Task.map (\o -> o.drained == 1 && o.cursorRows == 1 && not o.stillQueued && o.totalAfter == o.totalBefore - 1)
 
 
 -- R11: the unit is re-queued with a new hash between the decision and the
@@ -2148,7 +2148,7 @@ drainFlow =
 drainKeepsRequeuedChange : Task.Task Error Bool
 drainKeepsRequeuedChange =
     drainAfter "ipe-index-drain-requeued" requeueB
-        |> Task.map (\o -> o.drained == 0 && o.stillQueued && o.total == 3)
+        |> Task.map (\o -> o.drained == 0 && o.stillQueued && o.totalAfter == o.totalBefore)
 
 
 -- R10: an unknown uid is its own unit-page state, and every state that
@@ -2216,8 +2216,9 @@ requeueB at =
 
 
 -- Seeds the bridge fixture, decides `u-b`, runs `mutate`, then records the
--- drain twice and drains under the decision's attested pair.
-drainAfter : String -> (Scratch -> Task.Task Error ()) -> Task.Task Error { drained : Int, cursorRows : Int, stillQueued : Bool, total : Int }
+-- drain twice and drains under the decision's attested pair. `totalBefore`
+-- and `totalAfter` are the queue counts around the drain.
+drainAfter : String -> (Scratch -> Task.Task Error ()) -> Task.Task Error DrainOutcome
 drainAfter name mutate =
     let
         at =
@@ -2232,7 +2233,7 @@ drainAfter name mutate =
         migrated <- LibDb.migrate db
         decided <- decideUnit db (List.find (\u -> u.uid == "u-b") r.units)
         mutate at
-        outcome <- drainDecided db decided
+        outcome <- drainDecided db r.total decided
         cleanupIndex at.indexDb at.repo
         removeFileIfAny at.reviewDb
         Task.succeed outcome
@@ -2248,8 +2249,12 @@ decideUnit db found =
             Task.fail (Error.conflict "fixture unit not loaded")
 
 
-drainDecided : Db -> ( Index.Attested, Int ) -> Task.Task Error { drained : Int, cursorRows : Int, stillQueued : Bool, total : Int }
-drainDecided db decided =
+type alias DrainOutcome =
+    { drained : Int, cursorRows : Int, stillQueued : Bool, totalBefore : Int, totalAfter : Int }
+
+
+drainDecided : Db -> Int -> ( Index.Attested, Int ) -> Task.Task Error DrainOutcome
+drainDecided db totalBefore decided =
     case decided of
         ( attested, _ ) ->
             do
@@ -2262,7 +2267,8 @@ drainDecided db decided =
                     { drained = drained
                     , cursorRows = cursorRows
                     , stillQueued = List.any (\u -> u.uid == "u-b") after.units
-                    , total = after.total
+                    , totalBefore = totalBefore
+                    , totalAfter = after.total
                     }
 
 

@@ -79,8 +79,9 @@ in the file re-hash to the `body_hash` the index recorded; the hash is checked
 again when the decision is saved. A unit whose file changed since indexing, or
 whose range no longer fits the file, shows why in place of its source and has
 no decision buttons. An index built before source attestation stores hashes
-the app cannot verify, so every unit reads as unverifiable: after upgrading,
-re-run `tools/scripts/ipe-index index` to re-hash the units.
+the app cannot verify, so every unit reads as unverifiable until the index is
+rebuilt: `tools/scripts/ipe-index update` rebuilds an index of an older schema
+in full, as `tools/scripts/ipe-index index` does.
 
 The queue view loads one page of at most 200 units (`pageSize` in `src/Lib/Index.ipe`).
 

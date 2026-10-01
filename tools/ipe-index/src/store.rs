@@ -1,6 +1,6 @@
 use crate::model::{Kind, Unit};
 use anyhow::{Result, bail};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 pub struct Store {
     pub conn: Connection,
@@ -63,9 +63,10 @@ CREATE TABLE IF NOT EXISTS change_queue (
 );
 ";
 
-/// Current schema version, recorded in `meta` after the additive DDL runs.
-/// `open` bumps it on the first connection to a v2 DB; a future destructive
-/// migration keys off this value instead of guessing from table presence.
+/// Current schema version: v3 rows carry `sha256:` view attestations in
+/// `body_hash`, v2 rows a bare blake3 of the span. `open` stamps it only on a
+/// DB with no units yet, so a stamp always describes the rows beside it; a DB
+/// holding rows of another version keeps its stamp until `index` rebuilds it.
 const SCHEMA_VERSION: &str = "3";
 
 /// Stable unit id: blake3 of `path|kind|qualified`. Content-stable across
@@ -265,19 +266,37 @@ impl Store {
     }
 }
 
+/// Stamps `SCHEMA_VERSION` on a DB that holds no units and no version yet.
+/// A DB already holding rows keeps whatever version it records (or none):
+/// restamping would claim its stored hashes are in the current format.
 fn ensure_schema_version(conn: &Connection) -> Result<()> {
-    let current: Option<String> = conn
+    if read_schema_version(conn)?.is_none() {
+        let units: i64 = conn.query_row("SELECT COUNT(*) FROM units", [], |r| r.get(0))?;
+        if units == 0 {
+            conn.execute(
+                "INSERT INTO meta VALUES ('schema_version', ?)",
+                [SCHEMA_VERSION],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn read_schema_version(conn: &Connection) -> Result<Option<String>> {
+    Ok(conn
         .query_row("SELECT v FROM meta WHERE k='schema_version'", [], |r| {
             r.get(0)
         })
-        .ok();
-    if current.as_deref() != Some(SCHEMA_VERSION) {
-        conn.execute(
-            "INSERT OR REPLACE INTO meta VALUES ('schema_version', ?)",
-            [SCHEMA_VERSION],
-        )?;
+        .optional()?)
+}
+
+impl Store {
+    /// True when the DB's rows are in the current format. An incremental
+    /// `update` re-extracts only changed files, so it must not run over rows
+    /// of another version: their stored hashes would never be re-made.
+    pub fn schema_is_current(&self) -> Result<bool> {
+        Ok(read_schema_version(&self.conn)?.as_deref() == Some(SCHEMA_VERSION))
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -346,7 +365,38 @@ mod tests {
     #[test]
     fn schema_version_is_gated() {
         let s = Store::open(":memory:").unwrap();
-        assert_eq!(s.get_meta("schema_version").unwrap(), Some("2".to_string()));
+        assert_eq!(
+            s.get_meta("schema_version").unwrap().as_deref(),
+            Some(SCHEMA_VERSION)
+        );
+        assert!(s.schema_is_current().unwrap());
+    }
+
+    // A DB recording an older version is never restamped on open: its rows
+    // still carry the old hash format.
+    #[test]
+    fn older_schema_is_not_restamped() {
+        let s = Store::open(":memory:").unwrap();
+        s.put_unit(&sample_unit("src/a.rs", "foo", "crate::foo"))
+            .unwrap();
+        s.set_meta("schema_version", "2").unwrap();
+        ensure_schema_version(&s.conn).unwrap();
+        assert_eq!(s.get_meta("schema_version").unwrap().as_deref(), Some("2"));
+        assert!(!s.schema_is_current().unwrap());
+    }
+
+    // A DB with units but no recorded version is not stamped current either.
+    #[test]
+    fn unversioned_rows_are_not_stamped() {
+        let s = Store::open(":memory:").unwrap();
+        s.put_unit(&sample_unit("src/a.rs", "foo", "crate::foo"))
+            .unwrap();
+        s.conn
+            .execute("DELETE FROM meta WHERE k='schema_version'", [])
+            .unwrap();
+        ensure_schema_version(&s.conn).unwrap();
+        assert_eq!(s.get_meta("schema_version").unwrap(), None);
+        assert!(!s.schema_is_current().unwrap());
     }
 
     #[test]
