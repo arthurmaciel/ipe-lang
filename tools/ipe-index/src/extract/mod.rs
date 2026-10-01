@@ -1,29 +1,16 @@
 pub mod ipe;
 pub mod treesitter;
+pub mod view;
 
 use crate::model::{Kind, Lang, facing_of};
+use crate::static_re::StaticRegex;
 use crate::store::{Store, unit_uid};
-use anyhow::Result;
-use regex::Regex;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
-fn re_sh_source() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^\s*(?:source|\.)\s+(\S+)").unwrap())
-}
-/// Top-level Bash function: `name() {` or `function name {`.
-fn re_sh_func() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r"^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*\{?").unwrap()
-    })
-}
-
-/// Deterministic body hash over the exact span bytes.
-pub fn blake3_hex(bytes: &[u8]) -> String {
-    blake3::hash(bytes).to_hex().to_string()
-}
+static RE_SH_SOURCE: StaticRegex = StaticRegex::new(r"^\s*(?:source|\.)\s+(\S+)");
+static RE_SH_FUNC: StaticRegex =
+    StaticRegex::new(r"^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*\{?");
 
 /// The crate-root segment of a Rust `qualified` name: the directory that owns
 /// the crate's `src/` (its basename), so two crates each defining `parse` yield
@@ -96,15 +83,18 @@ pub struct UnitSpec<'a> {
     pub line_end: i64,
     pub facing: crate::model::Facing,
     pub purpose: Option<String>,
-    pub body_hash: &'a str,
     pub updated_sha: &'a str,
 }
 
 /// Emit one `units` row. Duplicate `(path, kind, qualified)` identities (e.g.
 /// several `impl` blocks of the same type in one file) get an ordinal suffix
-/// (`#2`) so each keeps a distinct, stable uid. Returns the unit's uid.
+/// (`#2`) so each keeps a distinct, stable uid. The body hash is computed here
+/// and only here, as `view::attest` of the unit's `view::view_text` in `src`;
+/// a span outside `src` is an extractor bug and refuses the file. Returns the
+/// unit's uid.
 pub fn emit_unit(
     store: &Store,
+    src: &str,
     spec: UnitSpec,
     ord: &mut HashMap<(String, String), i64>,
 ) -> Result<String> {
@@ -117,9 +107,10 @@ pub fn emit_unit(
         line_end,
         facing,
         purpose,
-        body_hash,
         updated_sha,
     } = spec;
+    let text = view::view_text(src, line_start, line_end)
+        .with_context(|| format!("{path}: unit `{qualified}` span {line_start}..={line_end}"))?;
     let key = (path.to_string(), format!("{}|{qualified}", kind.as_str()));
     let n = ord.entry(key).or_insert(0);
     let q = if *n == 0 {
@@ -137,7 +128,7 @@ pub fn emit_unit(
         line_end,
         facing,
         purpose,
-        body_hash: body_hash.to_string(),
+        body_hash: view::attest(&text),
         updated_sha: updated_sha.to_string(),
     };
     store.put_unit(&unit)?;
@@ -150,7 +141,8 @@ pub fn emit_unit(
 fn bash_doc_purpose(src: &str, line: i64) -> Option<String> {
     let lines: Vec<&str> = src.lines().collect();
     let mut top: Option<String> = None;
-    for l in lines[..(line - 1).max(0) as usize].iter().rev() {
+    let above = usize::try_from(line.saturating_sub(1)).unwrap_or(0);
+    for l in lines.iter().take(above).rev() {
         let t = l.trim_start();
         if let Some(rest) = t.strip_prefix('#') {
             // The FIRST line of the block is the topmost (last visited).
@@ -172,20 +164,20 @@ pub fn extract_file(
     src: &str,
     updated_sha: &str,
 ) -> Result<()> {
-    let line_count = src.lines().count() as i64;
+    let line_count = view::view_line_count(src);
     let mut ord: HashMap<(String, String), i64> = HashMap::new();
     match lang {
         Lang::Ipe => {
-            let r = ipe::scan_ipe(src);
+            let r = ipe::scan_ipe(src)?;
             for i in r.imports {
                 store.put_edge(path, &i, "import")?;
             }
             let base = r.module.clone().unwrap_or_else(|| module_path(path, lang));
             for b in &r.bindings {
                 store.put_symbol(path, &b.name, "binding", b.line, 0)?;
-                let body = ipe::binding_text(src, b.line, b.line_end);
                 emit_unit(
                     store,
+                    src,
                     UnitSpec {
                         path,
                         kind: Kind::Binding,
@@ -195,7 +187,6 @@ pub fn extract_file(
                         line_end: b.line_end,
                         facing: facing_of(path, ipe::is_pub(&r.exposing, &b.name)),
                         purpose: ipe::doc_purpose(src, b.line),
-                        body_hash: &blake3_hex(body.as_bytes()),
                         updated_sha,
                     },
                     &mut ord,
@@ -203,21 +194,22 @@ pub fn extract_file(
             }
         }
         Lang::Bash => {
+            let (re_source, re_func) = (RE_SH_SOURCE.get()?, RE_SH_FUNC.get()?);
             let mut funcs: Vec<(String, i64)> = Vec::new();
             for (i, line) in src.lines().enumerate() {
-                if let Some(c) = re_sh_source().captures(line) {
-                    store.put_edge(path, &c[1], "import")?;
-                } else if let Some(c) = re_sh_func().captures(line) {
-                    let name = c[1].to_string();
+                if let Some(m) = re_source.captures(line).and_then(|c| c.get(1)) {
+                    store.put_edge(path, m.as_str(), "import")?;
+                } else if let Some(m) = re_func.captures(line).and_then(|c| c.get(1)) {
+                    let name = m.as_str().to_string();
                     store.put_symbol(path, &name, "def", i as i64 + 1, 0)?;
                     funcs.push((name, i as i64 + 1));
                 }
             }
             for (idx, (name, line)) in funcs.iter().enumerate() {
                 let end = funcs.get(idx + 1).map_or(line_count, |(_, l)| l - 1);
-                let body = lines_between(src, *line, end);
                 emit_unit(
                     store,
+                    src,
                     UnitSpec {
                         path,
                         kind: Kind::Fn,
@@ -227,7 +219,6 @@ pub fn extract_file(
                         line_end: end,
                         facing: facing_of(path, false),
                         purpose: bash_doc_purpose(src, *line),
-                        body_hash: &blake3_hex(body.as_bytes()),
                         updated_sha,
                     },
                     &mut ord,
@@ -249,6 +240,7 @@ pub fn extract_file(
     let base = module_path(path, lang);
     emit_unit(
         store,
+        src,
         UnitSpec {
             path,
             kind: Kind::File,
@@ -258,7 +250,6 @@ pub fn extract_file(
             line_end: line_count,
             facing: facing_of(path, false),
             purpose: None,
-            body_hash: &blake3_hex(src.as_bytes()),
             updated_sha,
         },
         &mut ord,
@@ -266,19 +257,26 @@ pub fn extract_file(
     Ok(())
 }
 
-/// `src` lines `[start..=end]` joined with `\n` (1-indexed, clamped).
-fn lines_between(src: &str, start: i64, end: i64) -> String {
-    src.lines()
-        .skip((start - 1).max(0) as usize)
-        .take(((end - start + 1).max(0)) as usize)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::Store;
+
+    #[test]
+    fn built_in_shell_patterns_compile() {
+        assert!(RE_SH_SOURCE.get().is_ok());
+        assert!(RE_SH_FUNC.get().is_ok());
+    }
+
+    // A line past the end of the script, or before its start, slices nothing
+    // out of bounds.
+    #[test]
+    fn bash_doc_purpose_line_out_of_range() {
+        let src = "# helper\nf() {\n";
+        assert_eq!(bash_doc_purpose(src, 2), Some("helper".to_string()));
+        assert_eq!(bash_doc_purpose(src, 50), None);
+        assert_eq!(bash_doc_purpose(src, i64::MIN), None);
+    }
 
     fn defs(store: &Store, path: &str) -> Vec<(String, i64)> {
         let mut st = store
@@ -394,5 +392,95 @@ mod tests {
         let store = Store::open(":memory:").unwrap();
         extract_file(&store, "src/a.ipe", Lang::Ipe, "x = 1\n", "sha").unwrap();
         assert_eq!(store.count("units").unwrap(), 2); // binding + FILE
+    }
+
+    fn unit_rows(store: &Store) -> Vec<(String, i64, i64, String)> {
+        let mut st = store
+            .conn
+            .prepare("SELECT qualified,line_start,line_end,body_hash FROM units")
+            .unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn every_unit_hash_is_its_view() {
+        let fixtures = [
+            (
+                "src/lib.rs",
+                Lang::Rust,
+                "struct Foo;\nimpl Foo {\n    fn a(&self) {}\n}\npub fn f() -> i64 {\n    0\n}\n",
+            ),
+            (
+                "web/a.ts",
+                Lang::Ts,
+                "export function g(x: number): number {\n  return x;\n}\nclass K {}\n",
+            ),
+            (
+                "src/A.ipe",
+                Lang::Ipe,
+                "module A exposing (..)\n\nhead xs = xs\n\nmap f xs = xs\n",
+            ),
+            (
+                "tools/x.sh",
+                Lang::Bash,
+                "helper() {\n  :\n}\nfunction other() {\n  :\n}\n",
+            ),
+        ];
+        for (path, lang, src) in fixtures {
+            let store = Store::open(":memory:").unwrap();
+            extract_file(&store, path, lang, src, "sha").unwrap();
+            let rows = unit_rows(&store);
+            assert!(rows.len() >= 2, "{path}: expected units");
+            for (qualified, start, end, hash) in rows {
+                let view = view::view_text(src, start, end).unwrap();
+                assert_eq!(hash, view::attest(&view), "{path}: {qualified}");
+            }
+        }
+        // A file no extractor yields units for still gets its FILE unit, whose
+        // hash is the view of the whole file.
+        let store = Store::open(":memory:").unwrap();
+        let src = "# only a comment\r\nexport X=1\n";
+        extract_file(&store, "tools/env.sh", Lang::Bash, src, "sha").unwrap();
+        let rows = unit_rows(&store);
+        assert_eq!(rows.len(), 1);
+        for (qualified, start, end, hash) in rows {
+            assert!(qualified.ends_with("::FILE"), "{qualified}");
+            assert_eq!((start, end), (1, 2));
+            assert_eq!(
+                hash,
+                view::attest(&view::view_text(src, start, end).unwrap())
+            );
+        }
+        // A file of an unknown language is not indexed, so it has no unit
+        // whose hash could drift from its view.
+        let store = Store::open(":memory:").unwrap();
+        extract_file(&store, "notes/a.txt", Lang::Other, "text\n", "sha").unwrap();
+        assert!(unit_rows(&store).is_empty());
+    }
+
+    #[test]
+    fn crlf_file_hash_keeps_cr() {
+        let store = Store::open(":memory:").unwrap();
+        let src = "pub fn f() {\r\n    0\r\n}\r\n";
+        extract_file(&store, "src/lib.rs", Lang::Rust, src, "sha").unwrap();
+        let rows = unit_rows(&store);
+        let file = rows.iter().find(|r| r.0.ends_with("::FILE")).unwrap();
+        assert_eq!((file.1, file.2), (1, 3));
+        assert_eq!(file.3, view::attest("pub fn f() {\r\n    0\r\n}\r"));
+        assert_ne!(file.3, view::attest("pub fn f() {\n    0\n}"));
+    }
+
+    #[test]
+    fn empty_file_unit_range() {
+        let store = Store::open(":memory:").unwrap();
+        extract_file(&store, "tools/empty.sh", Lang::Bash, "", "sha").unwrap();
+        let rows = unit_rows(&store);
+        assert_eq!(rows.len(), 1);
+        let (_, start, end, hash) = &rows[0];
+        assert_eq!((*start, *end), (1, 1));
+        assert_eq!(hash, &view::attest(""));
     }
 }

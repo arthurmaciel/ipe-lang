@@ -58,7 +58,8 @@ pub enum Facing {
 
 /// A reviewable source unit: a content-stable id (`uid` = blake3 of
 /// `path|kind|qualified`), a span, classification, and a body hash binding
-/// the row to the exact source bytes it describes.
+/// the row to the exact source bytes it describes: `body_hash` is the
+/// `sha256:` attestation of the unit's whole-line view (`extract::view`).
 pub struct Unit {
     pub path: String,
     pub kind: Kind,
