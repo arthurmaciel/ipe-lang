@@ -1,0 +1,105 @@
+module Main exposing (main)
+
+-- | layout-fill — `fill` sizes along the axis its parent controls.
+--
+-- A full-viewport column: a fixed 48px header above a main area that fills
+-- the rest of the viewport height. Inside it, a counter, a 12px progress row
+-- split by `fillPortion` 0 / 1 / 3 (so the middle segment is a quarter of the
+-- bar and the first is empty), and a list of `width fill` rows that span the
+-- list's width without growing taller than their text.
+--
+-- Co-located, no capabilities, no JS ports.
+
+
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.String as String
+import Ipe.Ui as Ui
+
+
+type alias Model =
+    { count : Int }
+
+
+type Msg
+    = Increment
+    | NoOp
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+        NoOp ->
+            ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+segment : String -> Int -> Element Msg
+segment name portion =
+    Ui.el
+        [ Ui.width (Ui.fillPortion portion)
+        , Ui.height Ui.fill
+        , Ui.id name
+        ]
+        Ui.none
+
+
+bar : Element Msg
+bar =
+    Ui.row
+        [ Ui.width Ui.fill, Ui.height (Ui.px 12), Ui.id "bar" ]
+        [ segment "seg0" 0
+        , segment "seg25" 1
+        , segment "seg75" 3
+        ]
+
+
+rows : Element Msg
+rows =
+    Ui.column
+        [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.id "rows" ]
+        [ Ui.el [ Ui.width Ui.fill, Ui.id "wrow" ] (Ui.text "first row")
+        , Ui.el [ Ui.width Ui.fill ] (Ui.text "second row")
+        ]
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column
+        [ Ui.width Ui.fill, Ui.height Ui.fill ]
+        [ Ui.el [ Ui.height (Ui.px 48), Ui.id "header" ] (Ui.text "header")
+        , Ui.el
+            [ Ui.height Ui.fill, Ui.width Ui.fill, Ui.id "main" ]
+            (Ui.column
+                [ Ui.width Ui.fill, Ui.height Ui.fill ]
+                [ Ui.button [ Ui.id "inc" ] { onPress = Just Increment, label = Ui.text "+" }
+                , Ui.el [ Ui.id "count" ] (Ui.text (String.fromInt model.count))
+                , bar
+                , rows
+                ]
+            )
+        ]
+
+
+main =
+    Web.tea
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = NoOp
+        }

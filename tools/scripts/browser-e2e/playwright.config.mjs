@@ -1,5 +1,6 @@
 /**
- * Playwright configuration for the geo-clipboard browser E2E suite.
+ * Playwright configuration for the browser E2E suite (geo-clipboard and
+ * layout-fill).
  *
  * A single Chromium project — the only browser target for these tests.
  * The geo/clipboard browser APIs (navigator.geolocation,
@@ -12,7 +13,7 @@
 
 /** @type {import('@playwright/test').PlaywrightTestConfig} */
 export default {
-  testMatch: "geo-clipboard.spec.mjs",
+  testMatch: ["geo-clipboard.spec.mjs", "layout-fill.spec.mjs"],
   timeout: 30_000,
   retries: 0,
   reporter: "list",
