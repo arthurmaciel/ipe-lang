@@ -1141,8 +1141,8 @@ pub fn cmd_rename_symbol(
     // Compile user preserves + baked defaults
     let mut preserve_regexes = Vec::new();
     // Baked defaults: URL-ish (contains ://), kebab-case attrs
-    preserve_regexes.push(Regex::new(r".*://.*").unwrap());
-    preserve_regexes.push(Regex::new(r"(?i)^[a-z]+(-[a-z]+)+$").unwrap());
+    preserve_regexes.push(Regex::new(r".*://.*")?);
+    preserve_regexes.push(Regex::new(r"(?i)^[a-z]+(-[a-z]+)+$")?);
     for p in preserves {
         preserve_regexes.push(
             Regex::new(p).map_err(|e| anyhow::anyhow!("invalid --preserve regex {p:?}: {e}"))?,

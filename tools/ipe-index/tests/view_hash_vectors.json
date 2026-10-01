@@ -1,0 +1,15 @@
+[
+  { "name": "lf_trailing_newline", "src": "a\nb\nc\n", "start": 2, "end": 3, "view": "b\nc", "hash": "sha256:6c516cfc306e53636a409aa84780db9730490c6b3928ccab0f183a8fbc39124e", "refusal": null },
+  { "name": "no_trailing_newline", "src": "a\nb\nc", "start": 3, "end": 3, "view": "c", "hash": "sha256:2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6", "refusal": null },
+  { "name": "crlf_keeps_cr", "src": "a\r\nb\r\n", "start": 1, "end": 2, "view": "a\r\nb\r", "hash": "sha256:464c8c7baee96c964ae5d50b87cbc47ec4b8e8f836d6cb43d412da227eb15c9a", "refusal": null },
+  { "name": "lone_cr_is_content", "src": "a\rb\n", "start": 1, "end": 1, "view": "a\rb", "hash": "sha256:af9081672dd5ef3247a30c2db5b0dafcc9bcf981a26aefb3c55d210d43fcc14e", "refusal": null },
+  { "name": "empty_file_is_one_empty_line", "src": "", "start": 1, "end": 1, "view": "", "hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "refusal": null },
+  { "name": "lone_newline_is_one_empty_line", "src": "\n", "start": 1, "end": 1, "view": "", "hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "refusal": null },
+  { "name": "blank_trailing_lines_kept", "src": "a\n\n\n", "start": 2, "end": 3, "view": "\n", "hash": "sha256:01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b", "refusal": null },
+  { "name": "bom_is_content", "src": "﻿x\ny\n", "start": 1, "end": 1, "view": "﻿x", "hash": "sha256:84144a41283d6dc344addf4e83189d83fdd656439675abf54e6f44ccb73b4eb6", "refusal": null },
+  { "name": "multibyte_utf8", "src": "ação\n日本\n", "start": 1, "end": 2, "view": "ação\n日本", "hash": "sha256:3fdce097caed0d08ff904582e6996e611a8707ac7cecf6f6fdbaafffec5c7abb", "refusal": null },
+  { "name": "last_line_exactly", "src": "a\nb\nc\n", "start": 3, "end": 3, "view": "c", "hash": "sha256:2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6", "refusal": null },
+  { "name": "end_one_past_last_line", "src": "a\nb\n", "start": 1, "end": 3, "view": null, "hash": null, "refusal": "EndPastFile" },
+  { "name": "start_zero", "src": "a\nb\n", "start": 0, "end": 1, "view": null, "hash": null, "refusal": "StartBelowOne" },
+  { "name": "end_before_start", "src": "a\nb\n", "start": 2, "end": 1, "view": null, "hash": null, "refusal": "EndBeforeStart" }
+]

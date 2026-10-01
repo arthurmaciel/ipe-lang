@@ -6,7 +6,7 @@ use anyhow::Result;
 /// (kind `covers`). Only `Ipe.*` / `Std.*` imports count — local-module imports
 /// are not stdlib coverage.
 pub fn record_coverage(store: &Store, path: &str, src: &str) -> Result<()> {
-    for imp in scan_ipe(src).imports {
+    for imp in scan_ipe(src)?.imports {
         if imp.starts_with("Ipe.") || imp.starts_with("Std.") {
             store.put_edge(path, &imp, "covers")?;
         }
