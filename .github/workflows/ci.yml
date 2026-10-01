@@ -1902,7 +1902,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_GEO_SERVER_PID "$!"
           ready=""
           for i in $(seq 1 40); do
-            if curl -sf "http://127.0.0.1:$IPE_GEO_CLIPBOARD_PORT/" >/dev/null 2>&1; then
+            if curl -sf --max-time 2 "http://127.0.0.1:$IPE_GEO_CLIPBOARD_PORT/" >/dev/null 2>&1; then
               echo "server ready (attempt $i)"; ready=1; break
             fi
             sleep 0.5
@@ -1937,7 +1937,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_WS_ECHO_PID "$!"
           ready=""
           for i in $(seq 1 40); do
-            if curl -s -o /dev/null "http://127.0.0.1:8033/ws"; then
+            if curl -s --max-time 2 -o /dev/null "http://127.0.0.1:8033/ws"; then
               echo "echo server ready (attempt $i)"; ready=1; break
             fi
             sleep 0.5

@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
-//! Refuses every way a test can pass without having run.
+//! Refuses the early-exit shapes by which an integration test passes without
+//! having run.
 //!
 //! A missing binary, runtime tree, or manifest directory must fail the test
 //! that needed it. The `e2e_support` resolvers panic with a proof-of-absence
-//! error, so the only remaining way to turn "absent" into a green is an early
-//! exit from the test body. This scan walks every test target of the workspace
+//! error, so turning "absent" into a green takes an exit from the test body.
+//! This scan walks every test target of the workspace
 //! (each `cargo metadata` target of kind `test`, and every module file it
 //! declares) and refuses:
 //!
@@ -27,6 +28,15 @@
 //! (a jail primitive, a target, an outbound route) rather than a missing test
 //! artifact: each entry names its file and fn with the reason, and an entry
 //! that no longer matches a skip fails, so the list only shrinks.
+//!
+//! Outside the scan, so not refused:
+//! - a skip with no `return`: the body sits inside `if let Ok(..) = ..`, or a
+//!   `match` whose miss arm is empty;
+//! - an early return from a helper fn the `#[test]` body calls;
+//! - `std::process::exit` from a test body;
+//! - unit-test modules under `src/` (`cargo metadata` targets of kind `lib`);
+//! - bodies under a test attribute whose last path segment is not `test`
+//!   (`#[wasm_bindgen_test]`, `#[rstest]`, `#[test_case(..)]`).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
