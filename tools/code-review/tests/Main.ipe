@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.ByteSize as ByteSize
 import Ipe.Char as Char
+import Ipe.Crypto as Crypto
 import Ipe.Db as Db
 import Ipe.Db.Sql as Sql
 import Ipe.Dict as Dict
@@ -19,7 +20,7 @@ import Ipe.Time.Timestamp as Timestamp
 import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
-import Lib.Index as Index
+import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
 import Lib.Queue as Queue exposing (QueueState(..))
@@ -439,6 +440,162 @@ fixtureMainIpe =
     "module Main exposing (main)\n\nmain = ()\n"
 
 
+-- Lines 3..6 of `fixtureLibRs`, the source unit `u-a` attests.
+viewA : String
+viewA =
+    "pub fn answer() -> i32 {\n    // the answer to everything\n    42\n}"
+
+
+-- Lines 1..2 of `fixtureMainIpe`, the source unit `u-b` attests.
+viewB : String
+viewB =
+    "module Main exposing (main)\n"
+
+
+-- A source view's state as one comparable word; `Unreadable` carries the
+-- rendered error so a test can check what it names.
+viewTag : Index.SourceView -> String
+viewTag view =
+    case view of
+        Shown _ ->
+            "shown"
+
+        Stale Drifted ->
+            "drifted"
+
+        Stale (RangeOutOfFile r) ->
+            "range " ++ String.fromInt r.lineCount
+
+        Stale UnverifiableHash ->
+            "unverifiable"
+
+        Unreadable e ->
+            "unreadable: " ++ Error.toString e
+
+
+shownTextOf : Index.SourceView -> Maybe String
+shownTextOf view =
+    case view of
+        Shown shown ->
+            Just (Index.shownText shown)
+
+        Stale _ ->
+            Nothing
+
+        Unreadable _ ->
+            Nothing
+
+
+unitViewTag : String -> List Index.Unit -> String
+unitViewTag uid units =
+    case List.find (\u -> u.uid == uid) units of
+        Just u ->
+            viewTag u.view
+
+        Nothing ->
+            "absent"
+
+
+-- Runs one statement against a seeded scratch index database.
+execIndex : String -> String -> List SqlValue -> Task.Task Error ()
+execIndex indexDb sql params =
+    do
+        conn <- Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rw")
+        Db.exec conn sql params
+        Task.succeed ()
+
+
+-- ── source attestation ──────────────────────────────────────────────────
+--
+-- A unit's source is shown only when its lines re-hash to the stored
+-- attestation; every other state withholds it, per unit, without failing the
+-- page.
+type alias Scratch =
+    { repo : String, indexDb : String }
+
+
+scratchAt : String -> Scratch
+scratchAt name =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/" ++ name
+    in
+    { repo = base ++ "/repo", indexDb = base ++ "/index.db" }
+
+
+-- Seeds the bridge fixture at `name`, runs `mutate`, loads the first page and
+-- returns the view tag of each queued unit as `uid=tag`.
+viewTagsAfter : String -> (Scratch -> Task.Task Error ()) -> Task.Task Error (List String)
+viewTagsAfter name mutate =
+    let
+        at =
+            scratchAt name
+    in
+    do
+        removeFileIfAny at.indexDb
+        seedIndex at.indexDb at.repo
+        mutate at
+        r <- loadFirstPage
+        cleanupIndex at.indexDb at.repo
+        Task.succeed (List.map (\u -> u.uid ++ "=" ++ viewTag u.view) r.units)
+
+
+-- R1: one line inserted above the unit moves its bytes; the stored hash no
+-- longer matches. Red if the hash comparison is removed (the view is shown).
+driftedSourceNotShown : Task.Task Error Bool
+driftedSourceNotShown =
+    viewTagsAfter "ipe-index-attest-drift"
+        (\at -> writeFileText (at.repo ++ "/src/Lib.rs") ("// inserted above\n" ++ fixtureLibRs))
+        |> Task.map (\tags -> List.member "u-a=drifted" tags && List.member "u-b=shown" tags)
+
+
+-- R2: a span one line past the 10-line file, stored with the hash of the
+-- clamped slice so only the range check can refuse it. Red if the range check
+-- is removed or clamping comes back.
+rangePastFileIsStale : Task.Task Error Bool
+rangePastFileIsStale =
+    viewTagsAfter "ipe-index-attest-range"
+        (\at ->
+            execIndex at.indexDb
+                "UPDATE units SET line_start = ?, line_end = ?, body_hash = ? WHERE uid = ?"
+                [ SqlInt 9, SqlInt 11, SqlString (Index.attest "    7\n}"), SqlString "u-a" ]
+        )
+        |> Task.map (\tags -> List.member "u-a=range 10" tags)
+
+
+-- R3: a stored value with no exact `sha256:` prefix is never re-proved, even
+-- when it is the right digest. Red if the scheme parse is removed (each
+-- value would read as drifted).
+legacyHashUnverifiable : Task.Task Error Bool
+legacyHashUnverifiable =
+    [ Crypto.sha256 viewA
+    , "SHA256:" ++ Crypto.sha256 viewA
+    , "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    ]
+        |> List.map
+            (\stored ->
+                viewTagsAfter "ipe-index-attest-legacy"
+                    (\at -> execIndex at.indexDb "UPDATE units SET body_hash = ? WHERE uid = ?" [ SqlString stored, SqlString "u-a" ])
+                    |> Task.map (\tags -> List.member "u-a=unverifiable" tags)
+            )
+        |> Task.sequence
+        |> Task.map (List.all identity)
+
+
+-- R8: one queued unit's file is gone; that unit alone is unreadable, naming
+-- its stored path, and the page still loads. Red if the per-unit error
+-- capture is removed (the whole page fails).
+oneMissingFileIsolated : Task.Task Error Bool
+oneMissingFileIsolated =
+    viewTagsAfter "ipe-index-attest-missing"
+        (\at -> removeFileIfAny (at.repo ++ "/src/Main.ipe"))
+        |> Task.map
+            (\tags ->
+                List.member "u-a=shown" tags
+                    && List.any (\t -> String.startsWith "u-b=unreadable: " t && String.contains "ipe:src/Main.ipe" t) tags
+            )
+
+
 unitsDdl : String
 unitsDdl =
     "CREATE TABLE units (uid TEXT PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, qualified TEXT NOT NULL, line_start INTEGER NOT NULL, line_end INTEGER NOT NULL, facing TEXT NOT NULL, purpose TEXT, body_hash TEXT NOT NULL, updated_sha TEXT NOT NULL)"
@@ -474,7 +631,7 @@ insertUnitRows conn =
         , SqlInt 6
         , SqlString "internal"
         , SqlString "purpose-A"
-        , SqlString "hashA"
+        , SqlString (Index.attest viewA)
         , SqlString "shaA"
         ]
         |> Task.andThen
@@ -490,7 +647,7 @@ insertUnitRows conn =
                     , SqlInt 2
                     , SqlString "user"
                     , SqlNull (SqlString "")
-                    , SqlString "hashB"
+                    , SqlString (Index.attest viewB)
                     , SqlString "shaB"
                     ]
             )
@@ -521,7 +678,7 @@ insertUnitRows conn =
             (\_ ->
                 Db.exec conn
                     "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
-                    [ SqlString "u-b", SqlString "modified", SqlString "oldB", SqlString "hashB", SqlString "shaB", SqlInt 2 ]
+                    [ SqlString "u-b", SqlString "modified", SqlString "oldB", SqlString (Index.attest viewB), SqlString "shaB", SqlInt 2 ]
             )
         |> Task.andThen
             (\_ ->
@@ -601,12 +758,12 @@ isUnitA u =
         == "internal"
         && u.purpose
         == Just "purpose-A"
-        && u.bodyHash
-        == "hashA"
+        && Index.storedHash u.attested
+        == Index.attest viewA
         && u.updatedSha
         == "shaA"
-        && u.source
-        == "pub fn answer() -> i32 {\n    // the answer to everything\n    42\n}"
+        && shownTextOf u.view
+        == Just viewA
 
 
 isUnitB : Index.Unit -> Bool
@@ -616,7 +773,7 @@ isUnitB u =
         && u.change
         == "modified"
         && u.newHash
-        == Just "hashB"
+        == Just (Index.attest viewB)
         && u.path
         == "ipe:src/Main.ipe"
         && u.kind
@@ -625,8 +782,8 @@ isUnitB u =
         == "user"
         && u.purpose
         == Nothing
-        && u.source
-        == "module Main exposing (main)\n"
+        && shownTextOf u.view
+        == Just viewB
 
 
 cleanupIndex : String -> String -> Task.Task Error ()
@@ -875,7 +1032,8 @@ seedOneUnit conn i =
 -- ── guard the path resolver ─────────────────────────────────────────────
 --
 -- A queued unit whose stored path escapes the index root (mid-path `..`
--- segment) must fail the whole load closed, never read a file outside root.
+-- segment) is unreadable, naming the stored path, and no file outside the
+-- root is read; the page itself still loads.
 traversalPathsRejected : Task.Task Error Bool
 traversalPathsRejected =
     let
@@ -887,13 +1045,17 @@ traversalPathsRejected =
         |> Task.onError (\_ -> Task.succeed ())
         |> Task.andThen (\_ -> Task.fromResult (Path.fromString base) |> Task.andThen File.mkdirAll)
         |> Task.andThen (\_ -> seedTraversalDb base)
-        |> Task.andThen
-            (\_ ->
-                loadFirstPage
-                    |> Task.map (\_ -> Nothing)
-                    |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
+        |> Task.andThen (\_ -> loadFirstPage)
+        |> Task.map
+            (\r ->
+                let
+                    tag =
+                        unitViewTag "u-esc" r.units
+                in
+                String.startsWith "unreadable: " tag
+                    && String.contains "escapes its root via `..`" tag
+                    && String.contains "ipe:a/../../escape" tag
             )
-        |> Task.map (refusedFor "escapes its root via `..`")
         |> Task.andThen (\ok -> removeFileIfAny (base ++ "/index.db") |> Task.map (\_ -> ok))
 
 
@@ -917,7 +1079,7 @@ seedTraversalDb base =
                                 , SqlInt 1
                                 , SqlString "user"
                                 , SqlNull (SqlString "")
-                                , SqlString "h"
+                                , SqlString (Index.attest "x")
                                 , SqlString "s"
                                 ]
                         )
@@ -1811,7 +1973,8 @@ relativeRootLoadsQueue =
 
 
 -- A queued unit whose source file is one byte past the 16 MiB read ceiling
--- fails the whole load closed for that reason, rather than being read whole.
+-- is unreadable for that reason, rather than read whole; the page still
+-- loads.
 oversizedSourceRefused : Task.Task Error Bool
 oversizedSourceRefused =
     let
@@ -1828,12 +1991,12 @@ oversizedSourceRefused =
         removeFileIfAny indexDb
         seedIndex indexDb repo
         writeFileText (repo ++ "/src/Lib.rs") (String.repeat (16 * 1024 * 1024 + 1) "x")
-        refusal <-
-            loadFirstPage
-                |> Task.map (\_ -> Nothing)
-                |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
+        r <- loadFirstPage
         cleanupIndex indexDb repo
-        Task.succeed (refusedFor "16777216-byte limit" refusal)
+        let
+            tag =
+                unitViewTag "u-a" r.units
+        Task.succeed (String.startsWith "unreadable: " tag && String.contains "16777216-byte limit" tag)
 
 
 -- ── decision drain loop ─────────────────────────────────────────────────
@@ -2272,7 +2435,8 @@ unitPageLoad =
                                             (\qs ->
                                                 unit.qualified
                                                     == "Lib.answer"
-                                                    && String.contains "answer" unit.source
+                                                    && shownTextOf unit.view
+                                                    == Just viewA
                                                     && List.length qs
                                                     == 3
                                                     && List.member ( "Lib.answer", "u-a" ) qs
@@ -2382,9 +2546,9 @@ sampleQueuedUnit =
         , lineEnd = 1
         , facing = "internal"
         , purpose = Nothing
-        , bodyHash = "hash-sample"
+        , attested = Index.UnknownScheme "hash-sample"
         , updatedSha = "sha-sample"
-        , source = "main = ()\n"
+        , view = Stale UnverifiableHash
         }
     , changed = Nothing
     }
@@ -2668,6 +2832,26 @@ main =
                         , ( "queue state texts distinguish loading/empty/failed/loaded", queueStateTextsDistinct )
                         ]
                     )
+            )
+        |> Task.andThen
+            (\results ->
+                driftedSourceNotShown
+                    |> Task.map (\ok -> results ++ [ ( "a drifted unit's source is withheld", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                rangePastFileIsStale
+                    |> Task.map (\ok -> results ++ [ ( "a span past the file is refused, not clamped", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                legacyHashUnverifiable
+                    |> Task.map (\ok -> results ++ [ ( "an unprefixed or foreign-scheme hash is unverifiable", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                oneMissingFileIsolated
+                    |> Task.map (\ok -> results ++ [ ( "one missing file fails only its unit", ok ) ])
             )
         |> Task.andThen
             (\results ->

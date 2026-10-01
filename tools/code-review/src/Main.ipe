@@ -23,7 +23,7 @@ import Ipe.Time.Timestamp exposing (Timestamp)
 import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Token(..))
-import Lib.Index as Index
+import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
 import Lib.Queue as Queue exposing (QueueState(..))
@@ -335,7 +335,7 @@ bodyHashOf : String -> List Queue.QueuedUnit -> Maybe String
 bodyHashOf uid qs =
     case List.find (\q -> q.unit.uid == uid) qs of
         Just q ->
-            Just q.unit.bodyHash
+            Just (Index.storedHash q.unit.attested)
 
         Nothing ->
             Nothing
@@ -378,10 +378,24 @@ loadUnitView uid =
             Just unit ->
                 do
                     qs <- Index.qualifiedUids
-                    Task.succeed ( Just unit, Links.resolve unit.qualified qs unit.source )
+                    Task.succeed ( Just unit, linksFor unit qs )
 
             Nothing ->
                 Task.succeed ( Nothing, [] )
+
+
+-- Jump links come only from verified source; a withheld view links nothing.
+linksFor : Index.Unit -> List ( String, String ) -> List Links.Link
+linksFor unit qs =
+    case unit.view of
+        Shown shown ->
+            Links.resolve unit.qualified qs (Index.shownText shown)
+
+        Stale _ ->
+            []
+
+        Unreadable _ ->
+            []
 
 
 header : Model -> Ui.Element Msg
@@ -1006,7 +1020,16 @@ sourceBlock unit =
         ]
         (Ui.column
             [ Ui.width Ui.fill, Ui.spacing 2 ]
-            (List.map (numberedLine (Highlight.langFor unit.kind)) (Format.numberedLines unit.lineStart unit.source))
+            (case unit.view of
+                Shown shown ->
+                    List.map (numberedLine (Highlight.langFor unit.kind)) (Format.numberedLines unit.lineStart (Index.shownText shown))
+
+                Stale _ ->
+                    []
+
+                Unreadable _ ->
+                    []
+            )
         )
 
 

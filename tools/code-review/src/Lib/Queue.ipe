@@ -9,7 +9,7 @@ import Ipe.String as String
 import Ipe.Task as Task
 import Lib.Db as LibDb
 import Lib.Format as Format
-import Lib.Index as Index
+import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.SafeText as SafeText
 import Lib.Settings as Settings
 
@@ -145,7 +145,7 @@ classify db units =
 classifyUnit : Db.Db -> Index.Unit -> Task.Task Error (Maybe QueuedUnit)
 classifyUnit db unit =
     do
-        decided <- LibDb.findDecision db unit.uid unit.bodyHash
+        decided <- LibDb.findDecision db unit.uid (Index.storedHash unit.attested)
         case decided of
             Just _ ->
                 Task.succeed Nothing

@@ -1,4 +1,4 @@
-module Lib.Index exposing (Cursor(..), PendingRow, StaleReason(..), Unit, attest, countPending, dbBytes, drainUnit, loadPendingPage, loadUnitByUid, nameFor, openRead, pageSize, qualifiedUids, viewText)
+module Lib.Index exposing (AttestedHash(..), Cursor(..), PendingRow, ShownSource, SourceView(..), StaleReason(..), Unit, attest, countPending, dbBytes, drainUnit, loadPendingPage, loadUnitByUid, nameFor, openRead, pageSize, qualifiedUids, shownHash, shownText, storedHash, viewText)
 
 import Ipe.ByteSize as ByteSize exposing (ByteSize)
 import Ipe.Db
@@ -13,12 +13,14 @@ import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Task as Task
 import Lib.RepoPath as RepoPath exposing (RootMap)
+import Lib.SafeText as SafeText
 import Lib.Settings as Settings
 
 
--- One queued ipe-index unit plus its source slice. `path` is the
--- `tag:relative` form ipe-index stores; `source` is the unit's line slice
--- read from disk.
+-- One queued ipe-index unit plus its verified source view. `path` is the
+-- `tag:relative` form ipe-index stores; `attested` is the stored body hash,
+-- parsed once; `view` is the unit's lines from disk, shown only when they
+-- re-hash to `attested`.
 type alias Unit =
     { uid : String
     , change : String
@@ -32,9 +34,9 @@ type alias Unit =
     , lineEnd : Int
     , facing : String
     , purpose : Maybe String
-    , bodyHash : String
+    , attested : AttestedHash
     , updatedSha : String
-    , source : String
+    , view : SourceView
     }
 
 
@@ -48,7 +50,7 @@ unitByUidSql =
     "SELECT u.uid, 'new' AS change, NULL AS old_hash, NULL AS new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha FROM units u WHERE u.uid = ?"
 
 
--- One unit by uid (decided or not), with its source slice resolved against
+-- One unit by uid (decided or not), with its source view verified against
 -- its tag's index root; Nothing when no such unit exists.
 loadUnitByUid : String -> Task.Task Error (Maybe Unit)
 loadUnitByUid uid =
@@ -58,7 +60,7 @@ loadUnitByUid uid =
         rows <- Db.queryDecode conn unitByUidSql [ SqlString uid ] rowDecoder
         case List.head rows of
             Just row ->
-                Task.map Just (loadSource settings.roots row)
+                Task.map (\view -> Just (withView view row)) (viewOf settings.roots row)
 
             Nothing ->
                 Task.succeed Nothing
@@ -280,7 +282,9 @@ enqueuedAtDecoder =
 
 
 -- One page of queue units (new + modified) at `cursor`, at most `pageSize`
--- rows, each with its source slice resolved against its tag's index root.
+-- rows, each with its source view verified against its tag's index root. A
+-- unit whose file is missing, refused or drifted carries that state; only a
+-- failed query fails the page.
 loadPendingPage : Cursor -> Task.Task Error (List PendingRow)
 loadPendingPage cursor =
     let
@@ -292,7 +296,7 @@ loadPendingPage cursor =
         conn <- Db.open "sqlite" (Settings.indexReadUrl settings.db)
         rows <- Db.queryDecode conn sql params pendingRowDecoder
         rows
-            |> List.map (\( row, at ) -> Task.map (\unit -> { unit = unit, enqueuedAt = at }) (loadSource settings.roots row))
+            |> List.map (\( row, at ) -> Task.map (\view -> { unit = withView view row, enqueuedAt = at }) (viewOf settings.roots row))
             |> Task.sequence
 
 
@@ -387,20 +391,57 @@ nameFor conn uid =
                         Task.succeed Nothing
 
 
--- Reading a unit's source fails the whole load with a typed error: a queued
--- unit whose stored path is refused by `RepoPath.resolve`, or whose file
--- cannot be read or exceeds `sourceCeiling`, is a real problem, not a row to
--- silently skip.
-loadSource : RootMap -> RowUnit -> Task.Task Error Unit
-loadSource roots row =
-    case RepoPath.resolve roots row.path of
-        Err refusal ->
-            Task.fail (RepoPath.toError refusal)
+-- The one verification of a unit's source. The stored hash is parsed first,
+-- so an unknown scheme refuses before any read; then the stored path is
+-- resolved, the file read, the line range checked and the view re-hashed.
+-- Only a view whose attestation equals the stored one is `Shown`. Every
+-- per-unit cause (refused path, unreadable file, bad range, drift) is a
+-- `SourceView` state, never a failed task.
+viewOf : RootMap -> RowUnit -> Task.Task Error SourceView
+viewOf roots row =
+    case parseAttested row.bodyHash of
+        UnknownScheme _ ->
+            Task.succeed (Stale UnverifiableHash)
 
-        Ok path ->
-            do
-                text <- File.readFileLimit path sourceCeiling
-                Task.succeed (withSource (sliceLines row.lineStart row.lineEnd text) row)
+        Sha256 stored ->
+            case RepoPath.resolve roots row.path of
+                Err refusal ->
+                    Task.succeed (Unreadable (RepoPath.toError refusal))
+
+                Ok path ->
+                    File.readFileLimit path sourceCeiling
+                        |> Task.map (\text -> verifyView row.uid stored (viewText row.lineStart row.lineEnd text))
+                        |> Task.onError (\e -> Task.succeed (Unreadable (readFailure row.path e)))
+
+
+-- A read error re-worded to name the stored path it came from.
+readFailure : String -> Error -> Error
+readFailure stored e =
+    Error.withMessage
+        (SafeText.toString
+            (SafeText.concat
+                [ SafeText.literal "index path "
+                , SafeText.quoted stored
+                , SafeText.literal " could not be read: "
+                , SafeText.render (Error.message e)
+                ]
+            )
+        )
+        e
+
+
+verifyView : String -> String -> Result StaleReason String -> SourceView
+verifyView uid stored sliced =
+    case sliced of
+        Err reason ->
+            Stale reason
+
+        Ok view ->
+            if attest view == stored then
+                Shown (ShownSource { uid = uid, text = view, hash = stored })
+
+            else
+                Stale Drifted
 
 
 -- The largest source file a unit is sliced from; a bigger file under the root
@@ -410,8 +451,9 @@ sourceCeiling =
     ByteSize.mib 16
 
 
-withSource : String -> RowUnit -> Unit
-withSource source row =
+-- The single decode point from a raw row: the stored hash is parsed here.
+withView : SourceView -> RowUnit -> Unit
+withView view row =
     { uid = row.uid
     , change = row.change
     , oldHash = row.oldHash
@@ -424,20 +466,58 @@ withSource source row =
     , lineEnd = row.lineEnd
     , facing = row.facing
     , purpose = row.purpose
-    , bodyHash = row.bodyHash
+    , attested = parseAttested row.bodyHash
     , updatedSha = row.updatedSha
-    , source = source
+    , view = view
     }
 
 
--- 1-based inclusive slice of the unit's lines.
-sliceLines : Int -> Int -> String -> String
-sliceLines start end text =
-    text
-        |> String.split "\n"
-        |> List.drop (max 0 (start - 1))
-        |> List.take (max 0 (end - start + 1))
-        |> String.join "\n"
+-- A stored `body_hash`, parsed once: an attestation this app can re-prove,
+-- or a value under any other scheme (a legacy or unknown hash).
+type AttestedHash
+    = Sha256 String
+    | UnknownScheme String
+
+
+parseAttested : String -> AttestedHash
+parseAttested stored =
+    if String.startsWith attestScheme stored then
+        Sha256 stored
+
+    else
+        UnknownScheme stored
+
+
+-- The stored text, for keying review-db lookups only; never a value to
+-- record a decision against.
+storedHash : AttestedHash -> String
+storedHash attested =
+    case attested of
+        Sha256 stored ->
+            stored
+
+        UnknownScheme stored ->
+            stored
+
+
+-- Source text proved equal to its attestation. Opaque: built only by
+-- `viewOf`, so holding one means the bytes were re-hashed.
+type ShownSource
+    = ShownSource { uid : String, text : String, hash : String }
+
+
+shownText : ShownSource -> String
+shownText shown =
+    case shown of
+        ShownSource s ->
+            s.text
+
+
+shownHash : ShownSource -> String
+shownHash shown =
+    case shown of
+        ShownSource s ->
+            s.hash
 
 
 -- Why a unit's source is withheld instead of shown.
@@ -445,6 +525,14 @@ type StaleReason
     = Drifted
     | RangeOutOfFile { lineCount : Int }
     | UnverifiableHash
+
+
+-- What the unit page may show of a unit's source: the verified view, a
+-- reason it is withheld, or the error that kept it from being read.
+type SourceView
+    = Shown ShownSource
+    | Stale StaleReason
+    | Unreadable Error
 
 
 -- The scheme prefix of every attestation ipe-index stores in `body_hash`.
