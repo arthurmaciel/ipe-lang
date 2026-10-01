@@ -651,6 +651,19 @@ fn apply_env_directives(
     builder.env_remove(crate::LISTEN_PORT_RELOCATION_ENV);
 }
 
+/// Env var a supervisor (`ipe watch`, the dev console proxy) sets on the child
+/// it spawns to place that child's HTTP listener on a port the supervisor chose.
+///
+/// Internal plumbing, never operator configuration: it outranks the operator
+/// port var (`IPE_WEB_PORT` / `IPE_SERVER_PORT`) and the source port, is left
+/// out of the documented env registry, and is never inherited by a `Process.*`
+/// child (only the program's own explicit per-child env entry sets it there).
+/// Ungated, and defined in this module (vendored into every emitted project
+/// and re-exported at the runtime root), so the `ipe` CLI, which links the
+/// runtime without the `server` feature, and the runtime listeners share ONE
+/// wire name.
+pub const LISTEN_PORT_RELOCATION_ENV: &str = "IPE_INTERNAL_LISTEN_PORT";
+
 /// Why a hardened spawn was refused.
 ///
 /// Every variant is a refusal: a hardened spawn never degrades to an unhardened
@@ -2437,7 +2450,7 @@ mod env_overlay_tests {
         let relocation = crate::LISTEN_PORT_RELOCATION_ENV;
         for directives in [
             vec![(relocation.to_owned(), Some("9100".to_owned()))],
-            vec![("IPE_OVERLAY_KEEP".to_owned(), Some("1".to_owned()))],
+            vec![("OVERLAY_TEST_KEEP".to_owned(), Some("1".to_owned()))],
             Vec::new(),
         ] {
             let mut cmd = std::process::Command::new("true");
@@ -2453,11 +2466,11 @@ mod env_overlay_tests {
         let mut cmd = std::process::Command::new("true");
         apply_env_directives(
             &mut cmd,
-            vec![("IPE_OVERLAY_KEEP".to_owned(), Some("1".to_owned()))],
+            vec![("OVERLAY_TEST_KEEP".to_owned(), Some("1".to_owned()))],
         );
         assert!(
             cmd.get_envs()
-                .any(|(k, v)| k == "IPE_OVERLAY_KEEP" && v == Some(std::ffi::OsStr::new("1"))),
+                .any(|(k, v)| k == "OVERLAY_TEST_KEEP" && v == Some(std::ffi::OsStr::new("1"))),
             "other overlay sets still reach the child"
         );
     }
