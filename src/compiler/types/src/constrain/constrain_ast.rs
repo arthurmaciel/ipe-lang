@@ -27,6 +27,10 @@ pub enum ObligationKind {
     WebModel,
     /// `Web.tea` / `Web.embed` notFound var (routed-Web page-field check).
     WebNotFound,
+    /// `Web.tea` / `Web.embed` message var (the `onNavigate` result).
+    WebMsg,
+    /// `Web.tea` / `Web.embed` cfg row tail (absorbs `onNavigate`).
+    WebCfgTail,
     /// `Web.route` result page var (per-route page witness).
     WebPage,
     /// `Web.route` page-builder var (per-route page witness).
@@ -71,11 +75,20 @@ pub const OBLIGATION_SLOTS: &[(StdlibKernel, u32, ObligationKind)] = {
         (K::LogWarnWith, 0, O::Interpolable),
         (K::LogErrorWith, 0, O::Interpolable),
         (K::DebugLog, 0, O::Show),
-        // `Web.tea` / `Web.embed` — Model var 0, notFound var 2.
+        // `Web.tea` / `Web.embed` / `Web.appWith` — Model var 0, Msg var 1,
+        // notFound var 2, cfg row tail 3.
         (K::WebApp, 0, O::WebModel),
+        (K::WebApp, 1, O::WebMsg),
         (K::WebApp, 2, O::WebNotFound),
+        (K::WebApp, 3, O::WebCfgTail),
         (K::WebEmbed, 0, O::WebModel),
+        (K::WebEmbed, 1, O::WebMsg),
         (K::WebEmbed, 2, O::WebNotFound),
+        (K::WebEmbed, 3, O::WebCfgTail),
+        (K::WebAppWith, 0, O::WebModel),
+        (K::WebAppWith, 1, O::WebMsg),
+        (K::WebAppWith, 2, O::WebNotFound),
+        (K::WebAppWith, 3, O::WebCfgTail),
         // `Web.route` — page var 0, builder var 1.
         (K::WebRoute, 0, O::WebPage),
         (K::WebRoute, 1, O::WebBuilder),
@@ -87,7 +100,7 @@ pub const OBLIGATION_SLOTS: &[(StdlibKernel, u32, ObligationKind)] = {
 /// update this count — a silently dropped entry (obligation removed → hazard
 /// reopened) fails the build.
 #[cfg(test)]
-pub const EXPECTED_OBLIGATION_SLOT_COUNT: usize = 24;
+pub const EXPECTED_OBLIGATION_SLOT_COUNT: usize = 32;
 
 impl Builder<'_> {
     #[allow(clippy::too_many_lines)] // Handler expansion block (E-12) pushes it over 100
@@ -801,7 +814,7 @@ impl Builder<'_> {
                 self.eq(span, value_var, s);
                 return Ok(var);
             }
-            // `Web.tea` — post-solve routed-Web check.
+            // `Web.tea` / `Web.embed` / `Web.appWith` — post-solve routed-Web check.
             //
             // The open-record cfg scheme for K::WebApp is shared by both routed
             // apps (Model has a `page : Page` field) and non-routed apps (Model
@@ -811,10 +824,13 @@ impl Builder<'_> {
             // app whose Model has no `page` field.
             //
             // Instead: instantiate the scheme with `instantiate_tracked`, record
-            // the Model var (var index 0) and notFound var (var index 2), then
-            // push a `RoutedWebCheck` so `resolve_routed_web_checks` can run
-            // the gate after the HM solver settles.
-            if matches!(k, StdlibKernel::WebApp | StdlibKernel::WebEmbed) {
+            // the Model, Msg, notFound and cfg-tail vars, then push a
+            // `RoutedWebCheck` so `resolve_routed_web_checks` can run the gate
+            // after the HM solver settles.
+            if matches!(
+                k,
+                StdlibKernel::WebApp | StdlibKernel::WebEmbed | StdlibKernel::WebAppWith
+            ) {
                 let ty = self.resolve_scheme(SchemeKey(k)).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
@@ -841,9 +857,21 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
+                let slot_var = |kind| {
+                    Self::obligation_slot(k, kind)
+                        .and_then(|slot| vars.get(&slot).copied())
+                        .ok_or(Diagnostic::Lower {
+                            span,
+                            msg: LowerError::Unsupported(Feature::Kernels),
+                        })
+                };
+                let msg_var = slot_var(ObligationKind::WebMsg)?;
+                let cfg_tail_var = slot_var(ObligationKind::WebCfgTail)?;
                 self.routed_web_checks.push(RoutedWebCheck {
                     model_var,
+                    msg_var,
                     not_found_var,
+                    cfg_tail_var,
                     span,
                     home: self.current_home.clone(),
                 });

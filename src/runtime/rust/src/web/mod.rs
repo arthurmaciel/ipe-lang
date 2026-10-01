@@ -2846,7 +2846,8 @@ mod handlers {
                 .ok()
                 .and_then(|base| crate::encoding::EncodedBase::encode(&base).ok())
             else {
-                return (StatusCode::INTERNAL_SERVER_ERROR, "500 base path unusable").into_response();
+                return (StatusCode::INTERNAL_SERVER_ERROR, "500 base path unusable")
+                    .into_response();
             };
             match route::canonical_redirect(&base, uri.path(), uri.query(), canonical) {
                 route::Redirect::Serve => {}
@@ -5606,6 +5607,194 @@ mod request_is_https_tests {
 }
 
 #[cfg(all(test, feature = "server"))]
+mod canonical_redirect_handler_tests {
+    //! The page handler redirects a GET/HEAD for a non-canonical spelling of a
+    //! routed page to its canonical path (308) before any session work: no
+    //! cookie, no `init`, a same-origin relative `Location` under the base.
+
+    use super::*;
+    use crate::system::{locked_remove_var, locked_set_var};
+    use crate::web::req::WebReq;
+    use crate::web::route::{RenderArg, RenderRefusal, Route, RoutePath, render_route};
+    use crate::web::store::MemoryStore;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use axum::routing::get;
+    use serde::{Deserialize, Serialize};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tower::ServiceExt; // oneshot
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+    struct Model {
+        page: u8,
+    }
+
+    impl crate::stringify::IpeStringify for Model {
+        fn ipe_show(&self) -> String {
+            format!("Model {{ page: {} }}", self.page)
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum Page {
+        Home,
+        About,
+        Slug(String),
+    }
+
+    fn routes() -> Vec<Route<Page>> {
+        vec![
+            Route::new("/", |_| Some(Page::Home)),
+            Route::new("/about", |_| Some(Page::About)),
+            Route::new("/:slug", |p| p.first().cloned().map(Page::Slug)),
+        ]
+    }
+
+    fn render(page: &Page) -> Result<RoutePath, RenderRefusal> {
+        match page {
+            Page::Home => render_route(&routes(), 0, &[]),
+            Page::About => render_route(&routes(), 1, &[]),
+            Page::Slug(s) => render_route(&routes(), 2, &[RenderArg::Text(s)]),
+        }
+    }
+
+    static INIT_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+    fn init(_req: WebReq) -> (Model, IpeCmd<()>) {
+        INIT_RUNS.fetch_add(1, Ordering::SeqCst);
+        (Model { page: 0 }, IpeCmd::None)
+    }
+    fn update(_msg: (), model: Model) -> (Model, IpeCmd<()>) {
+        (model, IpeCmd::None)
+    }
+    fn view(_model: Model) -> Html<()> {
+        Html::HText(String::new())
+    }
+    fn subs(_model: Model) -> IpeSub<()> {
+        IpeSub::None
+    }
+
+    type Init = fn(WebReq) -> (Model, IpeCmd<()>);
+    type Update = fn((), Model) -> (Model, IpeCmd<()>);
+    type View = fn(Model) -> Html<()>;
+    type Subs = fn(Model) -> IpeSub<()>;
+
+    fn make_router() -> Router {
+        let (route_entry, param_resolver, route_matched) = routed_resolvers(
+            routes(),
+            Page::Home,
+            |_page: Page, model: Model| (model, IpeCmd::None),
+            render,
+        );
+        let state: WebState<Model, (), Init, Update, View, Subs> = WebState {
+            store: Arc::new(MemoryStore::<Model, ()>::new(Duration::from_secs(60)))
+                as Arc<dyn store::SessionStore<Model, ()>>,
+            init: Arc::new(init),
+            update: Arc::new(update),
+            view: Arc::new(view),
+            subs: Arc::new(subs),
+            route_entry,
+            param_resolver,
+            route_matched,
+            session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
+        };
+        Router::new()
+            .fallback(get(handlers::page::<Model, (), Init, Update, View, Subs>))
+            .with_state(state)
+    }
+
+    #[allow(clippy::expect_used)] // test helper: request build and router failure are environment issues
+    async fn send(method: &str, uri: &str) -> axum::response::Response {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .expect("build request");
+        make_router().oneshot(req).await.expect("router responds")
+    }
+
+    fn location(resp: &axum::response::Response) -> Option<String> {
+        resp.headers()
+            .get(header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    }
+
+    #[allow(clippy::expect_used)] // test helper: an in-memory body read cannot fail
+    async fn body_len(resp: axum::response::Response) -> usize {
+        axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("body")
+            .len()
+    }
+
+    /// A 308 carries the canonical `Location`, no cookie and no body, and
+    /// runs no `init`; GET and HEAD agree.
+    #[tokio::test]
+    async fn non_canonical_get_and_head_redirect_before_init() {
+        locked_remove_var("IPE_WEB_BASE_PATH");
+        let before = INIT_RUNS.load(Ordering::SeqCst);
+        for method in ["GET", "HEAD"] {
+            let resp = send(method, "/about/?x=1").await;
+            assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT, "{method}");
+            assert_eq!(
+                location(&resp).as_deref(),
+                Some("/about?x=1"),
+                "{method}: query kept"
+            );
+            assert!(
+                resp.headers().get(header::SET_COOKIE).is_none(),
+                "{method}: a redirect mints no cookie"
+            );
+            assert_eq!(body_len(resp).await, 0, "{method}: a redirect has no body");
+        }
+        assert_eq!(INIT_RUNS.load(Ordering::SeqCst), before, "no init ran");
+    }
+
+    /// The canonical spelling is served, not redirected.
+    #[tokio::test]
+    async fn canonical_get_is_served() {
+        locked_remove_var("IPE_WEB_BASE_PATH");
+        let resp = send("GET", "/about").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(location(&resp).is_none());
+    }
+
+    /// An escape the route decodes redirects to the canonical encoding, and a
+    /// redirect never leaves the origin: `Location` is one `/` then a non-`/`.
+    #[tokio::test]
+    async fn redirect_location_is_same_origin_relative() {
+        locked_remove_var("IPE_WEB_BASE_PATH");
+        let resp = send("GET", "/%2f%2fevil.com").await;
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(location(&resp).as_deref(), Some("/%2F%2Fevil.com"));
+        for raw in ["//evil.com", "/%5c%5cevil.com", "/%2f%2fevil.com", "///"] {
+            let resp = send("GET", raw).await;
+            if let Some(loc) = location(&resp) {
+                let bytes = loc.as_bytes();
+                assert!(
+                    bytes.first() == Some(&b'/') && !matches!(bytes.get(1), Some(b'/' | b'\\')),
+                    "{raw}: Location {loc} must be same-origin relative"
+                );
+            }
+        }
+    }
+
+    /// Under a base path the redirect targets the base plus the canonical path.
+    #[tokio::test]
+    async fn redirect_targets_the_base() {
+        locked_set_var("IPE_WEB_BASE_PATH", "/app");
+        let resp = send("GET", "/about/").await;
+        locked_remove_var("IPE_WEB_BASE_PATH");
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(location(&resp).as_deref(), Some("/app/about"));
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
 mod base_path_tests {
     use super::{
         client_js_path, cookie_name_for, cookie_path_for, normalise_base_path, render_page_full,
@@ -6049,6 +6238,20 @@ mod sse_reconnect_reconcile_tests {
             "the entry fn (and so its Cmd) ran once"
         );
         assert_eq!(model_of(&fx.entry), TestPage::Detail("7".into()));
+    }
+
+    /// A reconnect at another spelling of the entered path (`/items/%41` after
+    /// `/items/A`) dedupes against one canonical key and enters nothing.
+    #[tokio::test]
+    async fn reconcile_at_an_alternate_spelling_enters_nothing() {
+        let mut fx = make_session(TestPage::Detail("A".into()), Some("/items/A"), label_view());
+        let (committed, _) = reconnect(&mut fx, "/items/%41", "").await;
+        assert_eq!(committed, 0, "one canonical path, no second entry");
+        assert_eq!(
+            fx.entry_fn_runs.load(Ordering::SeqCst),
+            0,
+            "no entry Cmd ran"
+        );
     }
 
     /// A page GET re-enters even the path the session already entered, so a
@@ -9247,7 +9450,8 @@ mod route_entry_cmd_tests {
 
     #[allow(clippy::expect_used)] // test helper: the fixture table and base are well-formed
     fn router(store: Store) -> axum::Router {
-        let (route_entry, _, route_matched) = routed_resolvers(routes(), Page::Home, set_page, render);
+        let (route_entry, _, route_matched) =
+            routed_resolvers(routes(), Page::Home, set_page, render);
         let state: FixtureState = WebState {
             store,
             init: Arc::new(init),

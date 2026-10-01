@@ -560,10 +560,13 @@ mod walk_tests {
 mod agreement_tests {
     use ipe_runtime_rust::encoding::{DecodeRefusal, ParamNameRefusal};
     use ipe_runtime_rust::server::{api_spec_parts, path_param_names};
-    use ipe_runtime_rust::web::route::{RoutePattern, RouteSegmentRefusal};
+    use ipe_runtime_rust::web::route::{
+        DecodedPath, RoutePattern, RouteSegmentRefusal, match_route,
+    };
 
     use super::{
-        MAX_PATH_LEN, RoutePatternDefect, server_api_path, server_route_path, web_route_pattern,
+        MAX_PATH_LEN, RoutePatternDefect, SegmentShape, server_api_path, server_route_path,
+        web_route_pattern, web_route_segments,
     };
 
     /// Kind + offset of a verdict, erasing the excerpt text only this side keeps.
@@ -679,6 +682,66 @@ mod agreement_tests {
         ] {
             let (_, path) = api_spec_parts(spec);
             assert_eq!(server_api_path(spec), path, "{spec:?}");
+        }
+    }
+
+    /// Whether a pattern read as `segments` matches a path of `decoded`
+    /// segments, by shape alone: a parameter takes any one segment, a literal
+    /// its decoded text.
+    fn shape_matches(segments: &[SegmentShape], decoded: &[&str]) -> bool {
+        segments.len() == decoded.len()
+            && segments.iter().zip(decoded).all(|pair| match pair {
+                (SegmentShape::Param, _) => true,
+                (SegmentShape::Literal(l), seg) => l == seg,
+            })
+    }
+
+    /// The compiler's segment reading (which the routed-table equivalence and
+    /// coverage checks compare) matches exactly the paths the runtime's
+    /// `RoutePattern` matches.
+    #[test]
+    #[allow(clippy::expect_used)] // test table: every pattern and probe is well-formed
+    fn segment_reading_matches_runtime_matching() {
+        let patterns = [
+            "/",
+            "/a",
+            "/a/",
+            "/A",
+            "/a/:x",
+            "/a/%41",
+            "/a/A",
+            "/a/b",
+            "/:x",
+            "/:x/:y",
+            "/caf%C3%A9",
+            "/a+b",
+            "/%2F",
+            "/a/%3Ax",
+        ];
+        let probes: &[(&str, &[&str])] = &[
+            ("/", &[]),
+            ("/a", &["a"]),
+            ("/A", &["A"]),
+            ("/a/A", &["a", "A"]),
+            ("/a/%41", &["a", "A"]),
+            ("/a/b", &["a", "b"]),
+            ("/caf%C3%A9", &["café"]),
+            ("/a+b", &["a+b"]),
+            ("/%2F", &["/"]),
+            ("/a/%3Ax", &["a", ":x"]),
+            ("/x/y", &["x", "y"]),
+        ];
+        for pattern in patterns {
+            let ours = web_route_segments(pattern).expect("well-formed pattern");
+            let theirs = RoutePattern::parse(pattern).expect("well-formed pattern");
+            for (raw, decoded) in probes {
+                let path = DecodedPath::parse(raw).expect("well-formed probe");
+                assert_eq!(
+                    shape_matches(&ours, decoded),
+                    match_route(&theirs, &path).is_some(),
+                    "{pattern:?} against {raw:?}"
+                );
+            }
         }
     }
 

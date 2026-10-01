@@ -29,12 +29,12 @@
 use std::sync::Arc;
 
 pub use crate::encoding::DecodedPath;
-#[cfg(feature = "server")]
-use crate::encoding::{EncodedBase, QueryText};
 use crate::encoding::{
     DecodeRefusal, EncodeRefusal, MAX_URL_COMPONENT_LEN, ParamName, ParamNameRefusal, ParamNames,
     decode_path_segment, encode_path_segment, raw_path_segments,
 };
+#[cfg(feature = "server")]
+use crate::encoding::{EncodedBase, QueryText};
 
 /// One segment of a parsed route pattern.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -627,14 +627,25 @@ mod tests {
         for page in pages {
             let canonical = render(&page).unwrap_or_else(|e| panic!("{page:?} must render: {e}"));
             match resolve(&routes(), canonical.decoded(), render) {
-                Matched::Hit { page: back, canonical: again } => {
-                    assert_eq!(back, page, "{page:?} must read back from {}", canonical.as_str());
+                Matched::Hit {
+                    page: back,
+                    canonical: again,
+                } => {
+                    assert_eq!(
+                        back,
+                        page,
+                        "{page:?} must read back from {}",
+                        canonical.as_str()
+                    );
                     assert_eq!(again, canonical, "a canonical path is its own canonical");
                 }
                 Matched::Miss => panic!("{} must resolve", canonical.as_str()),
             }
         }
-        assert_eq!(render(&Page::Home).map(|p| p.as_str().to_owned()), Ok("/".to_owned()));
+        assert_eq!(
+            render(&Page::Home).map(|p| p.as_str().to_owned()),
+            Ok("/".to_owned())
+        );
     }
 
     /// Non-canonical spellings of a page resolve to the one canonical path.
@@ -666,9 +677,18 @@ mod tests {
     #[test]
     fn unrenderable_params_are_refused() {
         let rs = routes();
-        assert_eq!(render(&Page::App(String::new())), Err(RenderRefusal::EmptySegment));
-        assert_eq!(render(&Page::App(".".into())), Err(RenderRefusal::DotSegment));
-        assert_eq!(render(&Page::App("..".into())), Err(RenderRefusal::DotSegment));
+        assert_eq!(
+            render(&Page::App(String::new())),
+            Err(RenderRefusal::EmptySegment)
+        );
+        assert_eq!(
+            render(&Page::App(".".into())),
+            Err(RenderRefusal::DotSegment)
+        );
+        assert_eq!(
+            render(&Page::App("..".into())),
+            Err(RenderRefusal::DotSegment)
+        );
         assert_eq!(
             render_route(&rs, 1, &[RenderArg::Float(f64::NAN)]),
             Err(RenderRefusal::NonFinite)
@@ -690,7 +710,10 @@ mod tests {
     #[test]
     fn unrenderable_page_resolves_to_a_miss() {
         let rs: Vec<Route<Page>> = vec![Route::new("/apps/:slug", |_| Some(Page::NF))];
-        assert!(matches!(resolve(&rs, &dp("/apps/x"), render), Matched::Miss));
+        assert!(matches!(
+            resolve(&rs, &dp("/apps/x"), render),
+            Matched::Miss
+        ));
     }
 
     /// `req.params` come from the route that built the page, not from an
@@ -741,7 +764,10 @@ mod tests {
         let to = canonical_redirect(&base("/m"), "/apps/foo/", Some("x=1&y=%20"), &canon);
         assert_eq!(location_of(&to), "/m/apps/foo?x=1&y=%20");
         let home = canonical_of("/");
-        assert_eq!(location_of(&canonical_redirect(&base("/m"), "//", None, &home)), "/m/");
+        assert_eq!(
+            location_of(&canonical_redirect(&base("/m"), "//", None, &home)),
+            "/m/"
+        );
     }
 
     /// A redirect target redirects no further: render(parse(canonical)) is
@@ -764,14 +790,30 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn canonical_redirect_stays_on_origin() {
-        for slug in ["/evil.com", "//evil.com", "\\evil.com", "%2F%2Fevil.com", "http://evil.com"] {
+        for slug in [
+            "/evil.com",
+            "//evil.com",
+            "\\evil.com",
+            "%2F%2Fevil.com",
+            "http://evil.com",
+        ] {
             let canon = render(&Page::App(slug.into())).unwrap_or_else(|e| panic!("{slug}: {e}"));
             let location = location_of(&canonical_redirect(&base("/"), "/other", None, &canon));
             assert!(location.starts_with("/apps/"), "{slug}: {location}");
-            assert!(!location.contains('\\') && !location.contains("//"), "{slug}: {location}");
+            assert!(
+                !location.contains('\\') && !location.contains("//"),
+                "{slug}: {location}"
+            );
         }
-        for raw in ["//evil.com", "//evil.com/", "/\\evil.com", "/%2F%2Fevil.com"] {
-            let Ok(path) = DecodedPath::parse(raw) else { continue };
+        for raw in [
+            "//evil.com",
+            "//evil.com/",
+            "/\\evil.com",
+            "/%2F%2Fevil.com",
+        ] {
+            let Ok(path) = DecodedPath::parse(raw) else {
+                continue;
+            };
             if let Matched::Hit { canonical, .. } = resolve(&routes(), &path, render) {
                 let location = location_of(&canonical_redirect(&base("/"), raw, None, &canonical));
                 assert!(!location.starts_with("//"), "{raw}: {location}");
@@ -1055,7 +1097,12 @@ mod tests {
             };
             (count + 1, cmd)
         };
-        let entered = enter(resolve(&rs, &dp("/apps/abc"), render), &Page::NF, 0_u32, entry);
+        let entered = enter(
+            resolve(&rs, &dp("/apps/abc"), render),
+            &Page::NF,
+            0_u32,
+            entry,
+        );
         assert_eq!(entered.model, 1);
         assert_eq!(
             entered.cmd, "load abc",
