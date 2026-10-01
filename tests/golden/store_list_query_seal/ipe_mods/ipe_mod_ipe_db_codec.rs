@@ -1,8 +1,26 @@
 use crate::*;
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbCodecCell {
+    CellAbsent,
+    CellNull,
+    CellText(String),
+}
+impl IpeStringify for IpeDbCodecCell {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbCodecCell::CellAbsent => "CellAbsent".to_string(),
+            IpeDbCodecCell::CellNull => "CellNull".to_string(),
+            IpeDbCodecCell::CellText(p0) => format!(
+                "CellText {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
+        }
+    }
+}
 pub(crate) fn user_ipe_db_codec_codec_from_row<T1: 'static + Send + Clone>(
     codec: IpeCodecCodec<T1>,
-    row: HashMap<String, String>,
+    row: HashMap<String, IpeMaybe<String>>,
 ) -> IpeResult<ipe_runtime::error::IpeError, T1> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match codec {
@@ -20,7 +38,7 @@ pub(crate) fn user_ipe_db_codec_codec_from_row<T1: 'static + Send + Clone>(
     }
 }
 pub(crate) fn user_ipe_db_codec_value_from_row(
-    row: HashMap<String, String>,
+    row: HashMap<String, IpeMaybe<String>>,
     columns: Vec<(String, IpeCodecColType)>,
 ) -> IpeResult<ipe_runtime::error::IpeError, JsonVal> {
     let _ipe_recursion_guard = crate::recursion_guard();
@@ -30,7 +48,7 @@ pub(crate) fn user_ipe_db_codec_value_from_row(
     }
 }
 pub(crate) fn user_ipe_db_codec_fields_from_row(
-    row: HashMap<String, String>,
+    row: HashMap<String, IpeMaybe<String>>,
     columns: Vec<(String, IpeCodecColType)>,
 ) -> IpeResult<ipe_runtime::error::IpeError, Vec<(String, JsonVal)>> {
     let _ipe_recursion_guard = crate::recursion_guard();
@@ -53,7 +71,7 @@ pub(crate) fn user_ipe_db_codec_fields_from_row(
     )
 }
 pub(crate) fn user_ipe_db_codec_cons_field(
-    row: HashMap<String, String>,
+    row: HashMap<String, IpeMaybe<String>>,
     col: (String, IpeCodecColType),
     acc: IpeResult<ipe_runtime::error::IpeError, Vec<(String, JsonVal)>>,
 ) -> IpeResult<ipe_runtime::error::IpeError, Vec<(String, JsonVal)>> {
@@ -63,7 +81,7 @@ pub(crate) fn user_ipe_db_codec_cons_field(
         IpeResult::Ok(rest) => {
             ({
                 let (name, colType) = col;
-                match crate::user_ipe_db_codec_cell_to_value(name.clone(), colType, dict_get(name.clone(), row.clone()))
+                match crate::user_ipe_db_codec_cell_to_value(name.clone(), colType, crate::user_ipe_db_codec_lookup_cell(name.clone(), row))
                 {
                     IpeResult::Ok(node) => {
                         IpeResult::Ok(ipe_runtime::list::ipe_list_cons((name, node), rest))
@@ -74,77 +92,92 @@ pub(crate) fn user_ipe_db_codec_cons_field(
         }
     }
 }
+pub(crate) fn user_ipe_db_codec_lookup_cell(
+    name: String,
+    row: HashMap<String, IpeMaybe<String>>,
+) -> IpeDbCodecCell {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match dict_get(name, row.clone()) {
+        IpeMaybe::Nothing => IpeDbCodecCell::CellAbsent,
+        IpeMaybe::Just(maybeText) => match maybeText {
+            IpeMaybe::Nothing => IpeDbCodecCell::CellNull,
+            IpeMaybe::Just(text) => IpeDbCodecCell::CellText(text),
+        },
+    }
+}
 pub(crate) fn user_ipe_db_codec_cell_to_value(
     name: String,
     colType: IpeCodecColType,
-    maybeCell: IpeMaybe<String>,
+    cell: IpeDbCodecCell,
 ) -> IpeResult<ipe_runtime::error::IpeError, JsonVal> {
     let _ipe_recursion_guard = crate::recursion_guard();
     let mut name = name;
     let mut colType = colType;
-    let mut maybeCell = maybeCell;
+    let mut cell = cell;
     loop {
         match colType.clone() {
             IpeCodecColType::CNull(inner) => {
                 let inner = *inner;
-                match maybeCell {
-                    IpeMaybe::Nothing => {
+                match cell.clone() {
+                    IpeDbCodecCell::CellNull => {
                         return IpeResult::Ok(json_enc_null());
                     }
-                    IpeMaybe::Just(cell) => {
-                        if crate::user_ipe_db_codec_is_sql_null(cell.clone()) {
-                            return IpeResult::Ok(json_enc_null());
-                        } else {
-                            let __tco_0 = name;
-                            let __tco_1 = inner;
-                            let __tco_2 = IpeMaybe::Just(cell);
-                            name = __tco_0;
-                            colType = __tco_1;
-                            maybeCell = __tco_2;
-                            continue;
-                        }
+                    IpeDbCodecCell::CellAbsent => {
+                        return IpeResult::Err(crate::user_ipe_db_codec_missing_column_error(name));
+                    }
+                    IpeDbCodecCell::CellText(_) => {
+                        let __tco_0 = name;
+                        let __tco_1 = inner;
+                        let __tco_2 = cell;
+                        name = __tco_0;
+                        colType = __tco_1;
+                        cell = __tco_2;
+                        continue;
                     }
                 }
             }
             IpeCodecColType::CText => {
-                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_0: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_0) });
+                return crate::user_ipe_db_codec_require_text(name.clone(), cell, move |eta_0: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_0) });
             }
             IpeCodecColType::CInt => {
-                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_1: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_1) });
+                return crate::user_ipe_db_codec_require_text(name.clone(), cell, move |eta_1: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_1) });
             }
             IpeCodecColType::CReal => {
-                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_2: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_2) });
+                return crate::user_ipe_db_codec_require_text(name.clone(), cell, move |eta_2: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_2) });
             }
             IpeCodecColType::CBool => {
-                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_3: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_3) });
+                return crate::user_ipe_db_codec_require_text(name.clone(), cell, move |eta_3: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_3) });
             }
             IpeCodecColType::CTime => {
-                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_4: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_4) });
+                return crate::user_ipe_db_codec_require_text(name.clone(), cell, move |eta_4: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_4) });
             }
             IpeCodecColType::CDecimal => {
-                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_5: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_5) });
+                return crate::user_ipe_db_codec_require_text(name.clone(), cell, move |eta_5: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_5) });
             }
             IpeCodecColType::CMoney => {
-                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_6: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_6) });
+                return crate::user_ipe_db_codec_require_text(name.clone(), cell, move |eta_6: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_6) });
             }
             IpeCodecColType::CBlob => {
-                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_7: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_7) });
+                return crate::user_ipe_db_codec_require_text(name.clone(), cell, move |eta_7: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_7) });
             }
         }
     }
 }
-pub(crate) fn user_ipe_db_codec_require_present<
+pub(crate) fn user_ipe_db_codec_require_text<
     FN2: Fn(String) -> IpeResult<ipe_runtime::error::IpeError,
     JsonVal> + Send + Sync + 'static,
 >(
     name: String,
-    maybeCell: IpeMaybe<String>,
+    cell: IpeDbCodecCell,
     parse: FN2,
 ) -> IpeResult<ipe_runtime::error::IpeError, JsonVal> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    match maybeCell {
-        IpeMaybe::Just(cell) => (parse)(cell),
-        IpeMaybe::Nothing => IpeResult::Err(crate::user_ipe_db_codec_missing_column_error(name)),
+    match cell {
+        IpeDbCodecCell::CellText(text) => (parse)(text),
+        IpeDbCodecCell::CellNull => IpeResult::Err(crate::user_ipe_db_codec_null_cell_error(name)),
+        IpeDbCodecCell::CellAbsent => {
+            IpeResult::Err(crate::user_ipe_db_codec_missing_column_error(name))
+        }
     }
 }
 pub(crate) fn user_ipe_db_codec_scalar_cell_to_value(
@@ -230,10 +263,6 @@ pub(crate) fn user_ipe_db_codec_scalar_cell_to_value(
         }
     }
 }
-pub(crate) fn user_ipe_db_codec_is_sql_null(cell: String) -> bool {
-    let _ipe_recursion_guard = crate::recursion_guard();
-    (string_to_upper(cell) == "NULL".to_string())
-}
 pub(crate) fn user_ipe_db_codec_bool_from_cell(cell: String) -> IpeMaybe<bool> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match (cell).as_str() {
@@ -257,6 +286,14 @@ pub(crate) fn user_ipe_db_codec_missing_column_error(name: String) -> ipe_runtim
         "Ipe.Db.Codec: row is missing the required column \"".to_string(),
         name,
         "\"".to_string(),
+    ]))
+}
+pub(crate) fn user_ipe_db_codec_null_cell_error(name: String) -> ipe_runtime::error::IpeError {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    ipe_error_invalid_input(string_concat(vec![
+        "Ipe.Db.Codec: column \"".to_string(),
+        name,
+        "\" is NULL but its field is not a Maybe".to_string(),
     ]))
 }
 pub(crate) fn user_ipe_db_codec_bad_cell_error(

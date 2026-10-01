@@ -348,6 +348,23 @@ fn db_store_to_maybe() {
     assert_runs_and_matches_oracle("db_store_to_maybe");
 }
 
+/// `Ipe.Db.Store` nullable round-trip over a codec store on `sqlite::memory:`: a
+/// record holding a `Maybe String`, `Maybe Int`, `Maybe Float`, and `Maybe Bool`
+/// reads SQL `NULL` back as `Nothing` through every codec-decoded read terminal
+/// (`get`, `all`, `findBy`, `findWhere`, query `toList`), while `Just ""`,
+/// `Just 0`, `Just 3.0`, `Just False`, and `Just "NULL"` read back unchanged —
+/// `NULL` and the empty string never collapse, and no text value is an in-band
+/// `NULL` marker. A query on the nullable int orders the `NULL` row first
+/// ascending and last descending; a codec whose field is a plain `String`
+/// refuses the `NULL` row with a typed `Err`.
+///
+/// Sanctioned divergence: Ipê emits Rust+sqlx; `Ipe.Db.Store` is an Ipê-only
+/// addition with no prior counterpart; oracle is Ipê's own output.
+#[test]
+fn db_store_null_roundtrip() {
+    assert_runs_and_matches_oracle("db_store_null_roundtrip");
+}
+
 /// SEAL regression: cross-call auto-trait-bound propagation through a NON-BARE
 /// argument. `fetchAll conn s = Store.toList conn (Store.query s)` is generic
 /// over the row type; the caller's tvar rides inside the COMPUTED argument

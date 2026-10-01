@@ -19,9 +19,10 @@ Three knots.
   `codecFromRow` assembles the row's cells into one in-memory value and runs the
   codec's *own* decoder on it. A field renamed or retyped changes exactly one
   place.
-- **Schema drift is fail-closed.** A row missing a required column, or a cell
-  that is not the declared shape (a non-integer where an `Int` column was
-  declared), is a typed `Err` — never a wrong value silently threaded onward. The
+- **Schema drift is fail-closed.** A row missing a declared column, a SQL
+  `NULL` in a column whose field is not a `Maybe`, or a cell that is not the
+  declared shape (a non-integer where an `Int` column was declared), is a typed
+  `Err` — never a wrong value silently threaded onward. The
   read either yields a real, fully-typed value or a typed error; there is no
   ragged half-decoded row.
 - **A non-record codec has no columns, so it is rejected.** `codecToBinds` /
@@ -35,7 +36,7 @@ Three knots.
 The example under
 [`examples/shapes/script/db-codec-row`](../../examples/shapes/script/db-codec-row/src/Main.ipe)
 derives a codec from a record witness, reads a well-formed row back into a
-typed value, and rejects two drifted rows.
+typed value, and rejects three drifted rows.
 
 The codec is derived from a named, annotated witness — the field names become
 the columns, one derivation:
@@ -58,12 +59,14 @@ userCodec =
     Codec.auto blankUser
 ```
 
-A database row is a `Dict String String` of cell text keyed by column name.
-Reading it runs the codec's own decoder — on success the result is a real
-`User`; on drift, a typed `Err`:
+A database row is a `Dict String (Maybe String)` keyed by column name: `Just`
+the cell text, or `Nothing` for SQL `NULL`, so `NULL` and the empty string stay
+apart and a `Maybe` field reads `Nothing` only from a real `NULL`. Reading it
+runs the codec's own decoder — on success the result is a real `User`; on
+drift, a typed `Err`:
 
 ```ipe
-readRow : Dict String String -> String
+readRow : Dict String (Maybe String) -> String
 readRow row =
     case DbCodec.codecFromRow userCodec row of
         Ok user ->
@@ -73,12 +76,13 @@ readRow row =
             "rejected (schema drift — fail-closed)"
 ```
 
-Running it (`ipe run`) reads the good row and turns both drifted rows away:
+Running it (`ipe run`) reads the good row and turns the three drifted rows away:
 
 ```
 well-formed row -> Ok User { id = u-42, age = 30, active = True }
 missing column  -> rejected (schema drift — fail-closed)
 bad cell type   -> rejected (schema drift — fail-closed)
+NULL in an Int  -> rejected (schema drift — fail-closed)
 ```
 
 ## The why
@@ -103,6 +107,6 @@ already-parameterised binds it feeds.
 - **Sibling guides:** [Codec](codec.md) — the bidirectional codec this bridges
   to a row; the `Shape` it declares is what names the columns here. [Result](result.md)
   — the typed failure both directions return. [Dictionaries](dict.md) — the
-  `Dict String String` a row arrives as.
+  `Dict String (Maybe String)` a row arrives as.
 - **Concepts:** [The parse-don't-validate idiom](../idioms/parse-dont-validate.md)
   — a row read is the boundary where untyped cell text becomes a typed value.

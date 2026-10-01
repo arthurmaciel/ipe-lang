@@ -1436,7 +1436,7 @@ Ipe.Db.Codec — the seam that turns one `Ipe.Codec.Codec a` into a database
 | Export | Summary |
 |--------|----------|
 | `codecToBinds` | Project a value through its codec to the `(column, SqlValue)` binds a row |
-| `codecFromRow` | Rebuild a value from a database row through its codec. Each column declared |
+| `codecFromRow` | Rebuild a value from a database row through its codec. The row maps each |
 | `toSqlValue` | Project a SCALAR-shaped value through its codec to one bound `SqlValue`. |
 
 ## Db.Dsn

@@ -25,7 +25,10 @@ decoder. Both directions reuse the codec's own JSON seam:
   * `codecFromRow` builds an in-memory `Value` object from the row's cells,
     one field per declared column parsed into the JSON scalar the decoder
     expects, then runs the codec's OWN `Decoder` on that `Value` via
-    `Json.Decode.decodeValue`. Schema drift (a missing column, a cell that is
+    `Json.Decode.decodeValue`. A row cell is `Maybe String`: `Nothing` is SQL
+    `NULL`, kept apart from the empty string, so a nullable column reads back
+    `Nothing` only for `NULL` and `Just ""` only for an empty value. Schema
+    drift (a missing column, a `NULL` in a non-nullable column, a cell that is
     not the declared shape) surfaces as a typed `Err`, never a wrong value.
 
 Fail-closed throughout. A codec whose `Shape` is not an `SRecord` cannot name
@@ -62,18 +65,20 @@ wrong bind.
 ## `codecFromRow`
 
 ```ipe
-codecFromRow : Codec a -> Dict String String -> Result Error a
+codecFromRow : Codec a -> Dict String (Maybe String) -> Result Error a
 ```
 
-Rebuild a value from a database row through its codec. Each column declared
-by the codec's `Shape` is parsed from its row cell into the JSON scalar the
-decoder expects, assembled into ONE in-memory `Value` object, and the codec's
-OWN `Decoder` is run on that `Value`. No second decoder is written — the same
+Rebuild a value from a database row through its codec. The row maps each
+column name to its cell, `Nothing` for SQL `NULL`. Each column declared by the
+codec's `Shape` is parsed from its row cell into the JSON scalar the decoder
+expects, assembled into ONE in-memory `Value` object, and the codec's OWN
+`Decoder` is run on that `Value`. No second decoder is written — the same
 decoder that reads the wire form reads the row.
 
-Fail-closed: a codec whose shape is not an `SRecord`, a required column
-missing from the row, or a cell that does not parse to its declared shape is a
-typed `Err`. Schema drift surfaces as an error, never a wrong value.
+Fail-closed: a codec whose shape is not an `SRecord`, a declared column
+missing from the row, a `NULL` cell in a non-nullable column, or a cell that
+does not parse to its declared shape is a typed `Err`. Schema drift surfaces
+as an error, never a wrong value.
 
 ## `toSqlValue`
 

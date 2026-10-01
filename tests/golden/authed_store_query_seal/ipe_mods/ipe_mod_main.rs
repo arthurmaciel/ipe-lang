@@ -23,7 +23,7 @@ pub(crate) fn main_doc_codec() -> IpeCodecCodec<RecAuthorBody> {
         mkDec: {
             let __ipe_fn: ::std::sync::Arc<
                 dyn Fn(Rec_) -> Decoder<RecAuthorBody> + Send + Sync + 'static,
-            > = ::std::sync::Arc::new(move |arg_15: Rec_| -> Decoder<RecAuthorBody> {
+            > = ::std::sync::Arc::new(move |arg_16: Rec_| -> Decoder<RecAuthorBody> {
                 ({
                     let cap_0 = "body".to_string();
                     ({
@@ -114,7 +114,7 @@ pub(crate) fn main_share_codec() -> IpeCodecCodec<RecDocRefMember> {
         mkDec: {
             let __ipe_fn: ::std::sync::Arc<
                 dyn Fn(Rec_) -> Decoder<RecDocRefMember> + Send + Sync + 'static,
-            > = ::std::sync::Arc::new(move |arg_16: Rec_| -> Decoder<RecDocRefMember> {
+            > = ::std::sync::Arc::new(move |arg_17: Rec_| -> Decoder<RecDocRefMember> {
                 ({
                     let cap_0 = "member".to_string();
                     ({
@@ -219,7 +219,7 @@ pub(crate) fn main_handle_shared_docs(
                     + Send
                     + Sync
                     + 'static,
-            > = Box::new(move |arg_17: ipe_runtime::error::IpeError| -> IpeTask<ServerResponse> {
+            > = Box::new(move |arg_18: ipe_runtime::error::IpeError| -> IpeTask<ServerResponse> {
                 task_succeed(server_text("none".to_string()))
             });
             __ipe_fn
@@ -267,7 +267,7 @@ pub(crate) fn main_handle_my_docs(
                     + Send
                     + Sync
                     + 'static,
-            > = Box::new(move |arg_18: ipe_runtime::error::IpeError| -> IpeTask<ServerResponse> {
+            > = Box::new(move |arg_19: ipe_runtime::error::IpeError| -> IpeTask<ServerResponse> {
                 task_succeed(server_text("none".to_string()))
             });
             __ipe_fn
@@ -326,7 +326,7 @@ pub(crate) fn main_mask_codec() -> IpeCodecCodec<RecOwnerSsn> {
         mkDec: {
             let __ipe_fn: ::std::sync::Arc<
                 dyn Fn(Rec_) -> Decoder<RecOwnerSsn> + Send + Sync + 'static,
-            > = ::std::sync::Arc::new(move |arg_19: Rec_| -> Decoder<RecOwnerSsn> {
+            > = ::std::sync::Arc::new(move |arg_20: Rec_| -> Decoder<RecOwnerSsn> {
                 decode_map2(
                     {
                         let __ipe_fn: Box<
@@ -403,7 +403,7 @@ pub(crate) fn main_handle_mask_docs(
                     + Send
                     + Sync
                     + 'static,
-            > = Box::new(move |arg_20: ipe_runtime::error::IpeError| -> IpeTask<ServerResponse> {
+            > = Box::new(move |arg_21: ipe_runtime::error::IpeError| -> IpeTask<ServerResponse> {
                 task_succeed(server_text("none".to_string()))
             });
             __ipe_fn
@@ -453,7 +453,7 @@ pub(crate) fn ipe_main() -> IpeTask<()> {
         {
             let __ipe_fn: Box<
                 dyn Fn(ipe_runtime::error::IpeError) -> IpeTask<()> + Send + Sync + 'static,
-            > = Box::new(move |arg_21: ipe_runtime::error::IpeError| -> IpeTask<()> {
+            > = Box::new(move |arg_22: ipe_runtime::error::IpeError| -> IpeTask<()> {
                 io_println("authed-store-query-seal".to_string())
             });
             __ipe_fn
@@ -488,7 +488,7 @@ pub(crate) fn ipe_main() -> IpeTask<()> {
                     __ipe_fn
                 }),
             ]),
-            Box::new(move |arg_22: ()| -> IpeTask<()> {
+            Box::new(move |arg_23: ()| -> IpeTask<()> {
                 io_println("authed-store-query-seal".to_string())
             }),
         ),

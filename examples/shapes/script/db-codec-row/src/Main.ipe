@@ -15,8 +15,9 @@ import Ipe.Io as Io
 --   • `codecFromRow` rebuilds a value from a row's cells through the codec's OWN
 --     decoder — no second decoder is written, so the row read cannot drift from
 --     the JSON read.
---   • Schema drift is fail-closed: a row missing a declared column, or a cell
---     that is not the declared shape, is a typed `Err`, never a wrong value.
+--   • Schema drift is fail-closed: a row missing a declared column, a SQL
+--     `NULL` in a column whose field is not a `Maybe`, or a cell that is not the
+--     declared shape, is a typed `Err`, never a wrong value.
 --   • A codec whose shape is not a record has no columns to name, so it is
 --     rejected with a typed error rather than a guess.
 
@@ -40,39 +41,51 @@ userCodec =
     Codec.auto blankUser
 
 
--- A database row is a `Dict String String` of cell text keyed by column name.
--- Every cell is a string; the codec parses each into its declared type.
-sampleRow : Dict String String
+-- A database row maps each column name to its cell: `Just` the cell text, or
+-- `Nothing` for SQL `NULL` (kept apart from the empty string). The codec parses
+-- each cell into its declared type.
+sampleRow : Dict String (Maybe String)
 sampleRow =
     Dict.fromList
-        [ ( "id", "u-42" )
-        , ( "age", "30" )
-        , ( "active", "1" )
+        [ ( "id", Just "u-42" )
+        , ( "age", Just "30" )
+        , ( "active", Just "1" )
         ]
 
 
 -- A row missing the required `age` column — schema drift the read must reject.
-missingAgeRow : Dict String String
+missingAgeRow : Dict String (Maybe String)
 missingAgeRow =
     Dict.fromList
-        [ ( "id", "u-7" )
-        , ( "active", "0" )
+        [ ( "id", Just "u-7" )
+        , ( "active", Just "0" )
         ]
 
 
 -- A row whose `age` cell is not an integer — a bad cell the read must reject.
-badAgeRow : Dict String String
+badAgeRow : Dict String (Maybe String)
 badAgeRow =
     Dict.fromList
-        [ ( "id", "u-9" )
-        , ( "age", "thirty" )
-        , ( "active", "1" )
+        [ ( "id", Just "u-9" )
+        , ( "age", Just "thirty" )
+        , ( "active", Just "1" )
+        ]
+
+
+-- A row whose `age` cell is SQL `NULL`, but `age` is an `Int`, not a
+-- `Maybe Int` — a NULL the read must reject rather than invent a value for.
+nullAgeRow : Dict String (Maybe String)
+nullAgeRow =
+    Dict.fromList
+        [ ( "id", Just "u-11" )
+        , ( "age", Nothing )
+        , ( "active", Just "1" )
         ]
 
 
 -- Read a row through the codec and describe the outcome. On success the value
 -- is a real `User` the rest of the program can use; on drift it is a typed Err.
-readRow : Dict String String -> String
+readRow : Dict String (Maybe String) -> String
 readRow row =
     case DbCodec.codecFromRow userCodec row of
         Ok user ->
@@ -104,3 +117,4 @@ main =
         Io.println ("well-formed row -> " ++ readRow sampleRow)
         Io.println ("missing column  -> " ++ readRow missingAgeRow)
         Io.println ("bad cell type   -> " ++ readRow badAgeRow)
+        Io.println ("NULL in an Int  -> " ++ readRow nullAgeRow)
