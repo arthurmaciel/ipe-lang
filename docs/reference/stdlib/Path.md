@@ -14,10 +14,12 @@ a raw `String` — an unvalidated string can never reach a filesystem syscall.
 Use `Ipe.File` for the effectful side (read / write / exists).
 
 Compose paths with `under root child`, never by string concatenation: it
-refuses an empty, absolute, `..`-bearing, or NUL-bearing child, and checks
-that the result lies component-wise below the root (`/repo2/x` is not
-under `/repo`). `absolute` resolves a relative path against the working
-directory through the same join (it needs the `filesystem` capability).
+refuses an empty, absolute, or NUL-bearing child, and checks that the
+result lies component-wise below the root (`/repo2/x` is not under
+`/repo`). A child cannot climb out through `..`: `fromString` folds an
+in-bounds `..` (`a/../b` is `b`) and refuses one that escapes.
+`absolute` resolves a relative path against the working directory
+through the same join (it needs the `filesystem` capability).
 
 Symlinks: `under` and `absolute` are lexical. They never touch the
 filesystem, so they neither follow nor forbid a symlink; a joined path
@@ -82,8 +84,9 @@ under : Path -> Path -> Result Error Path
 ```
 
 `under root child` — join the relative `child` beneath `root`. Returns
-`Err` when `child` is empty, absolute, contains a `..` element, or the
-join would not lie below `root`; otherwise `Ok` the cleaned joined `Path`.
+`Err` when `child` is empty or absolute, or the join would not lie below
+`root`; otherwise `Ok` the cleaned joined `Path`. A `child` built by
+`fromString` never holds a `..` that escapes, so `a/../b` joins as `b`.
 On Windows, a `child` element containing `:` (a drive or an alternate data
 stream), made only of dots and spaces (which Windows strips to `.` or
 `..`), or naming a reserved device (`CON`, `NUL`, `COM1`, `nul.txt`, ...)
