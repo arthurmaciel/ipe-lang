@@ -22,9 +22,9 @@
 //! `Cmd.publish`/`PubSub.publish`/`Sub.subscribeTopic` (via `pubsub`, an
 //! in-tab broker) are the M4 Cmd/Sub browser bridge — see each submodule's
 //! doc comment. Client-side routing (`wasm_app_routed`) uses the browser
-//! History API: `popstate` events drive URL → page transitions via the
-//! same `route::match_routes` the server uses — one algorithm, two entry
-//! points.
+//! History API: mount, `popstate`, and in-app navigation enter the URL
+//! through the same `route::enter` the server uses — one algorithm, every
+//! entry point — and each entry runs the page's entry Cmd.
 
 #![allow(clippy::type_complexity)] // TEA fn-quadruples are inherent here
 
@@ -161,11 +161,11 @@ where
 /// model lives in the tab, URLs are matched client-side, and navigation uses
 /// the History API.
 ///
-/// URL → page resolution uses the same `route::match_routes` the server uses
-/// (one algorithm, two entry points). On every `popstate` event the router
-/// applies `set_page(matched_page, current_model)` → new model, then runs the
-/// normal view→diff→patch cycle — no `update` call is involved, matching the
-/// server's per-request `init`/`set_page` flow.
+/// URL → page entry uses the same `route::enter` the server uses (one
+/// algorithm, every entry point). On mount, on every `popstate` event, and on
+/// in-app navigation the router applies `set_page(matched_page, current_model)`
+/// → (new model, entry Cmd), runs the view→diff→patch cycle, then runs the
+/// entry Cmd — matching the server's `init`/`set_page` flow.
 ///
 /// `init` receives a `WebReq` synthesised from `location` + cookies, the same
 /// shape `wasm_app` uses.
@@ -187,7 +187,7 @@ where
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
     FView: Fn(Model) -> Html<Msg> + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
-    FSetPage: Fn(Page, Model) -> Model + 'static,
+    FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + 'static,
 {
     Box::pin(async move {
         match mount_app_routed(
@@ -274,6 +274,10 @@ fn install_port_inbound_seam() {
 }
 
 /// The retained application state driving one mounted TEA app.
+/// A routed app's URL entry: path + current model → the entered model and entry Cmd, or `None` when unrouted.
+type WasmRouter<Model, Msg> =
+    dyn Fn(&str, Model) -> Option<crate::web::route::Entered<Model, IpeCmd<Msg>>>;
+
 struct App<Model, Msg> {
     model: RefCell<Model>,
     tree: RefCell<Html<Msg>>,
@@ -286,14 +290,14 @@ struct App<Model, Msg> {
     submgr: RefCell<subs::SubManager<Msg>>,
     /// This mount instance's `Cmd.publish`/`Sub.subscribeTopic` origin token.
     origin: String,
-    /// Client-side router: maps a URL path to a new model (present only for
-    /// routed apps). Called on `popstate` events — applies `set_page` over the
-    /// matched route without going through `update`. Returns `None` when the
-    /// path does not match any declared route — the current model and DOM are
-    /// left unchanged, matching the server's `matches_any` unrouted-GET guard
+    /// Client-side router: enters a URL path, yielding the new model and the
+    /// page's entry Cmd (present only for routed apps). Called on `popstate`
+    /// and in-app navigation. Returns `None` when the path does not match any
+    /// declared route — the current model and DOM are left unchanged and no
+    /// Cmd runs, matching the server's `matches_any` unrouted-GET guard
     /// (`web::route::matches_any`; prevents handler-index orphaning on noise
     /// paths like `/favicon.ico`).
-    router: Option<Box<dyn Fn(&str, Model) -> Option<Model>>>,
+    router: Option<Box<WasmRouter<Model, Msg>>>,
     /// Development-only time-travelling debugger recorder. Passive: records
     /// each live-pass `update` step without re-firing any `Cmd`. Present only
     /// when the `debugger` feature is active (`ipe build/run --debugger`).
@@ -502,9 +506,10 @@ where
 }
 
 /// Mount a routed `Web.tea` in the browser. Identical to `mount_app` except:
-/// 1. The initial model's `page` field is set by routing the current URL.
-/// 2. A `popstate` listener is installed so back/forward navigation re-routes
-///    the URL → model without going through `update`.
+/// 1. The initial model is entered at the current URL, and the entry Cmd runs
+///    after `init`'s.
+/// 2. A `popstate` listener is installed so back/forward navigation enters the
+///    URL (running its entry Cmd).
 fn mount_app_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
     init: FInit,
     update: FUpdate,
@@ -522,9 +527,9 @@ where
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + 'static,
     FView: Fn(Model) -> Html<Msg> + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
-    FSetPage: Fn(Page, Model) -> Model + 'static,
+    FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + 'static,
 {
-    use crate::web::route::{match_routes, matches_any};
+    use crate::web::route::{enter, matches_any};
 
     let document = document()?;
     let body: web_sys::HtmlElement = document.body().ok_or("document has no <body>")?;
@@ -532,12 +537,13 @@ where
     let req = synthesize_req(&document)?;
     let initial_path = req.path.clone();
 
-    // Seed the model from `init`, then immediately apply the current URL so the
-    // `page` field reflects the browser's address bar before the first render.
-    // This mirrors the server's per-request `set_page(match_routes(…), init_model)` call.
-    let (init_model, cmd0) = init(req);
-    let initial_page = match_routes(&routes, &not_found, &initial_path);
-    let model = set_page(initial_page, init_model);
+    // Seed the model from `init`, then enter the current URL so the `page`
+    // field reflects the browser's address bar before the first render. This
+    // mirrors the server's miss: `init`'s Cmd, then the entry Cmd.
+    let (init_model, init_cmd) = init(req);
+    let entered = enter(&routes, &not_found, &initial_path, init_model, &set_page);
+    let model = entered.model;
+    let cmd0 = IpeCmd::Batch(vec![init_cmd, entered.cmd]);
 
     let mut tree = view(model.clone());
     assign_ipe_ids(&mut tree, ROOT_IPE_ID);
@@ -545,8 +551,8 @@ where
 
     let index = build_index(&tree);
 
-    // Shared router closure: maps a URL path → new model, or `None` when the
-    // path does not match any declared route.
+    // Shared router closure: enters a URL path → new model + entry Cmd, or
+    // `None` when the path does not match any declared route.
     //
     // The `matches_any` guard before `match_routes` is the browser-client
     // analogue of the server's routed-app noise-path guard: a popstate to an
@@ -557,16 +563,12 @@ where
     let routes_rc = Rc::new(routes);
     let not_found_rc = Rc::new(not_found);
     let set_page_rc = Rc::new(set_page);
-    let router: Box<dyn Fn(&str, Model) -> Option<Model>> = {
+    let router: Box<WasmRouter<Model, Msg>> = {
         let routes = Rc::clone(&routes_rc);
         let not_found = Rc::clone(&not_found_rc);
         let set_page = Rc::clone(&set_page_rc);
         Box::new(move |path: &str, m: Model| {
-            if !matches_any(&routes, path) {
-                return None;
-            }
-            let page = match_routes(&routes, &not_found, path);
-            Some((set_page)(page, m))
+            matches_any(&routes, path).then(|| enter(&routes, &not_found, path, m, &*set_page))
         })
     };
 
@@ -614,7 +616,7 @@ where
 }
 
 /// Install a `popstate` listener on `window` so back/forward navigation
-/// re-routes the new URL into the app's model without going through `update`.
+/// enters the new URL (running its entry Cmd).
 fn attach_popstate_listener<Model, Msg>(app: &Rc<App<Model, Msg>>) -> Result<(), String>
 where
     Model: Clone + 'static,
@@ -637,12 +639,11 @@ where
     Ok(())
 }
 
-/// Apply a client-side navigation: route `path` → new model via the app's
-/// router closure, then run a view→diff→patch cycle. No `update` is called —
-/// the router directly replaces the `page` field in the model, matching the
-/// server's per-request `set_page` call.
+/// Apply a client-side navigation: enter `path` via the app's router closure,
+/// commit the model, run a view→diff→patch cycle, then run the entry Cmd —
+/// matching the server's entry.
 ///
-/// Returns early (no DOM mutation) when the router returns `None`, which means
+/// Returns early (no DOM mutation, no Cmd) when the router returns `None`, which means
 /// the path does not match any declared route — unrouted popstate events (e.g.
 /// a browser extension pushing `/favicon.ico`) must not rebuild the handler
 /// index from the `notFound` view and orphan the live page's handlers.
@@ -655,7 +656,11 @@ where
         return;
     };
     let current = app.model.borrow().clone();
-    let Some(new_model) = (router)(path, current) else {
+    let Some(crate::web::route::Entered {
+        model: new_model,
+        cmd,
+    }) = (router)(path, current)
+    else {
         return;
     };
     *app.model.borrow_mut() = new_model.clone();
@@ -673,6 +678,7 @@ where
         widget::sync_widget_properties(&document, &app.tree.borrow());
     }
 
+    run_cmd(app, cmd);
     resync_subscriptions(app);
 }
 

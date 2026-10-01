@@ -4,7 +4,9 @@ module Main exposing (main)
 -- `onNavigate : page -> msg` cfg field.  Every URL-driven route change becomes
 -- the `Navigate p` Msg, which the runtime dispatches through `update` — the new
 -- page reaches the model only through the author's own `update` arm, never a
--- runtime-internal `page`-field mutation.
+-- runtime-internal `page`-field mutation.  The arm's Cmd is the page's entry
+-- Cmd: it runs on every URL entry (first GET, in-app navigation, back/forward,
+-- reconnect).
 --
 -- The absent-field counterpart (`live_let_bound_routes`) reconciles the page by
 -- the implicit desugaring instead; the two fixtures pin both sides of the
@@ -14,6 +16,7 @@ import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Tea.Web.Cmd
 import Ipe.String
+import Ipe.Task as Task
 import Ipe.Tea.Web.Sub
 
 type Page
@@ -40,7 +43,7 @@ update msg model =
             ( { model | count = model.count + 1 }, Cmd.none )
 
         Navigate p ->
-            ( { model | page = p, count = model.count + 1 }, Cmd.none )
+            ( { model | page = p, count = model.count + 1 }, Cmd.perform (Task.succeed 1) (\_result -> Increment) )
 
 view : Model -> Element Msg
 view model =

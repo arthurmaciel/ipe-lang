@@ -125,6 +125,36 @@ pub fn match_params<Page>(routes: &[Route<Page>], path: &str) -> crate::dict::Ip
     IpeDict::new()
 }
 
+/// The result of entering a routed page: the model to commit and the Cmd to run once.
+///
+/// `#[must_use]` so a caller that drops the entry (and with it the page's
+/// load Cmd) is a denied warning, never a silently skipped page load.
+///
+/// Generic over the Cmd carrier `C` (the platform's `IpeCmd<Msg>`), so the
+/// server-free render core shares it without the TEA loop.
+#[must_use]
+pub struct Entered<M, C> {
+    pub model: M,
+    pub cmd: C,
+}
+
+/// Enter `path`: match it against `routes` and apply the app's entry fn to the matched page.
+///
+/// The single URL-to-model entry every platform shares (server GET, SSE
+/// reconnect, wasm mount, popstate, in-app navigation). The entry fn is the
+/// app's `set_page` (`onNavigate` routed through `update`, or the implicit
+/// `{ model | page }` paired with `Cmd.none`); its Cmd is returned, never dropped.
+pub fn enter<Page: Clone, M, C>(
+    routes: &[Route<Page>],
+    not_found: &Page,
+    path: &str,
+    model: M,
+    entry: impl Fn(Page, M) -> (M, C),
+) -> Entered<M, C> {
+    let (model, cmd) = entry(match_routes(routes, not_found, path), model);
+    Entered { model, cmd }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +234,28 @@ mod tests {
         assert!(matches_any(&none, "/"));
         assert!(!matches_any(&none, "/favicon.ico"));
         assert!(!matches_any(&none, "/about"));
+    }
+
+    /// `enter` hands back the entry fn's Cmd beside its model, so no caller can
+    /// commit the page and lose the page's load.
+    #[test]
+    fn enter_returns_the_entry_fns_cmd() {
+        let rs = routes();
+        let entry = |page: Page, count: u32| {
+            let cmd = match page {
+                Page::App(slug) => format!("load {slug}"),
+                _ => String::new(),
+            };
+            (count + 1, cmd)
+        };
+        let entered = enter(&rs, &Page::NF, "/apps/abc", 0_u32, entry);
+        assert_eq!(entered.model, 1);
+        assert_eq!(
+            entered.cmd, "load abc",
+            "enter must return the entry fn's Cmd for the matched page"
+        );
+        let missed = enter(&rs, &Page::NF, "/nope", 5_u32, entry);
+        assert_eq!(missed.model, 6, "an unknown path enters notFound");
+        assert_eq!(missed.cmd, "");
     }
 }
