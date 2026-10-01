@@ -4,6 +4,7 @@ import Ipe.Char as Char
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.String as String
+import Lib.SafeText as SafeText exposing (SafeText)
 
 
 -- Server-side syntax highlighting, Ipê-native: a small hand-rolled tokenizer
@@ -47,8 +48,16 @@ langFor kind =
             Unknown
 
 
-tokenText : Token -> String
+-- A token's text as it may be shown: every control and bidi character is
+-- spelled as a visible escape, so a source line cannot render reordered
+-- (Trojan Source). `\` and `"` stay as the source wrote them.
+tokenText : Token -> SafeText
 tokenText tok =
+    SafeText.renderForeign (tokenSource tok)
+
+
+tokenSource : Token -> String
+tokenSource tok =
     case tok of
         Keyword s ->
             s

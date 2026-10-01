@@ -1,3 +1,4 @@
+use crate::diff::{Change, QueueOp, Snapshot, UnitState};
 use crate::model::{Kind, Unit};
 use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension};
@@ -6,9 +7,11 @@ pub struct Store {
     pub conn: Connection,
 }
 
-/// Schema v2 — additive over v1: `units`/`links`/`callgraph`/`change_queue`
-/// are the review backbone. All `CREATE … IF NOT EXISTS` so an old DB gains
-/// the new tables on open; `index` deletes the file anyway. The CHECK
+/// The index schema: `units`/`links`/`callgraph`/`change_queue` are the review
+/// backbone. All `CREATE … IF NOT EXISTS` so an old DB gains missing tables on
+/// open; `index` drops and recreates every table except `change_queue`, whose
+/// rows only the queue reconciliation (`diff::reconcile`) and the review app's
+/// drain ever change. The CHECK
 /// constraints make an invalid enum literal unrepresentable at the DB layer
 /// (the extractor is the only writer and only emits the allowed values).
 const SCHEMA: &str = "
@@ -31,7 +34,8 @@ CREATE TABLE IF NOT EXISTS units (
   facing      TEXT NOT NULL CHECK (facing IN ('user','internal','test')),
   purpose     TEXT,
   body_hash   TEXT NOT NULL,
-  updated_sha TEXT NOT NULL
+  updated_sha TEXT NOT NULL,
+  residual_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS i_units_path ON units(path);
 CREATE INDEX IF NOT EXISTS i_units_name ON units(name);
@@ -63,11 +67,13 @@ CREATE TABLE IF NOT EXISTS change_queue (
 );
 ";
 
-/// Current schema version: v3 rows carry `sha256:` view attestations in
-/// `body_hash`, v2 rows a bare blake3 of the span. `open` stamps it only on a
+/// Current schema version: v4 `file` units carry `residual_hash`, the change
+/// key of the lines no other unit of the file covers; v3 rows carry `sha256:`
+/// view attestations in `body_hash` and no residual; v2 rows a bare blake3 of
+/// the span. `open` stamps it only on a
 /// DB with no units yet, so a stamp always describes the rows beside it; a DB
 /// holding rows of another version keeps its stamp until `index` rebuilds it.
-const SCHEMA_VERSION: &str = "3";
+const SCHEMA_VERSION: &str = "4";
 
 /// Stable unit id: blake3 of `path|kind|qualified`. Content-stable across
 /// re-indexes; a rename of the symbol or path changes the id by design.
@@ -90,7 +96,14 @@ impl Store {
         Ok(Store { conn })
     }
     pub fn begin(&self) -> Result<()> {
-        self.conn.execute_batch("BEGIN;")?;
+        // IMMEDIATE takes the write lock before the first read, so the
+        // snapshot a run diffs is the state its writes land on: no drain by
+        // the review app can commit between the two and be overwritten.
+        self.conn.execute_batch("BEGIN IMMEDIATE;")?;
+        Ok(())
+    }
+    pub fn rollback(&self) -> Result<()> {
+        self.conn.execute_batch("ROLLBACK;")?;
         Ok(())
     }
     pub fn commit(&self) -> Result<()> {
@@ -128,7 +141,8 @@ impl Store {
     pub fn put_unit(&self, u: &Unit) -> Result<()> {
         let uid = unit_uid(&u.path, u.kind, &u.qualified);
         self.conn.execute(
-            "INSERT OR REPLACE INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO units (uid, path, kind, name, qualified, line_start, \
+             line_end, facing, purpose, body_hash, updated_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             rusqlite::params![
                 uid,
                 u.path,
@@ -166,18 +180,43 @@ impl Store {
         )?;
         Ok(())
     }
-    pub fn enqueue_change(
-        &self,
-        uid: &str,
-        change: &str,
-        old_hash: Option<&str>,
-        new_hash: Option<&str>,
-        sha: &str,
-        at: i64,
-    ) -> Result<()> {
+    /// Records a `file` unit's residual change key.
+    pub fn set_residual_hash(&self, uid: &str, hash: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE units SET residual_hash=? WHERE uid=?",
+            rusqlite::params![hash, uid],
+        )?;
+        Ok(())
+    }
+    /// The line spans of every non-`file` unit of `path`.
+    pub fn child_spans(&self, path: &str) -> Result<Vec<(i64, i64)>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT line_start, line_end FROM units WHERE path=? AND kind != 'file'")?;
+        let rows = st.query_map([path], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+    /// Applies one queue operation; the only writer of `change_queue`.
+    ///
+    /// `New`/`Modified`/`Deleted` replace the unit's row, so a unit holds at
+    /// most one pending change. `Refresh` re-points an existing row at the
+    /// current body hash and never creates one.
+    pub fn apply(&self, op: &QueueOp, sha: &str, at: i64) -> Result<()> {
+        let (change, old_hash, new_hash) = match &op.change {
+            Change::New { new_hash } => ("new", None, Some(new_hash)),
+            Change::Modified { old_hash, new_hash } => ("modified", Some(old_hash), Some(new_hash)),
+            Change::Deleted { old_hash } => ("deleted", Some(old_hash), None),
+            Change::Refresh { new_hash } => {
+                self.conn.execute(
+                    "UPDATE change_queue SET new_hash=? WHERE uid=?",
+                    rusqlite::params![new_hash, op.uid],
+                )?;
+                return Ok(());
+            }
+        };
         self.conn.execute(
             "INSERT OR REPLACE INTO change_queue VALUES (?,?,?,?,?,?)",
-            rusqlite::params![uid, change, old_hash, new_hash, sha, at],
+            rusqlite::params![op.uid, change, old_hash, new_hash, sha, at],
         )?;
         Ok(())
     }
@@ -239,14 +278,64 @@ impl Store {
         let rows = st.query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
-    /// Every (uid, body_hash) pair for a path — the old/new snapshots the
-    /// update loop diffs (A6) to decide what enters the change queue.
-    pub fn units_for_path(&self, path: &str) -> Result<Vec<(String, String)>> {
-        let mut st = self
-            .conn
-            .prepare("SELECT uid, body_hash FROM units WHERE path=? ORDER BY uid")?;
-        let rows = st.query_map([path], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    /// The queue state of every unit of `path`.
+    pub fn snapshot_path(&self, path: &str) -> Result<Snapshot> {
+        self.snapshot(
+            "SELECT uid, path, body_hash, COALESCE(residual_hash, body_hash) \
+             FROM units WHERE path=?1",
+            Some(path),
+        )
+    }
+    /// The queue state of every unit in the index. A `units` table of an
+    /// older schema has no `residual_hash`; its file units are keyed by their
+    /// whole body, so the first rebuild over it queues each changed file once.
+    pub fn snapshot_all(&self) -> Result<Snapshot> {
+        let has_residual: bool = self.conn.query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('units') WHERE name='residual_hash'",
+            [],
+            |r| r.get(0),
+        )?;
+        let sql = if has_residual {
+            "SELECT uid, path, body_hash, COALESCE(residual_hash, body_hash) FROM units"
+        } else {
+            "SELECT uid, path, body_hash, body_hash FROM units"
+        };
+        self.snapshot(sql, None)
+    }
+    fn snapshot(&self, sql: &str, path: Option<&str>) -> Result<Snapshot> {
+        let mut st = self.conn.prepare(sql)?;
+        let row = |r: &rusqlite::Row<'_>| {
+            Ok((
+                r.get::<_, String>(0)?,
+                UnitState {
+                    path: r.get(1)?,
+                    body_hash: r.get(2)?,
+                    change_key: r.get(3)?,
+                },
+            ))
+        };
+        let rows = match path {
+            Some(p) => st
+                .query_map([p], row)?
+                .collect::<std::result::Result<_, _>>()?,
+            None => st
+                .query_map([], row)?
+                .collect::<std::result::Result<_, _>>()?,
+        };
+        Ok(rows)
+    }
+    /// Empties the index for a full rebuild: every derived table is dropped
+    /// and recreated in the current shape, `meta` is cleared and restamped
+    /// current, and `change_queue` is kept for the rebuild to reconcile.
+    pub fn reset_index(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS symbols; \
+             DROP TABLE IF EXISTS edges; DROP TABLE IF EXISTS units; \
+             DROP TABLE IF EXISTS links; DROP TABLE IF EXISTS callgraph; \
+             DELETE FROM meta;",
+        )?;
+        self.conn.execute_batch(SCHEMA)?;
+        self.set_meta("schema_version", SCHEMA_VERSION)
     }
     /// Resolve a unit by exact qualified name (callee lookup). A Rust qualified
     /// name is rooted at its crate (`backend::run`, not `crate::run`), so the
@@ -405,7 +494,8 @@ mod tests {
         let err = s
             .conn
             .execute(
-                "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO units (uid, path, kind, name, qualified, line_start, line_end, \
+                 facing, purpose, body_hash, updated_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 rusqlite::params![
                     "uid",
                     "p",
