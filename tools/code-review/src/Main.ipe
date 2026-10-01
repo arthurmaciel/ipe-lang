@@ -59,12 +59,12 @@ type alias Model =
     , refusingUid : Maybe String
     , refuseDraft : String
     , refuseError : Maybe String
-    , decisionError : Maybe String
+    , decisionError : Maybe Error
     , history : List HistoryRow
-    , historyError : Maybe String
+    , historyError : Maybe Error
     , unitPage : Maybe Index.Unit
     , unitLinks : List Links.Link
-    , unitError : Maybe String
+    , unitError : Maybe Error
     , selected : Int
     }
 
@@ -170,7 +170,7 @@ update msg model =
                     ( { model | decidedThisPass = model.decidedThisPass + 1, decisionError = Nothing }, drainAndReload model uid )
 
                 Err e ->
-                    ( { model | decisionError = Just ("Decision save failed: " ++ Error.toString e) }, Cmd.none )
+                    ( { model | decisionError = Just e }, Cmd.none )
 
         ShowQueue ->
             ( { model | page = QueuePage }, Cmd.none )
@@ -184,7 +184,7 @@ update msg model =
                     ( { model | history = rows, historyError = Nothing }, Cmd.none )
 
                 Err e ->
-                    ( { model | historyError = Just ("History load failed: " ++ Error.toString e) }, Cmd.none )
+                    ( { model | historyError = Just e }, Cmd.none )
 
         UnitLoaded result ->
             case result of
@@ -192,7 +192,7 @@ update msg model =
                     ( { model | unitPage = mb, unitLinks = links, unitError = Nothing }, Cmd.none )
 
                 Err e ->
-                    ( { model | unitError = Just ("Unit load failed: " ++ Error.toString e) }, Cmd.none )
+                    ( { model | unitError = Just e }, Cmd.none )
 
         KeyDown key ->
             keyActionMsg (Keys.keyAction (model.refusingUid /= Nothing) (List.length (queueList model)) model.selected key) model
@@ -503,7 +503,7 @@ decisionErrorBanner : Model -> Ui.Element Msg
 decisionErrorBanner model =
     case model.decisionError of
         Just err ->
-            Ui.el [ Font.size 13, Font.color (Ui.rgb 230 120 120) ] (Ui.text err)
+            Ui.el [ Font.size 13, Font.color (Ui.rgb 230 120 120) ] (Ui.text ("Decision save failed: " ++ Error.toString err))
 
         Nothing ->
             Ui.none
@@ -628,7 +628,7 @@ historyBody : Model -> Ui.Element Msg
 historyBody model =
     case model.historyError of
         Just err ->
-            Ui.text err
+            Ui.text ("History load failed: " ++ Error.toString err)
 
         Nothing ->
             if List.isEmpty model.history then
@@ -689,7 +689,7 @@ unitPageBody : Model -> Ui.Element Msg
 unitPageBody model =
     case model.unitError of
         Just err ->
-            Ui.text err
+            Ui.text ("Unit load failed: " ++ Error.toString err)
 
         Nothing ->
             case model.unitPage of
