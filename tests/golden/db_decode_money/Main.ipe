@@ -24,7 +24,7 @@ import Ipe.Task
 --
 -- `Db.Decode.money` deliberately returns `Decoder (Decimal, String)`, not
 -- `Decoder Money` -- `Money`/`Currency` are project-generated Rust types
--- unnameable from the shared runtime crate. See `docs/divergences-from-sky.md`.
+-- unnameable from the shared runtime crate.
 --
 -- Row "widget": amount column = "USD 12.34" (the lossless "CODE AMOUNT" TEXT
 -- `SqlMoney` writes on INSERT) -> decodes to (Decimal "12.34", "USD").
