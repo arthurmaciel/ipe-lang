@@ -645,6 +645,14 @@ jobs:
       # recompile. `--workspace-remap .` re-roots the archived paths at this
       # checkout. E2E tests no-op without IPE_E2E.
       - run: cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --partition count:${{ matrix.shard }}/4 --profile ci
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: junit-test-run-${{ matrix.shard }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
 
   # Required aggregation gate for `test`: green only when every shard and the
   # doctest job (in test-prep) passed. Branch protection lists this job, so a
@@ -894,6 +902,14 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       - run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: junit-runtime-full-features
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
 
   # Required context for `runtime-full-features-run`: the phase verdict (see the header).
   runtime-full-features:
@@ -1155,6 +1171,14 @@ jobs:
           SHARD_FILTER: ${{ fromJSON(needs.changes.outputs.e2e_plan)[matrix.shard].filter }}
           SHARD_PARTITION: ${{ fromJSON(needs.changes.outputs.e2e_plan)[matrix.shard].partition }}
         run: cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --test-threads=2 --no-tests=fail -E "$SHARD_FILTER" --partition "$SHARD_PARTITION"
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: junit-e2e-${{ matrix.shard }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
 
   # Stable aggregation gate for the sharded SEAL. The `e2e` matrix expands to one
   # shard-named job per partition, so no single shard name is a durable
