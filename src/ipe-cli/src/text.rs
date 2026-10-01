@@ -181,7 +181,7 @@ type Section = (&'static str, &'static str);
 const SECTION_COUNT: usize = count_sections(CATALOG);
 
 /// Every catalog section in catalog order, parsed once at build time.
-const SECTIONS: [Section; SECTION_COUNT] = index_sections(CATALOG);
+static SECTIONS: [Section; SECTION_COUNT] = index_sections(CATALOG);
 
 /// The text of the catalog's `## <key>` section, checked against its declaration.
 ///
@@ -907,6 +907,24 @@ messages! {
     cli_lint_gate_failed = "cli-lint-gate-failed";
     /// A file exceeded the per-surface read ceiling.
     cli_file_too_large(path, max) = "cli-file-too-large";
+    /// A remote transfer crossed its declared ingest budget.
+    cli_remote_ingest_exceeded(source, limit) = "cli-remote-ingest-exceeded";
+    /// A remote transfer ran past its wall-time ceiling.
+    cli_remote_ingest_timed_out(source, limit) = "cli-remote-ingest-timed-out";
+    /// A package source crossed a transfer or tree ceiling, naming the publisher's fix.
+    cli_package_source_exceeded(source, limit) = "cli-package-source-exceeded";
+    /// A remote transfer sent data it refuses by its shape.
+    cli_remote_ingest_refused(source, shape) = "cli-remote-ingest-refused";
+    /// A signal ended a remote transfer.
+    cli_transfer_interrupted = "cli-transfer-interrupted";
+    /// A local walk or git query crossed its ceiling.
+    cli_local_limit_exceeded(source, limit) = "cli-local-limit-exceeded";
+    /// A local git query ran past its wall-time ceiling.
+    cli_local_timed_out(source, limit) = "cli-local-timed-out";
+    /// A local walk met an entry it refuses by its shape.
+    cli_local_tree_refused(source, shape) = "cli-local-tree-refused";
+    /// A finished child's output pipe stayed open past the grace.
+    cli_child_pipe_held(stream) = "cli-child-pipe-held";
     /// A source path named a FIFO, device, socket or other non-regular file.
     cli_source_not_regular_file(path) = "cli-source-not-regular-file";
     /// A source file or directory could not be opened for lack of permission.
@@ -1464,6 +1482,8 @@ messages! {
     upgrade_unsupported_platform(command) = "upgrade-unsupported-platform";
     /// `ipe upgrade`'s installer could not be launched.
     upgrade_installer_launch_failed(detail) = "upgrade-installer-launch-failed";
+    /// `ipe upgrade` could not download the installer.
+    upgrade_installer_download_failed(detail) = "upgrade-installer-download-failed";
     /// `ipe upgrade`'s installer could not be waited on.
     upgrade_installer_wait_failed(detail) = "upgrade-installer-wait-failed";
     /// `ipe upgrade`'s installer exited non-zero.
@@ -1534,15 +1554,12 @@ messages! {
     publish_fresh_claim_not_covered(claimed) = "publish-fresh-claim-not-covered";
     /// An index `source` that is not an accepted URL.
     index_source_url_invalid(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-source-url-invalid";
+    /// An index `source` on the plaintext `git://` transport.
+    index_source_url_plaintext(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-source-url-plaintext";
     /// An index `rev` shaped like an injection.
     index_rev_injection(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-rev-injection";
     /// A recorded `rev` that is not a full commit SHA.
     index_rev_not_immutable(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-rev-not-immutable";
-    /// `git rev-parse` could not be run.
-    index_rev_parse_unavailable(pkg: &crate::package_name::PackageName, detail) = "index-rev-parse-unavailable";
-    /// A pinned ref that is not a commit in the fetched checkout.
-    index_rev_unresolved(pkg: &crate::package_name::PackageName, refspec: &crate::style::TerminalSafe, rev: &crate::style::TerminalSafe) =
-        "index-rev-unresolved";
     /// A requested rev that is hex-shaped but mixed-case.
     index_rev_mixed_case_hex(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-rev-mixed-case-hex";
     /// A full-SHA requested rev that disagrees with the commit git served.
@@ -1601,8 +1618,6 @@ messages! {
     /// `curl` exited nonzero before a GitHub API call got a response.
     publish_http_transport_failed(op, detail: &crate::style::TerminalSafe) =
         "publish-http-transport-failed";
-    /// A GitHub API response body exceeded the shared size cap.
-    publish_http_body_too_large(op, cap) = "publish-http-body-too-large";
     /// A GitHub API response body could not be read back from the scratch file.
     publish_http_body_io(op) = "publish-http-body-io";
     /// A registry trust identity field that is not a token.
@@ -1625,6 +1640,9 @@ messages! {
     /// A `git` step of dependency resolution failed.
     resolve_git_failed(name, args: &crate::style::TerminalSafe, stderr: &crate::style::TerminalSafe) =
         "resolve-git-failed";
+    /// A fetch that checked out a commit other than the one requested.
+    resolve_fetched_commit_mismatch(pkg: &crate::package_name::PackageName, requested, served) =
+        "resolve-fetched-commit-mismatch";
     /// An `ipe login` failure.
     login_error(message: &crate::text::Message) = "login-error";
     /// A package name that is not a safe path component.
@@ -1682,7 +1700,7 @@ mod tests {
             ),
             (
                 index_source_url_invalid(&pkg, &hostile),
-                "package `pkg`: `source` must be an https://, git://, ssh://, or file:// URL (or a bare absolute path), got: xyz",
+                "package `pkg`: `source` must be an https://, ssh://, or file:// URL (or a bare absolute path), got: xyz",
             ),
             (
                 registry_json_malformed(&pkg, &hostile),

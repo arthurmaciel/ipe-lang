@@ -207,7 +207,7 @@ pub fn pubsub_publish_no_echo<T: Clone + Send + 'static, E>(
 /// Registers against the CURRENT mount instance's origin (read synchronously
 /// here, while [`with_origin`]'s scope is active — same discipline as
 /// native's `sub_subscribe_topic` doc comment). Returns a real teardown
-/// thunk so the scheduler's stop-all-then-respawn cycle
+/// thunk so the scheduler's teardown-then-respawn of sources
 /// (`wasm::subs::SubManager`) can unregister a dropped subscription instead
 /// of accumulating duplicate listeners across re-renders.
 pub fn sub_subscribe_topic<T, M, F>(topic: String, to_msg: F) -> IpeSub<M>

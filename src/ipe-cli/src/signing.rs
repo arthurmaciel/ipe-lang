@@ -272,17 +272,19 @@ impl std::fmt::Display for SignatureError {
 pub trait SignatureVerifier {
     /// Verify `bundle` offline against the vendored trust root, requiring that
     /// (a) the cert chain and Rekor inclusion proof are valid, (b) the signed
-    /// subject digest equals the content hash of `source_tree` (which the caller
-    /// has already fetched and which the resolver independently hash-verifies to
-    /// equal the pinned `subject_digest`), and (c) the certificate's
-    /// `(issuer, san)` is one of `policy.trusted_identities()`.
+    /// subject digest equals `tree` (the digest of the fetched source, which
+    /// the resolver independently compares with the pinned `subject_digest`),
+    /// and (c) the certificate's `(issuer, san)` is one of
+    /// `policy.trusted_identities()`.
     ///
-    /// `source_tree` is the fetched-and-on-disk package source. The concrete
-    /// verifier feeds a hasher over exactly its bytes to sigstore's
-    /// `verify_digest`, so the DSSE subject-digest comparison is over the same
-    /// tree the resolver pins — no digest is re-derived from the hex string.
-    /// `subject_digest` is the pinned hex, retained for the typed
-    /// [`SignatureError::DigestMismatch`] and as a defensive cross-check.
+    /// `tree` is the caller's one budgeted walk of the fetched source: the
+    /// verifier receives no path, so it cannot walk the tree again, however
+    /// many identities it tries. The concrete verifier hands a copy of its
+    /// hasher to sigstore's `verify_digest`, so the DSSE subject-digest
+    /// comparison is over the same tree the resolver pins — no digest is
+    /// re-derived from the hex string. `subject_digest` is the pinned hex,
+    /// retained for the typed [`SignatureError::DigestMismatch`] and as a
+    /// defensive cross-check.
     ///
     /// # Errors
     /// A [`SignatureError`] for any of the three failures above. On success,
@@ -291,7 +293,7 @@ pub trait SignatureVerifier {
         &self,
         bundle: &SignatureBundle,
         subject_digest: &str,
-        source_tree: &std::path::Path,
+        tree: &crate::cache::TreeDigest,
         policy: &TrustPolicy,
     ) -> Result<VerifiedIdentity, SignatureError>;
 }
@@ -326,7 +328,7 @@ pub fn evaluate_signature(
     policy: &TrustPolicy,
     signature: Option<&SignatureBundle>,
     subject_digest: &str,
-    source_tree: &std::path::Path,
+    tree: &crate::cache::TreeDigest,
     verifier: &dyn SignatureVerifier,
 ) -> Result<SignatureOutcome, CliError> {
     signature.map_or_else(
@@ -344,7 +346,7 @@ pub fn evaluate_signature(
         // version is rejected — regardless of `require_signature`.
         |bundle| {
             verifier
-                .verify(bundle, subject_digest, source_tree, policy)
+                .verify(bundle, subject_digest, tree, policy)
                 .map(SignatureOutcome::Verified)
                 .map_err(|e| {
                     CliError::Resolve(crate::text::msg::signature_untrusted(
@@ -538,7 +540,7 @@ impl SignatureVerifier for UnavailableVerifier {
         &self,
         _bundle: &SignatureBundle,
         _subject_digest: &str,
-        _source_tree: &std::path::Path,
+        _tree: &crate::cache::TreeDigest,
         _policy: &TrustPolicy,
     ) -> Result<VerifiedIdentity, SignatureError> {
         Err(SignatureError::VerifierUnavailable)
@@ -562,17 +564,14 @@ pub use sigstore_impl::{SigstoreVerifier, vendored_sigstore_verifier};
 /// our pinned tree hash — nothing more.
 ///
 /// The registry pins `cache::hash_tree` over the fetched source, which is a
-/// plain `Sha256` over a deterministic byte stream. `cache::tree_hasher` returns
-/// that same hasher UN-finalized; feeding it to `verify_digest` makes the
+/// plain `Sha256` over a deterministic byte stream. `cache::TreeDigest` holds
+/// that same hasher UN-finalized; feeding a copy to `verify_digest` makes the
 /// subject-digest comparison exactly `pinned tree hash == bundle subject digest`
 /// — no digest is re-derived from the hex string, no double-hash. The resolver
-/// fetches the tree and independently hash-verifies it against the pinned
-/// `sha256`, so at this verification point the tree bytes are on disk and
-/// reproducible.
+/// walks the fetched tree once into that `TreeDigest` and compares the same
+/// value with the pinned `sha256`.
 #[cfg(feature = "signing")]
 mod sigstore_impl {
-    use std::path::Path;
-
     use super::{
         Identity, SignatureBundle, SignatureError, SignatureVerifier, TrustPolicy, VerifiedIdentity,
     };
@@ -630,7 +629,7 @@ mod sigstore_impl {
             &self,
             bundle: &SignatureBundle,
             subject_digest: &str,
-            source_tree: &Path,
+            tree: &crate::cache::TreeDigest,
             policy: &TrustPolicy,
         ) -> Result<VerifiedIdentity, SignatureError> {
             // Deny by default: with no trusted identity configured, nothing can
@@ -655,10 +654,10 @@ mod sigstore_impl {
 
             // Try each trusted identity in turn; accept the FIRST that verifies.
             // Each attempt rebuilds the consumed inputs: a fresh `Bundle`, a fresh
-            // `Verifier`, and a fresh `tree_hasher` (the crate finalizes it). The
-            // DSSE path checks the envelope signature over the in-bundle PAE and
-            // compares the statement's subject digest against
-            // `hex(tree_hasher(source_tree).finalize())` — the pinned tree hash.
+            // `Verifier`, and a copy of the one tree hasher (the crate finalizes
+            // it). The DSSE path checks the envelope signature over the in-bundle
+            // PAE and compares the statement's subject digest against
+            // `tree.to_hex()` — the pinned tree hash.
             let mut last_detail: Option<String> = None;
             for identity in identities {
                 let parsed = parse_bundle()?;
@@ -666,14 +665,7 @@ mod sigstore_impl {
                     .map_err(|e| SignatureError::BundleInvalid {
                         detail: format!("could not build the verifier: {e}"),
                     })?;
-                let hasher = crate::cache::tree_hasher(source_tree).map_err(|(path, source)| {
-                    SignatureError::BundleInvalid {
-                        detail: format!(
-                            "could not hash the fetched source tree at {}: {source}",
-                            path.display()
-                        ),
-                    }
-                })?;
+                let hasher = tree.hasher();
                 let sig_policy = Self::identity_policy(identity);
                 match verifier.verify_digest(hasher, parsed, &sig_policy, true) {
                     Ok(()) => {
@@ -822,6 +814,16 @@ mod sigstore_impl {
             SigstoreVerifier { trust_root: root }
         }
 
+        /// The digest of an empty source tree.
+        fn empty_tree() -> crate::cache::TreeDigest {
+            let dir = crate::scratch::ScratchDir::new("ipe-sig-tree").expect("scratch dir");
+            crate::cache::TreeDigest::of_tree_within(
+                dir.path(),
+                crate::remote_ingest::PACKAGE_SOURCE.tree(),
+            )
+            .expect("an empty tree hashes")
+        }
+
         fn empty_root() -> ManualTrustRoot<'static> {
             ManualTrustRoot {
                 fulcio_certs: Vec::new(),
@@ -865,12 +867,7 @@ mod sigstore_impl {
             let verifier = verifier_over(empty_root());
             let bundle = SignatureBundle::parse("p", r#"{"dsseEnvelope":{}}"#).expect("bundle");
             let err = verifier
-                .verify(
-                    &bundle,
-                    "00",
-                    std::path::Path::new("/nonexistent"),
-                    &TrustPolicy::default(),
-                )
+                .verify(&bundle, "00", &empty_tree(), &TrustPolicy::default())
                 .expect_err("empty allowlist must reject");
             assert!(
                 matches!(err, SignatureError::UntrustedIdentity { .. }),
@@ -898,7 +895,7 @@ mod sigstore_impl {
             .expect("bundle");
             let policy = TrustPolicy::new(vec![a_trusted_identity()], false);
             let err = verifier
-                .verify(&bundle, "00", std::path::Path::new("/nonexistent"), &policy)
+                .verify(&bundle, "00", &empty_tree(), &policy)
                 .expect_err("no CA + empty root must reject at the crypto path");
             // Not the old blanket "cannot bridge" refusal: the message reflects a
             // real verification attempt over the pinned digest.
@@ -952,11 +949,21 @@ mod tests {
             &self,
             _bundle: &SignatureBundle,
             _subject_digest: &str,
-            _source_tree: &std::path::Path,
+            _tree: &crate::cache::TreeDigest,
             _policy: &TrustPolicy,
         ) -> Result<VerifiedIdentity, SignatureError> {
             self.result.clone()
         }
+    }
+
+    /// The digest of an empty source tree.
+    fn empty_tree() -> crate::cache::TreeDigest {
+        let dir = crate::scratch::ScratchDir::new("ipe-sig-tree").expect("scratch dir");
+        crate::cache::TreeDigest::of_tree_within(
+            dir.path(),
+            crate::remote_ingest::PACKAGE_SOURCE.tree(),
+        )
+        .expect("an empty tree hashes")
     }
 
     fn trusted_identity() -> Identity {
@@ -1040,15 +1047,8 @@ mod tests {
     fn unsigned_with_require_false_resolves_with_warning() {
         let policy = TrustPolicy::new(vec![trusted_identity()], false);
         let verifier = MockVerifier::accepting();
-        let outcome = evaluate_signature(
-            "p",
-            &policy,
-            None,
-            DIGEST,
-            std::path::Path::new("."),
-            &verifier,
-        )
-        .expect("unsigned + !require resolves");
+        let outcome = evaluate_signature("p", &policy, None, DIGEST, &empty_tree(), &verifier)
+            .expect("unsigned + !require resolves");
         assert_eq!(outcome, SignatureOutcome::UnsignedAllowed);
     }
 
@@ -1056,15 +1056,8 @@ mod tests {
     fn unsigned_with_require_true_is_rejected() {
         let policy = TrustPolicy::new(vec![trusted_identity()], true);
         let verifier = MockVerifier::accepting();
-        let err = evaluate_signature(
-            "p",
-            &policy,
-            None,
-            DIGEST,
-            std::path::Path::new("."),
-            &verifier,
-        )
-        .expect_err("unsigned + require must reject");
+        let err = evaluate_signature("p", &policy, None, DIGEST, &empty_tree(), &verifier)
+            .expect_err("unsigned + require must reject");
         assert!(format!("{err}").contains("requires one"), "{err}");
     }
 
@@ -1078,7 +1071,7 @@ mod tests {
             &policy,
             Some(&bundle),
             DIGEST,
-            std::path::Path::new("."),
+            &empty_tree(),
             &verifier,
         )
         .expect("verified signature resolves");
@@ -1100,7 +1093,7 @@ mod tests {
             &policy,
             Some(&bundle),
             DIGEST,
-            std::path::Path::new("."),
+            &empty_tree(),
             &verifier,
         )
         .expect_err("present-but-untrusted must reject");
@@ -1124,7 +1117,7 @@ mod tests {
             &policy,
             Some(&bundle),
             DIGEST,
-            std::path::Path::new("."),
+            &empty_tree(),
             &verifier,
         )
         .expect_err("digest mismatch must reject");
@@ -1149,7 +1142,7 @@ mod tests {
             &policy,
             Some(&bundle),
             DIGEST,
-            std::path::Path::new("."),
+            &empty_tree(),
             &verifier,
         )
         .expect_err("signed version with empty allowlist must reject");
@@ -1168,7 +1161,7 @@ mod tests {
             &policy,
             Some(&bundle),
             DIGEST,
-            std::path::Path::new("."),
+            &empty_tree(),
             &verifier,
         )
         .expect_err("invalid bundle must reject");
@@ -1187,7 +1180,7 @@ mod tests {
             &policy,
             Some(&bundle),
             DIGEST,
-            std::path::Path::new("."),
+            &empty_tree(),
             &verifier,
         )
         .expect_err("no verifier + present signature must reject");

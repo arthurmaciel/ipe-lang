@@ -621,7 +621,7 @@ fn dev_console_banner(base: &str) -> String {
 // ─── web_app: axum mount + per-session TEA driver over SSE ─────────────────
 
 #[cfg(feature = "server")]
-use crate::tea::{IpeCmd, IpeSub};
+use crate::tea::{IpeCmd, IpeSub, SubRuntime, SubSink};
 #[cfg(feature = "server")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "server")]
@@ -640,6 +640,12 @@ pub struct SessionEntry<Model, Msg> {
     pub seq: u64,
     pub sse_tx: Option<SseTx>,
     pub msg_tx: Sender<Msg>,
+    /// The base-relative path the session last entered, so a reconnect that
+    /// reports the same path does not enter (and run its Cmd) a second time.
+    pub entered_path: Option<route::RoutePath>,
+    /// Feeds URL entries to the per-session driver, which serialises them with
+    /// `update`; bounded by [`ENTER_QUEUE_CAP`].
+    pub enter_tx: Sender<EnterRequest>,
     /// Bounded rolling message log for time-travel scrubbing. Present only
     /// when the `debugger` feature is active; absent builds pay no cost.
     #[cfg(feature = "debugger")]
@@ -753,10 +759,160 @@ fn value_to_string(v: &serde_json::Value) -> String {
     }
 }
 
-/// Boxed route resolver: a freshly-`init`'d model + GET path → the model whose
-/// `page` field reflects the matched route.
+/// Boxed route entry: a model + base-relative path → the entered model and the page's entry Cmd.
+///
+/// The only way a URL reaches a session's model; the Cmd is `#[must_use]` in
+/// [`route::Entered`] and is dispatched by whoever commits the model.
 #[cfg(feature = "server")]
-type RouteResolver<Model> = Arc<dyn Fn(Model, &str) -> Model + Send + Sync>;
+type RouteEntry<Model, Msg> =
+    Arc<dyn Fn(Model, &str) -> route::Entered<Model, IpeCmd<Msg>> + Send + Sync>;
+
+/// Pending URL entries a session driver holds before a new one is refused with 503.
+#[cfg(feature = "server")]
+const ENTER_QUEUE_CAP: std::num::NonZeroUsize = std::num::NonZeroUsize::MIN.saturating_add(7);
+
+/// How long a request waits for the driver to commit its entry before answering 503.
+#[cfg(feature = "server")]
+const ENTER_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Whether the session driver enters a queued path unconditionally or only when it is new.
+///
+/// The choice is made by the driver when it commits, the one point that
+/// serialises every entry of a session, so two requests queued for one path
+/// cannot both see it as new.
+#[cfg(feature = "server")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnterMode {
+    /// A page GET: its requester renders the reply, so the path is always entered.
+    Load,
+    /// A reconnect's displayed path: entered only when it differs from the
+    /// session's `entered_path` at commit time.
+    Reconcile,
+}
+
+/// A URL entry for a session driver: the base-relative path, how to enter it, and where to send the rendered body.
+#[cfg(feature = "server")]
+pub struct EnterRequest {
+    path: route::RoutePath,
+    mode: EnterMode,
+    reply: tokio::sync::oneshot::Sender<EnterReply>,
+}
+
+/// The driver's answer to an [`EnterRequest`]: the committed page's rendered body.
+///
+/// Only the body crosses back; the entry Cmd stays with the driver, so a
+/// requester that stops waiting loses nothing.
+#[cfg(feature = "server")]
+pub struct EnterReply {
+    body: String,
+}
+
+/// Queue an entry of `path` in `mode` on the session driver behind `enter_tx`.
+///
+/// `None` when the queue is full or the driver is gone; the caller refuses
+/// rather than waiting without a bound.
+#[cfg(feature = "server")]
+fn queue_entry(
+    enter_tx: &Sender<EnterRequest>,
+    path: route::RoutePath,
+    mode: EnterMode,
+) -> Option<tokio::sync::oneshot::Receiver<EnterReply>> {
+    let (reply, reply_rx) = tokio::sync::oneshot::channel();
+    enter_tx
+        .try_send(EnterRequest { path, mode, reply })
+        .ok()
+        .map(|()| reply_rx)
+}
+
+/// Wait at most [`ENTER_REPLY_TIMEOUT`] for the driver's entry reply.
+///
+/// `None` on timeout or when the driver dropped the request unanswered.
+#[cfg(feature = "server")]
+async fn await_entry(reply_rx: tokio::sync::oneshot::Receiver<EnterReply>) -> Option<EnterReply> {
+    tokio::time::timeout(ENTER_REPLY_TIMEOUT, reply_rx)
+        .await
+        .ok()
+        .and_then(Result::ok)
+}
+
+/// What reconnect reconciliation did with the path the browser reports.
+#[cfg(feature = "server")]
+pub enum ReconcileOutcome {
+    /// The path is invalid, unrouted, or outside the base.
+    Unchanged,
+    /// The driver accepted a `Reconcile` entry; await it before
+    /// the resync frame. A path the session already entered when the driver
+    /// reaches it is dropped unanswered.
+    Entering(tokio::sync::oneshot::Receiver<EnterReply>),
+    /// The enter queue is full or closed; the current view stands and the next reconnect retries.
+    Refused,
+}
+
+/// Reconcile a reconnecting session with the path its browser displays.
+///
+/// `client_path` is the raw `location.pathname` the SSE client sends; it must
+/// be a bare path (leading `/`, no `?` or `#`). `base` (the sub-app mount
+/// prefix) is stripped once at a segment boundary — a path outside the base
+/// enters nothing — then a routed path is queued as a [`EnterMode::Reconcile`]
+/// entry. The driver enters it only when its [`route::RoutePath`] differs from
+/// the session's `entered_path` at commit time, so the GET that created the
+/// page, the SSE open that follows it, and concurrent reconnects at one path
+/// run the page's entry Cmd once.
+#[cfg(feature = "server")]
+fn reconcile_path<Model, Msg>(
+    entry: &store::SessionHandle<Model, Msg>,
+    route_matched: &RouteMatched,
+    client_path: &str,
+    base: &str,
+) -> ReconcileOutcome {
+    let client_path = client_path.trim();
+    if !client_path.starts_with('/') || client_path.contains(['?', '#']) {
+        return ReconcileOutcome::Unchanged;
+    }
+    let Some(rest) = client_path.strip_prefix(base) else {
+        return ReconcileOutcome::Unchanged;
+    };
+    if !(rest.is_empty() || rest.starts_with('/')) {
+        return ReconcileOutcome::Unchanged;
+    }
+    let route_path = route::RoutePath::of(rest);
+    if !route_matched(route_path.as_str()) {
+        return ReconcileOutcome::Unchanged;
+    }
+    let enter_tx = entry
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .enter_tx
+        .clone();
+    queue_entry(&enter_tx, route_path, EnterMode::Reconcile)
+        .map_or(ReconcileOutcome::Refused, ReconcileOutcome::Entering)
+}
+
+/// The 503 a request gets when its session cannot enter the URL within the bounds.
+#[cfg(feature = "server")]
+fn entry_unavailable() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        [(axum::http::header::RETRY_AFTER, "1")],
+        "session busy entering a page",
+    )
+        .into_response()
+}
+
+/// Build the routed entry from the route table, the `notFound` page, and the app's emitted `set_page`.
+#[cfg(feature = "server")]
+fn routed_entry<Model, Msg, Page, FSetPage>(
+    routes: Arc<Vec<route::Route<Page>>>,
+    not_found: Page,
+    set_page: FSetPage,
+) -> RouteEntry<Model, Msg>
+where
+    Page: Clone + Send + Sync + 'static,
+    FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+{
+    Arc::new(move |model, path| route::enter(&routes, &not_found, path, model, &set_page))
+}
 /// Boxed param resolver: a GET path → the matched route's `:name`→value params.
 #[cfg(feature = "server")]
 type ParamResolver = Arc<dyn Fn(&str) -> crate::dict::IpeDict<String> + Send + Sync>;
@@ -774,12 +930,12 @@ pub(crate) struct WebState<Model, Msg, FInit, FUpdate, FView, FSubs> {
     update: Arc<FUpdate>,
     view: Arc<FView>,
     subs: Arc<FSubs>,
-    /// Maps the freshly-`init`'d model + GET path to the model whose `page`
-    /// field reflects the matched route. `web_app` passes identity (no
-    /// routing); `web_app_routed` captures the route table + page-setter.
-    /// `Page`/`set_page` are erased into this boxed closure, so `WebState`
-    /// keeps its original 6 type params.
-    route_resolver: RouteResolver<Model>,
+    /// Enters a base-relative path: the model whose `page` reflects the
+    /// matched route, plus the page's entry Cmd. `web_app` enters unchanged
+    /// with `Cmd.none` (no routing); the routed builders capture the route
+    /// table + `set_page`. `Page`/`set_page` are erased into this boxed
+    /// closure, so `WebState` keeps its original 6 type params.
+    route_entry: RouteEntry<Model, Msg>,
     /// Maps a GET path to the matched route's `:name`→value params (for
     /// `req.params`). Model-independent so the page handler can build `req`
     /// BEFORE calling `init`. `web_app` returns empty; `web_app_routed`
@@ -818,7 +974,7 @@ impl<Model, Msg, FInit, FUpdate, FView, FSubs> Clone
             update: self.update.clone(),
             view: self.view.clone(),
             subs: self.subs.clone(),
-            route_resolver: self.route_resolver.clone(),
+            route_entry: self.route_entry.clone(),
             param_resolver: self.param_resolver.clone(),
             route_matched: self.route_matched.clone(),
             session_count: self.session_count.clone(),
@@ -886,70 +1042,112 @@ fn run_cmd<Msg: Send + 'static>(cmd: IpeCmd<Msg>, tx: &Sender<Msg>, sid: &str) {
     }
 }
 
-/// (Re-)spawn subscription tasks. Aborts the previous handles first (one model
-/// re-evaluated each commit). When `subscriptions` is `Sub.none`, this is
-/// exercised mainly by the None arm.
+/// A session's message queue as a subscription sink.
+///
+/// A timer waits for queue room (backpressure on a slow session) and stops once
+/// the driver is gone; a source drops a message the full queue cannot take.
+/// Terminal input handlers in a Web session's `Sub` are dropped by
+/// [`SubRuntime::reconcile`]: a Web session has no terminal input.
 #[cfg(feature = "server")]
-fn spawn_subs<Msg: Clone + Send + 'static>(
-    sub: IpeSub<Msg>,
-    tx: &Sender<Msg>,
-    handles: &mut Vec<tokio::task::JoinHandle<()>>,
-) {
-    for h in handles.drain(..) {
-        h.abort();
+impl<Msg: Send + 'static> SubSink<Msg> for Sender<Msg> {
+    fn deliver(&self, msg: Msg) -> impl std::future::Future<Output = bool> + Send {
+        let tx = self.clone();
+        async move { tx.send(msg).await.is_ok() }
     }
-    fn go<Msg: Clone + Send + 'static>(
-        sub: IpeSub<Msg>,
-        tx: &Sender<Msg>,
-        handles: &mut Vec<tokio::task::JoinHandle<()>>,
-    ) {
-        match sub {
-            IpeSub::None => {}
-            IpeSub::Batch(items) => {
-                for s in items {
-                    go(s, tx, handles);
-                }
-            }
-            IpeSub::Every { ms, msg } => {
-                if ms <= 0 {
-                    return;
-                }
-                let tx = tx.clone();
-                let dur = std::time::Duration::from_millis(ms as u64);
-                let h = tokio::spawn(async move {
-                    loop {
-                        tokio::time::sleep(dur).await;
-                        // Bounded send: break when the session queue is full
-                        // or the receiver is gone (driver exited).
-                        if tx.send(msg.clone()).await.is_err() {
-                            break;
-                        }
-                    }
-                });
-                handles.push(h);
-            }
-            IpeSub::Source(spawn) => {
-                let tx = tx.clone();
-                let emit: Arc<dyn Fn(Msg) + Send + Sync> = Arc::new(move |m| {
-                    let _ = tx.try_send(m);
-                });
-                handles.push(spawn(emit));
-            }
-            // Terminal input has no source in a Web session; the resolver and
-            // emitter refuse `Tui.Sub.onKey` / `Cli.Sub.onLine` outside their own
-            // terminal app, so these never reach here from Ipê source.
-            IpeSub::OnKey(_) | IpeSub::OnLine(_) => {}
+    fn emit(&self, msg: Msg) {
+        let _ = self.try_send(msg);
+    }
+}
+
+/// What the session driver did with one queued [`EnterRequest`].
+#[cfg(feature = "server")]
+enum EntryCommit<Model, Msg> {
+    /// The path was entered and committed; the driver runs the Cmd.
+    Entered(Model, IpeCmd<Msg>),
+    /// A [`EnterMode::Reconcile`] path the session had already entered; nothing ran.
+    AlreadyEntered,
+    /// The session is gone; the driver exits.
+    SessionGone,
+}
+
+/// Commit one URL entry on the session driver and hand back the entered model and its Cmd.
+///
+/// A [`EnterMode::Reconcile`] request whose path equals the session's
+/// `entered_path` is dropped unanswered here, on the driver, so the check and
+/// the commit that follows cannot interleave with another entry. Otherwise
+/// enters `request.path` under the session's sid, renders, commits model, view,
+/// index and `entered_path`, then replies with the rendered body. A requester
+/// that stopped waiting gets the committed page as a full resync frame over
+/// the attached SSE channel instead, so the browser never keeps a DOM the
+/// server no longer diffs against.
+#[cfg(feature = "server")]
+async fn commit_entry<Model, Msg, FView>(
+    entry: &Weak<Mutex<SessionEntry<Model, Msg>>>,
+    request: EnterRequest,
+    route_entry: &RouteEntry<Model, Msg>,
+    view: &FView,
+    store: &Arc<dyn store::SessionStore<Model, Msg>>,
+    sid: &str,
+) -> EntryCommit<Model, Msg>
+where
+    Model: Clone,
+    Msg: Clone,
+    FView: Fn(Model) -> Html<Msg> + ?Sized,
+{
+    let Some(strong) = entry.upgrade() else {
+        return EntryCommit::SessionGone;
+    };
+    let EnterRequest { path, mode, reply } = request;
+    let model = {
+        let g = strong.lock().unwrap_or_else(|e| e.into_inner());
+        let already_entered = match mode {
+            EnterMode::Load => false,
+            EnterMode::Reconcile => g.entered_path.as_ref() == Some(&path),
+        };
+        if already_entered {
+            return EntryCommit::AlreadyEntered;
+        }
+        g.model.clone()
+    };
+    let entered = pubsub::with_session_sid(sid.to_owned(), || route_entry(model, path.as_str()));
+    let mut tree = view(entered.model.clone());
+    assign_ipe_ids(&mut tree, "r");
+    style_inject::apply_style_injections(&mut tree);
+    let body = render_html(&tree);
+    {
+        let mut e = strong.lock().unwrap_or_else(|e| e.into_inner());
+        e.index = build_index(&tree);
+        e.last_view = tree;
+        e.model = entered.model.clone();
+        e.entered_path = Some(path);
+    }
+    if let Err(EnterReply { body }) = reply.send(EnterReply { body }) {
+        let (frame, sse_tx) = {
+            let mut e = strong.lock().unwrap_or_else(|e| e.into_inner());
+            e.seq += 1;
+            (
+                serde_json::json!({ "seq": e.seq, "body": body }).to_string(),
+                e.sse_tx.clone(),
+            )
+        };
+        if let Some(sse_tx) = sse_tx {
+            let _ = sse_tx.send(SsePatch(sse::frame("patch", &frame))).await;
         }
     }
-    go(sub, tx, handles);
+    store.set(sid, strong).await;
+    EntryCommit::Entered(entered.model, entered.cmd)
 }
 
 /// The per-session driver: folds each Msg through `update`, diffs the new view
 /// against the last, pushes patches over SSE (if attached), runs the resulting
 /// Cmd, and re-evaluates subscriptions.
-// Eight distinct per-session runtime handles (entry, both channel ends, the three
-// Arc'd TEA callbacks, the store, the sid) — bundling them into a struct purely to
-// satisfy the 7-arg heuristic would add indirection without clarifying anything.
+///
+/// URL entries arrive on `enter_rx` and are committed by the same loop, so an
+/// entry and an in-flight `update` never overwrite each other's model.
+// Ten distinct per-session runtime handles (entry, both Msg channel ends, the
+// entry queue, the three Arc'd TEA callbacks, the route entry, the store, the
+// sid) — bundling them into a struct purely to satisfy the 7-arg heuristic
+// would add indirection without clarifying anything.
 #[allow(clippy::too_many_arguments)]
 #[cfg(feature = "server")]
 async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
@@ -961,9 +1159,11 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
     entry: Weak<Mutex<SessionEntry<Model, Msg>>>,
     mut msg_rx: Receiver<Msg>,
     msg_tx: Sender<Msg>,
+    mut enter_rx: Receiver<EnterRequest>,
     update: Arc<FUpdate>,
     view: Arc<FView>,
     subs: Arc<FSubs>,
+    route_entry: RouteEntry<Model, Msg>,
     store: Arc<dyn store::SessionStore<Model, Msg>>,
     sid: String,
     // Admission-control slot: decrements WebState::session_count on driver exit.
@@ -980,7 +1180,9 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
 {
-    let mut sub_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    // One keyed subscription runtime per session: a re-evaluation keeps a
+    // still-requested `Sub.every` timer and its phase.
+    let mut sub_runtime = SubRuntime::new(msg_tx.clone());
 
     // `Ipe.Ffi.Js` port channel lifecycle. Open this session's inbound/outbound port
     // endpoints now (before the browser can POST to `/_ipe/port`) and close them
@@ -1026,7 +1228,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
                 .clone()
         };
         pubsub::with_session_sid(sid.clone(), || {
-            spawn_subs(subs(model0), &msg_tx, &mut sub_handles)
+            sub_runtime.reconcile(subs(model0));
         });
     }
     // Periodic liveness check: the driver holds only a Weak ref, but it also holds
@@ -1043,6 +1245,22 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
                 Some(m) => m,
                 None => break,
             },
+            maybe = enter_rx.recv() => {
+                let Some(request) = maybe else {
+                    break;
+                };
+                let (next, cmd) =
+                    match commit_entry(&entry, request, &route_entry, &*view, &store, &sid).await {
+                        EntryCommit::Entered(next, cmd) => (next, cmd),
+                        EntryCommit::AlreadyEntered => continue,
+                        EntryCommit::SessionGone => break,
+                    };
+                pubsub::with_session_sid(sid.clone(), || run_cmd(cmd, &msg_tx, &sid));
+                pubsub::with_session_sid(sid.clone(), || {
+                    sub_runtime.reconcile(subs(next));
+                });
+                continue;
+            }
             _ = liveness.tick() => {
                 if entry.upgrade().is_none() {
                     break;
@@ -1150,12 +1368,10 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
 
         pubsub::with_session_sid(sid.clone(), || run_cmd(cmd, &msg_tx, &sid));
         pubsub::with_session_sid(sid.clone(), || {
-            spawn_subs(subs(next.clone()), &msg_tx, &mut sub_handles)
+            sub_runtime.reconcile(subs(next.clone()));
         });
     }
-    for h in sub_handles.drain(..) {
-        h.abort();
-    }
+    drop(sub_runtime);
 }
 
 /// A fresh session id: **128 bits from the OS CSPRNG**, as 32 lowercase-hex
@@ -1911,10 +2127,13 @@ where
             view: Arc::new(view),
             subs: Arc::new(subscriptions),
             // No routing: GET serves the freshly-init'd model unchanged; no params.
-            route_resolver: Arc::new(|m, _path| m),
+            route_entry: Arc::new(|model, _path| route::Entered {
+                model,
+                cmd: IpeCmd::None,
+            }),
             param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
-            // No route table: only `/` is a page URL.
-            route_matched: Arc::new(|path| path == "/"),
+            // No route table: only the root is a page URL.
+            route_matched: Arc::new(route::is_root),
             session_count: Arc::new(AtomicUsize::new(0)),
             watch_build_status: Arc::new(Mutex::new(None)),
         };
@@ -2005,9 +2224,12 @@ where
                 update: Arc::new(update),
                 view: Arc::new(view),
                 subs: Arc::new(subscriptions),
-                route_resolver: Arc::new(|m, _path| m),
+                route_entry: Arc::new(|model, _path| route::Entered {
+                    model,
+                    cmd: IpeCmd::None,
+                }),
                 param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
-                route_matched: Arc::new(|path| path == "/"),
+                route_matched: Arc::new(route::is_root),
                 session_count: Arc::new(AtomicUsize::new(0)),
                 watch_build_status: Arc::new(Mutex::new(None)),
             };
@@ -2020,13 +2242,13 @@ where
 
 /// `Web.embed` of a ROUTED app (`Model` has a `page` field): the routed sibling
 /// of [`web_embed_router`]. It builds the SAME routed `WebState` as
-/// [`web_app_routed`] — a `route_resolver` / `param_resolver` / `route_matched`
+/// [`web_app_routed`] — a `route_entry` / `param_resolver` / `route_matched`
 /// derived from the route table + `set_page` — but, exactly like
 /// [`web_embed_router`], returns a [`crate::tea::MountBuilder`] that yields the
 /// fully-layered `Router` for `Server.mountApp` to nest under a prefix on the
 /// shared server port, instead of binding its own listener.
 ///
-/// `Page` / `FSetPage` are erased into the boxed resolver closures, so
+/// `Page` / `FSetPage` are erased into the boxed entry closures, so
 /// `build_web_router` / `WebState` keep the original six type params — no `dyn`
 /// over the app's handlers (§9).
 #[allow(clippy::too_many_arguments)] // mirrors web_app_routed's routed cfg (callbacks + route table + set_page + store)
@@ -2065,7 +2287,7 @@ where
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
-    FSetPage: Fn(Page, Model) -> Model + Send + Sync + 'static,
+    FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
 {
     Box::new(move |prefix: String| {
         Box::pin(async move {
@@ -2078,13 +2300,9 @@ where
             // Routed resolvers — identical construction to `web_app_routed`; only
             // the terminal `build_web_router` (vs `serve_web`) differs.
             let routes = Arc::new(routes);
-            let not_found = Arc::new(not_found);
-            let set_page = Arc::new(set_page);
             let routes_for_params = routes.clone();
             let routes_for_match = routes.clone();
-            let resolver: RouteResolver<Model> = Arc::new(move |m, path| {
-                (set_page)(route::match_routes(&routes, &not_found, path), m)
-            });
+            let route_entry = routed_entry(routes, not_found, set_page);
             let param_resolver: ParamResolver =
                 Arc::new(move |path| route::match_params(&routes_for_params, path));
             let route_matched: RouteMatched =
@@ -2108,7 +2326,7 @@ where
                 update: Arc::new(update),
                 view: Arc::new(view),
                 subs: Arc::new(subscriptions),
-                route_resolver: resolver,
+                route_entry,
                 param_resolver,
                 route_matched,
                 session_count: Arc::new(AtomicUsize::new(0)),
@@ -2233,7 +2451,7 @@ where
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
-    FSetPage: Fn(Page, Model) -> Model + Send + Sync + 'static,
+    FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
 {
     let init = Arc::new(init);
     let update = Arc::new(update);
@@ -2297,11 +2515,11 @@ fn fail_closed_router(message: String) -> axum::Router {
 
 /// `Ipe.Web.tea { …, routes, notFound }` with URL routing — serve via axum.
 ///
-/// Identical to `web_app` except a `route_resolver` is built from the route
-/// table + page-setter: on each GET it matches the path to a `Page` value
-/// (param strings applied via the route closures) and writes it into the
-/// freshly-`init`'d model's `page` field via `set_page`. `Page`/`FSetPage`
-/// are erased into the boxed resolver, so `serve_web`/`WebState` keep the
+/// Identical to `web_app` except a `route_entry` is built from the route
+/// table + `set_page`: each URL entry matches the path to a `Page` value
+/// (param strings applied via the route closures) and enters it through
+/// `set_page`, which yields the model and the page's entry Cmd. `Page`/`FSetPage`
+/// are erased into the boxed entry, so `serve_web`/`WebState` keep the
 /// original 6 type params.
 #[allow(clippy::too_many_arguments)]
 #[cfg(feature = "server")]
@@ -2347,16 +2565,13 @@ where
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
-    FSetPage: Fn(Page, Model) -> Model + Send + Sync + 'static,
+    FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
 {
     Box::pin(async move {
         let routes = Arc::new(routes);
-        let not_found = Arc::new(not_found);
-        let set_page = Arc::new(set_page);
         let routes_for_params = routes.clone();
         let routes_for_match = routes.clone();
-        let resolver: RouteResolver<Model> =
-            Arc::new(move |m, path| (set_page)(route::match_routes(&routes, &not_found, path), m));
+        let route_entry = routed_entry(routes, not_found, set_page);
         let param_resolver: ParamResolver =
             Arc::new(move |path| route::match_params(&routes_for_params, path));
         let route_matched: RouteMatched =
@@ -2379,7 +2594,7 @@ where
             update: Arc::new(update),
             view: Arc::new(view),
             subs: Arc::new(subscriptions),
-            route_resolver: resolver,
+            route_entry,
             param_resolver,
             route_matched,
             session_count: Arc::new(AtomicUsize::new(0)),
@@ -2515,8 +2730,8 @@ mod handlers {
         FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
     {
         // Cookie-based session lifecycle:
-        //   * Web hit  → reuse the in-process session; re-apply routing for
-        //                 this GET's path + re-render (no new driver).
+        //   * Web hit  → reuse the in-process session; its driver enters this
+        //                 GET's path and runs the entry Cmd (no new driver).
         //   * Cold hit  → a persisted model (post-restart / different replica);
         //                 hydrate a fresh driver seeded with it (no init).
         //   * miss      → init a new session.
@@ -2593,32 +2808,34 @@ mod handlers {
         let (sid, model, cmd0) = match hit {
             Some((sid, store::StoreHit::Web(handle))) => {
                 // sid is carried from the cookie lookup; the "hit but no sid"
-                // state is unrepresentable.
-                #[cfg_attr(not(feature = "debugger"), allow(unused_variables))]
-                let (body, history_labels, history_total) = {
-                    let mut e = handle.lock().unwrap_or_else(|e| e.into_inner());
-                    e.model = (st.route_resolver)(e.model.clone(), uri.path());
-                    let mut tree = (st.view)(e.model.clone());
-                    assign_ipe_ids(&mut tree, "r");
-                    style_inject::apply_style_injections(&mut tree);
-                    e.index = build_index(&tree);
-                    e.last_view = tree.clone();
-                    let body = render_html(&tree);
-                    #[cfg(feature = "debugger")]
-                    let labels: Vec<String> = e.history.labels();
-                    #[cfg(not(feature = "debugger"))]
-                    let labels: Vec<String> = Vec::new();
-                    let total = labels.len();
-                    (body, labels, total)
+                // state is unrepresentable. The live driver enters the path,
+                // serialised with its `update`s, commits, touches the store and
+                // runs the entry Cmd; this request waits for the body, bounded
+                // by the queue cap and the reply timeout.
+                let enter_tx = handle
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .enter_tx
+                    .clone();
+                let Some(reply_rx) =
+                    queue_entry(&enter_tx, route::RoutePath::of(uri.path()), EnterMode::Load)
+                else {
+                    return entry_unavailable();
                 };
-                st.store.set(&sid, handle).await; // touch last-seen
+                let Some(EnterReply { body }) = await_entry(reply_rx).await else {
+                    return entry_unavailable();
+                };
                 #[cfg(feature = "debugger")]
                 {
-                    let base = web_base_path();
+                    let labels: Vec<String> = handle
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .history
+                        .labels();
                     let overlay = crate::debugger::server::overlay_html(
-                        &history_labels,
-                        history_total,
-                        &base,
+                        &labels,
+                        labels.len(),
+                        &web_base_path(),
                     );
                     return page_response_with_overlay(&sid, &body, &overlay, &csrf_tok, &headers);
                 }
@@ -2630,7 +2847,9 @@ mod handlers {
                 // volume, so NOT rejected; but count its driver so the slot it
                 // gets below is paired (decremented on the driver's exit).
                 st.session_count.fetch_add(1, Ordering::SeqCst);
-                (sid, (st.route_resolver)(m, uri.path()), IpeCmd::None)
+                let entered =
+                    pubsub::with_session_sid(sid.clone(), || (st.route_entry)(m, uri.path()));
+                (sid, entered.model, entered.cmd)
             }
             None => {
                 // Admission control (cookieless = brand-new session = the
@@ -2655,12 +2874,17 @@ mod handlers {
                 // model-independent, breaking the init↔routing cycle.
                 let params = (st.param_resolver)(uri.path());
                 let req = req::web_req(&method, &uri, &headers, params);
-                let (m, c) = (st.init)(req);
                 // Session fixation guard: a store MISS means this sid is NOT a
                 // known session, so NEVER adopt the client-supplied cookie value
                 // — always mint a fresh sid. (A HIT path keeps cookie_sid.)
+                // Minted first so `init` and the entry run under it.
                 let s = new_sid();
-                (s, (st.route_resolver)(m, uri.path()), c)
+                let (m, c) = pubsub::with_session_sid(s.clone(), || {
+                    let (m, init_cmd) = (st.init)(req);
+                    let entered = (st.route_entry)(m, uri.path());
+                    (entered.model, IpeCmd::Batch(vec![init_cmd, entered.cmd]))
+                });
+                (s, m, c)
             }
         };
 
@@ -2675,6 +2899,7 @@ mod handlers {
         // On overflow events are dropped with a warn (see event_handler).
         // 1024 is far above any legitimate burst of user-driven events.
         let (msg_tx, msg_rx) = mpsc::channel::<Msg>(1024);
+        let (enter_tx, enter_rx) = mpsc::channel::<EnterRequest>(ENTER_QUEUE_CAP.get());
         #[cfg(feature = "debugger")]
         let history_init =
             crate::debugger::RecordBuffer::new(model.clone(), crate::debugger::DEFAULT_HISTORY_CAP);
@@ -2685,6 +2910,8 @@ mod handlers {
             seq: 0,
             sse_tx: None,
             msg_tx: msg_tx.clone(),
+            entered_path: Some(route::RoutePath::of(uri.path())),
+            enter_tx,
             #[cfg(feature = "debugger")]
             history: history_init,
             #[cfg(feature = "debugger")]
@@ -2706,15 +2933,17 @@ mod handlers {
             Arc::downgrade(&entry),
             msg_rx,
             msg_tx.clone(),
+            enter_rx,
             st.update.clone(),
             st.view.clone(),
             st.subs.clone(),
+            st.route_entry.clone(),
             st.store.clone(),
             sid.clone(),
             slot,
         ));
-        // Fire init's Cmd into the loop (None for a cold-restored session).
-        run_cmd(cmd0, &msg_tx, &sid);
+        // Fire the entry Cmd into the loop (batched after init's on a miss).
+        pubsub::with_session_sid(sid.clone(), || run_cmd(cmd0, &msg_tx, &sid));
 
         #[cfg(feature = "debugger")]
         {
@@ -2766,61 +2995,17 @@ mod handlers {
         // Reconnect reconciliation: the client sends
         // `?path=<encodeURIComponent(location.pathname)>` on every (re)open,
         // so after a bfcache Back/Forward, reload, or full-page navigation the
-        // server knows which URL the browser is actually displaying.
-        //
-        // If the path param is present AND matches a declared route, apply
-        // `route_resolver` to reconcile the model's page to that URL before the
-        // resync render — preventing the stale-page bounce where the server's
-        // model still thinks the user is on page B while the browser has
-        // navigated back to page A.
-        //
-        // Absent param (older cached client) or an unroutable path (browser
-        // noise, unknown URL) falls through to the current behaviour unchanged.
-        // Idempotent when the tab is already on the page its URL names: the
-        // resolver applied to the already-matching route is a no-op.
-        //
-        // Sub-app base-path trimming: the client sends the raw
-        // `location.pathname` which includes any reverse-proxy prefix; strip the
-        // base before matching so mounted sub-apps reconcile against their
-        // own route table, not the root path.
-        if let Some(raw_path) = qs.get("path") {
-            // Sanitise: accept only paths (must start with `/`), reject anything
-            // with `?` or `#` to avoid confusing the route matcher with query
-            // strings or fragments the client should not be sending here.
-            let client_path = raw_path.trim();
-            let is_valid_path = client_path.starts_with('/')
-                && !client_path.contains('?')
-                && !client_path.contains('#');
-            if is_valid_path {
-                let base = web_base_path();
-                // Strip the sub-app base prefix so the remaining path is
-                // root-relative within this app's own route table.
-                let route_path = if base.is_empty() {
-                    client_path
-                } else {
-                    client_path.strip_prefix(&base).unwrap_or(client_path)
-                };
-                // Only reconcile when the path matches a declared route —
-                // unknown paths (404 territory) fall through unchanged.
-                if (st.route_matched)(route_path) {
-                    let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
-                    g.model = (st.route_resolver)(g.model.clone(), route_path);
-                    // Keep last_view in sync with the reconciled model so the
-                    // resync render below reflects the correct page. The tree
-                    // MUST carry ipe-ids: the resync frame replaces the whole
-                    // DOM on the client, and an unstamped tree renders every
-                    // event element without `ipe-id`/`data-ipe-hid`, so each
-                    // click posts an empty handlerId the server can't resolve.
-                    // Stamp + rebuild the handler index exactly as the page and
-                    // update render paths do, so ids stay consistent across all
-                    // three render sites.
-                    let mut tree = (st.view)(g.model.clone());
-                    assign_ipe_ids(&mut tree, "r");
-                    style_inject::apply_style_injections(&mut tree);
-                    g.index = build_index(&tree);
-                    g.last_view = tree;
-                }
-            }
+        // server knows which URL the browser is actually displaying. A routed
+        // path the session has not entered is entered by the driver (its Cmd
+        // runs there) before the resync render; the path the session already
+        // entered, an unroutable path, or an absent param keeps the current
+        // view. A refused entry (queue full or closed) keeps it too, and the
+        // next reconnect retries.
+        if let Some(raw_path) = qs.get("path")
+            && let ReconcileOutcome::Entering(reply_rx) =
+                reconcile_path(&entry, &st.route_matched, raw_path, &web_base_path())
+        {
+            let _ = await_entry(reply_rx).await;
         }
 
         let (tx, rx) = sse::channel();
@@ -2902,8 +3087,8 @@ mod handlers {
         // lock the event path uses so it stays monotonic vs later patches; drop
         // the guard before the await (never hold a std Mutex across .await).
         //
-        // When the reconnect reconciliation above ran, the model and last_view
-        // were already updated; the render here picks up the reconciled state.
+        // When the reconnect reconciliation above entered a path, the driver
+        // already committed model and last_view; the render here picks them up.
         let resync = {
             let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
             g.seq += 1;
@@ -4322,7 +4507,7 @@ mod handlers {
 
 /// Shared server setup for `web_app` / `web_app_routed`: nested HTTP
 /// handlers (`page` / `sse_handler` / `event_handler`), router + bind/serve.
-/// The only per-entry difference (the `route_resolver`) lives on `state`.
+/// The only per-entry difference (the `route_entry`) lives on `state`.
 #[cfg(feature = "server")]
 async fn serve_web<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
     state: WebState<Model, Msg, FInit, FUpdate, FView, FSubs>,
@@ -4899,6 +5084,8 @@ mod reload_push_tests {
             seq: 0,
             sse_tx,
             msg_tx: tx,
+            entered_path: None,
+            enter_tx: tokio::sync::mpsc::channel(1).0,
             #[cfg(feature = "debugger")]
             history: crate::debugger::RecordBuffer::new((), crate::debugger::DEFAULT_HISTORY_CAP),
             #[cfg(feature = "debugger")]
@@ -5008,6 +5195,8 @@ mod hot_appearance_push_tests {
             seq: 0,
             sse_tx,
             msg_tx,
+            entered_path: None,
+            enter_tx: tokio::sync::mpsc::channel(1).0,
             #[cfg(feature = "debugger")]
             history: crate::debugger::RecordBuffer::new(
                 count,
@@ -5470,23 +5659,24 @@ mod admission_control_tests {
 
 #[cfg(all(test, feature = "server"))]
 mod sse_reconnect_reconcile_tests {
-    //! Proves the two-half reconcile contract for SSE reconnect:
-    //! 1. A reconnect whose `?path=` differs from the session's current route
-    //!    applies `route_resolver` + re-renders `last_view` so the resync
-    //!    frame reflects the correct page.
-    //! 2. A reconnect whose `?path=` already matches the current route is
-    //!    idempotent (model unchanged, same rendered output).
-    //! 3. An absent `?path=` param (older cached client) falls through
-    //!    unchanged — no reconciliation, no panic.
-    //! 4. An invalid path (contains `?` or `#`, or doesn't start with `/`)
-    //!    is rejected — session state untouched.
-    //! 5. An unroutable path (not declared in the route table) is skipped —
-    //!    session state untouched.
-    //! 6. Sub-app base-path prefix is stripped before matching.
+    //! Drives the production reconnect reconciliation (`reconcile_path`) and
+    //! the driver's entry commit (`commit_entry`):
+    //! 1. A reconnect whose `?path=` differs from the session's entered path
+    //!    enters it once, re-rendering `last_view` id-stamped for the resync.
+    //! 2. A reconnect at the already-entered path enters nothing: the driver
+    //!    drops it at commit time.
+    //! 3. An invalid path (contains `?` or `#`, or no leading `/`) or an
+    //!    unrouted path enters nothing.
+    //! 4. The sub-app base prefix is stripped once before matching.
+    //! 5. A full enter queue refuses rather than waits.
+    //! 6. Reconnects queued at one new path enter it once; a page load
+    //!    re-enters even the entered path.
 
     use super::*;
-    use crate::web::route::{Route, match_routes, matches_any};
+    use crate::web::route::{Route, matches_any};
+    use crate::web::store::MemoryStore;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
     use tokio::sync::mpsc::channel;
 
     /// A minimal two-page model: `Home` or `Detail(String)`.
@@ -5496,47 +5686,57 @@ mod sse_reconnect_reconcile_tests {
         Detail(String),
     }
 
-    /// Build a `SessionEntry` seeded with `page`, plus the three boxed
-    /// closures that the reconciliation block in `sse_handler` calls.
-    // The tuple names the exact set of collaborators the test drives; extracting
-    // a `type` alias for a single test helper would hide, not clarify, them.
-    #[allow(clippy::type_complexity)]
-    fn make_session(
-        page: TestPage,
-    ) -> (
-        SessionHandle<TestPage, ()>,
-        RouteResolver<TestPage>,
-        RouteMatched,
-        Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync>,
-    ) {
-        let routes: Vec<Route<TestPage>> = vec![
+    type TestView = Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync>;
+
+    /// A session seeded on one page plus the collaborators `sse_handler` and the driver use.
+    struct Fixture {
+        entry: SessionHandle<TestPage, ()>,
+        enter_rx: Receiver<EnterRequest>,
+        route_entry: RouteEntry<TestPage, ()>,
+        route_matched: RouteMatched,
+        view: TestView,
+        store: Arc<dyn store::SessionStore<TestPage, ()>>,
+        /// How many times the app's entry fn ran, i.e. how many entry Cmds were produced.
+        entry_fn_runs: Arc<AtomicUsize>,
+    }
+
+    fn routes() -> Vec<Route<TestPage>> {
+        vec![
             Route::new("/", |_| Some(TestPage::Home)),
-            Route::new("/items/:id", |p| Some(TestPage::Detail(p[0].clone()))),
-        ];
-        let not_found = TestPage::Home;
+            Route::new("/items/:id", |p| p.first().cloned().map(TestPage::Detail)),
+        ]
+    }
 
-        let routes_arc = Arc::new(routes.clone());
-        let routes_arc2 = routes_arc.clone();
-        let nf = not_found.clone();
-
-        let route_resolver: RouteResolver<TestPage> =
-            Arc::new(move |_model, path| match_routes(&routes_arc, &nf, path));
-        let route_matched: RouteMatched = Arc::new(move |path| matches_any(&routes_arc2, path));
-
-        // Minimal view: render the page variant name as text so we can assert
-        // which page the resync would ship.
-        let view: Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync> = Arc::new(|p| {
-            let label = match p {
+    /// The page variant as text, so a test can assert which page a resync ships.
+    fn label_view() -> TestView {
+        Arc::new(|p| {
+            Html::HText(match p {
                 TestPage::Home => "home-page".to_string(),
                 TestPage::Detail(id) => format!("detail-{id}"),
-            };
-            Html::HText(label)
-        });
+            })
+        })
+    }
 
+    fn make_session(page: TestPage, entered_path: Option<&str>, view: TestView) -> Fixture {
+        let routes_arc = Arc::new(routes());
+        let routes_for_match = routes_arc.clone();
+        let entry_fn_runs = Arc::new(AtomicUsize::new(0));
+        let runs = entry_fn_runs.clone();
+        let route_entry = routed_entry(
+            routes_arc,
+            TestPage::Home,
+            move |p: TestPage, _m: TestPage| {
+                runs.fetch_add(1, Ordering::SeqCst);
+                (p, IpeCmd::None)
+            },
+        );
+        let route_matched: RouteMatched =
+            Arc::new(move |path| matches_any(&routes_for_match, path));
         let model = page.clone();
         let last_view = (view)(model.clone());
         let index = build_index(&last_view);
         let (msg_tx, _rx) = channel::<()>(1);
+        let (enter_tx, enter_rx) = channel::<EnterRequest>(ENTER_QUEUE_CAP.get());
         let entry = Arc::new(Mutex::new(SessionEntry {
             model,
             last_view,
@@ -5544,264 +5744,302 @@ mod sse_reconnect_reconcile_tests {
             seq: 0,
             sse_tx: None,
             msg_tx,
+            entered_path: entered_path.map(route::RoutePath::of),
+            enter_tx,
             #[cfg(feature = "debugger")]
             history: crate::debugger::RecordBuffer::new(page, crate::debugger::DEFAULT_HISTORY_CAP),
             #[cfg(feature = "debugger")]
             debug_cursor: None,
         }));
-
-        (entry, route_resolver, route_matched, view)
-    }
-
-    /// Apply the exact reconciliation block from `sse_handler`, extracted here
-    /// for unit-testing without spinning up an axum server.
-    fn reconcile(
-        entry: &SessionHandle<TestPage, ()>,
-        route_matched: &RouteMatched,
-        route_resolver: &RouteResolver<TestPage>,
-        view: &Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync>,
-        client_path: &str,
-    ) {
-        // Mirrors sse_handler's reconciliation block (IPE_WEB_BASE_PATH is
-        // empty in tests so base = "").
-        let is_valid_path = client_path.starts_with('/')
-            && !client_path.contains('?')
-            && !client_path.contains('#');
-        if is_valid_path && route_matched(client_path) {
-            let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
-            g.model = route_resolver(g.model.clone(), client_path);
-            let mut tree = (view)(g.model.clone());
-            assign_ipe_ids(&mut tree, "r");
-            style_inject::apply_style_injections(&mut tree);
-            g.index = build_index(&tree);
-            g.last_view = tree;
+        Fixture {
+            entry,
+            enter_rx,
+            route_entry,
+            route_matched,
+            view,
+            store: Arc::new(MemoryStore::new(Duration::from_secs(60))),
+            entry_fn_runs,
         }
     }
 
-    /// Helper: read the current rendered text from the session's `last_view`.
-    #[allow(clippy::unwrap_used)] // test helper — lock poison is a test environment issue
-    fn rendered_text(entry: &SessionHandle<TestPage, ()>) -> String {
-        let g = entry.lock().unwrap();
-        render_html(&g.last_view)
-    }
-
-    #[test]
-    fn differing_url_reconciles_model_and_last_view() {
-        // Session is on Detail("42") but the browser is now showing "/".
-        let (entry, resolver, matched, view) = make_session(TestPage::Detail("42".into()));
-        assert!(rendered_text(&entry).contains("detail-42"));
-
-        reconcile(&entry, &matched, &resolver, &view, "/");
-
-        let g = entry.lock().unwrap();
-        assert_eq!(
-            g.model,
-            TestPage::Home,
-            "model must be reconciled to the Home route"
-        );
-        drop(g);
+    /// Commit one queued request as the driver would: 1 when it entered, 0 when it was already entered.
+    async fn drive_one(fx: &Fixture, request: EnterRequest) -> usize {
+        let commit = commit_entry(
+            &Arc::downgrade(&fx.entry),
+            request,
+            &fx.route_entry,
+            &*fx.view,
+            &fx.store,
+            "sid-test",
+        )
+        .await;
         assert!(
-            rendered_text(&entry).contains("home-page"),
-            "last_view must reflect the reconciled page"
+            !matches!(commit, EntryCommit::SessionGone),
+            "a live session never reports itself gone"
         );
+        usize::from(matches!(commit, EntryCommit::Entered(..)))
     }
 
-    /// Regression: the SSE reconnect reconciliation must leave `last_view` and
-    /// `index` in the same id-stamped state the page and update render paths
-    /// produce. A view rebuilt WITHOUT `assign_ipe_ids` renders every event
-    /// element with no `ipe-id` / `data-ipe-hid`, so the client posts an empty
-    /// handlerId that the server can't resolve — every click, link, and button
-    /// silently does nothing until the next full-page load.
-    #[test]
-    fn reconcile_stamps_ids_so_handlers_resolve() {
-        // Every live app's SSE connect sends `?path=/`, and `/` always matches a
-        // route, so this reconciliation runs on the first connect of an app with
-        // no explicit routes as well. A view with one clickable element is the
-        // minimal shape that exercises the event-id path.
-        let routes: Vec<Route<TestPage>> = vec![Route::new("/", |_| Some(TestPage::Home))];
-        let not_found = TestPage::Home;
-        let routes_arc = Arc::new(routes.clone());
-        let routes_arc2 = routes_arc.clone();
-        let nf = not_found.clone();
-        let route_resolver: RouteResolver<TestPage> =
-            Arc::new(move |_m, path| match_routes(&routes_arc, &nf, path));
-        let route_matched: RouteMatched = Arc::new(move |path| matches_any(&routes_arc2, path));
+    /// Reconcile `client_path` under `base` and, when an entry was queued, commit it as the driver would.
+    ///
+    /// Returns how many entries the driver committed (0 or 1) and the reply body.
+    async fn reconnect(fx: &mut Fixture, client_path: &str, base: &str) -> (usize, Option<String>) {
+        let outcome = reconcile_path(&fx.entry, &fx.route_matched, client_path, base);
+        let ReconcileOutcome::Entering(reply_rx) = outcome else {
+            assert!(
+                fx.enter_rx.try_recv().is_err(),
+                "a non-entering reconcile must queue nothing"
+            );
+            return (0, None);
+        };
+        let queued = fx.enter_rx.try_recv();
+        assert!(
+            queued.is_ok(),
+            "an Entering outcome must have queued a request"
+        );
+        let Ok(request) = queued else {
+            return (0, None);
+        };
+        let committed = drive_one(fx, request).await;
+        (committed, await_entry(reply_rx).await.map(|r| r.body))
+    }
 
-        // A view whose single element carries a click handler — mirrors an
-        // `Ipe.Ui.el [ Ui.onClick msg ]` link in a real app.
-        let view: Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync> = Arc::new(|_p| {
+    /// Two reconnects at one new path, both queued before the driver runs,
+    /// enter it once: the driver, not the enqueuer, decides "already entered".
+    #[tokio::test]
+    async fn concurrent_reconciles_at_one_path_enter_once() {
+        let mut fx = make_session(
+            TestPage::Detail("42".into()),
+            Some("/items/42"),
+            label_view(),
+        );
+        let first = reconcile_path(&fx.entry, &fx.route_matched, "/items/7", "");
+        let second = reconcile_path(&fx.entry, &fx.route_matched, "/items/7/", "");
+        assert!(matches!(first, ReconcileOutcome::Entering(_)));
+        assert!(matches!(second, ReconcileOutcome::Entering(_)));
+
+        let mut committed = 0;
+        while let Ok(request) = fx.enter_rx.try_recv() {
+            committed += drive_one(&fx, request).await;
+        }
+
+        assert_eq!(committed, 1, "one path, one committed entry");
+        assert_eq!(
+            fx.entry_fn_runs.load(Ordering::SeqCst),
+            1,
+            "the entry fn (and so its Cmd) ran once"
+        );
+        assert_eq!(model_of(&fx.entry), TestPage::Detail("7".into()));
+    }
+
+    /// A page GET re-enters even the path the session already entered, so a
+    /// reload runs the entry Cmd again.
+    #[tokio::test]
+    async fn load_of_the_entered_path_enters_again() {
+        let mut fx = make_session(TestPage::Home, Some("/"), label_view());
+        let enter_tx = fx
+            .entry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enter_tx
+            .clone();
+        assert!(queue_entry(&enter_tx, route::RoutePath::of("/"), EnterMode::Load).is_some());
+        let queued = fx.enter_rx.try_recv();
+        assert!(queued.is_ok(), "the load was queued");
+        let Ok(request) = queued else {
+            return;
+        };
+        assert_eq!(drive_one(&fx, request).await, 1);
+        assert_eq!(fx.entry_fn_runs.load(Ordering::SeqCst), 1);
+    }
+
+    /// Helper: read the current rendered text from the session's `last_view`.
+    fn rendered_text(entry: &SessionHandle<TestPage, ()>) -> String {
+        render_html(&entry.lock().unwrap_or_else(|e| e.into_inner()).last_view)
+    }
+
+    fn model_of(entry: &SessionHandle<TestPage, ()>) -> TestPage {
+        entry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .model
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn differing_url_enters_once_then_is_unchanged() {
+        // Entered at Detail("42"), but the browser now shows "/".
+        let mut fx = make_session(
+            TestPage::Detail("42".into()),
+            Some("/items/42"),
+            label_view(),
+        );
+        assert!(rendered_text(&fx.entry).contains("detail-42"));
+
+        let (entered, body) = reconnect(&mut fx, "/", "").await;
+        assert_eq!(entered, 1, "a differing path enters once");
+        assert!(
+            body.is_some_and(|b| b.contains("home-page")),
+            "the reply carries the entered page's body"
+        );
+        assert_eq!(model_of(&fx.entry), TestPage::Home);
+        assert!(rendered_text(&fx.entry).contains("home-page"));
+
+        let (again, _) = reconnect(&mut fx, "/", "").await;
+        assert_eq!(again, 0, "a reconnect at the entered path enters nothing");
+    }
+
+    /// The reconcile commit leaves `last_view` and `index` id-stamped, as the
+    /// page and update renders do, so a click on the resynced page resolves.
+    #[tokio::test]
+    async fn entry_stamps_ids_so_handlers_resolve() {
+        let view: TestView = Arc::new(|_p| {
             Html::HElement(
                 "div".into(),
                 vec![Attribute::EventAttr(Event::OnMsg("click".into(), ()))],
                 vec![Html::HText("go".into())],
             )
         });
+        let mut fx = make_session(TestPage::Home, None, view);
 
-        // Seed the session with an UNSTAMPED last_view (the state right after
-        // the reconciliation block rebuilds the view from the model).
-        let model = TestPage::Home;
-        let last_view = (view)(model.clone());
-        let index = build_index(&last_view);
-        let (msg_tx, _rx) = channel::<()>(1);
-        let entry: SessionHandle<TestPage, ()> = Arc::new(Mutex::new(SessionEntry {
-            model,
-            last_view,
-            index,
-            seq: 0,
-            sse_tx: None,
-            msg_tx,
-            #[cfg(feature = "debugger")]
-            history: crate::debugger::RecordBuffer::new(
-                TestPage::Home,
-                crate::debugger::DEFAULT_HISTORY_CAP,
-            ),
-            #[cfg(feature = "debugger")]
-            debug_cursor: None,
-        }));
+        let (entered, _) = reconnect(&mut fx, "/", "").await;
+        assert_eq!(entered, 1);
 
-        reconcile(&entry, &route_matched, &route_resolver, &view, "/");
-
-        let g = entry.lock().unwrap();
-        // The rendered resync body the client applies must carry the id + hid,
-        // or the client can't tell the server which handler fired.
+        let g = fx.entry.lock().unwrap_or_else(|e| e.into_inner());
         let body = render_html(&g.last_view);
         assert!(
             body.contains("data-ipe-hid=\"r\""),
-            "reconciled resync body must stamp data-ipe-hid: {body}"
+            "entered resync body must stamp data-ipe-hid: {body}"
         );
         assert!(
             body.contains("ipe-id=\"r\""),
-            "reconciled resync body must stamp ipe-id: {body}"
+            "entered resync body must stamp ipe-id: {body}"
         );
-        // And the rebuilt index must resolve that hid + event back to the Msg,
-        // so the incoming click actually dispatches.
         assert_eq!(
             g.index.resolve("r", "click", &[]),
             Some(()),
-            "reconciled handler index must resolve the stamped ipe-id"
+            "entered handler index must resolve the stamped ipe-id"
         );
+        assert_eq!(g.entered_path, Some(route::RoutePath::of("/")));
     }
 
-    #[test]
-    fn same_url_is_idempotent() {
-        // Session is already on Home; reconnect with path "/" — no change.
-        let (entry, resolver, matched, view) = make_session(TestPage::Home);
-        let before = rendered_text(&entry);
+    #[tokio::test]
+    async fn same_entered_path_is_unchanged() {
+        let mut fx = make_session(TestPage::Home, Some("/"), label_view());
+        let before = rendered_text(&fx.entry);
 
-        reconcile(&entry, &matched, &resolver, &view, "/");
+        let (entered, _) = reconnect(&mut fx, "/", "").await;
 
-        let g = entry.lock().unwrap();
-        assert_eq!(g.model, TestPage::Home, "model must be unchanged");
-        drop(g);
-        assert_eq!(
-            rendered_text(&entry),
-            before,
-            "last_view must be identical after same-URL reconnect"
-        );
+        assert_eq!(entered, 0);
+        assert_eq!(model_of(&fx.entry), TestPage::Home);
+        assert_eq!(rendered_text(&fx.entry), before);
     }
 
-    #[test]
-    fn absent_path_param_leaves_session_unchanged() {
-        // No reconciliation path is exercised at all — no-op.
-        let (entry, _resolver, _matched, _view) = make_session(TestPage::Detail("7".into()));
-        let before = rendered_text(&entry);
-        let seq_before = entry.lock().unwrap().seq;
-        // Do nothing (the `if let Some(raw_path) = qs.get("path")` branch is
-        // not entered when the client sends no `path` param).
-        assert_eq!(rendered_text(&entry), before);
-        assert_eq!(entry.lock().unwrap().seq, seq_before);
-    }
-
-    #[test]
-    fn invalid_path_rejected_session_unchanged() {
-        let (entry, resolver, matched, view) = make_session(TestPage::Home);
-        let before = rendered_text(&entry);
-
-        // Path with query string — must be rejected.
-        reconcile(&entry, &matched, &resolver, &view, "/?foo=bar");
-        assert_eq!(
-            rendered_text(&entry),
-            before,
-            "path with '?' must be rejected"
-        );
-
-        // Path with fragment — must be rejected.
-        reconcile(&entry, &matched, &resolver, &view, "/#anchor");
-        assert_eq!(
-            rendered_text(&entry),
-            before,
-            "path with '#' must be rejected"
-        );
-
-        // Relative path (no leading '/') — must be rejected.
-        reconcile(&entry, &matched, &resolver, &view, "items/1");
-        assert_eq!(
-            rendered_text(&entry),
-            before,
-            "relative path must be rejected"
-        );
-    }
-
-    #[test]
-    fn unroutable_path_leaves_session_unchanged() {
-        // "/favicon.ico" is not a declared route — falls through unchanged.
-        let (entry, resolver, matched, view) = make_session(TestPage::Home);
-        let before = rendered_text(&entry);
-
-        reconcile(&entry, &matched, &resolver, &view, "/favicon.ico");
-
-        assert_eq!(
-            rendered_text(&entry),
-            before,
-            "unroutable path must not modify session state"
-        );
-    }
-
-    #[test]
-    fn sub_app_base_prefix_is_stripped_before_matching() {
-        // Simulate a sub-app mounted at "/app": the client sends "/app/items/5"
-        // (its full location.pathname) but the route table has "/items/:id".
-        // The reconciler must strip "/app" before matching.
-        let (entry, _resolver, _matched, _view) = make_session(TestPage::Home);
-
-        // Build sub-app-aware closures with base="/app".
-        let routes: Vec<Route<TestPage>> = vec![
-            Route::new("/", |_| Some(TestPage::Home)),
-            Route::new("/items/:id", |p| Some(TestPage::Detail(p[0].clone()))),
-        ];
-        let routes_arc = Arc::new(routes.clone());
-        let routes_arc2 = routes_arc.clone();
-        let nf = TestPage::Home;
-        let route_resolver: RouteResolver<TestPage> =
-            Arc::new(move |_model, path| match_routes(&routes_arc, &nf, path));
-        let route_matched: RouteMatched = Arc::new(move |path| matches_any(&routes_arc2, path));
-        let view: Arc<dyn Fn(TestPage) -> Html<()> + Send + Sync> = Arc::new(|p| {
-            Html::HText(match p {
-                TestPage::Home => "home-page".to_string(),
-                TestPage::Detail(id) => format!("detail-{id}"),
-            })
-        });
-
-        // Manually apply the sub-app base-stripping logic (mirrors sse_handler).
-        let base = "/app";
-        let client_path = "/app/items/5";
-        let route_path = client_path.strip_prefix(base).unwrap_or(client_path);
-        // route_path is now "/items/5" — must match the declared route.
-        assert!(
-            route_matched(route_path),
-            "stripped path must match route table"
-        );
-        if route_matched(route_path) {
-            let mut g = entry.lock().unwrap_or_else(|e| e.into_inner());
-            g.model = route_resolver(g.model.clone(), route_path);
-            g.last_view = (view)(g.model.clone());
+    #[tokio::test]
+    async fn invalid_path_enters_nothing() {
+        let mut fx = make_session(TestPage::Home, None, label_view());
+        let before = rendered_text(&fx.entry);
+        for bad in ["/?foo=bar", "/#anchor", "items/1", ""] {
+            let (entered, _) = reconnect(&mut fx, bad, "").await;
+            assert_eq!(entered, 0, "invalid path {bad:?} must enter nothing");
         }
+        assert_eq!(rendered_text(&fx.entry), before);
+    }
 
-        let g = entry.lock().unwrap();
+    #[tokio::test]
+    async fn unroutable_path_enters_nothing() {
+        let mut fx = make_session(TestPage::Home, None, label_view());
+        let before = rendered_text(&fx.entry);
+
+        let (entered, _) = reconnect(&mut fx, "/favicon.ico", "").await;
+
+        assert_eq!(entered, 0);
+        assert_eq!(rendered_text(&fx.entry), before);
+    }
+
+    /// A sub-app at "/app" reports its full `location.pathname`; the base is
+    /// stripped once and the base-relative path is what the session records.
+    #[tokio::test]
+    async fn sub_app_base_prefix_is_stripped_before_matching() {
+        let mut fx = make_session(TestPage::Home, Some("/"), label_view());
+
+        let (entered, _) = reconnect(&mut fx, "/app/items/5", "/app").await;
+
+        assert_eq!(entered, 1);
+        assert_eq!(model_of(&fx.entry), TestPage::Detail("5".into()));
         assert_eq!(
-            g.model,
-            TestPage::Detail("5".into()),
-            "sub-app base must be stripped before route matching"
+            fx.entry
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entered_path,
+            Some(route::RoutePath::of("/items/5")),
+            "entered_path is base-relative"
+        );
+        let (again, _) = reconnect(&mut fx, "/app/items/5", "/app").await;
+        assert_eq!(again, 0, "the base-relative dedupe holds under a base");
+    }
+
+    /// A sub-app opened at its bare base: the proxy forwarded "/", the browser
+    /// reports "/app"; both are the root page, so the entry Cmd does not rerun.
+    #[tokio::test]
+    async fn bare_base_is_the_entered_root() {
+        let mut fx = make_session(TestPage::Home, Some("/"), label_view());
+
+        let (entered, _) = reconnect(&mut fx, "/app", "/app").await;
+
+        assert_eq!(
+            entered, 0,
+            "\"/app\" under base \"/app\" is the entered \"/\""
+        );
+    }
+
+    /// A trailing slash names the page the matcher already entered.
+    #[tokio::test]
+    async fn trailing_slash_is_the_entered_path() {
+        let mut fx = make_session(TestPage::Detail("5".into()), Some("/items/5"), label_view());
+
+        let (entered, _) = reconnect(&mut fx, "/items/5/", "").await;
+
+        assert_eq!(entered, 0, "\"/items/5/\" is the entered \"/items/5\"");
+    }
+
+    /// The base is stripped only at a segment boundary; a path outside the
+    /// base enters nothing.
+    #[tokio::test]
+    async fn path_outside_the_base_enters_nothing() {
+        let mut fx = make_session(TestPage::Home, Some("/"), label_view());
+        let before = rendered_text(&fx.entry);
+
+        let (glued, _) = reconnect(&mut fx, "/appitems/5", "/app").await;
+        let (outside, _) = reconnect(&mut fx, "/items/5", "/app").await;
+
+        assert_eq!(glued, 0, "\"/appitems/5\" is not under \"/app\"");
+        assert_eq!(outside, 0, "\"/items/5\" is not under \"/app\"");
+        assert_eq!(model_of(&fx.entry), TestPage::Home);
+        assert_eq!(rendered_text(&fx.entry), before);
+    }
+
+    /// A driver whose enter queue is full refuses the entry instead of waiting.
+    #[tokio::test]
+    async fn full_enter_queue_is_refused() {
+        let fx = make_session(TestPage::Home, None, label_view());
+        let enter_tx = fx
+            .entry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enter_tx
+            .clone();
+        for _ in 0..ENTER_QUEUE_CAP.get() {
+            assert!(queue_entry(&enter_tx, route::RoutePath::of("/"), EnterMode::Load).is_some());
+        }
+        assert!(matches!(
+            reconcile_path(&fx.entry, &fx.route_matched, "/items/1", ""),
+            ReconcileOutcome::Refused
+        ));
+        drop(fx.enter_rx);
+        assert!(
+            queue_entry(&enter_tx, route::RoutePath::of("/"), EnterMode::Load).is_none(),
+            "a closed driver queue refuses"
         );
     }
 }
@@ -6027,14 +6265,11 @@ mod watch_status_handler_tests {
     fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
         IpeSub::None
     }
-    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
-        m
-    }
     fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
     fn test_route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     fn make_state(store: Arc<TestStore>) -> TestWebState {
@@ -6044,7 +6279,10 @@ mod watch_status_handler_tests {
             update: Arc::new(test_update),
             view: Arc::new(test_view),
             subs: Arc::new(test_subs),
-            route_resolver: Arc::new(test_route_resolver),
+            route_entry: Arc::new(|model, _path| route::Entered {
+                model,
+                cmd: IpeCmd::None,
+            }),
             param_resolver: Arc::new(test_param_resolver),
             route_matched: Arc::new(test_route_matched),
             session_count: Arc::new(AtomicUsize::new(0)),
@@ -6081,6 +6319,8 @@ mod watch_status_handler_tests {
             seq: 0,
             sse_tx,
             msg_tx,
+            entered_path: None,
+            enter_tx: tokio::sync::mpsc::channel(1).0,
             #[cfg(feature = "debugger")]
             history: crate::debugger::RecordBuffer::new((), crate::debugger::DEFAULT_HISTORY_CAP),
             #[cfg(feature = "debugger")]
@@ -6591,7 +6831,10 @@ mod watch_status_handler_tests {
                 update: Arc::new(test_update),
                 view: Arc::new(test_view),
                 subs: Arc::new(test_subs),
-                route_resolver: Arc::new(test_route_resolver),
+                route_entry: Arc::new(|model, _path| route::Entered {
+                    model,
+                    cmd: IpeCmd::None,
+                }),
                 param_resolver: Arc::new(test_param_resolver),
                 route_matched: Arc::new(test_route_matched),
                 session_count: Arc::new(AtomicUsize::new(0)),
@@ -6679,14 +6922,11 @@ mod hot_transition_handler_tests {
     fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
         IpeSub::None
     }
-    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
-        m
-    }
     fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
     fn test_route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     fn make_router() -> Router {
@@ -6697,7 +6937,10 @@ mod hot_transition_handler_tests {
             update: Arc::new(test_update),
             view: Arc::new(test_view),
             subs: Arc::new(test_subs),
-            route_resolver: Arc::new(test_route_resolver),
+            route_entry: Arc::new(|model, _path| route::Entered {
+                model,
+                cmd: IpeCmd::None,
+            }),
             param_resolver: Arc::new(test_param_resolver),
             route_matched: Arc::new(test_route_matched),
             session_count: Arc::new(AtomicUsize::new(0)),
@@ -6915,16 +7158,12 @@ mod hot_init_session_scoping_tests {
         IpeSub::None
     }
 
-    fn test_route_resolver(m: Counter, _path: &str) -> Counter {
-        m
-    }
-
     fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
 
     fn test_route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     // ── Type aliases ─────────────────────────────────────────────────────────
@@ -6948,7 +7187,10 @@ mod hot_init_session_scoping_tests {
             update: Arc::new(test_update),
             view: Arc::new(test_view),
             subs: Arc::new(test_subs),
-            route_resolver: Arc::new(test_route_resolver),
+            route_entry: Arc::new(|model, _path| route::Entered {
+                model,
+                cmd: IpeCmd::None,
+            }),
             param_resolver: Arc::new(test_param_resolver),
             route_matched: Arc::new(test_route_matched),
             session_count: Arc::new(AtomicUsize::new(0)),
@@ -7185,14 +7427,11 @@ mod hot_msg_handler_tests {
     fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
         IpeSub::None
     }
-    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
-        m
-    }
     fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
     fn test_route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     fn make_router() -> Router {
@@ -7203,7 +7442,10 @@ mod hot_msg_handler_tests {
             update: Arc::new(test_update),
             view: Arc::new(test_view),
             subs: Arc::new(test_subs),
-            route_resolver: Arc::new(test_route_resolver),
+            route_entry: Arc::new(|model, _path| route::Entered {
+                model,
+                cmd: IpeCmd::None,
+            }),
             param_resolver: Arc::new(test_param_resolver),
             route_matched: Arc::new(test_route_matched),
             session_count: Arc::new(AtomicUsize::new(0)),
@@ -7398,14 +7640,11 @@ mod hot_init_handler_tests {
     fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
         IpeSub::None
     }
-    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
-        m
-    }
     fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
     fn test_route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     fn make_router() -> Router {
@@ -7416,7 +7655,10 @@ mod hot_init_handler_tests {
             update: Arc::new(test_update),
             view: Arc::new(test_view),
             subs: Arc::new(test_subs),
-            route_resolver: Arc::new(test_route_resolver),
+            route_entry: Arc::new(|model, _path| route::Entered {
+                model,
+                cmd: IpeCmd::None,
+            }),
             param_resolver: Arc::new(test_param_resolver),
             route_matched: Arc::new(test_route_matched),
             session_count: Arc::new(AtomicUsize::new(0)),
@@ -7615,14 +7857,11 @@ mod hot_wiring_handler_tests {
     fn test_subs(_model: TestModel) -> IpeSub<TestMsg> {
         IpeSub::None
     }
-    fn test_route_resolver(m: TestModel, _path: &str) -> TestModel {
-        m
-    }
     fn test_param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
     fn test_route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     fn make_router() -> Router {
@@ -7633,7 +7872,10 @@ mod hot_wiring_handler_tests {
             update: Arc::new(test_update),
             view: Arc::new(test_view),
             subs: Arc::new(test_subs),
-            route_resolver: Arc::new(test_route_resolver),
+            route_entry: Arc::new(|model, _path| route::Entered {
+                model,
+                cmd: IpeCmd::None,
+            }),
             param_resolver: Arc::new(test_param_resolver),
             route_matched: Arc::new(test_route_matched),
             session_count: Arc::new(AtomicUsize::new(0)),
@@ -8026,14 +8268,11 @@ mod emitted_router_behavior_tests {
         fn(Model) -> IpeSub<Msg>,
     >;
 
-    fn route_resolver(m: Model, _path: &str) -> Model {
-        m
-    }
     fn param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
     fn route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     fn make_state(store: Arc<Store>) -> State {
@@ -8043,7 +8282,10 @@ mod emitted_router_behavior_tests {
             update: Arc::new(update),
             view: Arc::new(view),
             subs: Arc::new(subs),
-            route_resolver: Arc::new(route_resolver),
+            route_entry: Arc::new(|model, _path| route::Entered {
+                model,
+                cmd: IpeCmd::None,
+            }),
             param_resolver: Arc::new(param_resolver),
             route_matched: Arc::new(route_matched),
             session_count: Arc::new(AtomicUsize::new(0)),
@@ -8315,6 +8557,484 @@ mod emitted_router_behavior_tests {
                 "re-render after submit must show the decoded username:\n{}",
                 &body2[..body2.len().min(1500)]
             );
+        });
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
+mod route_entry_cmd_tests {
+    //! Every server path that commits a routed page from a URL runs that
+    //! page's entry Cmd: the first GET (after `init`'s Cmd), a reload of a live
+    //! session, a cold-restored session, and an SSE reconnect at a different
+    //! path — once per entry, serialised with `update`, and bounded by the
+    //! driver's enter queue and reply timeout.
+
+    use super::*;
+    use crate::web::req::WebReq;
+    use crate::web::route::{Route, matches_any};
+    use crate::web::store::{MemoryStore, SessionStore, StoreHit};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use serde::{Deserialize, Serialize};
+    use std::time::Duration;
+    use tower::ServiceExt; // oneshot
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+    enum Page {
+        Home,
+        Item(String),
+    }
+
+    /// The page plus every effect the session has seen, in arrival order.
+    #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+    struct Model {
+        page: Page,
+        log: Vec<String>,
+    }
+
+    impl crate::stringify::IpeStringify for Model {
+        fn ipe_show(&self) -> String {
+            format!("{self:?}")
+        }
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    enum Msg {
+        Loaded(String),
+    }
+
+    impl crate::stringify::IpeStringify for Msg {
+        fn ipe_show(&self) -> String {
+            format!("{self:?}")
+        }
+    }
+
+    /// A Cmd whose only effect is logging `label` into the model through `update`.
+    fn load(label: String) -> IpeCmd<Msg> {
+        IpeCmd::Perform(Box::new(move || {
+            Box::pin(async move { Msg::Loaded(label) })
+        }))
+    }
+
+    fn init(_req: WebReq) -> (Model, IpeCmd<Msg>) {
+        (
+            Model {
+                page: Page::Home,
+                log: Vec::new(),
+            },
+            load("init".to_owned()),
+        )
+    }
+
+    fn update(msg: Msg, model: Model) -> (Model, IpeCmd<Msg>) {
+        let Msg::Loaded(label) = msg;
+        let mut log = model.log;
+        log.push(label);
+        (Model { log, ..model }, IpeCmd::None)
+    }
+
+    fn view(model: Model) -> Html<Msg> {
+        Html::HText(match model.page {
+            Page::Home => "page-home".to_owned(),
+            Page::Item(id) => format!("page-item-{id}"),
+        })
+    }
+
+    fn subs(_model: Model) -> IpeSub<Msg> {
+        IpeSub::None
+    }
+
+    /// The app's entry fn: commit the page and load it.
+    fn set_page(page: Page, model: Model) -> (Model, IpeCmd<Msg>) {
+        let label = match &page {
+            Page::Home => "enter:home".to_owned(),
+            Page::Item(id) => format!("enter:item-{id}"),
+        };
+        (Model { page, ..model }, load(label))
+    }
+
+    fn routes() -> Vec<Route<Page>> {
+        vec![
+            Route::new("/", |_| Some(Page::Home)),
+            Route::new("/items/:id", |p| p.first().cloned().map(Page::Item)),
+        ]
+    }
+
+    type Store = Arc<dyn store::SessionStore<Model, Msg>>;
+
+    /// The fixture app's state, its four fns as plain fn pointers.
+    type FixtureState = WebState<
+        Model,
+        Msg,
+        fn(WebReq) -> (Model, IpeCmd<Msg>),
+        fn(Msg, Model) -> (Model, IpeCmd<Msg>),
+        fn(Model) -> Html<Msg>,
+        fn(Model) -> IpeSub<Msg>,
+    >;
+
+    fn router(store: Store) -> axum::Router {
+        let routes_for_match = Arc::new(routes());
+        let state: FixtureState = WebState {
+            store,
+            init: Arc::new(init),
+            update: Arc::new(update),
+            view: Arc::new(view),
+            subs: Arc::new(subs),
+            route_entry: routed_entry(Arc::new(routes()), Page::Home, set_page),
+            param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
+            route_matched: Arc::new(move |path| matches_any(&routes_for_match, path)),
+            session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
+        };
+        build_web_router(state, false)
+    }
+
+    fn memory() -> Store {
+        Arc::new(MemoryStore::<Model, Msg>::new(Duration::from_secs(60)))
+    }
+
+    /// Run `body` on a current-thread runtime (deterministic task order); `paused` starts tokio's clock paused.
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
+    fn run<F: std::future::Future<Output = ()>>(paused: bool, body: impl FnOnce() -> F) {
+        // Serialise with the other in-process router tests: the session cookie
+        // name and reset switch read the process-global env overlay.
+        let _g = crate::web::literal_table::overlay_test_lock();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(paused)
+            .build()
+            .expect("current-thread runtime")
+            .block_on(body());
+    }
+
+    /// GET `path` with an optional `ipe_sid` cookie → (status, `Retry-After`, minted sid, body).
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
+    async fn get(
+        store: &Store,
+        path: &str,
+        cookie: Option<&str>,
+    ) -> (StatusCode, Option<String>, String, String) {
+        let mut b = Request::builder().method("GET").uri(path);
+        if let Some(c) = cookie {
+            b = b.header(header::COOKIE, format!("ipe_sid={c}"));
+        }
+        let resp = router(store.clone())
+            .oneshot(b.body(Body::empty()).expect("build GET"))
+            .await
+            .expect("router responds");
+        let status = resp.status();
+        let retry_after = resp
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let sid = resp
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find_map(|c| c.strip_prefix("ipe_sid="))
+            .and_then(|rest| rest.split(';').next())
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        (
+            status,
+            retry_after,
+            sid,
+            String::from_utf8_lossy(&bytes).into_owned(),
+        )
+    }
+
+    async fn handle_of(store: &Store, sid: &str) -> Option<SessionHandle<Model, Msg>> {
+        match store.get(sid).await {
+            Some(StoreHit::Web(h)) => Some(h),
+            _ => None,
+        }
+    }
+
+    async fn model_of(store: &Store, sid: &str) -> Option<Model> {
+        handle_of(store, sid)
+            .await
+            .map(|h| h.lock().unwrap_or_else(|e| e.into_inner()).model.clone())
+    }
+
+    /// Wait (bounded) until the session's log has `len` entries, then return the model.
+    async fn settled(store: &Store, sid: &str, len: usize) -> Option<Model> {
+        for _ in 0..200 {
+            if let Some(m) = model_of(store, sid).await
+                && m.log.len() >= len
+            {
+                return Some(m);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        model_of(store, sid).await
+    }
+
+    fn count(model: &Model, label: &str) -> usize {
+        model.log.iter().filter(|l| l.as_str() == label).count()
+    }
+
+    /// A first GET runs `init`'s Cmd and then the entered page's Cmd, in that order.
+    #[test]
+    fn miss_runs_init_cmd_then_entry_cmd() {
+        run(false, || async {
+            let store = memory();
+            let (status, _, sid, body) = get(&store, "/items/1", None).await;
+            assert_eq!(status, StatusCode::OK);
+            assert!(
+                body.contains("page-item-1"),
+                "the GET renders the entered page"
+            );
+            let m = settled(&store, &sid, 2).await;
+            assert_eq!(
+                m.map(|m| m.log),
+                Some(vec!["init".to_owned(), "enter:item-1".to_owned()]),
+                "init's Cmd runs, then the entry Cmd, each once"
+            );
+        });
+    }
+
+    /// A GET on a live session enters through its driver and runs the entry Cmd.
+    #[test]
+    fn web_hit_runs_entry_cmd_through_the_driver() {
+        run(false, || async {
+            let store = memory();
+            let (_, _, sid, _) = get(&store, "/", None).await;
+            assert!(settled(&store, &sid, 2).await.is_some());
+
+            let (status, _, _, body) = get(&store, "/items/2", Some(&sid)).await;
+            assert_eq!(status, StatusCode::OK);
+            assert!(
+                body.contains("page-item-2"),
+                "the reply carries the driver's rendered entry: {body}"
+            );
+            let m = settled(&store, &sid, 3).await;
+            assert_eq!(
+                m.as_ref().map(|m| m.page.clone()),
+                Some(Page::Item("2".to_owned())),
+                "the driver committed the entered page"
+            );
+            assert_eq!(m.map(|m| count(&m, "enter:item-2")), Some(1));
+        });
+    }
+
+    /// A store that answers one sid with a persisted (cold) model, as after a restart.
+    struct ColdStore {
+        live: MemoryStore<Model, Msg>,
+        cold_sid: String,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionStore<Model, Msg> for ColdStore {
+        async fn get(&self, sid: &str) -> Option<StoreHit<Model, Msg>> {
+            match self.live.get(sid).await {
+                Some(hit) => Some(hit),
+                None if sid == self.cold_sid => Some(StoreHit::Cold(Model {
+                    page: Page::Home,
+                    log: vec!["persisted".to_owned()],
+                })),
+                None => None,
+            }
+        }
+        async fn set(&self, sid: &str, handle: SessionHandle<Model, Msg>) {
+            self.live.set(sid, handle).await;
+        }
+        async fn delete(&self, sid: &str) {
+            self.live.delete(sid).await;
+        }
+        async fn web_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
+            self.live.web_sessions().await
+        }
+    }
+
+    /// A GET restoring a cold session enters the path and runs its Cmd, without `init`.
+    #[test]
+    fn cold_hit_runs_entry_cmd_without_init() {
+        run(false, || async {
+            let cold_sid = new_sid();
+            let store: Store = Arc::new(ColdStore {
+                live: MemoryStore::new(Duration::from_secs(60)),
+                cold_sid: cold_sid.clone(),
+            });
+            let (status, _, _, _) = get(&store, "/items/3", Some(&cold_sid)).await;
+            assert_eq!(status, StatusCode::OK);
+            let m = settled(&store, &cold_sid, 2).await;
+            assert_eq!(
+                m.map(|m| m.log),
+                Some(vec!["persisted".to_owned(), "enter:item-3".to_owned()]),
+                "a cold restore runs the entry Cmd and never init's"
+            );
+        });
+    }
+
+    /// A live session whose driver does not drain its enter queue, so a test holds the queue's far end.
+    async fn stalled_session(store: &Store) -> (String, Receiver<EnterRequest>) {
+        let sid = new_sid();
+        let model = Model {
+            page: Page::Home,
+            log: Vec::new(),
+        };
+        let last_view = view(model.clone());
+        let index = build_index(&last_view);
+        let (msg_tx, _msg_rx) = mpsc::channel::<Msg>(1);
+        let (enter_tx, enter_rx) = mpsc::channel::<EnterRequest>(ENTER_QUEUE_CAP.get());
+        let entry = Arc::new(Mutex::new(SessionEntry {
+            model: model.clone(),
+            last_view,
+            index,
+            seq: 0,
+            sse_tx: None,
+            msg_tx,
+            entered_path: Some(route::RoutePath::of("/")),
+            enter_tx,
+            #[cfg(feature = "debugger")]
+            history: crate::debugger::RecordBuffer::new(
+                model,
+                crate::debugger::DEFAULT_HISTORY_CAP,
+            ),
+            #[cfg(feature = "debugger")]
+            debug_cursor: None,
+        }));
+        store.set(&sid, entry).await;
+        (sid, enter_rx)
+    }
+
+    /// A full or closed enter queue answers 503 with `Retry-After: 1`, never an unbounded wait.
+    #[test]
+    fn full_or_closed_enter_queue_is_503() {
+        run(false, || async {
+            let store = memory();
+            let (sid, enter_rx) = stalled_session(&store).await;
+            let handle = handle_of(&store, &sid).await;
+            assert!(handle.is_some(), "the seeded session is live");
+            let Some(handle) = handle else {
+                return;
+            };
+            let enter_tx = handle
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .enter_tx
+                .clone();
+            let held: Vec<_> = (0..ENTER_QUEUE_CAP.get())
+                .filter_map(|_| queue_entry(&enter_tx, route::RoutePath::of("/"), EnterMode::Load))
+                .collect();
+            assert_eq!(held.len(), ENTER_QUEUE_CAP.get());
+
+            let (status, retry, _, _) = get(&store, "/items/4", Some(&sid)).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "full queue");
+            assert_eq!(retry.as_deref(), Some("1"));
+
+            drop(enter_rx);
+            let (status, retry, _, _) = get(&store, "/items/4", Some(&sid)).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "closed queue");
+            assert_eq!(retry.as_deref(), Some("1"));
+        });
+    }
+
+    /// A driver that never replies within the reply timeout yields 503, not a hung request.
+    #[test]
+    fn unanswered_entry_times_out_with_503() {
+        run(true, || async {
+            let store = memory();
+            let (sid, _enter_rx) = stalled_session(&store).await;
+            let (status, retry, _, _) = get(&store, "/items/5", Some(&sid)).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(retry.as_deref(), Some("1"));
+        });
+    }
+
+    /// An `update` in flight and a GET re-entry are serialised by the driver, so neither commit is lost.
+    #[test]
+    fn update_and_reentry_keep_both_effects() {
+        run(false, || async {
+            let store = memory();
+            let (_, _, sid, _) = get(&store, "/", None).await;
+            assert!(settled(&store, &sid, 2).await.is_some());
+            let handle = handle_of(&store, &sid).await;
+            assert!(handle.is_some(), "the session is live");
+            let Some(handle) = handle else {
+                return;
+            };
+            let msg_tx = handle
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .msg_tx
+                .clone();
+            assert!(msg_tx.try_send(Msg::Loaded("update".to_owned())).is_ok());
+            let (status, _, _, _) = get(&store, "/items/6", Some(&sid)).await;
+            assert_eq!(status, StatusCode::OK);
+
+            let m = settled(&store, &sid, 4).await;
+            assert_eq!(
+                m.as_ref().map(|m| m.page.clone()),
+                Some(Page::Item("6".to_owned()))
+            );
+            assert_eq!(m.as_ref().map(|m| count(m, "update")), Some(1));
+            assert_eq!(m.map(|m| count(&m, "enter:item-6")), Some(1));
+        });
+    }
+
+    /// Open the SSE stream for `sid` reporting `path` and read until its resync frame.
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
+    async fn sse_resync(store: &Store, sid: &str, path: &str) -> String {
+        use futures_util::StreamExt;
+        let resp = router(store.clone())
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/_ipe/sse?path={}", path.replace('/', "%2F")))
+                    .header(header::ACCEPT, "text/event-stream")
+                    .header(header::COOKIE, format!("ipe_sid={sid}"))
+                    .body(Body::empty())
+                    .expect("build SSE GET"),
+            )
+            .await
+            .expect("router responds");
+        let mut stream = resp.into_body().into_data_stream();
+        let mut acc = String::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+            while acc.len() < 64 * 1024 && !acc.contains("event: patch") {
+                match stream.next().await {
+                    Some(Ok(chunk)) => acc.push_str(&String::from_utf8_lossy(&chunk)),
+                    _ => break,
+                }
+            }
+        })
+        .await;
+        acc
+    }
+
+    /// The GET that creates a page and the SSE open that follows at the same
+    /// path enter once; an SSE open at a different path enters again.
+    #[test]
+    fn get_then_sse_same_path_runs_entry_cmd_once() {
+        run(false, || async {
+            let store = memory();
+            let (_, _, sid, _) = get(&store, "/items/7", None).await;
+            assert!(settled(&store, &sid, 2).await.is_some());
+
+            let frame = sse_resync(&store, &sid, "/items/7").await;
+            assert!(frame.contains("event: patch"), "resync frame on connect");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let m = model_of(&store, &sid).await;
+            assert_eq!(
+                m.map(|m| count(&m, "enter:item-7")),
+                Some(1),
+                "the SSE open at the GET's path must not re-run the entry Cmd"
+            );
+
+            let frame = sse_resync(&store, &sid, "/").await;
+            assert!(
+                frame.contains("page-home"),
+                "a differing path resyncs the entered page"
+            );
+            let m = settled(&store, &sid, 3).await;
+            assert_eq!(m.map(|m| count(&m, "enter:home")), Some(1));
         });
     }
 }

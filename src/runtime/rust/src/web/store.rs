@@ -1460,6 +1460,8 @@ mod tests {
             seq: 0,
             sse_tx: None,
             msg_tx: tx,
+            entered_path: None,
+            enter_tx: tokio::sync::mpsc::channel(1).0,
             #[cfg(feature = "debugger")]
             history: crate::debugger::RecordBuffer::new((), crate::debugger::DEFAULT_HISTORY_CAP),
             #[cfg(feature = "debugger")]
@@ -1490,6 +1492,8 @@ mod tests {
             seq: 0,
             sse_tx: None,
             msg_tx: tx,
+            entered_path: None,
+            enter_tx: tokio::sync::mpsc::channel(1).0,
             #[cfg(feature = "debugger")]
             history: crate::debugger::RecordBuffer::new(
                 model,
@@ -2516,6 +2520,8 @@ mod tests {
             seq: 0,
             sse_tx: None,
             msg_tx: tx,
+            entered_path: None,
+            enter_tx: tokio::sync::mpsc::channel(1).0,
         }))
     }
 

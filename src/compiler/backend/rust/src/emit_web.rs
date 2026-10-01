@@ -802,26 +802,20 @@ fn msg_set_descriptor_item(ctx: &EmitCtx, update_e: &Expr) -> String {
     format!("#[allow(dead_code)] const IPE_WEB_MSG_SET: &str = {json:?}; ")
 }
 
-/// Build the `set_page : Fn(Page, Model) -> Model` closure passed to the routed
-/// runtime entry, which the runtime calls to reconcile the model to the page a
-/// URL matched.
+/// Build the `set_page : Fn(Page, Model) -> (Model, Cmd)` entry fn the routed runtime enters a URL through.
 ///
-/// The URL-driven navigation event flows through the app's `update` exactly when
-/// the cfg supplies an `onNavigate : page -> msg` field — the explicit-in-config
-/// navigation form:
+/// The runtime calls it once per URL-to-model entry (first GET, reload, in-app
+/// navigation, Back/Forward, SSE reconnect at a different path) and runs the
+/// returned Cmd exactly once, so a page's load effect fires on every entry.
 ///
 /// * **`onNavigate` present** — the matched page becomes a `Msg` via the
-///   supplied handler, and that `Msg` is dispatched through `update`:
-///   `move |page, model| { let (m, _cmd) = update(onNavigate(page), model); m }`.
-///   The app owns navigation — the new page reaches the model only through the
-///   `update` arm the author writes for the `onNavigate`-produced `Msg`. The
-///   `update` command is discarded here (URL reconcile is a synchronous
-///   model-only step, mirroring the implicit form's `Cmd.none`).
+///   supplied handler and is dispatched through `update`; the closure returns
+///   `update`'s `(Model, Cmd)` pair unchanged. The author owns the page
+///   transition and its load in the `update` arm for that `Msg`.
 ///
 /// * **`onNavigate` absent** — the implicit `\p -> __SetPage p` desugaring whose
-///   `update` arm is `({ model | page = p }, Cmd.none)`: the runtime writes the
-///   matched page straight into the model's `page` field via struct update. This
-///   is the historical magic-page behaviour, reproduced byte-for-byte.
+///   `update` arm is `({ model | page = p }, Cmd.none)`: the matched page is
+///   struct-updated into the model's `page` field, paired with `IpeCmd::None`.
 #[allow(clippy::too_many_arguments)]
 fn set_page_closure(
     ctx: &EmitCtx,
@@ -834,24 +828,18 @@ fn set_page_closure(
     generics: GenericScope,
 ) -> DResult<String> {
     match lookup_optional_field(ctx, fields, "onNavigate")? {
-        // Explicit-in-config navigation: the matched page is turned into a Msg
-        // and dispatched through `update`, so the author owns the page
-        // transition in `update` rather than the runtime mutating `page`.
         Some(on_navigate_e) => {
             let update_s = emit_web_fn(ctx, update_e, indent, child, generics)?;
             let on_navigate_s = emit_web_fn(ctx, on_navigate_e, indent, child, generics)?;
             Ok(format!(
                 "{{ let __update = {update_s}; let __on_navigate = {on_navigate_s}; \
-                 move |__page: {page_ty_s}, __model: {model_ty_s}| {{ \
-                 let (__next, _cmd) = (__update)((__on_navigate)(__page), __model); __next }} }}"
+                 move |__page: {page_ty_s}, __model: {model_ty_s}| \
+                 (__update)((__on_navigate)(__page), __model) }}"
             ))
         }
-        // The absent-field desugaring: struct-update the `page` field directly.
-        // Byte-identical to the historical magic-page emission — never change
-        // this string without re-baselining every routed-live golden.
         None => Ok(format!(
             "move |__page: {page_ty_s}, __model: {model_ty_s}| \
-             {model_ty_s} {{ page: __page, ..__model }}"
+             ({model_ty_s} {{ page: __page, ..__model }}, ipe_runtime::tea::IpeCmd::None)"
         )),
     }
 }

@@ -896,68 +896,26 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
         )));
     }
 
-    // A scratch root for fetch caches under the standard per-user cache root
-    // (the write-boundary from PRINCIPLES.md), isolated per process so concurrent
-    // audit-entry runs never share a cache directory.
-    let scratch_root = resolve::default_cache_base()?
-        .join("ipe")
-        .join(format!("audit-entry-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch_root).map_err(|e| CliError::Io {
-        path: scratch_root.clone(),
-        source: e,
-    })?;
-
-    let mut passing: Vec<String> = Vec::new();
-
-    for version in new_versions {
-        let ver_str = version.version.to_string();
-
-        // Step 3 — fetch + verify: git-clone the source at the pinned revision and
-        // assert the fetched tree's sha256 equals the index pin. A mismatch is a
-        // CliError::HashMismatch — the fetched bytes are not the source the
-        // publisher registered, so nothing derived from them is trusted.
-        let checkout = resolve::fetch_and_verify_index_version(
-            &scratch_root,
-            submitted.name.as_str(),
-            version,
-        )?;
-
-        // Step 4 — audit: run the full Tier-1 (+ Tier-2 where applicable) gate on
-        // the verified source tree. Pass --index so the enforced-semver check reads
-        // the right baseline. Reject on the first failing check.
-        let checkout_str = checkout.to_string_lossy().into_owned();
-        // Pass the submitted entry's claimed publisher (named in a reject) and the
-        // attestation-backed blessing: the reserved-namespace ownership check
-        // exempts only a proven blessed publisher and rejects any other whose
-        // source tree provides a reserved-namespace (`Ipe.*`) module — the
-        // admission-time squat-proofing of the trusted namespace.
-        let mut audit_args: Vec<String> = vec![
-            checkout_str,
-            "--publisher".to_owned(),
-            submitted.publisher.as_str().to_owned(),
-        ];
-        if let Some(ir) = &index_root_opt {
-            audit_args.push("--index".to_owned());
-            audit_args.push(ir.to_string_lossy().into_owned());
-        }
-        // Propagate typed errors directly — run_audit already produces a
-        // descriptive typed CliError (PackageAudit / HashMismatch / etc.) whose
-        // Display names the failing check; the version context is clear from
-        // the eprintln below and the structured error kind.
-        if let Err(e) = audit::run_audit_as(&audit_args, blessing.as_ref()) {
-            crate::screen::chatter(
-                crate::screen::Stream::Stderr,
-                crate::screen::Tone::UserError,
-                &format!(
-                    "audit-entry: `{}` version {} rejected",
-                    submitted.name, ver_str
-                ),
-            );
-            return Err(e);
-        }
-
-        passing.push(ver_str);
-    }
+    // Steps 3 and 4 for every new version, in a private scratch directory under
+    // the standard per-user cache root (the write-boundary from PRINCIPLES.md).
+    let passing = certify_versions(
+        &resolve::default_cache_base()?,
+        &submitted.name,
+        &new_versions,
+        &crate::remote_ingest::PACKAGE_SOURCE,
+        |checkout, version| {
+            // Step 4 — audit: run the full Tier-1 (+ Tier-2 where applicable) gate on
+            // the verified source tree. Pass --index so the enforced-semver check reads
+            // the right baseline. Reject on the first failing check.
+            audit_version(
+                checkout,
+                version,
+                &submitted,
+                index_root_opt.as_deref(),
+                blessing.as_ref(),
+            )
+        },
+    )?;
 
     // All new versions passed — print the certified summary.
     let versions_list = passing.join(", ");
@@ -969,10 +927,94 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
         .line(crate::screen::Tone::Text, &body)
         .emit();
-
-    // Remove the per-run scratch directory (best-effort; a leftover is harmless).
-    let _ = std::fs::remove_dir_all(&scratch_root);
     Ok(())
+}
+
+/// Fetch, hash-verify and `audit` each of `versions` of `name`, held to `budget`,
+/// in one private scratch directory under `cache_base`; returns the certified
+/// versions.
+///
+/// The directory is unpredictably named, created exclusively with owner-only
+/// access, and removed on every return — a fetch refusal, a hash mismatch or an
+/// audit rejection leaves nothing under `cache_base`.
+///
+/// # Errors
+/// [`CliError::Io`] when the scratch directory cannot be created; the first
+/// fetch, verify or `audit` error otherwise.
+pub fn certify_versions(
+    cache_base: &Path,
+    name: &crate::package_name::PackageName,
+    versions: &[&index::EntryVersion],
+    budget: &crate::remote_ingest::FetchBudget,
+    mut audit: impl FnMut(&Path, &index::EntryVersion) -> Result<(), CliError>,
+) -> Result<Vec<String>, CliError> {
+    let parent = cache_base.join("ipe");
+    let scratch =
+        scratch::ScratchDir::new_under(&parent, "audit-entry").map_err(|source| CliError::Io {
+            path: parent,
+            source,
+        })?;
+    versions
+        .iter()
+        .map(|version| {
+            // Step 3 — fetch + verify: git-fetch the source at the pinned revision
+            // and assert the fetched tree's sha256 equals the index pin. A
+            // mismatch is a CliError::HashMismatch — the fetched bytes are not the
+            // source the publisher registered, so nothing derived from them is
+            // trusted.
+            let checkout = resolve::fetch_and_verify_index_version_within(
+                scratch.path(),
+                name,
+                version,
+                budget,
+            )?;
+            audit(&checkout, version)?;
+            Ok(version.version.to_string())
+        })
+        .collect()
+}
+
+/// Run the full package audit on the verified `checkout` of `version` of the
+/// `submitted` entry.
+///
+/// # Errors
+/// The typed [`CliError`] of the first failing check.
+fn audit_version(
+    checkout: &Path,
+    version: &index::EntryVersion,
+    submitted: &index::IndexEntry,
+    index_root: Option<&Path>,
+    blessing: Result<&BlessedPublisher, &crate::publisher::BlessingRefusal>,
+) -> Result<(), CliError> {
+    let checkout_str = checkout.to_string_lossy().into_owned();
+    // Pass the submitted entry's claimed publisher (named in a reject) and the
+    // attestation-backed blessing: the reserved-namespace ownership check
+    // exempts only a proven blessed publisher and rejects any other whose
+    // source tree provides a reserved-namespace (`Ipe.*`) module — the
+    // admission-time squat-proofing of the trusted namespace.
+    let mut audit_args: Vec<String> = vec![
+        checkout_str,
+        "--publisher".to_owned(),
+        submitted.publisher.as_str().to_owned(),
+    ];
+    if let Some(ir) = index_root {
+        audit_args.push("--index".to_owned());
+        audit_args.push(ir.to_string_lossy().into_owned());
+    }
+    // Propagate typed errors directly — run_audit already produces a
+    // descriptive typed CliError (PackageAudit / HashMismatch / etc.) whose
+    // Display names the failing check; the version context is clear from
+    // the eprintln below and the structured error kind.
+    audit::run_audit_as(&audit_args, blessing).inspect_err(|_| {
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::UserError,
+            &format!(
+                "audit-entry: `{}` version {} rejected",
+                submitted.name, version.version
+            ),
+        );
+    })
 }
 
 /// The parsed `ipe package audit-entry` invocation.
@@ -1956,12 +1998,14 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
     }
 
     let fmt = format.unwrap_or_default();
-    let command = format!("curl -fsSL {INSTALL_SH_URL} | sh");
 
     // --dry-run: show the installer command and stop — no version check needed.
     if dry_run {
         crate::screen::Screen::new(crate::screen::Stream::Stdout)
-            .line(crate::screen::Tone::Text, &format!("would run: {command}"))
+            .line(
+                crate::screen::Tone::Text,
+                &format!("would run: {}", installer_command()),
+            )
             .emit();
         return Ok(());
     }
@@ -2067,24 +2111,99 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
         return Ok(());
     }
 
-    run_installer(&command)
+    run_installer()
 }
 
-/// Spawn the installer script and wait for it to finish.
+/// The installer hand-off `ipe upgrade` performs, as a shell command a user can run by hand.
+fn installer_command() -> String {
+    format!("curl -fsSL {INSTALL_SH_URL} | sh")
+}
+
+/// Download the installer script into a private file under [`remote_ingest::INSTALLER`].
 ///
-/// The installer script exits 2 when no prebuilt binary exists for the current
-/// platform; any other non-zero exit is a generic failure.
+/// The script is complete and within its ceilings before anything runs it, so
+/// a stalled or oversized response is refused rather than half-executed.
 ///
 /// # Errors
-/// [`CliError::Usage`] when the host is not POSIX, the installer cannot
-/// be launched, or it exits with a non-zero code that is not 2.
+/// [`CliError::RemoteIngestExceeded`] past a ceiling; [`CliError::Usage`] when
+/// curl cannot run or the download fails.
+fn download_installer() -> Result<crate::scratch::ScratchFile, CliError> {
+    use crate::remote_ingest::{self, Curl, RunError, Transfer};
+    let budget = &remote_ingest::INSTALLER;
+    let script =
+        crate::scratch::ScratchFile::create("ipe-upgrade-installer").map_err(|e| CliError::Io {
+            path: std::path::PathBuf::from("ipe-upgrade-installer"),
+            source: e,
+        })?;
+    let output = Curl::https()
+        .args(["--silent", "--show-error", "--fail", "--location"])
+        .args(remote_ingest::curl_limit_args(budget.disk_bytes(), budget))
+        .arg("-o")
+        .arg(script.path())
+        .arg(INSTALL_SH_URL)
+        .run(None, Some(script.path()), &Transfer::begin(*budget))
+        .map_err(|e| match e {
+            RunError::Spawn(e) => CliError::Usage(text::msg::upgrade_installer_launch_failed(&e)),
+            RunError::Wait(e) => CliError::Usage(text::msg::upgrade_installer_wait_failed(&e)),
+            RunError::Measure(path, source) => CliError::Io { path, source },
+            RunError::Exceeded(refusal) => CliError::RemoteIngestExceeded(refusal),
+            RunError::PipeDrainTimeout(stream) => CliError::ChildPipeHeld(stream),
+        })?;
+    if let Some(refusal) = remote_ingest::curl_refusal(output.status, budget.disk_bytes(), budget) {
+        return Err(CliError::RemoteIngestExceeded(refusal));
+    }
+    if !output.status.success() {
+        return Err(CliError::Usage(
+            text::msg::upgrade_installer_download_failed(&crate::style::TerminalSafe::sanitize(
+                String::from_utf8_lossy(&output.stderr).trim(),
+            )),
+        ));
+    }
+    Ok(script)
+}
+
+/// Download the installer script, then run it and wait for it to finish.
+///
+/// The script reaches `sh` on its standard input from the retained handle of
+/// the file it was downloaded into, exactly as a `curl | sh` pipe would, so the
+/// bytes run are the bytes that were downloaded and measured. The installer
+/// exits 2 when no prebuilt binary exists for the current platform; any other
+/// non-zero exit is a generic failure.
+///
+/// # Errors
+/// [`CliError::Usage`] when the host is not POSIX, the installer cannot be
+/// downloaded or launched, or it exits with a non-zero code that is not 2;
+/// [`CliError::RemoteIngestExceeded`] when the download crosses its ceilings;
 /// [`CliError::UpgradeNoPrebuilt`] when the installer exits 2.
-pub fn run_installer(command: &str) -> Result<(), CliError> {
+pub fn run_installer() -> Result<(), CliError> {
     if cfg!(not(unix)) {
         return Err(CliError::Usage(text::msg::upgrade_unsupported_platform(
-            &command,
+            &installer_command(),
         )));
     }
+
+    let download = progress::Stage::start(std::io::stderr(), "Downloading the release installer…");
+    let script = match download_installer().and_then(|mut script| {
+        script.rewind().map_err(|source| CliError::Io {
+            path: script.path().to_path_buf(),
+            source,
+        })?;
+        let stdin = script.file.try_clone().map_err(|source| CliError::Io {
+            path: script.path().to_path_buf(),
+            source,
+        })?;
+        Ok((script, stdin))
+    }) {
+        Ok(script) => {
+            download.success("Installer downloaded.");
+            script
+        }
+        Err(e) => {
+            download.failure("Could not download the installer.");
+            return Err(e);
+        }
+    };
+    let (_script, script_stdin) = script;
 
     // Render the hand-off to the installer as a stage on stderr: a running
     // light-yellow line while we spawn `sh`, settled to a green success (or a
@@ -2096,13 +2215,14 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
     // the one failure message ourselves, below) and writes the tag it actually
     // resolved and probed into the private (0600, unpredictably named) file
     // named by IPE_UPGRADE_TAG_FILE, so we report the real target version
-    // instead of guessing. All stdio stays inherited, untouched. Without a
+    // instead of guessing. The script arrives on stdin from its private file;
+    // stdout and stderr stay inherited, untouched. Without a
     // tag file install.sh keeps its own banner.
     let mut tag_file = crate::scratch::ScratchFile::create("ipe-upgrade-tag").ok();
     let mut installer = std::process::Command::new("sh");
     installer
-        .arg("-c")
-        .arg(command)
+        .arg("-s")
+        .stdin(script_stdin)
         .env(UPGRADE_WRAPPED_ENV, "1");
     match &tag_file {
         Some(file) => installer.env(UPGRADE_TAG_FILE_ENV, file.path()),
@@ -2115,9 +2235,7 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
             child
         }
         Err(e) => {
-            stage.failure(format!(
-                "Could not launch the installer (needs `sh` and `curl`): {e}"
-            ));
+            stage.failure(format!("Could not launch the installer (needs `sh`): {e}"));
             return Err(CliError::Usage(text::msg::upgrade_installer_launch_failed(
                 &e,
             )));

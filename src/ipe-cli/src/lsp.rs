@@ -78,13 +78,17 @@ fn load_error(err: &CliError, lifted_by: LimitSource) -> LoadError {
     use crate::owner_trust::TrustSubject;
     let detail = err.to_string();
     match err {
-        CliError::Io { .. } | CliError::ScratchUnavailable { .. } => LoadError::Io(detail),
+        CliError::Io { .. }
+        | CliError::ScratchUnavailable { .. }
+        | CliError::ChildPipeHeld(_)
+        | CliError::Interrupted => LoadError::Io(detail),
         CliError::SourceRefused { .. } | CliError::DeviceNamedModule { .. } => {
             LoadError::Refused(detail)
         }
-        CliError::FileTooLarge { .. } | CliError::DiscoveryLimitReached { .. } => {
-            LoadError::Limit { lifted_by, detail }
-        }
+        CliError::FileTooLarge { .. }
+        | CliError::DiscoveryLimitReached { .. }
+        | CliError::RemoteIngestExceeded(_)
+        | CliError::LocalLimitExceeded(_) => LoadError::Limit { lifted_by, detail },
         CliError::TrustRefused(refusal) => match refusal.subject() {
             TrustSubject::Ffi => LoadError::FfiUntrusted(detail),
             TrustSubject::Manifest => LoadError::ManifestUntrusted(detail),
