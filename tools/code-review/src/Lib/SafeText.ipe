@@ -13,7 +13,9 @@ module Lib.SafeText exposing (SafeText, concat, isHazard, literal, quoted, rende
 -- `scrub_log_controls`: `\n`, `\r` and `\t` by name, every other hazard as
 -- `\u{hex}` in lowercase. One deliberate deviation: `render` also escapes a
 -- literal `\` as `\\`, so untrusted text cannot pre-forge an escape that reads
--- as an innocent character. `renderForeign` leaves `\` alone: it is the
+-- as an innocent character, and a `"` as `\"`, so a `quoted` value cannot
+-- close its own quotes. With `\` escaped the mapping stays injective.
+-- `renderForeign` leaves `\` and `"` alone: it is the
 -- sink-side pass over text that may already be rendered, where doubling every
 -- `\` again would garble it.
 
@@ -46,14 +48,14 @@ isHazard c =
         || (code >= 8294 && code <= 8297)
 
 
--- Untrusted text with every hazard and every `\` escaped.
+-- Untrusted text with every hazard, every `\` and every `"` escaped.
 render : String -> SafeText
 render raw =
     SafeText (escapeWith True raw)
 
 
 -- Untrusted text that may already hold rendered escapes: every hazard is
--- escaped, `\` is kept as is.
+-- escaped, `\` and `"` are kept as is.
 renderForeign : String -> SafeText
 renderForeign raw =
     SafeText (escapeWith False raw)
@@ -86,7 +88,7 @@ toString text =
 
 escapeWith : Bool -> String -> String
 escapeWith escapeBackslash raw =
-    if String.any (\c -> isHazard c || (escapeBackslash && c == '\\')) raw then
+    if String.any (\c -> isHazard c || (escapeBackslash && (c == '\\' || c == '"'))) raw then
         String.concat (List.map (escapeChar escapeBackslash) (String.toList raw))
 
     else
@@ -106,6 +108,9 @@ escapeChar escapeBackslash c =
 
     else if escapeBackslash && c == '\\' then
         "\\\\"
+
+    else if escapeBackslash && c == '"' then
+        "\\\""
 
     else if isHazard c then
         "\\u{" ++ hex (Char.toCode c) ++ "}"
