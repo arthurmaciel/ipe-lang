@@ -99,9 +99,8 @@ fn todo_writes_located_message_to_stderr_and_exits_nonzero() {
         output.status.code()
     );
 
-    let stderr = String::from_utf8(output.stderr.clone());
-    assert!(stderr.is_ok(), "the child's stderr must be UTF-8");
-    let Ok(stderr) = stderr else { return };
+    let stderr =
+        String::from_utf8(output.stderr.clone()).expect("the child's stderr must be UTF-8");
 
     // The expected located message must appear on stderr.
     let expected = "TODO at testfile.ipe:42: subprocess note";

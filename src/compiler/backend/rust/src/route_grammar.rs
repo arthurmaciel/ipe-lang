@@ -147,12 +147,10 @@ pub fn web_route_pattern(pattern: &str) -> Result<(), RoutePatternDefect> {
         return Ok(());
     }
     let mut names = Names::default();
-    trimmed
-        .split('/')
-        .try_for_each(|raw| match raw.strip_prefix(':') {
-            Some(name) => names.admit(name),
-            None => literal_segment(raw),
-        })
+    trimmed.split('/').try_for_each(|raw| {
+        raw.strip_prefix(':')
+            .map_or_else(|| literal_segment(raw), |name| names.admit(name))
+    })
 }
 
 /// Check a literal `Server.*` route path against the runtime's server

@@ -2719,11 +2719,15 @@ def check_test_claims(errors: list[str], root: str = REPO_ROOT) -> None:
         if not isinstance(name, str) or "${{" in name:
             errors.append(f"check 20: owner job {job_id!r} has no literal context name; refused")
             continue
-        entry = next((e for e in entries if e.get("context") == name), None)
+        # An owner job reports either as its own context or through the one
+        # entry whose `aggregates:` names it (check 1), whose verdict it inherits.
+        entry = next((e for e in entries if e.get("context") == name), None) or next(
+            (e for e in entries if {name, job_id} & set(e.get("aggregates") or [])), None
+        )
         disp = entry.get("disposition") if entry else None
         if entry is None or entry.get("producer") != fname:
             errors.append(f"check 20: owner job {job_id!r} ({name!r}) has no manifest entry produced by {fname}; refused")
-        elif not (disp == "gate" and name in required) and disp != "nightly-gate":
+        elif not (disp == "gate" and entry.get("context") in required) and disp != "nightly-gate":
             errors.append(
                 f"check 20: owner job {job_id!r} ({name!r}) is {disp!r}, not a required gate or a "
                 "nightly-gate, so its red count blocks nothing; refused"

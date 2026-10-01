@@ -97,67 +97,66 @@ fn a_hardened_child_dies_with_its_killed_parent() {
         let mut child = spawn_hardened(sleep_30()).expect("probe hardened spawn");
         println!("{PROBE_PID_PREFIX}{}", child.id());
         let _ = child.wait();
-        return;
-    }
+    } else {
+        let mut probe = Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "a_hardened_child_dies_with_its_killed_parent",
+                "--exact",
+                "--nocapture",
+            ])
+            .env(PROBE_MODE_ENV, "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("re-exec probe");
+        let stdout = probe.stdout.take().expect("probe stdout pipe");
 
-    let mut probe = Command::new(std::env::current_exe().expect("test binary"))
-        .args([
-            "a_hardened_child_dies_with_its_killed_parent",
-            "--exact",
-            "--nocapture",
-        ])
-        .env(PROBE_MODE_ENV, "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("re-exec probe");
-    let stdout = probe.stdout.take().expect("probe stdout pipe");
-
-    // The reader ends at EOF: the probe is killed below, and the grandchild
-    // holds no copy of the pipe.
-    let (pid_tx, pid_rx) = std::sync::mpsc::channel::<u32>();
-    let reader = std::thread::spawn(move || {
-        let reported = std::io::BufReader::new(stdout)
-            .lines()
-            .map_while(Result::ok)
-            .find_map(|line| line.strip_prefix(PROBE_PID_PREFIX)?.trim().parse().ok());
-        if let Some(pid) = reported {
-            let _ = pid_tx.send(pid);
-        }
-    });
-    let grandchild = pid_rx.recv_timeout(POLL_CEILING).ok();
-    // Captured before the probe dies, while its pid names the grandchild.
-    let identity = grandchild.and_then(ProcStat::read);
-    let _ = probe.kill();
-    let _ = probe.wait();
-    reader.join().expect("probe stdout reader");
-    let grandchild = grandchild.expect("the probe must report its hardened child's pid");
-    let identity = identity.expect("the hardened child must be running before its parent dies");
-
-    let killed = Instant::now();
-    let died = loop {
-        match ProcStat::read(grandchild) {
-            None => break true,
-            Some(current) if !identity.same_process(&current) || current.state == 'Z' => {
-                break true;
+        // The reader ends at EOF: the probe is killed below, and the grandchild
+        // holds no copy of the pipe.
+        let (pid_tx, pid_rx) = std::sync::mpsc::channel::<u32>();
+        let reader = std::thread::spawn(move || {
+            let reported = std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+                .find_map(|line| line.strip_prefix(PROBE_PID_PREFIX)?.trim().parse().ok());
+            if let Some(pid) = reported {
+                let _ = pid_tx.send(pid);
             }
-            Some(_) if killed.elapsed() >= POLL_CEILING => break false,
-            Some(_) => std::thread::sleep(Duration::from_millis(20)),
+        });
+        let grandchild = pid_rx.recv_timeout(POLL_CEILING).ok();
+        // Captured before the probe dies, while its pid names the grandchild.
+        let identity = grandchild.and_then(ProcStat::read);
+        let _ = probe.kill();
+        let _ = probe.wait();
+        reader.join().expect("probe stdout reader");
+        let grandchild = grandchild.expect("the probe must report its hardened child's pid");
+        let identity = identity.expect("the hardened child must be running before its parent dies");
+
+        let killed = Instant::now();
+        let died = loop {
+            match ProcStat::read(grandchild) {
+                None => break true,
+                Some(current) if !identity.same_process(&current) || current.state == 'Z' => {
+                    break true;
+                }
+                Some(_) if killed.elapsed() >= POLL_CEILING => break false,
+                Some(_) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        };
+        // Kill only the process first observed: a reused pid belongs to someone else.
+        let still_ours =
+            ProcStat::read(grandchild).is_some_and(|current| identity.same_process(&current));
+        if !died && still_ours {
+            let _ = Command::new("/bin/kill")
+                .args(["-KILL", &grandchild.to_string()])
+                .status();
         }
-    };
-    // Kill only the process first observed: a reused pid belongs to someone else.
-    let still_ours =
-        ProcStat::read(grandchild).is_some_and(|current| identity.same_process(&current));
-    if !died && still_ours {
-        let _ = Command::new("/bin/kill")
-            .args(["-KILL", &grandchild.to_string()])
-            .status();
+        assert!(
+            died,
+            "a hardened child must die when its parent process is killed"
+        );
     }
-    assert!(
-        died,
-        "a hardened child must die when its parent process is killed"
-    );
 }
 
 #[cfg(feature = "web")]

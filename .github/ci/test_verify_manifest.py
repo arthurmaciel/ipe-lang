@@ -5893,6 +5893,20 @@ class TestTestClaims(unittest.TestCase):
     def test_owner_without_manifest_entry_refused(self) -> None:
         self.assertRefused(_tc_ci(_TC_PIN + _TC_CLAIM % _TC_RUN, name="renamed"), "has no manifest entry produced by ci.yml")
 
+    def test_owner_aggregated_by_required_gate_passes(self) -> None:
+        self.files[".github/ci/check-manifest.yml"] = _TC_MANIFEST + "    aggregates:\n      - leg\n"
+        self.assertEqual(self.errors(_tc_ci(_TC_PIN + _TC_CLAIM % _TC_RUN, name="leg")), [])
+
+    def test_owner_aggregated_by_unrequired_gate_refused(self) -> None:
+        self.files[".github/ci/check-manifest.yml"] = _TC_MANIFEST + "    aggregates:\n      - leg\n"
+        self.files[".github/ci/required-set.json"] = json.dumps([{"context": "other", "integration_id": 15368}])
+        self.assertRefused(_tc_ci(_TC_PIN + _TC_CLAIM % _TC_RUN, name="leg"), "blocks nothing")
+
+    def test_owner_aggregated_by_advisory_refused(self) -> None:
+        manifest = _TC_MANIFEST.replace("gate", "advisory") + "    aggregates:\n      - leg\n"
+        self.files[".github/ci/check-manifest.yml"] = manifest
+        self.assertRefused(_tc_ci(_TC_PIN + _TC_CLAIM % _TC_RUN, name="leg"), "blocks nothing")
+
     def test_bad_claims_table_refused(self) -> None:
         self.files[".github/ci/test-claims.yml"] = "cells: []\n"
         self.assertRefused(_TC_OK, "non-empty `cells`")

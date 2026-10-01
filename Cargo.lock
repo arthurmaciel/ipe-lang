@@ -3264,6 +3264,9 @@ dependencies = [
 [[package]]
 name = "ipe_env"
 version = "0.3.5"
+dependencies = [
+ "ipe-test-temp",
+]
 
 [[package]]
 name = "ipe_ffi"

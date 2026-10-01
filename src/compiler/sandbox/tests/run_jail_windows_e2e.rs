@@ -196,35 +196,35 @@ fn a_non_allowlisted_env_var_is_absent_from_the_jailed_child_but_present_under_c
             rerun.is_ok(),
             "the env-seeded re-exec did not pass: {rerun:?}"
         );
-        return;
-    }
-    let scratch = scratch_dir("env");
-    // Print 1 iff the var is present, else 0.
-    let probe = |name: &str| {
-        format!(
-            "if ($env:{name}) {{ Write-Output 'PRESENT' }} else {{ Write-Output 'ABSENT' }}; exit 0"
-        )
-    };
-    // Under control (unscrubbed, inherited), the secret is present.
-    let _ = run_control(&probe("IPE_SECRET_E2E"));
+    } else {
+        let scratch = scratch_dir("env");
+        // Print 1 iff the var is present, else 0.
+        let probe = |name: &str| {
+            format!(
+                "if ($env:{name}) {{ Write-Output 'PRESENT' }} else {{ Write-Output 'ABSENT' }}; exit 0"
+            )
+        };
+        // Under control (unscrubbed, inherited), the secret is present.
+        let _ = run_control(&probe("IPE_SECRET_E2E"));
 
-    // Under the jail with an allowlist that does NOT include the secret, the
-    // secret must be absent from the child. We capture the child's stdout by
-    // running through cmd and asserting on the exit code the probe encodes.
-    let coded = |name: &str| format!("if ($env:{name}) {{ exit 42 }} else {{ exit 0 }}");
-    // Allowlist only IPE_ALLOWED_E2E: the secret is scrubbed (exit 0 = absent),
-    // and the allowlisted var survives (exit 42 = present).
-    let profile = env_granted(&["IPE_ALLOWED_E2E"]);
-    let secret_absent = run_jailed(&profile, &scratch, &coded("IPE_SECRET_E2E"));
-    let allowed_present = run_jailed(&profile, &scratch, &coded("IPE_ALLOWED_E2E"));
-    let _ = std::fs::remove_dir_all(&scratch);
-    assert_eq!(
-        secret_absent,
-        Some(0),
-        "a non-allowlisted var must be scrubbed from the jailed child"
-    );
-    if let Some(a) = allowed_present {
-        assert_eq!(a, 42, "an allowlisted var must survive the scrub");
+        // Under the jail with an allowlist that does NOT include the secret, the
+        // secret must be absent from the child. We capture the child's stdout by
+        // running through cmd and asserting on the exit code the probe encodes.
+        let coded = |name: &str| format!("if ($env:{name}) {{ exit 42 }} else {{ exit 0 }}");
+        // Allowlist only IPE_ALLOWED_E2E: the secret is scrubbed (exit 0 = absent),
+        // and the allowlisted var survives (exit 42 = present).
+        let profile = env_granted(&["IPE_ALLOWED_E2E"]);
+        let secret_absent = run_jailed(&profile, &scratch, &coded("IPE_SECRET_E2E"));
+        let allowed_present = run_jailed(&profile, &scratch, &coded("IPE_ALLOWED_E2E"));
+        let _ = std::fs::remove_dir_all(&scratch);
+        assert_eq!(
+            secret_absent,
+            Some(0),
+            "a non-allowlisted var must be scrubbed from the jailed child"
+        );
+        if let Some(a) = allowed_present {
+            assert_eq!(a, 42, "an allowlisted var must survive the scrub");
+        }
     }
 }
 

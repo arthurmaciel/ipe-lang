@@ -28,7 +28,8 @@ const RUNTIME_ROOT: &str = "src/runtime/rust";
 const PATH_SEAL: &str = "src/clippy_paths_resolve.rs";
 
 /// Spellings of the lenient percent decoders, refused in every runtime source.
-const LENIENT_PERCENT_DECODERS: &[&str] = &["percent_decode", "decode_utf8_lossy"];
+const LENIENT_PERCENT_DECODERS: &[&str] =
+    &["percent_decode", "percent_decode_str", "decode_utf8_lossy"];
 
 /// axum's lenient request extractors, by every path that names them, refused
 /// in every runtime source.
@@ -110,13 +111,28 @@ const DENIED_PATHS: &[&str] = &[
     "axum::extract::Form",
 ];
 
+/// The paths the runtime `clippy.toml` denies for its other rules (abrupt
+/// failure, environment and temp-root reads), which this scan does not own.
+const OTHER_RULE_DENIED_PATHS: &[&str] = &[
+    "core::option::Option::unwrap_unchecked",
+    "core::result::Result::unwrap_unchecked",
+    "std::process::abort",
+    "std::panic::panic_any",
+    "core::hint::unreachable_unchecked",
+    "std::env::var",
+    "std::env::var_os",
+    "std::env::vars",
+    "std::env::vars_os",
+    "std::env::temp_dir",
+];
+
 /// The most alias hops a path is followed through before it counts as
 /// resolved.
 const MAX_ALIAS_HOPS: usize = 8;
 
 /// The runtime crate's directory.
 fn runtime() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    e2e_support::manifest_dir!()
         .join("../..")
         .join(RUNTIME_ROOT)
 }
@@ -690,7 +706,7 @@ fn names_lenient_percent_decoder(src: &str) -> bool {
     let code = code_of(src);
     LENIENT_PERCENT_DECODERS
         .iter()
-        .any(|name| code.contains(name))
+        .any(|name| word_count(&code, name) > 0)
 }
 
 /// Whether `src` names a lenient axum extractor in code, however imported.
@@ -846,10 +862,15 @@ fn the_denied_paths_are_exactly_the_runtime_clippy_config() {
         .filter_map(|(_, rest)| rest.split_once('"'))
         .map(|(path, _)| path)
         .collect();
-    let denied: BTreeSet<&str> = DENIED_PATHS.iter().copied().collect();
+    let denied: BTreeSet<&str> = DENIED_PATHS
+        .iter()
+        .chain(OTHER_RULE_DENIED_PATHS)
+        .copied()
+        .collect();
     assert_eq!(
         configured, denied,
-        "the runtime clippy.toml must deny exactly the scan's paths"
+        "the runtime clippy.toml must deny exactly the scan's paths and the other \
+         rules' paths; a new entry is classified in one of the two lists"
     );
 }
 
@@ -895,6 +916,10 @@ fn a_planted_lenient_decoder_is_detected() {
     // A lifetime is not a character literal that could swallow code.
     assert!(names_lenient_percent_decoder(
         "fn f<'a>(s: &'a str) { percent_decode(s) }"
+    ));
+    // The runtime's own strict kernels share the stem, not the name.
+    assert!(!names_lenient_percent_decoder(
+        "pub fn ipe_percent_decode(s: String) -> R { path_decode(s) }"
     ));
     // A mention in a comment or a string is not a call.
     assert!(!names_lenient_percent_decoder(

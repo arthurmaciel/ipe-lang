@@ -1117,7 +1117,7 @@ fn count_refusal(found: usize, expected: usize) -> Option<String> {
 
 /// This crate's manifest directory.
 fn crate_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    e2e_support::manifest_dir!()
 }
 
 /// The claim table's text.

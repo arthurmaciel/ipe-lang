@@ -293,33 +293,30 @@ fn ipe_build_target_wasi_user_path_cargo_builds() {
     // governed by the emitter's own `.cargo/config.toml` (see `in_seal_child`).
     let target_dir = e2e_support::child_shared_target_from_env()
         .map_or_else(|| out.join("target"), PathBuf::from);
-    if !in_seal_child("ipe_build_target_wasi_user_path_cargo_builds", &target_dir) {
-        if e2e_support::child_shared_target_from_env().is_none() {
-            let _ = std::fs::remove_dir_all(&target_dir);
-        }
-        return;
+    if in_seal_child("ipe_build_target_wasi_user_path_cargo_builds", &target_dir) {
+        let args = vec![
+            "build".to_owned(),
+            entry.to_string_lossy().into_owned(),
+            "--out".to_owned(),
+            out.to_string_lossy().into_owned(),
+            "--target".to_owned(),
+            "wasi".to_owned(),
+        ];
+        // THE SEAL: `run_cli` returns `Ok` ONLY if the wasip1 `cargo build`
+        // succeeded — `bundle_wasi` runs `cargo build --target wasm32-wasip1` and
+        // surfaces a non-zero exit as `CliError::EmittedBuildFailed`, so an `Ok`
+        // here is the end-to-end proof that the `ipe`-accepted program cargo-builds
+        // for the target through the real user selector. (The module artifact path
+        // is `bundle_wasi`'s own concern; a green build is the seal.)
+        let result = ipe::run_cli(&args);
+        assert!(
+            result.is_ok(),
+            "THE SEAL (user path): `ipe build --target wasi` on a sealed-floor Direct \
+             program must succeed (ipe-accepts ⇒ cargo-builds for wasm32-wasip1); got {result:?}",
+        );
+    } else if e2e_support::child_shared_target_from_env().is_none() {
+        let _ = std::fs::remove_dir_all(&target_dir);
     }
-
-    let args = vec![
-        "build".to_owned(),
-        entry.to_string_lossy().into_owned(),
-        "--out".to_owned(),
-        out.to_string_lossy().into_owned(),
-        "--target".to_owned(),
-        "wasi".to_owned(),
-    ];
-    // THE SEAL: `run_cli` returns `Ok` ONLY if the wasip1 `cargo build`
-    // succeeded — `bundle_wasi` runs `cargo build --target wasm32-wasip1` and
-    // surfaces a non-zero exit as `CliError::EmittedBuildFailed`, so an `Ok`
-    // here is the end-to-end proof that the `ipe`-accepted program cargo-builds
-    // for the target through the real user selector. (The module artifact path
-    // is `bundle_wasi`'s own concern; a green build is the seal.)
-    let result = ipe::run_cli(&args);
-    assert!(
-        result.is_ok(),
-        "THE SEAL (user path): `ipe build --target wasi` on a sealed-floor Direct \
-         program must succeed (ipe-accepts ⇒ cargo-builds for wasm32-wasip1); got {result:?}",
-    );
 }
 
 /// The user-path refusal: `ipe build --target wasi` on a non-WASI-viable shape
@@ -381,28 +378,25 @@ fn ipe_run_target_wasi_executes_under_wasmtime() {
 
     let target_dir = e2e_support::child_shared_target_from_env()
         .map_or_else(|| out.join("target"), PathBuf::from);
-    if !in_seal_child("ipe_run_target_wasi_executes_under_wasmtime", &target_dir) {
-        if e2e_support::child_shared_target_from_env().is_none() {
-            let _ = std::fs::remove_dir_all(&target_dir);
-        }
-        return;
+    if in_seal_child("ipe_run_target_wasi_executes_under_wasmtime", &target_dir) {
+        let args = vec![
+            "run".to_owned(),
+            entry.to_string_lossy().into_owned(),
+            "--out".to_owned(),
+            out.to_string_lossy().into_owned(),
+            "--target".to_owned(),
+            "wasi".to_owned(),
+        ];
+        let result = ipe::run_cli(&args);
+        assert!(
+            result.is_ok(),
+            "THE SEAL (run path): `ipe run --target wasi` on a sealed-floor Direct \
+             program must build the wasm32-wasip1 module and run it to a clean exit \
+             under embedded wasmtime; got {result:?}",
+        );
+    } else if e2e_support::child_shared_target_from_env().is_none() {
+        let _ = std::fs::remove_dir_all(&target_dir);
     }
-
-    let args = vec![
-        "run".to_owned(),
-        entry.to_string_lossy().into_owned(),
-        "--out".to_owned(),
-        out.to_string_lossy().into_owned(),
-        "--target".to_owned(),
-        "wasi".to_owned(),
-    ];
-    let result = ipe::run_cli(&args);
-    assert!(
-        result.is_ok(),
-        "THE SEAL (run path): `ipe run --target wasi` on a sealed-floor Direct \
-         program must build the wasm32-wasip1 module and run it to a clean exit \
-         under embedded wasmtime; got {result:?}",
-    );
 }
 
 /// The run-path refusal (non-viable shape): `ipe run --target wasi` on a `Web`

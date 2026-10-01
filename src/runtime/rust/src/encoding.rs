@@ -510,7 +510,7 @@ pub fn url_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
 /// Decodes `%XX` under the path grammar (`+` stays a literal `+`) through
 /// `decode_component`, refusing exactly what `url_decode` refuses.
 #[must_use]
-pub fn percent_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
+pub fn path_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
     decode_kernel("percentDecode", &s, UrlGrammar::Path)
 }
 
@@ -555,7 +555,7 @@ pub fn encoding_hex_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
 
 // ── Concrete (non-generic) wrappers for generated Ipê code ─────────────
 //
-// The generic `base64_decode<E>`, `url_decode<E>`, `percent_decode<E>`,
+// The generic `base64_decode<E>`, `url_decode<E>`, `path_decode<E>`,
 // `encoding_hex_decode<E>` above
 // use a flexible `E: From<String>` bound so the error type can be inferred from
 // surrounding context. Generated Ipê code sets `IpeError = ipe_runtime::error::
@@ -577,10 +577,10 @@ pub fn ipe_url_decode(s: String) -> IpeResult<crate::error::IpeError, String> {
     url_decode(s)
 }
 
-/// Generated-code alias for `percent_decode` with `E = IpeError`.
+/// Generated-code alias for `path_decode` with `E = IpeError`.
 #[must_use]
 pub fn ipe_percent_decode(s: String) -> IpeResult<crate::error::IpeError, String> {
-    percent_decode(s)
+    path_decode(s)
 }
 
 /// Generated-code alias for `encoding_hex_decode` with `E = IpeError`.
@@ -706,7 +706,7 @@ mod tests {
                 matches!(got, IpeResult::Err(_)),
                 "malformed percent-escape {bad:?} must be rejected"
             );
-            let got: IpeResult<String, String> = percent_decode(bad.to_string());
+            let got: IpeResult<String, String> = path_decode(bad.to_string());
             assert!(
                 matches!(got, IpeResult::Err(_)),
                 "malformed percent-escape {bad:?} must be rejected by percentDecode"
@@ -717,7 +717,7 @@ mod tests {
     // `percentDecode` keeps `+` literal; `urlDecode` reads it as a space.
     #[test]
     fn test_percent_decode_plus_is_literal() {
-        let path: IpeResult<String, String> = percent_decode("a+b%20c".to_string());
+        let path: IpeResult<String, String> = path_decode("a+b%20c".to_string());
         assert!(matches!(path, IpeResult::Ok(ref s) if s == "a+b c"));
         let form: IpeResult<String, String> = url_decode("a+b%20c".to_string());
         assert!(matches!(form, IpeResult::Ok(ref s) if s == "a b c"));
@@ -752,13 +752,13 @@ mod tests {
     // space.
     #[test]
     fn test_percent_decode_keeps_plus() {
-        let plus: IpeResult<String, String> = percent_decode("a+b".to_string());
+        let plus: IpeResult<String, String> = path_decode("a+b".to_string());
         assert!(matches!(plus, IpeResult::Ok(ref s) if s == "a+b"));
-        let escaped_plus: IpeResult<String, String> = percent_decode("%2B".to_string());
+        let escaped_plus: IpeResult<String, String> = path_decode("%2B".to_string());
         assert!(matches!(escaped_plus, IpeResult::Ok(ref s) if s == "+"));
-        let space: IpeResult<String, String> = percent_decode("a%20b".to_string());
+        let space: IpeResult<String, String> = path_decode("a%20b".to_string());
         assert!(matches!(space, IpeResult::Ok(ref s) if s == "a b"));
-        let path: IpeResult<String, String> = percent_decode("/t/a+b.db".to_string());
+        let path: IpeResult<String, String> = path_decode("/t/a+b.db".to_string());
         assert!(matches!(path, IpeResult::Ok(ref s) if s == "/t/a+b.db"));
     }
 
@@ -776,7 +776,7 @@ mod tests {
             "%G0",
             "bad-utf8-%C0",
         ] {
-            let got: IpeResult<String, String> = percent_decode(bad.to_string());
+            let got: IpeResult<String, String> = path_decode(bad.to_string());
             assert!(
                 matches!(got, IpeResult::Err(ref e) if e.starts_with("percentDecode: ")),
                 "malformed input {bad:?} must be rejected by percentDecode"
