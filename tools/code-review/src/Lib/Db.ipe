@@ -7,8 +7,9 @@ import Ipe.Db.Store as Store exposing (Store)
 import Ipe.Error as Error
 import Ipe.Json.Encode as Encode
 import Ipe.List as List
+import Ipe.Maybe as Maybe
 import Ipe.Result as Result exposing (Result(..))
-import Ipe.Set as Set exposing (Set)
+import Ipe.Set as Set
 import Ipe.String as String
 import Ipe.Task as Task
 import Ipe.Time as Time
@@ -64,9 +65,11 @@ reasonString reason =
 
 -- One row of the review table. `reviewedAt` is a typed instant — a moment in
 -- time, not a bare count — so it can only be built from and read as a
--- `Timestamp`, never swapped for a plain `Int`. A stored reason is parsed
--- by `parseReason` like a new one, so a row breaking its bound fails to
--- decode.
+-- `Timestamp`, never swapped for a plain `Int`. `reason` is `Just` exactly
+-- for a refusal: a stored refusal's reason is parsed by `parseReason` like a
+-- new one, so a row breaking its bound fails to decode, and an approval's
+-- reason column is never read (the store's plain read returns SQL NULL as
+-- `""`, which must not stand for a reason).
 type alias ReviewRow =
     { uid : String
     , bodyHash : String
@@ -103,8 +106,9 @@ reviewCodec =
                     (Config.field "uid" Config.string)
                     (Config.field "body_hash" Config.string)
                     (Config.field "decision" Config.string)
-                    (Config.field "reason" (Config.nullable reasonDecoder))
+                    (Config.field "reason" (Config.nullable Config.string))
                     (Config.field "reviewed_at" (Config.map Timestamp.fromUnixMillis Config.int))
+                    |> Config.andThen parseRow
         , shp =
             SRecord
                 [ ( "uid", CText )
@@ -116,21 +120,17 @@ reviewCodec =
         }
 
 
-reasonDecoder : Config.Decoder Reason
-reasonDecoder =
-    Config.andThen
-        (\raw ->
-            case parseReason raw of
-                Ok reason ->
-                    Config.succeed reason
-
-                Err e ->
-                    Config.fail (Error.message e)
-        )
-        Config.string
+-- A stored row as read, before its reason is parsed.
+type alias StoredRow =
+    { uid : String
+    , bodyHash : String
+    , decision : String
+    , reason : Maybe String
+    , reviewedAt : Timestamp
+    }
 
 
-makeRow : String -> String -> String -> Maybe Reason -> Timestamp -> ReviewRow
+makeRow : String -> String -> String -> Maybe String -> Timestamp -> StoredRow
 makeRow uid bodyHash decision reason reviewedAt =
     { uid = uid
     , bodyHash = bodyHash
@@ -138,6 +138,30 @@ makeRow uid bodyHash decision reason reviewedAt =
     , reason = reason
     , reviewedAt = reviewedAt
     }
+
+
+parseRow : StoredRow -> Config.Decoder ReviewRow
+parseRow stored =
+    let
+        row reason =
+            Config.succeed
+                { uid = stored.uid
+                , bodyHash = stored.bodyHash
+                , decision = stored.decision
+                , reason = reason
+                , reviewedAt = stored.reviewedAt
+                }
+    in
+    if stored.decision == "refuse" then
+        case parseReason (Maybe.withDefault "" stored.reason) of
+            Ok reason ->
+                row (Just reason)
+
+            Err e ->
+                Config.fail ("stored refusal: " ++ Error.message e)
+
+    else
+        row Nothing
 
 
 -- The typed store for the review table. `fromCodec` validates every column

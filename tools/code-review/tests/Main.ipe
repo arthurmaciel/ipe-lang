@@ -589,7 +589,7 @@ viewTagsAfter name mutate =
 -- fixture, runs `prepare`, loads the page, runs `mutate`, decides `u-a` and
 -- reports whether the decision failed as a conflict and how many review rows
 -- `u-a` holds afterwards.
-decideAfter : String -> (Scratch -> Task.Task Error ()) -> (Scratch -> Task.Task Error ()) -> Task.Task Error Decision -> Task.Task Error { conflict : Bool, rows : Int }
+decideAfter : String -> (Scratch -> Task.Task Error ()) -> (Scratch -> Task.Task Error ()) -> Decision -> Task.Task Error { conflict : Bool, rows : Int }
 decideAfter name prepare mutate decision =
     let
         at =
@@ -604,8 +604,7 @@ decideAfter name prepare mutate decision =
         mutate at
         db <- openReviewAt at.reviewDb
         migrated <- LibDb.migrate db
-        d <- decision
-        conflict <- decideOutcome db (List.find (\u -> u.uid == "u-a") r.units) d
+        conflict <- decideOutcome db (List.find (\u -> u.uid == "u-a") r.units) decision
         rows <- countUidRows db "u-a"
         cleanupIndex at.indexDb at.repo
         removeFileIfAny at.reviewDb
@@ -674,7 +673,7 @@ decideRecordsShownHash =
 -- from `decide` (the shown hash would be written).
 approveRefusedAfterDrift : Task.Task Error Bool
 approveRefusedAfterDrift =
-    decideAfter "ipe-index-decide-drift" noChange driftLib (Task.succeed Approved)
+    decideAfter "ipe-index-decide-drift" noChange driftLib Approved
         |> Task.map (\o -> o.conflict && o.rows == 0)
 
 
@@ -689,25 +688,29 @@ approveRefusedAfterReindex =
                 (writeFileText (at.repo ++ "/src/Lib.rs") (String.replace "42" "43" fixtureLibRs))
                 (execIndex at.indexDb "UPDATE units SET body_hash = ? WHERE uid = ?" [ SqlString (Index.attest (String.replace "42" "43" viewA)), SqlString "u-a" ])
     in
-    decideAfter "ipe-index-decide-reindex" noChange reindex (Task.succeed Approved)
+    decideAfter "ipe-index-decide-reindex" noChange reindex Approved
         |> Task.map (\o -> o.conflict && o.rows == 0)
 
 
 -- R6: the unit's row is gone from the index after the page loaded.
 approveRefusedAfterUnitDeleted : Task.Task Error Bool
 approveRefusedAfterUnitDeleted =
-    decideAfter "ipe-index-decide-deleted"
-        noChange
-        (\at -> execIndex at.indexDb "DELETE FROM units WHERE uid = ?" [ SqlString "u-a" ])
-        (refuse "x")
+    refuse "x"
+        |> Task.andThen (decideAfter "ipe-index-decide-deleted" noChange deleteUnitA)
         |> Task.map (\o -> o.conflict && o.rows == 0)
+
+
+deleteUnitA : Scratch -> Task.Task Error ()
+deleteUnitA at =
+    execIndex at.indexDb "DELETE FROM units WHERE uid = ?" [ SqlString "u-a" ]
 
 
 -- R7: a unit loaded stale is refused by `decide` itself, for a refusal as
 -- well as an approval.
 staleRefuseAlsoRefused : Task.Task Error Bool
 staleRefuseAlsoRefused =
-    decideAfter "ipe-index-decide-stale" driftLib noChange (refuse "x")
+    refuse "x"
+        |> Task.andThen (decideAfter "ipe-index-decide-stale" driftLib noChange)
         |> Task.map (\o -> o.conflict && o.rows == 0)
 
 
@@ -919,21 +922,21 @@ isUnitA u =
         == Nothing
         && u.newHash
         == Nothing
-        && u.path
+        && SafeText.toString u.path
         == "ipe:src/Lib.rs"
-        && u.name
+        && SafeText.toString u.name
         == "answer"
-        && u.qualified
+        && SafeText.toString u.qualified
         == "Lib.answer"
-        && u.kind
+        && SafeText.toString u.kind
         == "fn"
         && u.lineStart
         == 3
         && u.lineEnd
         == 6
-        && u.facing
+        && SafeText.toString u.facing
         == "internal"
-        && u.purpose
+        && Maybe.map SafeText.toString u.purpose
         == Just "purpose-A"
         && Index.storedHash u.attested
         == Index.attest viewA
@@ -951,13 +954,13 @@ isUnitB u =
         == "modified"
         && u.newHash
         == Just (Index.attest viewB)
-        && u.path
+        && SafeText.toString u.path
         == "ipe:src/Main.ipe"
-        && u.kind
+        && SafeText.toString u.kind
         == "module"
-        && u.facing
+        && SafeText.toString u.facing
         == "user"
-        && u.purpose
+        && Maybe.map SafeText.toString u.purpose
         == Nothing
         && shownTextOf u.view
         == Just viewB
@@ -2932,56 +2935,79 @@ probesNameTheirVariable =
     let
         at =
             scratchAt "ipe-index-probe"
-
-        missingDb =
-            at.repo ++ "/no-such-index.db"
-
-        notIndexDb =
-            at.repo ++ "/not-an-index.db"
-
-        badReview =
-            at.repo ++ "/no-such-dir/review.db"
-
-        probeMessage task =
-            task
-                |> Task.map (\_ -> Nothing)
-                |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
-
-        names var file message =
-            case message of
-                Just m ->
-                    String.startsWith (var ++ ": cannot open ") m && String.contains file m && noHazard m
-
-                Nothing ->
-                    False
     in
     do
         removeFileIfAny at.indexDb
         seedIndex at.indexDb at.repo
         good <- probeMessage (Settings.indexSettings |> Task.andThen Index.probe)
+        missing <- missingIndexProbed at
+        notIndex <- foreignDbProbed at
+        review <- reviewProbed at
+        System.setenv "IPE_INDEX_DB" at.indexDb
+        cleanupIndex at.indexDb at.repo
+        Task.succeed (good == Nothing && missing && notIndex && review)
+
+
+probeMessage : Task.Task Error () -> Task.Task Error (Maybe String)
+probeMessage task =
+    task
+        |> Task.map (\_ -> Nothing)
+        |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
+
+
+-- The probe refusal starts with the variable, names the file, and is clean.
+probeNames : String -> String -> Maybe String -> Bool
+probeNames var file message =
+    case message of
+        Just m ->
+            String.startsWith (var ++ ": cannot open ") m && String.contains file m && noHazard m
+
+        Nothing ->
+            False
+
+
+-- A nonexistent index is refused with the build hint and is not created.
+missingIndexProbed : Scratch -> Task.Task Error Bool
+missingIndexProbed at =
+    let
+        missingDb =
+            at.repo ++ "/no-such-index.db"
+    in
+    do
         removeFileIfAny missingDb
         System.setenv "IPE_INDEX_DB" missingDb
-        missing <- probeMessage (Settings.indexSettings |> Task.andThen Index.probe)
-        missingCreated <- Task.fromResult (Path.fromString missingDb) |> Task.andThen File.exists
-        conn <- Db.open "sqlite" ("sqlite://" ++ notIndexDb ++ "?mode=rwc")
+        message <- probeMessage (Settings.indexSettings |> Task.andThen Index.probe)
+        created <- Task.fromResult (Path.fromString missingDb) |> Task.andThen File.exists
+        Task.succeed (probeNames "IPE_INDEX_DB" missingDb message && maybeContains "ipe-index index" message && not created)
+
+
+-- A SQLite file with none of the index tables is refused.
+foreignDbProbed : Scratch -> Task.Task Error Bool
+foreignDbProbed at =
+    let
+        otherDb =
+            at.repo ++ "/not-an-index.db"
+    in
+    do
+        conn <- Db.open "sqlite" ("sqlite://" ++ otherDb ++ "?mode=rwc")
         Db.exec conn "CREATE TABLE IF NOT EXISTS other (x INTEGER)" []
-        System.setenv "IPE_INDEX_DB" notIndexDb
-        notIndex <- probeMessage (Settings.indexSettings |> Task.andThen Index.probe)
+        System.setenv "IPE_INDEX_DB" otherDb
+        message <- probeMessage (Settings.indexSettings |> Task.andThen Index.probe)
+        removeFileIfAny otherDb
+        Task.succeed (probeNames "IPE_INDEX_DB" otherDb message)
+
+
+-- A review location under a missing directory is refused with its own fix.
+reviewProbed : Scratch -> Task.Task Error Bool
+reviewProbed at =
+    let
+        badReview =
+            at.repo ++ "/no-such-dir/review.db"
+    in
+    do
         System.setenv "IPE_REVIEW_DB" badReview
-        review <- probeMessage (Settings.reviewDb |> Task.andThen LibDb.probe)
-        System.setenv "IPE_INDEX_DB" at.indexDb
-        removeFileIfAny notIndexDb
-        cleanupIndex at.indexDb at.repo
-        Task.succeed
-            (good
-                == Nothing
-                && names "IPE_INDEX_DB" missingDb missing
-                && maybeContains "ipe-index index" missing
-                && not missingCreated
-                && names "IPE_INDEX_DB" notIndexDb notIndex
-                && names "IPE_REVIEW_DB" badReview review
-                && not (maybeContains "ipe-index index" review)
-            )
+        message <- probeMessage (Settings.reviewDb |> Task.andThen LibDb.probe)
+        Task.succeed (probeNames "IPE_REVIEW_DB" badReview message && not (maybeContains "ipe-index index" message))
 
 
 maybeContains : String -> Maybe String -> Bool
@@ -3070,6 +3096,7 @@ progressStableAcrossDrain =
         removeFileIfAny at.indexDb
         removeFileIfAny at.reviewDb
         seedIndex at.indexDb at.repo
+        execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
         System.setenv "IPE_REVIEW_DB" at.reviewDb
         before <- Queue.loadPage Index.Start
         db <- LibDb.open
@@ -3101,6 +3128,20 @@ progressStableAcrossDrain =
                 && again.progress.total
                 == after.progress.total
             )
+
+
+-- Display escaping, startup probes, refusal fixes and progress. Last in the
+-- run: the probe case leaves `IPE_REVIEW_DB` at an unwritable location.
+displayAndStartupChecks : Task.Task Error (List ( String, Bool ))
+displayAndStartupChecks =
+    Task.sequence
+        [ Task.map (\ok -> ( "index text is rendered at the decode point", ok )) indexTextRendered
+        , Task.succeed ( "source tokens and link labels render bidi visibly", sourceTokensRendered )
+        , Task.map (\ok -> ( "each db refusal states one fix", ok )) dbRefusalsStateOneFix
+        , Task.succeed ( "progress counts decided over decided-or-queued units", progressCountsDecidedUnits )
+        , Task.map (\ok -> ( "progress total holds while the queue drains", ok )) progressStableAcrossDrain
+        , Task.map (\ok -> ( "startup probes name the variable and the file", ok )) probesNameTheirVariable
+        ]
 
 
 report : List ( String, Bool ) -> String
@@ -3251,6 +3292,20 @@ main =
                 oversizedSourceRefused
                     |> Task.map (\ok -> results ++ [ ( "source file past the read ceiling refused", ok ) ])
             )
+        |> Task.andThen laterChecks
+        |> Task.andThen
+            (\results ->
+                removeDbFile dbPath
+                    |> Task.map (\_ -> results)
+            )
+        |> Task.andThen finish
+
+
+-- The second half of the run, kept out of `main` so neither chain nests past
+-- the backend's expression-depth limit.
+laterChecks : List ( String, Bool ) -> Task.Task Error (List ( String, Bool ))
+laterChecks results =
+    Task.succeed results
         |> Task.andThen
             (\results ->
                 drainFlow
@@ -3362,43 +3417,8 @@ main =
         |> Task.andThen
             (\results ->
                 viewHashVectors
-                    |> Task.map (\ok -> results ++ [ ( "view and attestation match the shared ipe-index vectors", ok ) ])
+                    |> Task.andThen (\ok -> Task.map (\more -> results ++ (( "view and attestation match the shared ipe-index vectors", ok ) :: more)) displayAndStartupChecks)
             )
-        |> Task.andThen
-            (\results ->
-                indexTextRendered
-                    |> Task.map (\ok -> results ++ [ ( "index text is rendered at the decode point", ok ) ])
-            )
-        |> Task.andThen
-            (\results ->
-                probesNameTheirVariable
-                    |> Task.map (\ok -> results ++ [ ( "startup probes name the variable and the file", ok ) ])
-            )
-        |> Task.andThen
-            (\results ->
-                dbRefusalsStateOneFix
-                    |> Task.map (\ok -> results ++ [ ( "each db refusal states one fix", ok ) ])
-            )
-        |> Task.andThen
-            (\results ->
-                progressStableAcrossDrain
-                    |> Task.map (\ok -> results ++ [ ( "progress total holds while the queue drains", ok ) ])
-            )
-        |> Task.andThen
-            (\results ->
-                Task.succeed
-                    (results
-                        ++ [ ( "source tokens and link labels render bidi visibly", sourceTokensRendered )
-                        , ( "progress counts decided over decided-or-queued units", progressCountsDecidedUnits )
-                        ]
-                    )
-            )
-        |> Task.andThen
-            (\results ->
-                removeDbFile dbPath
-                    |> Task.map (\_ -> results)
-            )
-        |> Task.andThen finish
 
 
 removeDbFile : String -> Task.Task Error ()

@@ -5,11 +5,14 @@ import Ipe.Error as Error
 import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.Result as Result exposing (Result(..))
-import Ipe.Set as Set exposing (Set)
+import Ipe.Set as Set
 import Ipe.String as String
 import Ipe.Task as Task
 import Lib.Db as LibDb
 import Lib.Format as Format
+-- `Index.Unit` names `Highlight.Lang`, and an imported alias resolves its
+-- qualified names in this module.
+import Lib.Highlight as Highlight
 import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.Links as Links
 import Lib.SafeText as SafeText exposing (SafeText)
