@@ -8708,16 +8708,21 @@ mod route_entry_cmd_tests {
             .block_on(body());
     }
 
-    /// GET `path` with an optional `ipe_sid` cookie → (status, `Retry-After`, minted sid, body).
+    /// GET `path` with an optional session cookie → (status, `Retry-After`, minted sid, body).
+    ///
+    /// The cookie name comes from `cookie_name_for`, so the helper follows the
+    /// posture's name (`ipe_sid` or `__Host-ipe_sid`) instead of pinning one.
     #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn get(
         store: &Store,
         path: &str,
         cookie: Option<&str>,
     ) -> (StatusCode, Option<String>, String, String) {
+        let name = super::cookie_name_for("");
+        let prefix = format!("{name}=");
         let mut b = Request::builder().method("GET").uri(path);
         if let Some(c) = cookie {
-            b = b.header(header::COOKIE, format!("ipe_sid={c}"));
+            b = b.header(header::COOKIE, format!("{name}={c}"));
         }
         let resp = router(store.clone())
             .oneshot(b.body(Body::empty()).expect("build GET"))
@@ -8734,7 +8739,7 @@ mod route_entry_cmd_tests {
             .get_all(header::SET_COOKIE)
             .iter()
             .filter_map(|v| v.to_str().ok())
-            .find_map(|c| c.strip_prefix("ipe_sid="))
+            .find_map(|c| c.strip_prefix(prefix.as_str()))
             .and_then(|rest| rest.split(';').next())
             .unwrap_or("")
             .trim()
@@ -8990,7 +8995,10 @@ mod route_entry_cmd_tests {
                     .method("GET")
                     .uri(format!("/_ipe/sse?path={}", path.replace('/', "%2F")))
                     .header(header::ACCEPT, "text/event-stream")
-                    .header(header::COOKIE, format!("ipe_sid={sid}"))
+                    .header(
+                        header::COOKIE,
+                        format!("{}={sid}", super::cookie_name_for("")),
+                    )
                     .body(Body::empty())
                     .expect("build SSE GET"),
             )
