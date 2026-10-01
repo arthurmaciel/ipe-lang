@@ -2934,12 +2934,12 @@ Ipe.Tuple — helpers for 2-tuples (pairs).
 | `lightMode` | (no summary) |
 | `reducedMotion` | (no summary) |
 | `px` | (no summary) |
-| `fill` | (no summary) |
-| `fillPortion` | (no summary) |
+| `fill` | `fill` — take one share of the parent's leftover space; `fill` is |
+| `fillPortion` | `fillPortion n` — take `n` shares of the parent's leftover space. The space |
 | `content` | (no summary) |
 | `shrink` | (no summary) |
-| `minimum` | (no summary) |
-| `maximum` | (no summary) |
+| `minimum` | `minimum n len` — `len`, but never smaller than `n` pixels (a lower bound). |
+| `maximum` | `maximum n len` — `len`, but never larger than `n` pixels (an upper bound). |
 | `vh` | (no summary) |
 | `vw` | (no summary) |
 | `rgb` | (no summary) |
