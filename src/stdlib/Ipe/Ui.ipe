@@ -636,11 +636,13 @@ shrink =
     Kernel.kernel "Ui_shrink"
 
 
+-- | `minimum n len` — `len`, but never smaller than `n` pixels (a lower bound).
 minimum : Int -> Length -> Length
 minimum =
     Kernel.kernel "Ui_minimum"
 
 
+-- | `maximum n len` — `len`, but never larger than `n` pixels (an upper bound).
 maximum : Int -> Length -> Length
 maximum =
     Kernel.kernel "Ui_maximum"
