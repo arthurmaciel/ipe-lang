@@ -877,7 +877,7 @@ fn has_any_alignment<M>(attrs: &[Attribute<M>]) -> bool {
         .any(|a| matches!(a, Attribute::AttrAlignX(_) | Attribute::AttrAlignY(_)))
 }
 
-/// True when a block `el` is promoted to a flex row by A3.
+/// True when a block `el` is promoted to a flex row by its aligned child.
 ///
 /// A single-child block node whose only child carries an alignment becomes
 /// `display:flex` (a row), so its child is laid out with parent axis `Row`.
@@ -1303,7 +1303,7 @@ fn render_node_as<M: Clone>(
     let inside_paragraph = has_paragraph_marker(attrs);
 
     // The flex direction THIS node imposes on its children is its own `axis`,
-    // except that an A3-promoted `el` (single aligned child ⇒ `display:flex`,
+    // except that an aligned-child-promoted `el` (single aligned child ⇒ `display:flex`,
     // default row) lays its child out as a `Row`.
     let child_axis = if is_promoted_el(axis, &kids) {
         FlexAxis::Row
@@ -1875,7 +1875,7 @@ mod tests {
         assert!(s.contains("content"), "content must render: {s}");
     }
 
-    // ── Layout shell size chain (P1) ─────────────────────────────────────────
+    // ── Layout shell size chain ────────────────────────────────────────────
 
     /// The `style` attribute value of an `HElement`, if any.
     fn style_of<M>(html: &Html<M>) -> Option<&str> {
@@ -1957,7 +1957,7 @@ mod tests {
         );
     }
 
-    // ── Axis-aware size emission (P2) ─────────────────────────────────────────
+    // ── Axis-aware size emission ────────────────────────────────────────────
 
     /// Style of the first child of `parent [] [child]` rendered as a top node.
     fn first_child_style(parent: Element<TestMsg>) -> String {
@@ -2174,7 +2174,7 @@ mod tests {
         assert!(s.contains("align-self:stretch"), "stretch wins: {s}");
     }
 
-    /// An A3-promoted `el` lays its child out as a row: the child's aligned
+    /// An aligned-child-promoted `el` lays its child out as a row: the child's aligned
     /// `height fill` stretches instead of growing.
     #[test]
     fn promoted_el_child_sees_row() {
