@@ -14,7 +14,7 @@ inputs:
   results:
     description: >-
       Space-separated `job=result` pairs, one per need of the calling job, in
-      its `needs:` order, `changes` first (`changes=${{ needs.changes.result }} ...`).
+      its `needs:` order, `changes` first (`changes=<result of needs.changes> ...`).
     required: true
   phase:
     description: The phase the aggregated jobs run in, `tests` or `post_merge`.
