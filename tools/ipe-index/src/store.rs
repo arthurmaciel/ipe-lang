@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS change_queue (
 /// Current schema version, recorded in `meta` after the additive DDL runs.
 /// `open` bumps it on the first connection to a v2 DB; a future destructive
 /// migration keys off this value instead of guessing from table presence.
-const SCHEMA_VERSION: &str = "2";
+const SCHEMA_VERSION: &str = "3";
 
 /// Stable unit id: blake3 of `path|kind|qualified`. Content-stable across
 /// re-indexes; a rename of the symbol or path changes the id by design.
@@ -324,7 +324,7 @@ mod tests {
             line_end: 5,
             facing: Facing::Internal,
             purpose: Some("does the thing".to_string()),
-            body_hash: "deadbeef".to_string(),
+            body_hash: "sha256:00".to_string(),
             updated_sha: "cafe".to_string(),
         }
     }

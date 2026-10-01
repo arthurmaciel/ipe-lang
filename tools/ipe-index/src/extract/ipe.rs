@@ -129,15 +129,6 @@ pub fn doc_purpose(src: &str, line: i64) -> Option<String> {
     top.filter(|s| !s.is_empty())
 }
 
-/// The exact source text of a binding's extent (1-indexed, inclusive).
-pub fn binding_text(src: &str, line: i64, line_end: i64) -> String {
-    src.lines()
-        .skip((line - 1).max(0) as usize)
-        .take(((line_end - line + 1).max(0)) as usize)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,7 +184,7 @@ mod tests {
         assert_eq!(r.bindings[1].line_end, 3); // next binding (last) starts at 4
         assert_eq!(r.bindings[2].line, 4);
         assert_eq!(r.bindings[2].line_end, 4); // last binding → EOF
-        let text = binding_text(src, 4, 4);
-        assert_eq!(text, "last = 0");
+        let text = crate::extract::view::view_text(src, 4, 4);
+        assert_eq!(text.as_deref(), Ok("last = 0"));
     }
 }

@@ -1,4 +1,4 @@
-use super::{UnitSpec, blake3_hex, emit_unit, module_path};
+use super::{UnitSpec, emit_unit, module_path};
 use crate::model::{Facing, Kind, Lang, facing_of};
 use crate::store::Store;
 use anyhow::Result;
@@ -373,7 +373,6 @@ pub fn extract(
             if Some(cap.index) == def_idx {
                 store.put_symbol(path, text, "def", line, col)?;
                 let item = enclosing_item(cap.node);
-                let span = &src[item.byte_range()];
                 let (lstart, lend) = (
                     item.start_position().row as i64 + 1,
                     item.end_position().row as i64 + 1,
@@ -386,6 +385,7 @@ pub fn extract(
                 let (purpose, links) = doc_scan(item, src);
                 let uid = emit_unit(
                     store,
+                    src,
                     UnitSpec {
                         path,
                         kind: unit_kind(item.kind()),
@@ -395,7 +395,6 @@ pub fn extract(
                         line_end: lend,
                         facing,
                         purpose,
-                        body_hash: &blake3_hex(span.as_bytes()),
                         updated_sha,
                     },
                     ord,
@@ -407,7 +406,6 @@ pub fn extract(
                 // `locate <Type>` surfaces its impl sites alongside its def.
                 store.put_symbol(path, text, "impl", line, col)?;
                 let item = enclosing_item(cap.node);
-                let span = &src[item.byte_range()];
                 let (lstart, lend) = (
                     item.start_position().row as i64 + 1,
                     item.end_position().row as i64 + 1,
@@ -420,6 +418,7 @@ pub fn extract(
                 let (purpose, links) = doc_scan(item, src);
                 let uid = emit_unit(
                     store,
+                    src,
                     UnitSpec {
                         path,
                         kind: Kind::Impl,
@@ -429,7 +428,6 @@ pub fn extract(
                         line_end: lend,
                         facing,
                         purpose,
-                        body_hash: &blake3_hex(span.as_bytes()),
                         updated_sha,
                     },
                     ord,
