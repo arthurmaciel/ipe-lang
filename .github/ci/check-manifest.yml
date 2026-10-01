@@ -29,6 +29,8 @@
 # check before a push. Exactly one of:
 #   tier + run    Run these commands at `quick` (per push), `affected` (tests
 #                 over changed crates + reverse deps) or `full` (the CI mirror).
+#                 `complete: true` adds the converse: every command CI runs for
+#                 the gate is one of these, so the two sets are one.
 #                 A command is a string or {cmd, env, cwd, differs}. Each must
 #                 match a command the producer job runs, token for token, with
 #                 the same env and working directory; `differs: <reason>`
@@ -63,12 +65,14 @@ checks:
     disposition: gate
     producer: ci.yml
     local:
-      tier: affected
+      tier: quick
+      complete: true
       run:
         - cargo clippy -p ipe-runtime-rust --no-default-features --features db --all-targets -- -D warnings
         - cargo clippy -p ipe-runtime-rust --no-default-features --features db,web --all-targets -- -D warnings
         - cargo clippy -p ipe-runtime-rust --features debugger,tui --all-targets -- -D warnings
         - cargo clippy -p ipe-runtime-rust --features debugger,web --all-targets -- -D warnings
+        - cargo clippy -p ipe-runtime-rust --features full --all-targets -- -D warnings
     guards: >-
       Every runtime feature combination the emitter can select builds clean
       under clippy (SEAL); path-gated, so a skip on a non-emit PR passes.

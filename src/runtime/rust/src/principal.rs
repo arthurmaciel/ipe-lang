@@ -2,10 +2,9 @@
 //!
 //! A `Principal` names the caller a row-security policy filters on. Its subject
 //! string is only ever a value that a cryptographically verified, unexpired
-//! session token carried: the sole producer is [`principal_mint`] (and its
-//! claims-bearing sibling [`principal_mint_with_claims`]), which the HTTP-server
-//! auth middleware calls exclusively on the success branch of token
-//! verification. No other runtime path and no Ipê term can build one — the
+//! session token carried: the sole producer is [`principal_mint_with_claims`],
+//! which the HTTP-server auth middleware calls exclusively on the success
+//! branch of token verification. No other runtime path and no Ipê term can build one — the
 //! fields are private and there is no public constructor — so holding a
 //! `Principal` is proof the subject was authenticated.
 //!
@@ -21,8 +20,8 @@ use std::collections::BTreeMap;
 
 /// The verified subject of an authenticated request, together with the verified
 /// claims the session token carried. The fields are private: a value of this
-/// type can only originate from [`principal_mint`] or
-/// [`principal_mint_with_claims`].
+/// type can only originate from [`principal_mint_with_claims`] (or, in unit
+/// tests, `principal_mint`).
 ///
 /// The claims map is a `BTreeMap` so its iteration order is deterministic — a
 /// principal built from the same claims always reads back identically
@@ -37,14 +36,10 @@ pub struct Principal {
     claims: BTreeMap<String, String>,
 }
 
-/// Mint a `Principal` from a verified subject claim, with no further claims.
-/// Crate-internal: the auth middleware and the revocation surface are the only
-/// callers, and the middleware invokes minting solely after a successful token
-/// verification, so every `Principal` in existence carries a subject that a
-/// valid session proved. Not a registered kernel and not reachable from Ipê.
-/// Gated on `jwt` to match its sole non-test caller (the token-verifying
-/// middleware).
-#[cfg(any(feature = "jwt", test))]
+/// Mint a `Principal` with a subject and no claims — a unit-test fixture for
+/// the principal and revocation tests. Production minting goes through
+/// [`principal_mint_with_claims`] alone, so this exists only under `test`.
+#[cfg(test)]
 #[must_use]
 pub(crate) fn principal_mint(subject: String) -> Principal {
     Principal {
@@ -54,9 +49,11 @@ pub(crate) fn principal_mint(subject: String) -> Principal {
 }
 
 /// Mint a `Principal` from a verified subject claim and the full verified claims
-/// map. Crate-internal, same origin guarantee as [`principal_mint`]: the auth
-/// middleware calls this only on the success branch of token verification, so
-/// the claims carried are exactly the token's verified payload.
+/// map. Crate-internal: the auth middleware is the only non-test caller and
+/// calls this only on the success branch of token verification, so every
+/// `Principal` in existence carries a subject a valid session proved and
+/// exactly the token's verified payload. Not a registered kernel and not
+/// reachable from Ipê. Gated on `jwt` to match that caller.
 #[cfg(any(feature = "jwt", test))]
 #[must_use]
 pub(crate) fn principal_mint_with_claims(

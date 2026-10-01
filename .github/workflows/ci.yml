@@ -470,6 +470,9 @@ jobs:
       # break while main stays green.
       - run: cargo clippy -p ipe-runtime-rust --features debugger,tui --all-targets -- -D warnings
       - run: cargo clippy -p ipe-runtime-rust --features debugger,web --all-targets -- -D warnings
+      # Every runtime feature at once — lints that fire only when all gated
+      # modules compile together (an item order, a cfg-gated dead fn).
+      - run: cargo clippy -p ipe-runtime-rust --features full --all-targets -- -D warnings
 
   # Required context for `runtime-feature-combos-run`: the phase verdict (see the header).
   runtime-feature-combos:
