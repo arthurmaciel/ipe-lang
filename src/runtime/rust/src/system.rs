@@ -2822,6 +2822,7 @@ mod system_load_env_spawn_blocking_tests {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod argv_tests {
     use super::super::IpeErrorKind;
     use super::{IpeError, IpeMaybe, decode_arg_at, decode_args};

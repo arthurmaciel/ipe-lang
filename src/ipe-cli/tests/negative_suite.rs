@@ -1125,7 +1125,7 @@ fn custom_element_ctor_nul_path_rejected() {
 fn custom_element_ctor_windows_only_traversal_rejected() {
     for (i, literal) in [
         "..\\\\secret",
-        "...",
+        ".. .",
         ".. \\\\x",
         "C:..\\\\x",
         "a\\\\..\\\\..\\\\b",
