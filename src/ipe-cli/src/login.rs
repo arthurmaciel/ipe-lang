@@ -449,30 +449,35 @@ fn url_encode(s: &str) -> String {
 /// (`-d @-`), never as an argv element, so it cannot be read from
 /// `/proc/<pid>/cmdline` by another local user during the minutes-long poll.
 /// This mirrors `publish::github_api_post`'s stdin token delivery.
+///
+/// The response is held to [`crate::remote_ingest::OAUTH_FORM`]: curl's own
+/// limits stop a declared oversized body or a stalled transfer, and the
+/// captured stdout is refused past its ceiling.
 fn post_form(url: &str, fields: &[(&str, &str)]) -> Result<serde_json::Value, CliError> {
-    use std::process::Stdio;
+    use crate::remote_ingest::{self, Curl, RunError, Transfer};
+    let budget = &remote_ingest::OAUTH_FORM;
     let body = fields
         .iter()
         .map(|(k, v)| format!("{}={}", url_encode(k), url_encode(v)))
         .collect::<Vec<_>>()
         .join("&");
     // `-d @-` reads the form body from stdin, keeping the secret out of argv.
-    let mut child = Command::new("curl")
-        .args(curl_argv(url))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| login_error(&crate::text::msg::login_curl_unavailable(&e)))?;
-    // Write the body to curl's stdin, then close it so curl proceeds. A write
-    // failure means curl never receives the body; the wait below surfaces the
-    // resulting error.
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(body.as_bytes());
+    let limits = remote_ingest::curl_limit_args(budget.stdout_bytes(), budget);
+    let body = zeroize::Zeroizing::new(body);
+    let output = Curl::https()
+        .args(curl_argv(url, &limits))
+        .run(Some(body.as_bytes()), None, &Transfer::begin(*budget))
+        .map_err(|e| match e {
+            RunError::Spawn(e) => login_error(&crate::text::msg::login_curl_unavailable(&e)),
+            RunError::Wait(e) => login_error(&crate::text::msg::login_curl_wait_failed(&e)),
+            RunError::Measure(path, source) => CliError::Io { path, source },
+            RunError::Exceeded(refusal) => CliError::RemoteIngestExceeded(refusal),
+            RunError::PipeDrainTimeout(stream) => CliError::ChildPipeHeld(stream),
+        })?;
+    if let Some(refusal) = remote_ingest::curl_refusal(output.status, budget.stdout_bytes(), budget)
+    {
+        return Err(CliError::RemoteIngestExceeded(refusal));
     }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| login_error(&crate::text::msg::login_curl_wait_failed(&e)))?;
     if !output.status.success() {
         return Err(login_error(&crate::text::msg::login_request_failed(
             &crate::style::TerminalSafe::sanitize(String::from_utf8_lossy(&output.stderr).trim()),
@@ -485,12 +490,18 @@ fn post_form(url: &str, fields: &[(&str, &str)]) -> Result<serde_json::Value, Cl
 /// The full curl argument vector for a `post_form` call. The body is NOT among
 /// these arguments — it is `-d @-`, read from stdin — so no field value (in
 /// particular the poll's `device_code`) can leak through `/proc/<pid>/cmdline`.
+/// `limits` are the [`crate::remote_ingest::curl_limit_args`] of the call.
 /// Split out so a regression test can assert the argv is secret-free.
-const fn curl_argv(url: &str) -> [&str; 10] {
+const fn curl_argv<'a>(url: &'a str, limits: &'a [String; 4]) -> [&'a str; 14] {
+    let [max_filesize, bytes, max_time, secs] = limits;
     [
         "--silent",
         "--show-error",
         "--fail",
+        max_filesize.as_str(),
+        bytes.as_str(),
+        max_time.as_str(),
+        secs.as_str(),
         "-X",
         "POST",
         "-H",
@@ -1052,7 +1063,13 @@ mod tests {
     /// exchangeable for the publish token) cannot leak via `/proc/<pid>/cmdline`.
     #[test]
     fn post_form_argv_carries_no_secret_body() {
-        let argv = curl_argv(TOKEN_URL);
+        let budget = &crate::remote_ingest::OAUTH_FORM;
+        let limits = crate::remote_ingest::curl_limit_args(budget.stdout_bytes(), budget);
+        let argv = curl_argv(TOKEN_URL, &limits);
+        assert!(
+            argv.windows(limits.len()).any(|w| w == limits),
+            "curl argv must carry the ingest limits"
+        );
         let secret = "the-device-code-secret";
         let body = format!(
             "client_id={}&device_code={}&grant_type={}",

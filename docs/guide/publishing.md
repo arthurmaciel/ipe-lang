@@ -256,6 +256,10 @@ ipe build
 - **`publish` refuses on a dirty tree or unpushed `HEAD`.** Commit and push your
   source first — the index pins a revision that must be fetchable, so an
   uncommitted or unpushed state fails closed by design.
+- **The push to your fork fails.** git pushes over `https` without a terminal
+  prompt, so it authenticates only through a git credential helper. Configure
+  one (`gh auth setup-git` sets up GitHub's) and make sure your account can
+  push to the fork.
 
 ## Where to go next
 

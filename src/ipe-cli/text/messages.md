@@ -627,6 +627,42 @@ lint: findings remain at or above the gate severity (see above)
 
 {path}: file exceeds the {max}-byte read ceiling — refusing to allocate an unbounded buffer
 
+## cli-remote-ingest-exceeded
+
+{source}: remote transfer exceeded the {limit} ceiling — stopped; nothing was recorded
+
+## cli-remote-ingest-timed-out
+
+{source}: did not finish within {limit} — check the network or the source host; nothing was recorded
+
+## cli-package-source-exceeded
+
+{source}: the package source exceeds the {limit} ceiling ipe accepts — stopped; nothing was recorded. The publisher must shrink the published tree (drop build artefacts / vendored data) and republish
+
+## cli-remote-ingest-refused
+
+{source}: sent {shape}, which ipe does not accept — stopped; nothing was recorded
+
+## cli-transfer-interrupted
+
+a signal ended the transfer — stopped; nothing was recorded
+
+## cli-local-limit-exceeded
+
+{source}: exceeded the {limit} ceiling — stopped; nothing was recorded
+
+## cli-local-timed-out
+
+{source}: did not finish within {limit} — stopped; nothing was recorded
+
+## cli-local-tree-refused
+
+{source}: holds {shape}, which ipe does not accept — stopped; nothing was recorded
+
+## cli-child-pipe-held
+
+{stream} of a finished child stayed open past the grace — a process it started still holds it; stopped
+
 ## cli-source-not-regular-file
 
 {path}: not a regular file — ipe reads source only from regular files, never a FIFO, device, socket, directory or a symlink met while walking modules; point ipe at a regular `.ipe` file
@@ -1864,6 +1900,10 @@ upgrade: not supported on this platform — run the installer manually:
 
 upgrade: cannot launch the installer (needs `sh` and `curl`): {detail}
 
+## upgrade-installer-download-failed
+
+upgrade: the installer could not be downloaded — nothing was changed: {detail}
+
 ## upgrade-installer-wait-failed
 
 upgrade: the installer could not be waited on: {detail}
@@ -1971,7 +2011,11 @@ error[IPE-P0001]: the packaged {platform} manifest declares OS permission(s) the
 
 ## index-source-url-invalid
 
-package `{pkg}`: `source` must be an https://, git://, ssh://, or file:// URL (or a bare absolute path), got: {raw}
+package `{pkg}`: `source` must be an https://, ssh://, or file:// URL (or a bare absolute path), got: {raw}
+
+## index-source-url-plaintext
+
+package `{pkg}`: `source` uses the unauthenticated, unencrypted git:// transport, got: {raw} — use the repository's https:// URL instead
 
 ## index-rev-injection
 
@@ -1980,14 +2024,6 @@ package `{pkg}`: `rev` contains an injection-shaped value, got: {raw}
 ## index-rev-not-immutable
 
 package `{pkg}`: recorded `rev` is not an immutable commit SHA (expected 40 lowercase hex chars), got: {raw} — re-run `ipe add` to record an immutable pin
-
-## index-rev-parse-unavailable
-
-package `{pkg}`: could not run `git rev-parse`: {detail}
-
-## index-rev-unresolved
-
-package `{pkg}`: `git rev-parse --verify {refspec}` failed — ref {rev} does not resolve to a commit in the fetched checkout
 
 ## index-rev-mixed-case-hex
 
@@ -2064,7 +2100,7 @@ ipe package publish: could not clone your index fork `{fork_url}` — publish pu
 
 ## publish-push-failed
 
-ipe package publish: could not push `{branch}` to `{fork_url}` — nothing was published. Fix the push (git credentials / fork access), then open the PR here:
+ipe package publish: could not push `{branch}` to `{fork_url}` — nothing was published. git pushes without a terminal prompt, so it authenticates only through a credential helper: configure one (`gh auth setup-git` sets up GitHub's), make sure your account can push to the fork, then open the PR here:
   {url}
   git: {git}
 
@@ -2095,10 +2131,6 @@ ipe package publish: {op} got an out-of-range HTTP status from curl: {value} —
 ## publish-http-transport-failed
 
 ipe package publish: {op} — curl could not complete the request: {detail} — nothing was published.
-
-## publish-http-body-too-large
-
-ipe package publish: {op} response body exceeded the {cap}-byte limit — nothing was published.
 
 ## publish-http-body-io
 
@@ -2139,6 +2171,10 @@ package `{name}`: could not run `git`: {detail}
 ## resolve-git-failed
 
 package `{name}`: `git {args}` failed: {stderr}
+
+## resolve-fetched-commit-mismatch
+
+package `{pkg}`: the source served commit {served} where commit {requested} was asked for — nothing was recorded; check that `rev` names a commit the source repository holds
 
 ## login-error
 

@@ -12,7 +12,7 @@
 //! lowercase alphanumerics or single `-` separators, bounded in length — so a
 //! value of this type is a single, non-traversing, portable path component by
 //! construction. The path-building sinks ([`crate::resolve`]'s
-//! `package_cache_dir`, [`crate::index`]'s `entry_path`) take `&PackageName`, so
+//! `cache_dir`, [`crate::index`]'s `entry_path`) take `&PackageName`, so
 //! an unvalidated name can no longer reach a join.
 
 use crate::CliError;
