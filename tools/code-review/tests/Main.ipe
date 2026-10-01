@@ -1,5 +1,6 @@
 module Main exposing (main)
 
+import Ipe.ByteSize as ByteSize
 import Ipe.Char as Char
 import Ipe.Db as Db
 import Ipe.Db.Sql as Sql
@@ -7,6 +8,7 @@ import Ipe.Dict as Dict
 import Ipe.Error as Error
 import Ipe.File as File
 import Ipe.Io as Io
+import Ipe.Json.Decode as Decode
 import Ipe.List as List
 import Ipe.Path as Path
 import Ipe.Result as Result exposing (Result(..))
@@ -2388,6 +2390,84 @@ sampleQueuedUnit =
     }
 
 
+-- ── shared view/hash vectors ──────────────────────────────────────────────
+--
+-- The Ipê view rule and attestation agree with ipe-index's on every row of
+-- the shared vectors file, and a row ipe-index refuses is refused here too.
+-- Red if the trailing-newline drop or the `\r` keep rule changes, or if a
+-- range past the file is clamped instead of refused.
+type alias HashVector =
+    { name : String
+    , src : String
+    , startLine : Int
+    , endLine : Int
+    , view : Maybe String
+    , hash : Maybe String
+    }
+
+
+viewHashVectors : Task.Task Error Bool
+viewHashVectors =
+    do
+        cwd <- System.cwd ()
+        path <- Task.fromResult (Path.fromString (vectorsPath cwd))
+        text <- File.readFileLimit path (ByteSize.kib 64)
+        vectors <- Task.fromResult (Decode.decodeString (Decode.list vectorDecoder) text)
+        Task.succeed (List.length vectors >= 13 && List.all vectorHolds vectors)
+
+
+-- The vectors file beside this package: `tools/ipe-index/tests`, reached from
+-- the `tools/code-review` working directory without a `..` segment.
+vectorsPath : String -> String
+vectorsPath cwd =
+    let
+        segments =
+            String.split "/" cwd
+    in
+    String.join "/" (List.take (List.length segments - 1) segments) ++ "/ipe-index/tests/view_hash_vectors.json"
+
+
+vectorDecoder : Decode.Decoder HashVector
+vectorDecoder =
+    Decode.map3
+        (\name src rest ->
+            { name = name
+            , src = src
+            , startLine = rest.startLine
+            , endLine = rest.endLine
+            , view = rest.view
+            , hash = rest.hash
+            }
+        )
+        (Decode.field "name" Decode.string)
+        (Decode.field "src" Decode.string)
+        (Decode.map4
+            (\startLine endLine view hash -> { startLine = startLine, endLine = endLine, view = view, hash = hash })
+            (Decode.field "start" Decode.int)
+            (Decode.field "end" Decode.int)
+            (Decode.field "view" (Decode.nullable Decode.string))
+            (Decode.field "hash" (Decode.nullable Decode.string))
+        )
+
+
+vectorHolds : HashVector -> Bool
+vectorHolds v =
+    case Index.viewText v.startLine v.endLine v.src of
+        Ok text ->
+            case ( v.view, v.hash ) of
+                ( Just view, Just hash ) ->
+                    text == view && Index.attest text == hash
+
+                _ ->
+                    False
+
+        Err (Index.RangeOutOfFile _) ->
+            v.view == Nothing && v.hash == Nothing
+
+        Err _ ->
+            False
+
+
 report : List ( String, Bool ) -> String
 report results =
     List.map
@@ -2588,6 +2668,11 @@ main =
                         , ( "queue state texts distinguish loading/empty/failed/loaded", queueStateTextsDistinct )
                         ]
                     )
+            )
+        |> Task.andThen
+            (\results ->
+                viewHashVectors
+                    |> Task.map (\ok -> results ++ [ ( "view and attestation match the shared ipe-index vectors", ok ) ])
             )
         |> Task.andThen
             (\results ->

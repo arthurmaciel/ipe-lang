@@ -1,9 +1,10 @@
-module Lib.Index exposing (Cursor(..), PendingRow, Unit, countPending, dbBytes, drainUnit, loadPendingPage, loadUnitByUid, nameFor, openRead, pageSize, qualifiedUids)
+module Lib.Index exposing (Cursor(..), PendingRow, StaleReason(..), Unit, attest, countPending, dbBytes, drainUnit, loadPendingPage, loadUnitByUid, nameFor, openRead, pageSize, qualifiedUids, viewText)
 
 import Ipe.ByteSize as ByteSize exposing (ByteSize)
 import Ipe.Db
 import Ipe.Db.Decode
 import Ipe.Db.Sql as Sql
+import Ipe.Crypto as Crypto
 import Ipe.Db.Store as Store exposing (Store)
 import Ipe.Error as Error
 import Ipe.File as File
@@ -437,3 +438,61 @@ sliceLines start end text =
         |> List.drop (max 0 (start - 1))
         |> List.take (max 0 (end - start + 1))
         |> String.join "\n"
+
+
+-- Why a unit's source is withheld instead of shown.
+type StaleReason
+    = Drifted
+    | RangeOutOfFile { lineCount : Int }
+    | UnverifiableHash
+
+
+-- The scheme prefix of every attestation ipe-index stores in `body_hash`.
+attestScheme : String
+attestScheme =
+    "sha256:"
+
+
+-- The attestation of a view: the scheme prefix and the view's lowercase hex
+-- SHA-256, the exact form ipe-index stores in `units.body_hash`.
+attest : String -> String
+attest view =
+    attestScheme ++ Crypto.sha256 view
+
+
+-- A file's lines under the attestation's split rule, shared with ipe-index
+-- through the vectors file: split on `\n`, keep `\r`, drop the one empty
+-- segment a trailing `\n` leaves. `""` is one empty line.
+viewLines : String -> List String
+viewLines text =
+    let
+        segments =
+            String.split "\n" text
+    in
+    if String.endsWith "\n" text then
+        List.take (List.length segments - 1) segments
+
+    else
+        segments
+
+
+-- Lines `start..end` (1-based, inclusive) of `text` joined by `\n`. A range
+-- outside the file is refused with the file's line count, never clamped.
+viewText : Int -> Int -> String -> Result StaleReason String
+viewText start end text =
+    let
+        segments =
+            viewLines text
+
+        count =
+            List.length segments
+    in
+    if 1 <= start && start <= end && end <= count then
+        segments
+            |> List.drop (start - 1)
+            |> List.take (end - start + 1)
+            |> String.join "\n"
+            |> Ok
+
+    else
+        Err (RangeOutOfFile { lineCount = count })
