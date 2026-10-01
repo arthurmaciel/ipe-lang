@@ -50,12 +50,22 @@ fn opaque_leaf_ir(leaf: &str) -> Option<IrType> {
     }
 }
 
-/// Build and lower a single-module program `tag : <Leaf> -> Int; tag x = 0`,
-/// returning `tag`'s lowered parameter `IrType`. The leaf-type annotation Con
-/// carries `home` (empty for the genuine kernel leaf, `["Main"]` for a user
-/// union); `declare_union` seeds the matching `type <Leaf> = W` when the home is
-/// the user module, exactly as a real `.ipe` file would.
-fn lower_leaf_param_ty(leaf: &str, leaf_home: &[Symbol], declare_union: bool) -> IrType {
+/// The pieces `lower_leaf_param_ty` needs to call `lower`: the interner that
+/// minted every symbol in `module`/`types`, and `tag`'s own symbol so the
+/// caller can find its lowered function back among `program.modules`.
+struct LeafFixture {
+    interner: Interner,
+    module: canon::Module,
+    types: SolvedTypes,
+    tag: Symbol,
+}
+
+/// Build (without lowering) a single-module program `tag : <Leaf> -> Int;
+/// tag x = 0`. The leaf-type annotation Con carries `home` (empty for the
+/// genuine kernel leaf, `["Main"]` for a user union); `declare_union` seeds the
+/// matching `type <Leaf> = W` when the home is the user module, exactly as a
+/// real `.ipe` file would.
+fn build_leaf_fixture(leaf: &str, leaf_home: &[Symbol], declare_union: bool) -> LeafFixture {
     let mut i = Interner::new();
     let main = i.intern("Main").unwrap();
     let leaf_name = i.intern(leaf).unwrap();
@@ -142,7 +152,26 @@ fn lower_leaf_param_ty(leaf: &str, leaf_home: &[Symbol], declare_union: bool) ->
         signature_wildcards: BTreeMap::new(),
     };
 
-    let program = match lower(&m, &types, &mut i, "", "") {
+    LeafFixture {
+        interner: i,
+        module: m,
+        types,
+        tag,
+    }
+}
+
+/// Build and lower a single-module program `tag : <Leaf> -> Int; tag x = 0`,
+/// returning `tag`'s lowered parameter `IrType`. See `build_leaf_fixture` for
+/// what `leaf`/`leaf_home`/`declare_union` control.
+fn lower_leaf_param_ty(leaf: &str, leaf_home: &[Symbol], declare_union: bool) -> IrType {
+    let LeafFixture {
+        mut interner,
+        module: m,
+        types,
+        tag,
+    } = build_leaf_fixture(leaf, leaf_home, declare_union);
+
+    let program = match lower(&m, &types, &mut interner, "", "") {
         Ok(p) => p,
         Err((d, _)) => {
             // The assert fails the test; the sentinel is never inspected.
