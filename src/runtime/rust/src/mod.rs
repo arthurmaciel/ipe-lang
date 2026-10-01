@@ -93,8 +93,9 @@ pub const REPLAY_ENV: &str = "IPE_DEBUGGER_REPLAY";
 ///
 /// Internal plumbing, never operator configuration: it outranks the operator
 /// port var (`IPE_WEB_PORT` / `IPE_SERVER_PORT`) and the source port, is left
-/// out of the documented env registry, and is removed from every `Process.*`
-/// child. Ungated so the `ipe` CLI, which links the runtime without the
+/// out of the documented env registry, and is never inherited by a `Process.*`
+/// child (only the program's own explicit per-child env entry sets it there).
+/// Ungated so the `ipe` CLI, which links the runtime without the
 /// `server` feature, and the runtime listeners share ONE wire name.
 pub const LISTEN_PORT_RELOCATION_ENV: &str = "IPE_INTERNAL_LISTEN_PORT";
 /// File extension of the typed session log written beside the [`RECORD_ENV`] trace.

@@ -248,7 +248,13 @@ pub(crate) struct ListenPort(std::num::NonZeroU16);
 impl ListenPort {
     /// Parse an env value: `None` for empty, non-numeric, signed, `0`, or
     /// out-of-range text.
+    ///
+    /// Only ASCII digits are admitted: `u16`'s `FromStr` alone also accepts a
+    /// leading `+`.
     pub(crate) fn parse(raw: &str) -> Option<Self> {
+        if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
         raw.parse::<u16>()
             .ok()
             .and_then(std::num::NonZeroU16::new)
@@ -2302,12 +2308,17 @@ mod listen_port_tests {
     use super::{PortOrigin, ResolvedPort, resolve_listen_port};
 
     /// Every value that is not a bindable `1..=65535` port.
-    const GARBAGE: [&str; 10] = [
+    const GARBAGE: [&str; 15] = [
         "",
         "abc",
         "80a0",
         " ",
         "-",
+        "+8080",
+        "+0",
+        "+",
+        " 8080",
+        "8080 ",
         "0",
         "-1",
         "65536",
