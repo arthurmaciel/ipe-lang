@@ -554,6 +554,33 @@ impl<'a> Printer<'a> {
         out
     }
 
+    /// The offset of a declaration's first token.
+    ///
+    /// A definition with a signature starts at the signature's name, the code
+    /// token before the `:` that precedes the annotation.
+    fn decl_start(&self, d: &Decl<'_>) -> usize {
+        match d {
+            Decl::Union(u) => u.span.lo as usize,
+            Decl::Alias(a) => a.span.lo as usize,
+            Decl::Foreign(f) => f.span.lo as usize,
+            Decl::Value(v) => {
+                v.value
+                    .type_annotation
+                    .as_ref()
+                    .map_or(v.value.name.span.lo as usize, |ann| {
+                        let lo = ann.span.lo as usize;
+                        let i = self.code.partition_point(|t| t.lo < lo);
+                        let colon = i.checked_sub(1).and_then(|j| self.code.get(j));
+                        let name = i.checked_sub(2).and_then(|j| self.code.get(j));
+                        match (colon, name) {
+                            (Some(c), Some(n)) if matches!(c.kind, TokenKind::Colon) => n.lo,
+                            _ => lo,
+                        }
+                    })
+            }
+        }
+    }
+
     /// Render a whole module.
     fn module(&self, m: &Module) -> String {
         // Destructured field by field, with no `..`: a new kind of top-level
@@ -587,7 +614,6 @@ impl<'a> Printer<'a> {
         out.push_str(&self.dotted(&name.value));
         out.push_str(&self.module_exposing(exposing));
         out.push('\n');
-        let mut prev_hi = header_hi;
 
         // Import block: elm-format sorts imports by module path and prints them
         // directly under the header (one blank line separates the header from
@@ -621,8 +647,6 @@ impl<'a> Printer<'a> {
                 out.push_str(&self.import(imp));
                 out.push('\n');
             }
-            let imports_hi = imports.iter().map(|imp| imp.span.hi as usize).max();
-            prev_hi = imports_hi.map_or(prev_hi, |hi| hi.max(prev_hi));
         }
 
         // Declarations in source order, each preceded by two blank lines
@@ -637,13 +661,15 @@ impl<'a> Printer<'a> {
 
         for decl in &decls {
             out.push_str("\n\n");
-            // Leading comments: those anchored after the previous declaration
-            // (or the imports), up to this declaration's name.
+            // Leading comments: those anchored at the declaration's first
+            // token, or at a head token before its name (`type`, `alias`, a
+            // signature's name). Nothing depends on where the previous
+            // declaration's span ends, which a desugared body underestimates.
             let lo = decl.lo() as usize;
-            push_comment_lines(&mut out, self.anchored_in(prev_hi, lo.saturating_add(1)));
+            let start = self.decl_start(decl);
+            push_comment_lines(&mut out, self.anchored_in(start, lo.saturating_add(1)));
             out.push_str(&self.decl(decl));
             out.push('\n');
-            prev_hi = prev_hi.max(decl.hi() as usize);
         }
 
         // Trailing comments after the last token.
@@ -1747,17 +1773,19 @@ impl<'a> Printer<'a> {
         // keyword mid-line, breaking its layout-sensitive block on re-parse.
         // A modal body — one written across multiple source lines — also drops
         // to its own indented line, matching elm-format's `\x ->\n    body`.
-        // So does a body carrying a comment, which needs a line of its own.
+        // So does a body carrying a comment, which needs a line of its own, and
+        // a body that breaks across lines inline: the printed lambda is then
+        // multi-line, so the block form is the one a second pass would pick.
         // Any other body stays inline after the arrow.
         let block_body = matches!(body.value, Expr_::Let(..) | Expr_::Case(..) | Expr_::If(..))
             || !self.anchored(body.span.lo as usize).is_empty();
-        if block_body || self.was_multiline(span) {
-            let inner = pad(indent + 1);
-            let body_s = self.expr(body, indent + 1);
-            format!("{head}\n{inner}{body_s}")
-        } else {
-            format!("{head} {}", self.expr(body, indent))
-        }
+        let inline = (!block_body && !self.was_multiline(span))
+            .then(|| self.expr(body, indent))
+            .filter(|s| !has_layout_newline(s));
+        inline.map_or_else(
+            || format!("{head}\n{}{}", pad(indent + 1), self.expr(body, indent + 1)),
+            |body_s| format!("{head} {body_s}"),
+        )
     }
 
     fn case(&self, scrut: &Expr, arms: &[(Pattern, Expr)], indent: usize) -> String {
@@ -2235,16 +2263,6 @@ impl Decl<'_> {
                     })
             }
             Self::Foreign(f) => f.span.lo,
-        }
-    }
-
-    /// The end of the declaration's last token.
-    fn hi(&self) -> u32 {
-        match self {
-            Self::Union(u) => u.span.hi,
-            Self::Alias(a) => a.span.hi.max(a.value.body.span.hi),
-            Self::Value(v) => v.span.hi.max(v.value.body.span.hi),
-            Self::Foreign(f) => f.span.hi.max(f.value.body.span.hi),
         }
     }
 }
@@ -2960,5 +2978,30 @@ mod tests {
         let comments = scan_comments("x = '\\\\' -- real\ny = '-'\n");
         let texts: Vec<&str> = comments.iter().map(|c| c.text.as_str()).collect();
         assert_eq!(texts, vec!["-- real"]);
+    }
+
+    /// A single-line lambda whose body breaks when printed takes the block
+    /// form on the first pass, the form its now multi-line span selects on
+    /// the second.
+    #[test]
+    fn lambda_with_a_breaking_body_is_idempotent() {
+        let src = "module M exposing (mk3)\n\n\nmk3 a =\n    \\b -> \\c -> a ++ \":\" ++ (if c then \"T\" else \"F\")\n";
+        let once = format_source(src).expect("formats");
+        assert!(
+            once.contains("\\b ->\n        \\c ->\n"),
+            "not block form:\n{once}"
+        );
+        assert_eq!(format_source(&once).expect("second pass"), once);
+    }
+
+    /// A comment in a declaration whose desugared body ends early (a `do`
+    /// block's node spans only its keyword) prints once, in place.
+    #[test]
+    fn comment_after_a_do_statement_prints_once() {
+        let src = "module M exposing (main, next)\n\n\nmain =\n    do\n        Io.println \"a\" -- after a\n        r <- Task.parallel -- after parallel\n            [ x\n            , y\n            ]\n        Io.println r\n\n\nnext =\n    1\n";
+        let out = format_source(src).expect("formats");
+        assert_eq!(out.matches("-- after a").count(), 1, "{out}");
+        assert_eq!(out.matches("-- after parallel").count(), 1, "{out}");
+        assert_eq!(format_source(&out).expect("second pass"), out);
     }
 }
