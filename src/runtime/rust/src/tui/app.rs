@@ -100,7 +100,7 @@ impl TuiEnterError {
 /// to that typed refusal rather than staying an opaque `Unexpected`.
 #[cfg(unix)]
 fn classify_raw_mode_error(e: std::io::Error) -> TuiEnterError {
-    if e.raw_os_error() == rustix::io::Errno::NXIO.raw_os_error() {
+    if e.raw_os_error() == Some(rustix::io::Errno::NXIO.raw_os_error()) {
         TuiEnterError::NoTerminal(crate::terminal_access::NoTerminal::NoControllingTerminal)
     } else {
         TuiEnterError::RawMode(e)
@@ -222,11 +222,7 @@ mod tui_enter_error_tests {
     #[cfg(unix)]
     #[test]
     fn unix_enxio_raw_mode_error_is_reclassified_as_no_controlling_terminal() {
-        let io_err = std::io::Error::from_raw_os_error(
-            rustix::io::Errno::NXIO
-                .raw_os_error()
-                .expect("NXIO carries a raw errno"),
-        );
+        let io_err = std::io::Error::from_raw_os_error(rustix::io::Errno::NXIO.raw_os_error());
         assert!(matches!(
             classify_raw_mode_error(io_err),
             TuiEnterError::NoTerminal(NoTerminal::NoControllingTerminal)
