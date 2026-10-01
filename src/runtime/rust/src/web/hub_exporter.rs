@@ -20,19 +20,11 @@
 //! full), push failures fall back to the spool, the spool itself is bounded
 //! (oldest batch evicted when full). No `unwrap`/`expect`/indexing.
 
+use super::push_exporter::{ExporterEnv, OutcomeLog, PushOutcome};
 use std::collections::VecDeque;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-
-/// Hub OTLP collector base URL — presence enables the exporter.
-const HUB_ENV: &str = "IPE_CONSOLE_HUB";
-/// Bearer token (must be ≥32 bytes; shorter tokens are refused).
-const TOKEN_ENV: &str = "IPE_CONSOLE_HUB_TOKEN";
-/// Flush cadence (ms).
-const INTERVAL_ENV: &str = "IPE_CONSOLE_BATCH_INTERVAL_MS";
-/// Service name attached as the OTLP `service.name` resource attribute.
-const SERVICE_ENV: &str = "IPE_SERVICE_NAME";
 
 const DEFAULT_QUEUE_CAP: usize = 1024;
 const DEFAULT_INTERVAL_MS: u64 = 2000;
@@ -77,19 +69,20 @@ pub async fn enable_from_env() {
     // leading-whitespace value (" https://hub") otherwise passes the scheme
     // check (which trims) yet leaves the space in `base`, so every push fails
     // with an invalid URL.
-    let hub = match crate::system::read_env_var(HUB_ENV) {
-        Ok(h) if !h.trim().is_empty() => h.trim().to_string(),
+    let hub = match ExporterEnv::HubUrl.read() {
+        Some(h) if !h.trim().is_empty() => h.trim().to_string(),
         _ => return,
     };
     if SENDER.get().is_some() {
         return;
     }
-    let token = crate::system::read_env_var(TOKEN_ENV).unwrap_or_default();
+    let token = ExporterEnv::HubToken.read().unwrap_or_default();
     if token.len() < MIN_TOKEN_BYTES {
         crate::system::emit_runtime_log(
             "hub",
             &format!(
-                "{TOKEN_ENV} must be ≥{MIN_TOKEN_BYTES} bytes to push to {}; exporter disabled",
+                "{} must be ≥{MIN_TOKEN_BYTES} bytes to push to {}; exporter disabled",
+                ExporterEnv::HubToken.name(),
                 super::push_exporter::redacted_origin(&hub)
             ),
         );
@@ -106,23 +99,28 @@ pub async fn enable_from_env() {
         crate::system::emit_runtime_log(
             "hub",
             &format!(
-                "refusing to push bearer token over non-https {HUB_ENV}={}; \
+                "refusing to push bearer token over non-https {}={}; \
                  use https:// (or a localhost loopback); exporter disabled",
+                ExporterEnv::HubUrl.name(),
                 super::push_exporter::redacted_origin(&hub)
             ),
         );
         return;
     }
-    let interval_ms = crate::system::read_env_var(INTERVAL_ENV)
-        .ok()
+    let interval_ms = ExporterEnv::HubInterval
+        .read()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_INTERVAL_MS)
         .max(MIN_INTERVAL_MS);
-    let service = match crate::system::read_env_var(SERVICE_ENV) {
-        Ok(s) if !s.is_empty() => s,
+    let service = match ExporterEnv::ServiceName.read() {
+        Some(s) if !s.is_empty() => s,
         _ => "app".to_string(),
     };
     let base = hub.trim_end_matches('/').to_string();
+    let Some(client) = exporter_client(&base) else {
+        crate::system::emit_runtime_log("hub", "no HTTP client available; exporter disabled");
+        return;
+    };
 
     let (tx, rx) = mpsc::channel::<Entry>(DEFAULT_QUEUE_CAP);
     if SENDER.set(tx).is_err() {
@@ -135,7 +133,16 @@ pub async fn enable_from_env() {
             super::push_exporter::redacted_origin(&base)
         ),
     );
-    tokio::spawn(batcher(rx, base, token, service, interval_ms));
+    tokio::spawn(batcher(
+        rx,
+        HubTarget {
+            client,
+            base,
+            token,
+            service,
+        },
+        interval_ms,
+    ));
 }
 
 /// A ready-to-push OTLP/JSON payload for one signal endpoint.
@@ -145,43 +152,37 @@ struct OtlpBatch {
     json: String,
 }
 
-/// The exporter's reqwest client: bounded push/connect timeouts (a hung hub
-/// can't wedge the task) AND `redirect::Policy::none()`. Following a redirect is
+/// Where and as whom the exporter pushes.
+struct HubTarget {
+    client: reqwest::Client,
+    base: String,
+    token: String,
+    service: String,
+}
+
+/// The exporter's reqwest client for the hub at `base`: bounded push/connect
+/// timeouts (a hung hub can't wedge the task), the
+/// [`super::push_exporter::proxy_route`] for the hub, AND
+/// `redirect::Policy::none()`. Following a redirect is
 /// a secret-leak vector — reqwest's default follows up to 10 hops and RETAINS
 /// the `Authorization` bearer across a same-host `https→http` scheme-downgrade
 /// redirect, defeating the https-only enable gate and pushing the token over
 /// cleartext. A machine-to-machine exporter POSTs to its configured endpoint; it
-/// must never chase a 3xx to an attacker-chosen location. On a builder error
-/// (TLS backend init) fall back to a redirect-disabled default rather than the
-/// plain `Client::new()` (whose default WOULD follow), so the safe policy holds
-/// even on the fallback path.
-fn exporter_client() -> reqwest::Client {
-    reqwest::Client::builder()
+/// must never chase a 3xx to an attacker-chosen location. `None` when the TLS
+/// backend cannot initialise; there is no unpinned fallback client.
+fn exporter_client(base: &str) -> Option<reqwest::Client> {
+    let builder = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .connect_timeout(Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap_or_else(|_| {
-            reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new())
-        })
+        .redirect(reqwest::redirect::Policy::none());
+    super::push_exporter::routed(builder, base).build().ok()
 }
 
 /// Accumulate entries; on each tick encode + push, retrying spooled batches
 /// first. Channel close drains a final flush. A `Flush` sentinel drains
 /// immediately and acks.
-async fn batcher(
-    mut rx: mpsc::Receiver<Entry>,
-    base: String,
-    token: String,
-    service: String,
-    interval_ms: u64,
-) {
-    // Cap each push so a hung/black-holed hub (TCP handshake completes, no HTTP
-    // response — slowloris) can't wedge the exporter task forever.
-    let client = exporter_client();
+async fn batcher(mut rx: mpsc::Receiver<Entry>, target: HubTarget, interval_ms: u64) {
+    let mut log = OutcomeLog::new(Instant::now());
     let mut logs: Vec<(u64, String, String)> = Vec::new();
     let mut spans: Vec<(u64, String, u64, bool)> = Vec::new();
     let mut spool: VecDeque<OtlpBatch> = VecDeque::new();
@@ -191,29 +192,29 @@ async fn batcher(
         tokio::select! {
             maybe = rx.recv() => match maybe {
                 Some(Entry::Flush(ack)) => {
-                    flush(&client, &base, &token, &service, &mut logs, &mut spans, &mut spool).await;
+                    flush(&target, &mut logs, &mut spans, &mut spool, &mut log).await;
                     // Best-effort ack — ignore send errors (caller may have timed out).
                     let _ = ack.send(());
                 }
                 Some(Entry::Log { ts_ms, level, message }) => {
                     logs.push((ts_ms, level, message));
                     if logs.len() + spans.len() >= MAX_BATCH_ENTRIES {
-                        flush(&client, &base, &token, &service, &mut logs, &mut spans, &mut spool).await;
+                        flush(&target, &mut logs, &mut spans, &mut spool, &mut log).await;
                     }
                 }
                 Some(Entry::Span { ts_ms, name, dur_us, ok }) => {
                     spans.push((ts_ms, name, dur_us, ok));
                     if logs.len() + spans.len() >= MAX_BATCH_ENTRIES {
-                        flush(&client, &base, &token, &service, &mut logs, &mut spans, &mut spool).await;
+                        flush(&target, &mut logs, &mut spans, &mut spool, &mut log).await;
                     }
                 }
                 None => {
-                    flush(&client, &base, &token, &service, &mut logs, &mut spans, &mut spool).await;
+                    flush(&target, &mut logs, &mut spans, &mut spool, &mut log).await;
                     break;
                 }
             },
             _ = tick.tick() => {
-                flush(&client, &base, &token, &service, &mut logs, &mut spans, &mut spool).await;
+                flush(&target, &mut logs, &mut spans, &mut spool, &mut log).await;
             }
         }
     }
@@ -233,18 +234,17 @@ pub async fn flush_now(cap_ms: u64) {
 }
 
 /// Encode the accumulated logs/spans into OTLP batches, then push the spool
-/// (oldest first) + the new batches. Failed pushes go back to the spool
-/// (bounded — oldest evicted on overflow).
-#[allow(clippy::too_many_arguments)]
+/// (oldest first) + the new batches. The first failed push puts it and every
+/// batch after it back in the spool, in order, untried (bounded — oldest
+/// evicted on overflow); each outcome is reported through `log`.
 async fn flush(
-    client: &reqwest::Client,
-    base: &str,
-    token: &str,
-    service: &str,
+    target: &HubTarget,
     logs: &mut Vec<(u64, String, String)>,
     spans: &mut Vec<(u64, String, u64, bool)>,
     spool: &mut VecDeque<OtlpBatch>,
+    log: &mut OutcomeLog,
 ) {
+    let service = target.service.as_str();
     if !logs.is_empty() {
         spool_push(
             spool,
@@ -265,40 +265,38 @@ async fn flush(
         );
         spans.clear();
     }
-    // Drain the spool in order; re-spool anything that fails this round.
+    // Drain the spool in order; the first failure re-spools the rest untried.
     let mut pending: VecDeque<OtlpBatch> = std::mem::take(spool);
     while let Some(batch) = pending.pop_front() {
-        if !push_one(client, base, token, &batch).await {
+        let url = format!("{}{}", target.base, batch.path);
+        let outcome = push_one(target, &url, &batch).await;
+        if let Some(line) = log.observe(Instant::now(), &url, &outcome, &failure_note(batch.path)) {
+            crate::system::emit_runtime_log("hub", &line);
+        }
+        if !matches!(outcome, PushOutcome::Accepted) {
             spool_push(spool, batch);
+            while let Some(rest) = pending.pop_front() {
+                spool_push(spool, rest);
+            }
         }
     }
 }
 
-/// Push one OTLP batch. `true` on a 2xx; `false` (→ re-spool) on a refusal or
-/// a transport failure, each logged by its redacted origin.
-async fn push_one(client: &reqwest::Client, base: &str, token: &str, batch: &OtlpBatch) -> bool {
-    let url = format!("{base}{}", batch.path);
-    let req = client
-        .post(&url)
+/// Push one OTLP batch to `url` with the bearer: only a 2xx is an acceptance.
+async fn push_one(target: &HubTarget, url: &str, batch: &OtlpBatch) -> PushOutcome {
+    let req = target
+        .client
+        .post(url)
         .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {token}"))
+        .header("authorization", format!("Bearer {}", target.token))
         .body(batch.json.clone());
-    let outcome = super::push_exporter::send_classified(req).await;
-    if let Some(line) = push_log_line(&url, batch.path, &outcome) {
-        crate::system::emit_runtime_log("hub", &line);
-    }
-    matches!(outcome, super::push_exporter::PushOutcome::Accepted)
+    super::push_exporter::send_classified(req).await
 }
 
-/// The hub's log line for a push outcome: `None` for an acceptance. Names the
-/// hub by its redacted origin and the OTLP path only, never the bearer.
-fn push_log_line(
-    url: &str,
-    path: &str,
-    outcome: &super::push_exporter::PushOutcome,
-) -> Option<String> {
-    super::push_exporter::outcome_log_line(url, outcome)
-        .map(|line| format!("{line} ({path}); batch re-spooled"))
+/// What becomes of a batch whose push to the OTLP `path` failed. Names the
+/// path only, never the bearer.
+fn failure_note(path: &str) -> String {
+    format!("{path} batch and the batches after it re-spooled")
 }
 
 /// Bounded spool insert (evict oldest on overflow — never grows unbounded).
@@ -496,9 +494,14 @@ mod tests {
             let _ = axum::serve(listener, app).await;
         });
 
-        let client = reqwest::Client::new();
         let base = format!("http://127.0.0.1:{port}");
         let token = "x".repeat(MIN_TOKEN_BYTES);
+        let target = HubTarget {
+            client: exporter_client(&base).expect("TLS backend"),
+            base: base.clone(),
+            token: token.clone(),
+            service: "svc".to_string(),
+        };
         let mut logs = vec![(
             1_700_000_000_000u64,
             "error".to_string(),
@@ -508,7 +511,11 @@ mod tests {
         let mut spool: VecDeque<OtlpBatch> = VecDeque::new();
 
         flush(
-            &client, &base, &token, "svc", &mut logs, &mut spans, &mut spool,
+            &target,
+            &mut logs,
+            &mut spans,
+            &mut spool,
+            &mut OutcomeLog::new(Instant::now()),
         )
         .await;
 
@@ -586,25 +593,32 @@ mod tests {
             let _ = axum::serve(hub_listener, hub_app).await;
         });
 
-        let client = exporter_client();
         let base = format!("http://127.0.0.1:{hub_port}");
         let token = "x".repeat(MIN_TOKEN_BYTES);
+        let target = HubTarget {
+            client: exporter_client(&base).expect("TLS backend"),
+            base: base.clone(),
+            token: token.clone(),
+            service: "svc".to_string(),
+        };
         let batch = OtlpBatch {
             path: "/v1/logs",
             json: "{}".to_string(),
         };
 
-        // A 307 is not a 2xx → push_one reports failure (batch would be re-spooled).
-        let ok = push_one(&client, &base, &token, &batch).await;
-        assert!(!ok, "a 3xx redirect must NOT count as a successful push");
+        // A 307 is not a 2xx → push_one reports a refusal (batch is re-spooled).
+        let url = format!("{base}{}", batch.path);
+        let outcome = push_one(&target, &url, &batch).await;
+        assert!(
+            matches!(outcome, PushOutcome::Refused(s) if s.as_u16() == 307),
+            "a 3xx redirect must NOT count as a successful push"
+        );
 
         // The refusal is surfaced as a log line naming the status, never the bearer.
-        let url = format!("{base}{}", batch.path);
-        let req = client
-            .post(&url)
-            .header("authorization", format!("Bearer {token}"));
-        let outcome = super::super::push_exporter::send_classified(req).await;
-        let line = push_log_line(&url, batch.path, &outcome).expect("a refusal is logged");
+        let now = Instant::now();
+        let line = OutcomeLog::new(now)
+            .observe(now, &url, &outcome, &failure_note(batch.path))
+            .expect("a refusal is logged");
         assert!(line.contains("HTTP 307"), "{line}");
         assert!(line.contains("re-spooled"), "{line}");
         assert!(!line.contains(&token), "{line}");
@@ -616,5 +630,52 @@ mod tests {
             hits.is_empty(),
             "exporter followed the redirect and leaked to the redirect target: {hits:?}"
         );
+    }
+    // A failing hub costs one push per flush, not one per spooled batch, and
+    // every batch stays spooled in order.
+    #[tokio::test]
+    async fn first_failure_respools_the_rest_untried() {
+        use axum::extract::State;
+        use axum::{Router, routing::any};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        async fn refuse(State(hits): State<Arc<AtomicUsize>>) -> axum::http::StatusCode {
+            hits.fetch_add(1, Ordering::SeqCst);
+            axum::http::StatusCode::UNAUTHORIZED
+        }
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let app = Router::new().fallback(any(refuse)).with_state(hits.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let base = format!("http://127.0.0.1:{port}");
+        let target = HubTarget {
+            client: exporter_client(&base).expect("TLS backend"),
+            base,
+            token: "x".repeat(MIN_TOKEN_BYTES),
+            service: "svc".to_string(),
+        };
+        let mut spool: VecDeque<OtlpBatch> = ["a", "b", "c"]
+            .into_iter()
+            .map(|j| OtlpBatch {
+                path: "/v1/logs",
+                json: j.to_string(),
+            })
+            .collect();
+        flush(
+            &target,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut spool,
+            &mut OutcomeLog::new(Instant::now()),
+        )
+        .await;
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let left: Vec<&str> = spool.iter().map(|b| b.json.as_str()).collect();
+        assert_eq!(left, ["a", "b", "c"]);
     }
 }

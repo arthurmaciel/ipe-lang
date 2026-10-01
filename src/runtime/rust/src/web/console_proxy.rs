@@ -22,7 +22,7 @@ use tokio::process::{Child, Command};
 const CONSOLE_BIN_ENV: &str = "IPE_CONSOLE_BIN";
 
 /// The child's ingest-token variable (the one its ingest gate reads).
-const INGEST_TOKEN_ENV: &str = "IPE_INGEST_TOKEN";
+const INGEST_TOKEN_ENV: &str = super::push_exporter::ExporterEnv::IngestToken.name();
 
 /// The mount prefix. The parent proxies everything under this path to the child
 /// and STRIPS the prefix before forwarding (the strip convention — see the
@@ -79,9 +79,18 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
 /// The child always binds loopback (`IPE_HTTP_BIND=127.0.0.1`): it serves the
 /// console unauthenticated behind the gated parent proxy, so it is never
 /// reachable off the machine under any posture. Its ingest requires `token`
-/// (`IPE_INGEST_TOKEN`), which only this parent holds, so the parent's pushes
-/// are admitted under every build and posture and no other local process can
-/// write the store.
+/// (`IPE_INGEST_TOKEN`), which only this parent and the child hold, so the
+/// parent's pushes are admitted under every build and posture and a process
+/// running as another user cannot write the store. A process running as the
+/// same user can read the token from `/proc/<pid>/environ`; it is in the
+/// parent's trust domain already.
+///
+/// The child exports nowhere: every [`ExporterEnv::egress`] name is removed,
+/// so neither an inherited `IPE_PARENT_URL` nor a hub target makes the child
+/// push, and the token minted for this child's ingest never leaves for a party
+/// it was not minted for.
+///
+/// [`ExporterEnv::egress`]: super::push_exporter::ExporterEnv::egress
 fn console_command(
     bin: &std::path::Path,
     child_port: u16,
@@ -97,6 +106,9 @@ fn console_command(
         // Belt-and-braces: suppress the child's own console auto-mount + banner.
         .env("IPE_CONSOLE_EMBED", "off")
         .kill_on_drop(true);
+    for name in super::push_exporter::ExporterEnv::egress() {
+        cmd.env_remove(name);
+    }
     // hubStore read source.
     if store.is_empty() {
         cmd.env_remove("IPE_CONSOLE_HUB_DB");
@@ -462,37 +474,42 @@ pub async fn ensure_console_proxy() -> bool {
         shutdown_console();
         return false;
     }
-    // Lean parent: start pushing our telemetry to the child collector now that
-    // its ingest is up. (db parent already wrote the store directly.)
-    if !parent_writes {
-        super::push_exporter::enable_to_console(port, token).await;
-    }
     // Bound the upstream hop so a wedged child can't accumulate in-flight
     // requests without limit. `connect_timeout` caps the TCP handshake; a
     // `read_timeout` (per-read inactivity, NOT a total `.timeout`) caps a child
     // that accepts the connection then stalls — set well above the Ipe.Web SSE
     // heartbeat (~15 s) + TTL (~35 s) so long-lived `/_ipe/sse` streams are not
-    // severed. `.build()` only fails on a TLS-backend init error (we use none
-    // for loopback http); fall back to the default client rather than panic.
+    // severed.
     // `redirect::Policy::none()`: a reverse proxy RELAYS an upstream 3xx to the
     // browser verbatim — it must never follow it itself. Following would both
     // break proxy semantics (the client never learns the redirect) and re-issue
     // the forwarded request headers to the redirect target; `forward` strips the
     // parent admin `Authorization` before forwarding, but other forwarded headers
-    // (cookies) must not be replayed to an upstream-chosen location. On a builder
-    // error fall back to a redirect-disabled default, never the plain
-    // `Client::new()` (whose default WOULD follow up to 10 hops).
-    let client = reqwest::Client::builder()
+    // (cookies) must not be replayed to an upstream-chosen location.
+    // `no_proxy()`: the upstream is always loopback, so an inherited
+    // `HTTP_PROXY` never receives the forwarded cookies.
+    // No client (TLS backend init failed) → no proxy: the in-process console
+    // serves; there is no unpinned fallback client.
+    let Some(client) = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .read_timeout(Duration::from_secs(60))
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .build()
-        .unwrap_or_else(|_| {
-            reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new())
-        });
+        .ok()
+    else {
+        crate::system::emit_runtime_log(
+            "console",
+            "no HTTP client for the console proxy; falling back to in-process console",
+        );
+        shutdown_console();
+        return false;
+    };
+    // Lean parent: start pushing our telemetry to the child collector now that
+    // its ingest is up. (db parent already wrote the store directly.)
+    if !parent_writes {
+        super::push_exporter::enable_to_console(port, token).await;
+    }
     if PROXY
         .set(ProxyState {
             client,
@@ -602,6 +619,34 @@ mod tests {
         assert_eq!(first.expose().len(), 64);
         assert!(first.expose().bytes().all(|b| b.is_ascii_hexdigit()));
         assert_ne!(first.expose(), second.expose(), "every spawn mints afresh");
+    }
+
+    // The child exports nowhere: every egress name is removed on every spawn
+    // shape, so the token minted for the child's ingest never reaches an
+    // inherited parent or hub target.
+    #[test]
+    fn console_child_inherits_no_egress_target() {
+        use super::super::push_exporter::{ExporterEnv, IngestToken};
+        let bin = std::path::Path::new("/nonexistent/ipe-console");
+        let egress: Vec<&str> = ExporterEnv::egress().collect();
+        assert!(egress.contains(&"IPE_PARENT_URL"));
+        assert!(egress.contains(&"IPE_CONSOLE_HUB"));
+        assert!(egress.contains(&"IPE_CONSOLE_HUB_TOKEN"));
+        for (store, collects) in [("", false), ("/tmp/hub.db", false), ("/tmp/hub.db", true)] {
+            let token = IngestToken::mint().expect("entropy");
+            let cmd = console_command(bin, 9931, store, collects, &token);
+            for name in &egress {
+                let entry = cmd
+                    .as_std()
+                    .get_envs()
+                    .find(|(key, _)| *key == std::ffi::OsStr::new(name));
+                assert_eq!(
+                    entry,
+                    Some((std::ffi::OsStr::new(name), None)),
+                    "{name} not removed; store {store:?} collects {collects}"
+                );
+            }
+        }
     }
 
     #[test]
