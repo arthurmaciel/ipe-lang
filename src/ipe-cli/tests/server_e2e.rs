@@ -1141,7 +1141,7 @@ fn server_mounts_web_app_and_api_on_one_port() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn release_web_app_keeps_console_closed_without_auth() -> Result<(), BoxError> {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return Ok(());
     }
     let test_name = "release_web_app_keeps_console_closed_without_auth";
