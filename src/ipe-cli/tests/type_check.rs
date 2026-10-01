@@ -562,5 +562,9 @@ fn relative_missing_file_argument_is_refused() -> TestResult {
         !ok,
         "a missing file argument must be refused, got:\n{stderr}"
     );
+    assert!(
+        stderr.contains("src/Missing.ipe"),
+        "the refusal must name the missing path, not another error, got:\n{stderr}"
+    );
     Ok(())
 }

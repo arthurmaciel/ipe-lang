@@ -2736,8 +2736,10 @@ fn resolve_analysis_target_through_a_symlinked_project_dir_is_source_file() {
     );
 }
 
-/// A symlink under `tests/` or `src/` naming a file outside the project is
-/// not admitted as project-rooted: its canonical path lies under neither root.
+/// A symlink under `tests/` or `src/` naming a file outside every project is
+/// not admitted as project-rooted: the canonical path has no governing
+/// manifest, so it resolves loose at the no-manifest exit. The containment
+/// guards past that exit are pinned by the in-project fixtures below.
 #[cfg(unix)]
 #[test]
 fn resolve_analysis_target_refuses_a_symlink_escaping_the_project_roots() {
@@ -2762,6 +2764,72 @@ fn resolve_analysis_target_refuses_a_symlink_escaping_the_project_roots() {
     assert!(
         matches!(&via_src, Ok(AnalysisTarget::LooseFile(_))),
         "a src/ symlink leaving the project must not be a SourceFile: {via_src:?}"
+    );
+}
+
+/// A file the project's manifest governs but that lies under neither `src/`
+/// nor `tests/` (here `scripts/Y.ipe`) resolves loose, never `SourceFile` or
+/// `TestFile`: it clears the manifest lookup and is refused by the
+/// `tests/` and `src/` containment checks themselves.
+#[test]
+fn resolve_analysis_target_of_an_in_project_file_outside_src_and_tests_is_loose() {
+    let tmp = analysis_project("ipe_resolve_target_in_project_outside_roots");
+    fs::create_dir_all(tmp.join("tests")).expect("create tests/");
+    let scripts = tmp.join("scripts");
+    fs::create_dir_all(&scripts).expect("create scripts/");
+    let script = scripts.join("Y.ipe");
+    fs::write(&script, "module Y exposing (y)\ny = 1\n").expect("scripts/Y.ipe");
+
+    let target = resolve_analysis_target(&script);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(
+        matches!(&target, Ok(AnalysisTarget::LooseFile(p)) if *p == script),
+        "a governed file outside src/ and tests/ must stay loose: {target:?}"
+    );
+}
+
+/// A `src/` symlink naming another directory of the SAME project resolves
+/// loose: the manifest is found, but the canonical file is not under the
+/// canonical `src/` root, so the `src/` containment check refuses it.
+#[cfg(unix)]
+#[test]
+fn resolve_analysis_target_refuses_a_src_symlink_to_elsewhere_in_the_project() {
+    let tmp = analysis_project("ipe_resolve_target_src_symlink_in_project");
+    let scripts = tmp.join("scripts");
+    fs::create_dir_all(&scripts).expect("create scripts/");
+    fs::write(scripts.join("Y.ipe"), "module Y exposing (y)\ny = 1\n").expect("scripts/Y.ipe");
+    let link = tmp.join("src").join("link");
+    std::os::unix::fs::symlink(&scripts, &link).expect("symlink src/link");
+    let arg = link.join("Y.ipe");
+
+    let target = resolve_analysis_target(&arg);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(
+        matches!(&target, Ok(AnalysisTarget::LooseFile(p)) if *p == arg),
+        "a src/ symlink leaving src/ for elsewhere in the project must not be a \
+         SourceFile: {target:?}"
+    );
+}
+
+/// A `tests` symlink to the project root itself is not a tests root: its
+/// canonical path equals the project root, not strictly under it, so it is
+/// dropped and `tests/X.ipe` (canonically `<proj>/X.ipe`) resolves loose,
+/// never `TestFile`.
+#[cfg(unix)]
+#[test]
+fn resolve_analysis_target_drops_a_tests_root_that_is_the_project_root() {
+    let tmp = analysis_project("ipe_resolve_target_tests_root_is_project_root");
+    fs::write(tmp.join("X.ipe"), "module X exposing (x)\nx = 1\n").expect("X.ipe");
+    let tests_link = tmp.join("tests");
+    std::os::unix::fs::symlink(".", &tests_link).expect("symlink tests -> .");
+    let arg = tests_link.join("X.ipe");
+
+    let target = resolve_analysis_target(&arg);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(
+        matches!(&target, Ok(AnalysisTarget::LooseFile(p)) if *p == arg),
+        "a tests root equal to the project root must be dropped, so the file \
+         is not a TestFile: {target:?}"
     );
 }
 
