@@ -55,28 +55,75 @@ def _listing(*runs: dict) -> dict:
 
 
 class FakeApi:
-    """Route `gh api` paths: a main-nightly listing, an own-commit listing, a PR."""
+    """Route `gh api` paths: the three dispatch listings per scope, a PR, a compare.
 
-    def __init__(self, main: object, own: object = None, pr: object = None, compare: object = None) -> None:
+    `main`/`own` answer the workflow listing filtered by event and branch/commit;
+    `event_only` answers the workflow listing filtered by event alone;
+    `repo_main`/`repo_own` answer the repository listing filtered by event and branch/commit;
+    `by_id` answers a run's own document, by default its copy in the scope's last listings.
+    """
+
+    def __init__(
+        self,
+        main: object,
+        own: object = None,
+        pr: object = None,
+        compare: object = None,
+        event_only: object = None,
+        repo_main: object = None,
+        repo_own: object = None,
+        by_id: dict | None = None,
+    ) -> None:
+        self.by_id = by_id or {}
+        self.served: list[object] = []
         self.main, self.own, self.pr = main, own if own is not None else _listing(), pr
+        self.event_only = event_only if event_only is not None else _listing()
+        self.repo_main = repo_main if repo_main is not None else _listing()
+        self.repo_own = repo_own if repo_own is not None else _listing()
         self.compare = compare if compare is not None else {"status": "ahead"}
         self.calls: list[str] = []
 
     def __call__(self, path: str) -> object:
         self.calls.append(path)
+        served = self._route(path)
+        if "/runs?" in path:
+            self.served.append(served)
+        return served
+
+    def _route(self, path: str) -> object:
         if "/pulls/" in path:
             if self.pr is None:
                 raise ng.NightlyError("no such PR")
             return self.pr
         if "/compare/" in path:
             return self.compare
-        if "head_sha=" in path:
-            return self.own
-        if "branch=main" in path:
-            if isinstance(self.main, Exception):
-                raise self.main
-            return self.main
+        if path.startswith(f"repos/{REPO}/actions/runs/"):
+            rid = int(path.rsplit("/", 1)[-1])
+            if rid in self.by_id:
+                return self.by_id[rid]
+            for listing in self.served[-len(ng._listing_paths(REPO, "")):]:
+                for run in listing.get("workflow_runs", []) if isinstance(listing, dict) else []:
+                    if isinstance(run, dict) and run.get("id") == rid:
+                        return run
+            raise AssertionError(f"run {rid} was never listed")
+        if f"repos/{REPO}/actions/runs?" in path:
+            if "head_sha=" in path:
+                return self.repo_own
+            if "branch=main" in path:
+                return self.repo_main
+        elif f"repos/{REPO}/actions/workflows/ci.yml/runs?" in path:
+            if "head_sha=" in path:
+                return self.own
+            if "branch=main" in path:
+                if isinstance(self.main, Exception):
+                    raise self.main
+                return self.main
+            return self.event_only
         raise AssertionError(f"unexpected path {path}")
+
+
+def _pick(*listings: object, branch: str | None = "main", sha: str | None = None) -> dict | None:
+    return ng.newest_dispatch(list(listings), branch=branch, sha=sha)
 
 
 def _verdict(api: FakeApi, **env: str) -> list[str]:
@@ -134,18 +181,21 @@ class RunErrorsTest(unittest.TestCase):
 
 class ListingTest(unittest.TestCase):
     def test_empty_listing_is_no_run(self) -> None:
-        self.assertIsNone(ng.latest_run(_listing()))
+        self.assertIsNone(_pick(_listing()))
+        self.assertIsNone(_pick())
 
     def test_malformed_listing_refused(self) -> None:
-        for bad in ({}, [], None, {"workflow_runs": {}}, {"workflow_runs": ["x"]}):
+        for bad in ({}, [], None, {"workflow_runs": {}}, {"workflow_runs": ["x"]}, _listing(_run(id="1")), _listing(_run(id=True)), _listing(_run(id=0))):
             with self.assertRaises(ng.NightlyError):
-                ng.latest_run(bad)
+                _pick(bad)
+            with self.assertRaises(ng.NightlyError):
+                _pick(_listing(_run()), bad)
 
     def test_newest_run_chosen_whatever_the_order(self) -> None:
         old = _run(id=1, created_at="2026-09-22T09:13:24Z")
         new = _run(id=2, created_at="2026-09-29T10:34:21Z")
         for listing in (_listing(old, new), _listing(new, old)):
-            chosen = ng.latest_run(listing)
+            chosen = _pick(listing)
             self.assertIsNotNone(chosen)
             self.assertEqual(chosen and chosen["id"], 2)
 
@@ -154,9 +204,9 @@ class ListingTest(unittest.TestCase):
         for status in ("in_progress", "queued", "waiting", None):
             with self.subTest(status):
                 running = _run(id=2, status=status, conclusion=None, created_at="2026-09-29T10:34:21Z")
-                chosen = ng.latest_run(_listing(running, done))
+                chosen = _pick(_listing(running, done))
                 self.assertEqual(chosen and chosen["id"], 1)
-        self.assertIsNone(ng.latest_run(_listing(_run(status="in_progress", conclusion=None))))
+        self.assertIsNone(_pick(_listing(_run(status="in_progress", conclusion=None))))
 
     def test_listing_is_not_status_filtered(self) -> None:
         api = FakeApi(_listing(_run()))
@@ -168,7 +218,131 @@ class ListingTest(unittest.TestCase):
     def test_untimed_entry_refused(self) -> None:
         for created in (None, "yesterday", 5):
             with self.assertRaises(ng.NightlyError):
-                ng.latest_run(_listing(_run(id=1), _run(id=2, created_at=created)))
+                _pick(_listing(_run(id=1), _run(id=2, created_at=created)))
+
+
+class UnionTest(unittest.TestCase):
+    """A stale or partial server-side listing can neither hide a fresh nightly nor pass a mis-scoped run."""
+
+    def test_stale_branch_listing_loses_to_fresh_event_listing(self) -> None:
+        stale = _listing(_run(id=1, head_sha=SHA, created_at=_stamp(timedelta(days=7))))
+        fresh = _run(id=2, created_at=_stamp(timedelta(hours=2)))
+        for where in ("event_only", "repo_main"):
+            with self.subTest(where):
+                api = FakeApi(stale, **{where: _listing(fresh)})
+                self.assertEqual(_verdict(api), [])
+                self.assertTrue(any(f"/compare/{OTHER}...main" in c for c in api.calls))
+        self.assertTrue(any("older than" in r for r in _verdict(FakeApi(stale))))
+
+    def test_mis_scoped_run_never_selected(self) -> None:
+        main_green = _run(id=1, created_at=_stamp(timedelta(hours=9)))
+        newer = _stamp(timedelta(hours=1))
+        for bad in (
+            _run(id=2, head_branch="feature", conclusion="failure", created_at=newer),
+            _run(id=2, event="push", conclusion="failure", created_at=newer),
+            _run(id=2, path=".github/workflows/other.yml", conclusion="failure", created_at=newer),
+        ):
+            with self.subTest(bad):
+                chosen = _pick(_listing(main_green), _listing(bad), _listing(bad))
+                self.assertEqual(chosen and chosen["id"], 1)
+                api = FakeApi(_listing(main_green), event_only=_listing(bad), repo_main=_listing(bad))
+                self.assertEqual(_verdict(api), [])
+        for bad in (
+            _run(id=2, head_branch="feature", created_at=newer),
+            _run(id=2, event="push", created_at=newer),
+            _run(id=2, path=".github/workflows/other.yml", created_at=newer),
+        ):
+            with self.subTest(bad):
+                red = _listing(_run(id=1, conclusion="failure"))
+                self.assertTrue(_verdict(FakeApi(red, event_only=_listing(bad), repo_main=_listing(bad))))
+                self.assertIsNone(_pick(_listing(bad), _listing(bad)))
+
+    def test_commit_scope_never_selects_other_commit(self) -> None:
+        other = _run(id=2, head_branch="fix", head_sha=OTHER)
+        self.assertIsNone(_pick(_listing(other), branch=None, sha=SHA))
+        own = _run(id=3, head_branch="fix", head_sha=SHA, created_at=_stamp(timedelta(days=9)))
+        chosen = _pick(_listing(other), _listing(own), branch=None, sha=SHA)
+        self.assertEqual(chosen and chosen["id"], 3)
+
+    def test_all_listings_empty_is_red(self) -> None:
+        reasons = _verdict(FakeApi(_listing()))
+        self.assertTrue(any("no completed dispatched full gate exists" in r for r in reasons))
+
+    def test_every_listing_is_read(self) -> None:
+        api = FakeApi(_listing(_run(conclusion="failure")))
+        _verdict(api)
+        for scope in (f"head_sha={SHA}", "branch=main"):
+            for path in ng._listing_paths(REPO, scope):
+                self.assertIn(path, api.calls)
+
+    def test_stale_own_listing_loses_to_repo_listing(self) -> None:
+        own = _listing(_run(head_branch="fix-nightly", head_sha=SHA))
+        api = FakeApi(_listing(_run(conclusion="failure")), repo_own=own)
+        self.assertEqual(_verdict(api), [])
+
+    def test_unreadable_listing_is_red(self) -> None:
+        for where in ("event_only", "repo_main"):
+            with self.subTest(where):
+                with self.assertRaises(ng.NightlyError):
+                    _verdict(FakeApi(_listing(_run()), **{where: {"total_count": 0}}))
+
+    def test_fresher_copy_of_a_run_wins(self) -> None:
+        stale_green = _run(id=5, run_attempt=1, updated_at=_stamp(timedelta(hours=7)))
+        fresh_red = _run(id=5, run_attempt=2, conclusion="failure", updated_at=_stamp(timedelta(hours=1)))
+        later_red = _run(id=5, run_attempt=1, conclusion="failure", updated_at=_stamp(timedelta(hours=1)))
+        rerunning = _run(id=5, run_attempt=2, status="in_progress", conclusion=None, updated_at=_stamp(timedelta(hours=1)))
+        for fresh in (fresh_red, later_red):
+            for order in ((stale_green, fresh), (fresh, stale_green)):
+                with self.subTest(fresh=fresh, order=order):
+                    chosen = _pick(_listing(order[0]), _listing(order[1]))
+                    self.assertEqual(chosen and chosen["conclusion"], "failure")
+                    self.assertTrue(_verdict(FakeApi(_listing(order[0]), event_only=_listing(order[1]))))
+        chosen = _pick(_listing(stale_green), _listing(rerunning))
+        self.assertEqual(chosen and chosen["status"], "in_progress")
+
+    def test_rerun_in_flight_shadows_an_older_green(self) -> None:
+        # A nightly that concluded red and is being re-run has a verdict not yet
+        # known; an older green nightly must not stand in for it.
+        older_green = _run(id=4, created_at=_stamp(timedelta(hours=30)))
+        rerunning = _run(id=5, run_attempt=2, status="in_progress", conclusion=None)
+        chosen = _pick(_listing(older_green, rerunning))
+        self.assertEqual(chosen and chosen["id"], 5)
+        reasons = _verdict(FakeApi(_listing(older_green, rerunning)))
+        self.assertTrue(any("status is 'in_progress'" in r for r in reasons), reasons)
+        first_run = _run(id=5, status="in_progress", conclusion=None)
+        self.assertEqual(_verdict(FakeApi(_listing(older_green, first_run))), [])
+
+    def test_chosen_run_reread_beats_stale_listed_copy(self) -> None:
+        stale_green = _run(id=5, run_attempt=1, updated_at=_stamp(timedelta(hours=7)))
+        for fresh in (
+            _run(id=5, run_attempt=2, conclusion="failure", updated_at=_stamp(timedelta(hours=1))),
+            _run(id=5, run_attempt=2, status="in_progress", conclusion=None, updated_at=_stamp(timedelta(hours=1))),
+            _run(id=5, run_attempt=1, conclusion="failure", updated_at=_stamp(timedelta(hours=1))),
+        ):
+            with self.subTest(fresh):
+                api = FakeApi(_listing(stale_green), by_id={5: fresh})
+                self.assertTrue(_verdict(api))
+                self.assertIn(f"repos/{REPO}/actions/runs/5", api.calls)
+        self.assertEqual(_verdict(FakeApi(_listing(stale_green), by_id={5: dict(stale_green)})), [])
+
+    def test_chosen_run_reread_malformed_refused(self) -> None:
+        listed = _run(id=5)
+        for bad in ([], None, _run(id=6), _run(id="5"), _run(id=5, created_at=None), _run(id=5, conclusion="failure")):
+            with self.subTest(bad), self.assertRaises(ng.NightlyError):
+                _verdict(FakeApi(_listing(listed), by_id={5: bad}))
+
+    def test_equally_fresh_copies_that_disagree_refused(self) -> None:
+        a = _run(id=5, updated_at=_stamp(timedelta(hours=1)))
+        b = _run(id=5, conclusion="failure", updated_at=_stamp(timedelta(hours=1)))
+        with self.assertRaises(ng.NightlyError):
+            _pick(_listing(a), _listing(b))
+        self.assertEqual(_pick(_listing(a), _listing(dict(a))), a)
+
+    def test_malformed_copy_rank_refused(self) -> None:
+        a = _run(id=5)
+        for bad in (_run(id=5, run_attempt=0), _run(id=5, run_attempt="2"), _run(id=5, updated_at="soon")):
+            with self.subTest(bad), self.assertRaises(ng.NightlyError):
+                _pick(_listing(a), _listing(bad))
 
 
 class EventTest(unittest.TestCase):
