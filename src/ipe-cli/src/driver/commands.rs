@@ -281,7 +281,11 @@ pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
     // build-run-reload loop that serves the served runtime; it takes no `--static`.
     // A grammar refusal (e.g. `web solo ios`, which cannot be watched — see the
     // spec's mobile-watch note) is caught here before the loop starts.
-    let _delivery = resolve_delivery(Path::new(&entry), &args.delivery, false, "watch")?;
+    let delivery = resolve_delivery(Path::new(&entry), &args.delivery, false, "watch")?;
+
+    // A Tui app with no interactive terminal is refused right here — before
+    // any compile or cargo work — same as `ipe run`.
+    gate_terminal("watch", delivery.shape())?;
     // Watch is always a native dependency-model dev build (it never vendors the
     // runtime tree, nor targets wasm), so — like `ipe build` on its default path
     // — it must NOT require the vendored runtime source subtree. It resolves the
@@ -2501,6 +2505,44 @@ pub fn gate_session_capabilities(
     Ok(())
 }
 
+/// Refuse a Tui app before any build work when no interactive terminal is
+/// reachable. No-op for every other shape.
+///
+/// Shares its one typed decision — and its one refusal text — with the
+/// runtime's own `TuiGuard` guard, via `ipe_runtime_rust::terminal_access`:
+/// a piped `ipe run`/`ipe watch` is turned away the same way whether the
+/// check runs here (before the build) or inside the built binary.
+///
+/// # Errors
+/// [`CliError::Usage`] naming which terminal fact is missing.
+pub fn gate_terminal(command: &'static str, shape: delivery::Shape) -> Result<(), CliError> {
+    gate_terminal_decision(command, shape, ipe_runtime_rust::terminal_access::probe())
+}
+
+/// The pure decision behind [`gate_terminal`], parametrized over the terminal
+/// access decision. Split out so the refusal wiring — shape gate, message,
+/// command name — is table-tested against both [`TerminalAccess`] variants
+/// without depending on whether the TEST process itself has a real tty,
+/// which a test must never assume.
+///
+/// [`TerminalAccess`]: ipe_runtime_rust::terminal_access::TerminalAccess
+pub fn gate_terminal_decision(
+    command: &'static str,
+    shape: delivery::Shape,
+    access: ipe_runtime_rust::terminal_access::TerminalAccess,
+) -> Result<(), CliError> {
+    if shape != delivery::Shape::Tui {
+        return Ok(());
+    }
+    if let ipe_runtime_rust::terminal_access::TerminalAccess::Refused(reason) = access {
+        return Err(CliError::Usage(text::msg::command_refusal(
+            &command,
+            &reason.text(),
+        )));
+    }
+    Ok(())
+}
+
 /// What a run does with its session, resolved once the output root is known.
 #[derive(Debug)]
 pub enum SessionPlan {
@@ -2730,6 +2772,11 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     // `web desktop` drives `webview_host` below. Runs after the static-plan check
     // so a flag contradiction fires before the entry file is read.
     let delivery = resolve_delivery(&entry_path, &args.delivery, wants_static, "run")?;
+
+    // A Tui app with no interactive terminal is refused right here — before
+    // any compile or cargo work — rather than building fully and only then
+    // failing on the raw-mode syscall inside the built binary.
+    gate_terminal("run", delivery.shape())?;
 
     // Human-friendly progress: the consent gates and the compile+emit below are
     // otherwise silent, so the banner and the running step come first. On a

@@ -1218,8 +1218,10 @@ const RUNTIME_MOD_RS_SEAL_CODEC_APPEND: &str = "pub mod seal_codec;\n";
 /// The `ui` module must also be loaded (tui/layout.rs imports `super::ui::Element`)
 /// — but `uses_ui` is set whenever `uses_tui` is set (a Tui app always references
 /// Ipe.Ui Element/attribute kernels), so `RUNTIME_MOD_RS_UI_APPEND` is already
-/// appended by the time this addition fires.
-const RUNTIME_MOD_RS_TUI_APPEND: &str = "#[cfg(feature = \"tui\")]\npub mod tui;\n\
+/// appended by the time this addition fires. `tui` also probes the terminal
+/// through the std-only `terminal_access` module, declared here unconditionally.
+const RUNTIME_MOD_RS_TUI_APPEND: &str = "pub mod terminal_access;\n\
+     #[cfg(feature = \"tui\")]\npub mod tui;\n\
      #[cfg(feature = \"tui\")]\npub use tui::{tui_app, tui_app_ui};\n";
 
 // ── Ipe.WebView / Ipe.WebView ───────────────────────────────────────────────

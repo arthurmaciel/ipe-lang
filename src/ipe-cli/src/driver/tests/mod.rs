@@ -3984,6 +3984,76 @@ fn default_replay_log_is_the_typed_sibling_of_the_trace() {
     assert_eq!(typed_log_file(), Path::new("session.ipemsgs"));
 }
 
+// ── `gate_terminal` — refuse a Tui app before any build, not just before raw
+// mode — over the pure decision, never the test process's own real stdio ──
+
+// Every non-Tui shape is unaffected, whatever the terminal decision: the gate
+// exists only for the one shape that ever calls `TuiGuard::enter*`.
+#[test]
+fn gate_terminal_is_a_no_op_for_every_non_tui_shape() {
+    use ipe_runtime_rust::terminal_access::{NoTerminal, TerminalAccess};
+    for shape in [
+        crate::delivery::Shape::Script,
+        crate::delivery::Shape::Cli,
+        crate::delivery::Shape::Worker,
+        crate::delivery::Shape::Web,
+    ] {
+        for access in [
+            TerminalAccess::Interactive,
+            TerminalAccess::Refused(NoTerminal::NoStdoutTty),
+        ] {
+            let result = gate_terminal_decision("run", shape, access);
+            assert!(
+                result.is_ok(),
+                "{shape:?} must never be gated on terminal access, got: {result:?}"
+            );
+        }
+    }
+}
+
+// A Tui app is refused before any build when the terminal decision is
+// `Refused`, and the message names the command and the exact refusal text —
+// the same text `TuiGuard::enter*` would raise inside the built binary.
+#[test]
+fn gate_terminal_refuses_a_tui_app_without_an_interactive_terminal() {
+    use ipe_runtime_rust::terminal_access::{NoTerminal, TerminalAccess};
+    for (command, reason) in [
+        ("run", NoTerminal::NoStdoutTty),
+        ("run", NoTerminal::DumbTerm),
+        ("run", NoTerminal::NoControllingTerminal),
+        ("watch", NoTerminal::NoStdoutTty),
+    ] {
+        let result = gate_terminal_decision(
+            command,
+            crate::delivery::Shape::Tui,
+            TerminalAccess::Refused(reason),
+        );
+        assert!(
+            matches!(&result, Err(CliError::Usage(msg))
+                if msg.contains(command) && msg.contains(reason.text())),
+            "{command} on a Tui app with {reason:?} must be refused naming the \
+             command and `{}`, got: {result:?}",
+            reason.text()
+        );
+    }
+}
+
+// A Tui app with a confirmed interactive terminal is admitted: the gate is a
+// refusal, not an extra ceremony a normal interactive run must pass through.
+#[test]
+fn gate_terminal_admits_a_tui_app_with_an_interactive_terminal() {
+    use ipe_runtime_rust::terminal_access::TerminalAccess;
+    let result = gate_terminal_decision(
+        "run",
+        crate::delivery::Shape::Tui,
+        TerminalAccess::Interactive,
+    );
+    assert!(
+        result.is_ok(),
+        "an interactive terminal must pass: {result:?}"
+    );
+}
+
 /// A fresh scratch directory for a session-log test.
 fn session_scratch(tag: &str) -> PathBuf {
     let dir = ipe_test_temp::temp_root().join(format!("ipe_session_{tag}_{}", std::process::id()));

@@ -1543,6 +1543,11 @@ messages! {
     /// A pinned ref that is not a commit in the fetched checkout.
     index_rev_unresolved(pkg: &crate::package_name::PackageName, refspec: &crate::style::TerminalSafe, rev: &crate::style::TerminalSafe) =
         "index-rev-unresolved";
+    /// A requested rev that is hex-shaped but mixed-case.
+    index_rev_mixed_case_hex(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-rev-mixed-case-hex";
+    /// A full-SHA requested rev that disagrees with the commit git served.
+    index_rev_served_mismatch(pkg: &crate::package_name::PackageName, requested, served) =
+        "index-rev-served-mismatch";
     /// An index `sha256` that is not a content hash.
     index_sha256_invalid(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-sha256-invalid";
     /// An index entry that exists but cannot be read.

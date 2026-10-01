@@ -60,6 +60,10 @@ pub struct Union {
     /// module's synthetic name.
     pub home: Vec<Symbol>,
     pub name: Symbol,
+    /// The `type` declaration's name-token source span, for diagnostic blame
+    /// (the first-declaration site of a cross-module duplicate). `Span::DUMMY`
+    /// in interface-identity and test-fixture contexts that have no source.
+    pub name_span: Span,
     /// The type variables this union quantifies, in declaration order
     /// (`a` in `type Maybe a = …`). Empty for a monomorphic union. The order is
     /// load-bearing: the lowerer carries it through to the IR enum's

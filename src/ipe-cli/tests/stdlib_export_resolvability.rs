@@ -1520,10 +1520,13 @@ fn terminal_attribute_types_stay_distinct() {
 }
 
 /// Refusal: a Tui colour attribute takes a terminal-palette `AnsiColor`, so the
-/// sRGB `Tui.Color` is rejected rather than rendered as a colour the terminal
-/// may not have.
+/// sRGB colour surface (`Color`/`rgb`/`rgba`/`white`/`black`) is not exported at
+/// all — there is no sRGB colour a Tui program could even name to pass to
+/// `Tui.color`. `Ipe.Ui.Tui` never declared these locally (they aliased the
+/// WEB module's sRGB kernels via the global `Color` builtin reservation), so a
+/// reference to `Tui.white` fails name resolution rather than type-checking.
 #[test]
-fn tui_color_attribute_rejects_an_srgb_color() {
+fn tui_does_not_export_an_srgb_color_surface() {
     let styles = concat!(
         "module Styles exposing (tint)\n",
         "import Ipe.Ui.Tui as Tui\n\n",
@@ -1532,7 +1535,8 @@ fn tui_color_attribute_rejects_an_srgb_color() {
     );
     let outcome = compile_styles(styles);
     assert!(
-        outcome.as_ref().is_err_and(|e| e.contains("IPE-T0001")),
-        "an sRGB `Tui.Color` in `Tui.color` must be a type mismatch: {outcome:?}",
+        outcome.as_ref().is_err_and(|e| e.contains("IPE-N0005")),
+        "`Tui.white` must fail name resolution now that Tui exports no sRGB \
+         colour surface: {outcome:?}",
     );
 }

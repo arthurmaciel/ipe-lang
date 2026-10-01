@@ -284,6 +284,30 @@ pub fn sandbox_override_warning(p: &Palette, override_env: &str, axes: &str) -> 
     )))
 }
 
+/// Build the shadowed-abbreviation warning line for stderr.
+///
+/// A `{git=}` escape's requested abbreviated hex ref was shadowed by a
+/// same-shaped branch or tag name, so git served that ref's commit instead of
+/// resolving the hex as an object id. Warn, never refuse: the checkout
+/// succeeded and `served` — the commit actually checked out — is what gets
+/// locked. Bold-red when `p` is the colour palette; plain text otherwise.
+#[must_use]
+pub fn escape_abbrev_shadowed_warning(
+    p: &Palette,
+    pkg: &str,
+    requested: &str,
+    served: &str,
+) -> String {
+    frame(&gutter(&format!(
+        "{bold}{red}warning: package `{pkg}`: requested rev `{requested}` is shadowed by a ref of \
+         the same name — git served commit `{served}`, not an abbreviation lookup. Locking the \
+         served commit; rename the ref or use its full SHA to pin the abbreviation instead.{reset}",
+        bold = p.bold,
+        red = p.red,
+        reset = p.reset,
+    )))
+}
+
 /// The product header that opens every human screen.
 ///
 /// A leading blank line, then `Ipê language - vN.N.N - <repo>` in the gutter,

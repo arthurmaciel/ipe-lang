@@ -354,12 +354,14 @@ pub fn infer_module(
     })
 }
 
-/// A [`canon::Union`] clone with every constructor span erased — interface
-/// identity must not depend on where in the file a union sits.
+/// A [`canon::Union`] clone with every span (its own name-token span and every
+/// constructor's) erased — interface identity must not depend on where in the
+/// file a union sits.
 fn erase_union_spans(union: &canon::Union) -> canon::Union {
     canon::Union {
         home: union.home.clone(),
         name: union.name,
+        name_span: Span::DUMMY,
         vars: union.vars.clone(),
         ctors: union
             .ctors
