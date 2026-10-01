@@ -240,13 +240,15 @@ rowCodec : List Column -> Codec Row
 
 `rowCodec columns` — the `Codec Row` a raw-column store uses: a record
 codec over `Dict String String` whose `Shape` is `SRecord` naming each
-declared column. Every column is carried as `CText` at the JSON layer,
-because a `Row` cell is already the string form the DB layer returns and
-accepts (the same lossless-string basis the `read*` helpers parse from); the
-DDL still uses each column's declared `ColType` (held on the store's frozen
-columns), so a raw store creates its table with real types while its rows stay
-untyped strings. The encoder emits the declared columns as a JSON object; the
-decoder reads that object back into a `Row`.
+declared column. Every column is carried as nullable text (`CNull CText`) at
+the JSON layer, because a `Row` cell is already the string form the DB layer
+returns and accepts (the same lossless-string basis the `read*` helpers parse
+from); the DDL still uses each column's declared `ColType` (held on the
+store's frozen columns), so a raw store creates its table with real types
+while its rows stay untyped strings. The encoder emits the declared columns as
+a JSON object; the decoder reads that object back into a `Row`, where a `Row`
+cannot express SQL `NULL`, so a `NULL` cell reads as the empty string — the
+untyped `Row` representation, never a codec-typed field.
 
 ## `public`
 
@@ -731,8 +733,9 @@ all : Db -> Store a -> Task Error (List a)
 ```
 
 `all conn store` — read every row and decode each through the store's
-codec. Routes through `Db.findWhere` with an always-true predicate, so the
-table name is kernel-validated and no raw SQL is built. A row that does not
+codec. Routes through the NULL-preserving `Db.findWhereMasked` with an
+always-true predicate, so the table name is kernel-validated, no raw SQL is
+built, and a `Maybe` field reads `Nothing` exactly when its column is `NULL`. A row that does not
 decode to the store's type is a typed `Err`, never a wrong value.
 
 ## `get`
