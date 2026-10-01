@@ -849,5 +849,5 @@ mod control_surface_absence {
 
 // Names every path the runtime `clippy.toml` denies, so a stale path breaks the
 // test build instead of silently disabling its lint.
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod clippy_paths_resolve;
