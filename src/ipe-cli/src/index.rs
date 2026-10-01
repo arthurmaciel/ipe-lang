@@ -24,65 +24,123 @@ use std::str::FromStr as _;
 use ipe_ir::Capability;
 
 use crate::CliError;
+pub use crate::cache::TreeHashError;
 use crate::package_name::PackageName;
 use crate::published_version::{PublishedVersion, require_successor};
 use crate::publisher::{AttestedActor, BlessedPublisher, SelfDeclaredPublisher};
 use crate::signing::SignatureBundle;
 
+/// A git transport the package index accepts for a source repository.
+///
+/// Every accepted transport authenticates the server (`https`, `ssh`) or is
+/// local (`file`). The plaintext `git://` transport, which neither encrypts
+/// nor authenticates, has no variant, so no source URL can carry it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Transport {
+    /// `https://` — TLS-authenticated HTTP.
+    Https,
+    /// `ssh://` — SSH with host-key checking.
+    Ssh,
+    /// `file://` or a bare absolute path — the local filesystem.
+    File,
+}
+
+impl Transport {
+    /// Every accepted transport.
+    pub const ALL: [Self; 3] = [Self::Https, Self::Ssh, Self::File];
+
+    /// The transport's name as `GIT_ALLOW_PROTOCOL` spells it.
+    #[must_use]
+    pub const fn git_protocol(self) -> &'static str {
+        match self {
+            Self::Https => "https",
+            Self::Ssh => "ssh",
+            Self::File => "file",
+        }
+    }
+
+    /// The transport `raw` names by its prefix, if it is an accepted one.
+    fn of_url(raw: &str) -> Option<Self> {
+        if raw.starts_with("https://") {
+            Some(Self::Https)
+        } else if raw.starts_with("ssh://") {
+            Some(Self::Ssh)
+        } else if raw.starts_with("file://") || raw.starts_with('/') {
+            Some(Self::File)
+        } else {
+            None
+        }
+    }
+}
+
 /// A validated source-repository URL accepted by the package index.
 ///
-/// The accept set covers the network transports (`https://`, `git://`, `ssh://`,
-/// `file://`) and bare absolute paths (a leading `/`). Any value that begins
-/// with `-` (option injection) or contains `::` (git transport helpers such as
-/// `ext::` or `fd::`, the real RCE vector) is rejected at parse time so a
-/// malicious index entry can never reach the `git` subprocess. A control
-/// character or `"` is rejected too, so a URL can never break out of the quoted,
+/// The accept set is the [`Transport`] set: `https://`, `ssh://`, `file://`,
+/// and bare absolute paths (a leading `/`). A `git://` URL is refused with a
+/// diagnostic naming its `https://` fix. Any value that begins with `-`
+/// (option injection) or contains `::` (git transport helpers such as `ext::`
+/// or `fd::`, the real RCE vector) is rejected at parse time so a malicious
+/// index entry can never reach the `git` subprocess. A control character or
+/// `"` is rejected too, so a URL can never break out of the quoted,
 /// line-oriented files (`ipe.lock`, index entries) it is recorded in.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SourceUrl(String);
+pub struct SourceUrl {
+    raw: String,
+    transport: Transport,
+}
 
 impl SourceUrl {
     /// Parse a raw string from the index into a [`SourceUrl`], rejecting
-    /// injection-shaped values.
+    /// injection-shaped values and any transport outside [`Transport`].
     ///
-    /// Accepted: `https://`, `git://`, `ssh://`, `file://`, and bare absolute
-    /// paths (starting with `/`). Rejected: a leading `-` (git flag injection),
-    /// `::` anywhere (transport-helper execution, the RCE vector), and any
-    /// control character or `"` (a field break-out where the URL is recorded).
+    /// Accepted: `https://`, `ssh://`, `file://`, and bare absolute paths
+    /// (starting with `/`). Rejected: `git://` (plaintext, unauthenticated), a
+    /// leading `-` (git flag injection), `::` anywhere (transport-helper
+    /// execution, the RCE vector), and any control character or `"` (a field
+    /// break-out where the URL is recorded).
     ///
     /// # Errors
     /// [`CliError::Resolve`] when the value is not an accepted source form.
     pub fn parse(pkg: &PackageName, raw: &str) -> Result<Self, CliError> {
-        let allowed = raw.starts_with("https://")
-            || raw.starts_with("git://")
-            || raw.starts_with("ssh://")
-            || raw.starts_with("file://")
-            || raw.starts_with('/');
+        let shown = || crate::style::TerminalSafe::sanitize(&format!("{raw:?}"));
+        if raw.starts_with("git://") {
+            return Err(CliError::Resolve(
+                crate::text::msg::index_source_url_plaintext(pkg, &shown()),
+            ));
+        }
         // Fail closed: absent proof the transport is safe, reject.
         // `-`-leading values would be parsed as git flags; `::` introduces
         // transport helpers (e.g. `ext::`) that execute arbitrary commands.
         let breaks_out = raw.chars().any(|c| c.is_control() || c == '"');
-        if !allowed || raw.starts_with('-') || raw.contains("::") || breaks_out {
+        let transport = Transport::of_url(raw)
+            .filter(|_| !raw.starts_with('-') && !raw.contains("::") && !breaks_out);
+        let Some(transport) = transport else {
             return Err(CliError::Resolve(
-                crate::text::msg::index_source_url_invalid(
-                    pkg,
-                    &crate::style::TerminalSafe::sanitize(&format!("{raw:?}")),
-                ),
+                crate::text::msg::index_source_url_invalid(pkg, &shown()),
             ));
-        }
-        Ok(Self(raw.to_owned()))
+        };
+        Ok(Self {
+            raw: raw.to_owned(),
+            transport,
+        })
     }
 
     /// The validated URL string, safe to pass to `git clone -- <url> <dest>`.
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.raw
+    }
+
+    /// The transport the URL uses.
+    #[must_use]
+    pub const fn transport(&self) -> Transport {
+        self.transport
     }
 }
 
 impl std::fmt::Display for SourceUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.raw)
     }
 }
 
@@ -159,11 +217,10 @@ impl std::fmt::Display for CommitId {
 
 /// An immutable, resolved commit SHA pinned in a lockfile or index entry.
 ///
-/// The only inhabitants are 40-char lowercase-hex strings produced by resolving
-/// a ref against a real git object. A moving ref (`HEAD`, `main`, a tag) cannot
-/// inhabit this type — it must first be resolved to a concrete SHA via
-/// [`served_commit`] (write path) or re-parsed from a stored value via
-/// [`PinnedRev::from_full_sha`] (read path).
+/// The only inhabitants are 40-char lowercase-hex strings. A moving ref
+/// (`HEAD`, `main`, a tag) cannot inhabit this type: the write path records the
+/// commit a fetch actually checked out, read from the checkout's `HEAD`, and
+/// the read path re-parses a stored value via [`PinnedRev::from_full_sha`].
 ///
 /// This is the recorded-pin type. [`CommitId`] is the distinct request type
 /// (what the author typed; may be a branch).
@@ -181,17 +238,20 @@ impl PinnedRev {
     /// # Errors
     /// [`CliError::Resolve`] when `raw` is not a 40-char lowercase-hex string.
     pub fn from_full_sha(pkg: &PackageName, raw: &str) -> Result<Self, CliError> {
-        // Require exactly 40 lowercase hex chars — no uppercase, no short hashes.
+        Self::parse_sha(raw).ok_or_else(|| {
+            CliError::Resolve(crate::text::msg::index_rev_not_immutable(
+                pkg,
+                &crate::style::TerminalSafe::sanitize(&format!("{raw:?}")),
+            ))
+        })
+    }
+
+    /// Parse `raw` as exactly 40 lowercase hex characters — no uppercase, no
+    /// short hashes — or `None`.
+    #[must_use]
+    pub fn parse_sha(raw: &str) -> Option<Self> {
         let is_sha = raw.len() == 40 && raw.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
-        if !is_sha {
-            return Err(CliError::Resolve(
-                crate::text::msg::index_rev_not_immutable(
-                    pkg,
-                    &crate::style::TerminalSafe::sanitize(&format!("{raw:?}")),
-                ),
-            ));
-        }
-        Ok(Self(raw.to_owned()))
+        is_sha.then(|| Self(raw.to_owned()))
     }
 
     /// The pinned SHA string, suitable for use as a cache-dir key or for
@@ -319,37 +379,6 @@ pub fn check_served(requested: &RequestedRev, served: &PinnedRev) -> Option<RevM
     }
 }
 
-/// Read the commit git actually checked out, by running
-/// `git rev-parse --verify --quiet HEAD^{commit}` inside `checkout`.
-///
-/// Deliberately reads `HEAD` rather than re-resolving the original requested
-/// string: right after a successful checkout, `HEAD` is unambiguous and
-/// always available, even when a shallow single-object fetch left no local
-/// ref copy of a branch or tag name the request spelled out (the checkout
-/// still succeeded — only a second, independent re-resolution of the same
-/// string would spuriously fail).
-///
-/// # Errors
-/// [`CliError::Resolve`] when git cannot be run, `HEAD` does not resolve to a
-/// commit, or the output is not a 40-hex SHA.
-pub fn served_commit(pkg: &PackageName, checkout: &std::path::Path) -> Result<PinnedRev, CliError> {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
-        .current_dir(checkout)
-        .output()
-        .map_err(|e| CliError::Resolve(crate::text::msg::index_rev_parse_unavailable(pkg, &e)))?;
-    if !output.status.success() {
-        return Err(CliError::Resolve(crate::text::msg::index_rev_unresolved(
-            pkg,
-            &crate::style::TerminalSafe::sanitize("HEAD^{commit}"),
-            &crate::style::TerminalSafe::sanitize("\"HEAD\""),
-        )));
-    }
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let sha = raw.trim();
-    PinnedRev::from_full_sha(pkg, sha)
-}
-
 /// A validated source-tree content hash: exactly 64 lowercase hex characters.
 ///
 /// The only inhabitants are the digests `hex::encode(Sha256)` produces
@@ -381,9 +410,28 @@ impl Sha256Hex {
     /// Hash the source tree at `root`, as the resolver verifies it.
     ///
     /// # Errors
-    /// The path and I/O error of the first entry that cannot be read.
-    pub fn of_tree(root: &Path) -> Result<Self, (PathBuf, std::io::Error)> {
+    /// [`TreeHashError::Io`] for the first entry that cannot be read;
+    /// [`TreeHashError::Exceeded`] past a package-source tree ceiling or on an
+    /// entry of a refused shape.
+    pub fn of_tree(root: &Path) -> Result<Self, TreeHashError> {
         crate::cache::hash_tree(root).map(Self)
+    }
+
+    /// [`Sha256Hex::of_tree`] under an explicit tree ceiling.
+    ///
+    /// # Errors
+    /// As [`Sha256Hex::of_tree`].
+    pub fn of_tree_within(
+        root: &Path,
+        ceiling: &crate::remote_ingest::TreeCeiling,
+    ) -> Result<Self, TreeHashError> {
+        crate::cache::hash_tree_within(root, ceiling).map(Self)
+    }
+
+    /// The finalized hex of an already-walked tree `digest`.
+    #[must_use]
+    pub fn of_digest(digest: &crate::cache::TreeDigest) -> Self {
+        Self(digest.to_hex())
     }
 
     /// The validated 64-hex digest string, compared against a freshly-computed
@@ -1141,7 +1189,7 @@ fn unquote(value: &str) -> &str {
 mod tests {
     use super::{
         CommitId, IndexEntry, PackageName, PinnedRev, RequestedRev, RevMismatch, SourceUrl,
-        check_served, read_entry, resolve_version,
+        Transport, check_served, read_entry, resolve_version,
     };
     use ipe_ir::Capability;
     use std::path::{Path, PathBuf};
@@ -1339,9 +1387,37 @@ mod tests {
     }
 
     #[test]
-    fn source_url_accepts_git_and_ssh() {
-        assert!(SourceUrl::parse(&pn("p"), "git://github.com/user/repo").is_ok());
-        assert!(SourceUrl::parse(&pn("p"), "ssh://git@github.com/user/repo").is_ok());
+    fn source_url_accepts_ssh() {
+        let url = SourceUrl::parse(&pn("p"), "ssh://git@github.com/user/repo").unwrap();
+        assert_eq!(url.transport(), Transport::Ssh);
+    }
+
+    #[test]
+    fn source_url_refuses_plaintext_git_transport_naming_https() {
+        let err = SourceUrl::parse(&pn("p"), "git://github.com/user/repo").unwrap_err();
+        let shown = format!("{err}");
+        assert!(matches!(err, crate::CliError::Resolve(_)), "{shown}");
+        assert!(shown.contains("git://"), "{shown}");
+        assert!(
+            shown.contains("use the repository's https:// URL"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn source_url_records_its_transport() {
+        let cases = [
+            ("https://github.com/user/repo", Transport::Https),
+            ("ssh://git@github.com/user/repo", Transport::Ssh),
+            ("file:///home/user/repo", Transport::File),
+            ("/home/user/repo", Transport::File),
+        ];
+        for (raw, transport) in cases {
+            assert_eq!(
+                SourceUrl::parse(&pn("p"), raw).unwrap().transport(),
+                transport
+            );
+        }
     }
 
     #[test]

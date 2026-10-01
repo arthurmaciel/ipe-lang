@@ -31,14 +31,20 @@ with.
 args : () -> Task Error (List String)
 ```
 
+`args ()` -- the command-line arguments after the program name.
+Fails with `InvalidInput` when an argument is not valid UTF-8; the
+error names the argument's position, never its bytes.
+
 ## `getArg`
 
 ```ipe
 getArg : Int -> Task Error (Maybe String)
 ```
 
-`getArg n` -- zero-indexed positional arg lookup.  `Nothing`
-if `n` is past the end of the args list.
+`getArg n` -- zero-indexed positional arg lookup over the whole
+argument vector (index 0 is the program name).  `Nothing` if `n` is
+negative or past the end; fails with `InvalidInput` when that
+argument is not valid UTF-8.
 
 ## `getenv`
 

@@ -116,6 +116,7 @@ use ipe_ir::Program;
 
 use crate::output_dir::OwnedDir;
 use crate::proven_dir::EntryName;
+use crate::remote_ingest::{IngestLimit, LocalRefusal, LocalSource, PACKAGE_SOURCE, TreeCeiling};
 use crate::secret_file::OwnerDir;
 use sha2::{Digest, Sha256};
 
@@ -145,23 +146,113 @@ fn update_str(hasher: &mut Sha256, s: &str) {
 /// a resolved package is verified against (`crate::resolve`).
 const TREE_TAG: &[u8] = b"ipe-source-tree-v1";
 
-/// The maximum directory depth [`collect_files`] descends before refusing a tree
-/// with a typed `InvalidInput` error. A published package source is never this
-/// deep; an adversarial or accidentally unbounded tree is turned back rather than
-/// exhausting the stack (mirroring `crate::project`'s `MAX_DISCOVERY_DEPTH`).
-const MAX_TREE_DEPTH: usize = 64;
-
-/// The maximum bytes a single file may contribute to the tree hash before it is
-/// refused with a typed `InvalidInput` error. A `hash_tree` runs over a fetched,
-/// still-untrusted git checkout, so attacker-supplied bytes must never be
-/// materialized whole; a file over this ceiling is turned back rather than
-/// allowed to exhaust memory. 64 MiB is far above any real published source file
-/// while refusing a multi-GiB blob.
-const MAX_HASHED_FILE_BYTES: u64 = 64 * 1024 * 1024;
-
 /// The fixed chunk size the file bytes are streamed into the hasher in, so a
 /// file's contribution never buffers more than one chunk at a time.
 const TREE_HASH_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Why a source tree could not be hashed.
+#[derive(Debug)]
+pub enum TreeHashError {
+    /// An entry could not be walked or read.
+    Io {
+        /// The failing entry.
+        path: PathBuf,
+        /// What went wrong reading it.
+        source: std::io::Error,
+    },
+    /// The tree crosses a package-source ceiling or holds an entry of a refused shape.
+    Exceeded(LocalRefusal),
+}
+
+impl From<TreeHashError> for crate::CliError {
+    fn from(err: TreeHashError) -> Self {
+        match err {
+            TreeHashError::Io { path, source } => Self::Io { path, source },
+            TreeHashError::Exceeded(refusal) => Self::LocalLimitExceeded(refusal),
+        }
+    }
+}
+
+impl std::fmt::Display for TreeHashError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
+            Self::Exceeded(refusal) => refusal.fmt(f),
+        }
+    }
+}
+
+/// A path relative to the hashed tree's root, parsed once as it is walked.
+///
+/// Forward-slash separated so the hash is identical across platforms; every
+/// component is valid UTF-8, non-empty, and neither `.` nor `..`, so two
+/// distinct trees never name a file alike.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct TreePath(String);
+
+impl TreePath {
+    /// The tree's root, which names no file itself.
+    const fn root() -> Self {
+        Self(String::new())
+    }
+
+    /// `name`, the entry at `path` inside the directory this path names.
+    ///
+    /// A name that is not UTF-8 is refused as [`IngestLimit::NonUtf8Name`]; a
+    /// name no directory listing yields (empty, `.`, `..`, or holding a `/`) is
+    /// refused as an `InvalidInput` I/O error.
+    fn child(&self, name: &std::ffi::OsStr, path: &Path) -> Result<Self, TreeHashError> {
+        let Some(name) = name.to_str() else {
+            return Err(tree_exceeded(IngestLimit::NonUtf8Name));
+        };
+        if name.is_empty() || name == "." || name == ".." || name.contains('/') {
+            return Err(tree_io(
+                path,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "a directory listing named an entry that is not a single path component",
+                ),
+            ));
+        }
+        if self.0.is_empty() {
+            return Ok(Self(name.to_owned()));
+        }
+        let mut joined = String::with_capacity(self.0.len() + 1 + name.len());
+        joined.push_str(&self.0);
+        joined.push('/');
+        joined.push_str(name);
+        Ok(Self(joined))
+    }
+
+    /// Whether the last component is hidden (dot-prefixed).
+    fn is_hidden(&self) -> bool {
+        self.0
+            .rsplit('/')
+            .next()
+            .is_some_and(|name| name.starts_with('.'))
+    }
+
+    const fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+/// Wrap an I/O failure on `path` as a [`TreeHashError::Io`].
+fn tree_io(path: &Path, source: std::io::Error) -> TreeHashError {
+    TreeHashError::Io {
+        path: path.to_path_buf(),
+        source,
+    }
+}
+
+/// The refusal of a tree past one of its package-source ceilings.
+const fn tree_exceeded(limit: IngestLimit) -> TreeHashError {
+    TreeHashError::Exceeded(LocalRefusal {
+        source: LocalSource::PackageTree,
+        limit,
+        name: None,
+    })
+}
 
 /// Compute a sha256 over the content of the directory tree rooted at `root`,
 /// deterministically over `(relative_path, file_bytes)` pairs sorted by path.
@@ -174,31 +265,78 @@ const TREE_HASH_CHUNK_BYTES: usize = 64 * 1024;
 /// path and its bytes are length-prefixed, so no rearrangement of files can
 /// collide (the delimiter-collision hazard, as in [`update_len_prefixed`]).
 ///
+/// The walk is held to the tree ceiling of [`PACKAGE_SOURCE`]: a tree past its
+/// entries, cumulative bytes, per-file bytes or depth is refused before it is
+/// read further, as is a symlink, a special file or a name that is not UTF-8.
+///
 /// # Errors
-/// Returns the failing path and its [`std::io::Error`] if the tree cannot be
-/// walked or a file cannot be read.
-pub fn hash_tree(root: &Path) -> Result<String, (PathBuf, std::io::Error)> {
-    Ok(hex::encode(tree_hasher(root)?.finalize()))
+/// [`TreeHashError::Io`] with the failing path when the tree cannot be walked
+/// or a file cannot be read; [`TreeHashError::Exceeded`] past a tree ceiling
+/// or on a refused entry.
+pub fn hash_tree(root: &Path) -> Result<String, TreeHashError> {
+    hash_tree_within(root, PACKAGE_SOURCE.tree())
 }
 
-/// Feed the identical deterministic byte stream [`hash_tree`] hashes into a fresh
-/// [`Sha256`] and return the UN-finalized hasher.
-///
-/// [`hash_tree`] is exactly `hex(tree_hasher(root)?.finalize())` — the two share
-/// this one byte stream so a tree hashes to a single value no matter which entry
-/// point is used. The un-finalized hasher exists for a caller that must hand a
-/// `Sha256` (not a hex digest) to an API that finalizes it itself — sigstore's
-/// `verify_digest(input_digest: Sha256, …)`, which finalizes the hasher and, for
-/// a DSSE bundle, compares `hex(input_digest.finalize())` against the bundle's
-/// signed subject digest. Feeding this hasher binds that comparison to exactly
-/// the pinned tree hash without re-deriving it from bytes twice.
+/// [`hash_tree`] under an explicit tree ceiling.
 ///
 /// # Errors
-/// Returns the failing path and its [`std::io::Error`] if the tree cannot be
-/// walked or a file cannot be read.
-pub fn tree_hasher(root: &Path) -> Result<Sha256, (PathBuf, std::io::Error)> {
-    let mut files: Vec<(String, PathBuf)> = Vec::new();
-    collect_files(root, root, &mut files, 0)?;
+/// As [`hash_tree`].
+pub fn hash_tree_within(root: &Path, ceiling: &TreeCeiling) -> Result<String, TreeHashError> {
+    Ok(hex::encode(tree_hasher_within(root, ceiling)?.finalize()))
+}
+
+/// The content hash of one source tree, from exactly one budgeted walk.
+///
+/// It holds the UN-finalized [`Sha256`] state of the byte stream [`hash_tree`]
+/// hashes, so `hex(finalize)` is that tree's [`hash_tree`] value. Every consumer
+/// of a fetched tree — each trusted identity's signature check and the pinned
+/// `sha256` comparison — reads this one value, so a tree whose shape its remote
+/// author controls is walked once per fetch, never once per consumer.
+#[derive(Clone)]
+pub struct TreeDigest(Sha256);
+
+impl TreeDigest {
+    /// Walk and hash the tree at `root` under `ceiling`.
+    ///
+    /// # Errors
+    /// As [`hash_tree`].
+    pub fn of_tree_within(root: &Path, ceiling: &TreeCeiling) -> Result<Self, TreeHashError> {
+        tree_hasher_within(root, ceiling).map(Self)
+    }
+
+    /// A copy of the un-finalized hasher, for an API that finalizes it itself —
+    /// sigstore's `verify_digest(input_digest: Sha256, …)` compares
+    /// `hex(input_digest.finalize())` against a DSSE bundle's signed subject
+    /// digest, binding that comparison to exactly this tree hash.
+    #[cfg(feature = "signing")]
+    #[must_use]
+    pub fn hasher(&self) -> Sha256 {
+        self.0.clone()
+    }
+
+    /// The finalized digest as lowercase hex.
+    #[must_use]
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.0.clone().finalize())
+    }
+}
+
+/// Feed the deterministic byte stream [`hash_tree`] hashes into a fresh
+/// [`Sha256`] under `ceiling` and return the UN-finalized hasher.
+///
+/// # Errors
+/// As [`hash_tree`].
+fn tree_hasher_within(root: &Path, ceiling: &TreeCeiling) -> Result<Sha256, TreeHashError> {
+    let mut files: Vec<(TreePath, PathBuf)> = Vec::new();
+    let mut entries: u64 = 0;
+    collect_files(
+        root,
+        &TreePath::root(),
+        &mut files,
+        &mut entries,
+        ceiling,
+        0,
+    )?;
     // Sort by the relative path so the hash is independent of directory-read
     // order (which the OS does not guarantee).
     files.sort_by(|a, b| a.0.cmp(&b.0));
@@ -211,17 +349,25 @@ pub fn tree_hasher(root: &Path) -> Result<Sha256, (PathBuf, std::io::Error)> {
     // identical to a per-file allocation, since every file streams through the
     // same fixed-size window.
     let mut buf = vec![0u8; TREE_HASH_CHUNK_BYTES];
+    let mut total_bytes: u64 = 0;
     for (rel, abs) in &files {
-        update_str(&mut hasher, rel);
-        hash_one_file(&mut hasher, rel, abs, &mut buf)?;
+        update_str(&mut hasher, rel.as_str());
+        let len = hash_one_file(
+            &mut hasher,
+            rel.as_str(),
+            abs,
+            &mut buf,
+            total_bytes,
+            ceiling,
+        )?;
+        total_bytes = total_bytes.saturating_add(len);
     }
     Ok(hasher)
 }
 
 /// Stream one file's bytes into `hasher` with an explicit little-endian
-/// length prefix (matching [`update_len_prefixed`]'s framing), refusing past
-/// [`MAX_HASHED_FILE_BYTES`] with a typed `InvalidInput` error before the read
-/// can exhaust memory.
+/// length prefix (matching [`update_len_prefixed`]'s framing), refusing a file
+/// past `ceiling.per_file()` before the read can exhaust memory.
 ///
 /// The length prefix is derived from the file's metadata size and re-checked
 /// against the bytes actually read, so a file that grows between `stat` and the
@@ -230,18 +376,26 @@ pub fn tree_hasher(root: &Path) -> Result<Sha256, (PathBuf, std::io::Error)> {
 ///
 /// `buf` is a caller-owned scratch chunk reused across every file in a tree; its
 /// length is the streaming window and its contents on entry are irrelevant.
+/// `hashed_so_far` is the byte total of the tree's earlier files: a file that
+/// would carry the tree past `ceiling.bytes()` is refused before it is read.
+/// Returns the file's length.
 fn hash_one_file(
     hasher: &mut Sha256,
     rel: &str,
     abs: &Path,
     buf: &mut [u8],
-) -> Result<(), (PathBuf, std::io::Error)> {
+    hashed_so_far: u64,
+    ceiling: &TreeCeiling,
+) -> Result<u64, TreeHashError> {
     use std::io::Read as _;
 
-    let file = fs::File::open(abs).map_err(|e| (abs.to_path_buf(), e))?;
-    let declared_len = file.metadata().map_err(|e| (abs.to_path_buf(), e))?.len();
-    if declared_len > MAX_HASHED_FILE_BYTES {
-        return Err((abs.to_path_buf(), file_too_large_error(rel, declared_len)));
+    let file = fs::File::open(abs).map_err(|e| tree_io(abs, e))?;
+    let declared_len = file.metadata().map_err(|e| tree_io(abs, e))?.len();
+    if declared_len > ceiling.per_file() {
+        return Err(tree_exceeded(IngestLimit::Bytes(ceiling.per_file())));
+    }
+    if hashed_so_far.saturating_add(declared_len) > ceiling.bytes() {
+        return Err(tree_exceeded(IngestLimit::Bytes(ceiling.bytes())));
     }
 
     hasher.update(declared_len.to_le_bytes());
@@ -249,14 +403,14 @@ fn hash_one_file(
     let mut reader = file.take(declared_len);
     let mut total: u64 = 0;
     loop {
-        let n = reader.read(buf).map_err(|e| (abs.to_path_buf(), e))?;
+        let n = reader.read(buf).map_err(|e| tree_io(abs, e))?;
         if n == 0 {
             break;
         }
         total = total.saturating_add(n as u64);
         let chunk = buf.get(..n).ok_or_else(|| {
-            (
-                abs.to_path_buf(),
+            tree_io(
+                abs,
                 std::io::Error::other("short read reported more bytes than the buffer holds"),
             )
         })?;
@@ -264,8 +418,8 @@ fn hash_one_file(
     }
 
     if total != declared_len {
-        return Err((
-            abs.to_path_buf(),
+        return Err(tree_io(
+            abs,
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
@@ -275,22 +429,11 @@ fn hash_one_file(
             ),
         ));
     }
-    Ok(())
+    Ok(declared_len)
 }
 
-fn file_too_large_error(rel: &str, size: u64) -> std::io::Error {
-    std::io::Error::new(
-        std::io::ErrorKind::InvalidInput,
-        format!(
-            "file `{rel}` is {size} bytes, over the {MAX_HASHED_FILE_BYTES}-byte per-file \
-             ceiling for a hashed package source tree"
-        ),
-    )
-}
-
-/// Depth-first collect every regular file under `dir` as `(relative_path,
-/// absolute_path)`, with the relative path expressed in forward slashes so the
-/// hash is identical across platforms.
+/// Depth-first collect every regular file under the directory `rel` names
+/// inside `root`, as `(relative_path, absolute_path)`.
 ///
 /// Hidden (dot-prefixed) directories are skipped. These hold VCS and local
 /// tooling metadata — `.git`, a code indexer's `.tokensave`, an editor's
@@ -299,64 +442,54 @@ fn file_too_large_error(rel: &str, size: u64) -> std::io::Error {
 /// alone, so a fetched checkout hashes identically no matter what local tools
 /// have dropped a scratch directory into it.
 ///
-/// Symlinks are rejected with an `InvalidInput` error. A published package
-/// source must contain only plain files and directories; symlinks cannot be
-/// integrity-checked safely without following them (which opens TOCTOU and
-/// path-escape hazards), so we fail-closed rather than silently omitting them
-/// from the hash (which would leave them invisible to the integrity check).
+/// A published package source holds only plain files and directories, so every
+/// other entry is refused rather than silently left out of the hash (which
+/// would leave it invisible to the integrity check): a symlink cannot be
+/// checked without following it (a TOCTOU and path-escape hazard), a FIFO would
+/// block the read, and a name that is not UTF-8 cannot be hashed without two
+/// distinct trees colliding.
 ///
-/// A tree deeper than [`MAX_TREE_DEPTH`] is refused with an `InvalidInput`
-/// error, bounding the recursion so a pathological tree cannot exhaust the
-/// stack.
+/// `seen` counts every entry visited across the whole walk; one past
+/// `ceiling.entries()` refuses the tree. A directory below `ceiling.depth()`
+/// levels is refused before it is listed, bounding the recursion.
 fn collect_files(
-    base: &Path,
-    dir: &Path,
-    out: &mut Vec<(String, PathBuf)>,
-    depth: usize,
-) -> Result<(), (PathBuf, std::io::Error)> {
-    if depth > MAX_TREE_DEPTH {
-        return Err((
-            dir.to_path_buf(),
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "directory tree exceeded the {MAX_TREE_DEPTH}-level depth ceiling for a \
-                     hashed package source tree"
-                ),
-            ),
-        ));
+    root: &Path,
+    rel: &TreePath,
+    out: &mut Vec<(TreePath, PathBuf)>,
+    seen: &mut u64,
+    ceiling: &TreeCeiling,
+    depth: u32,
+) -> Result<(), TreeHashError> {
+    if depth > ceiling.depth() {
+        return Err(tree_exceeded(IngestLimit::Depth(ceiling.depth())));
     }
-    let entries = fs::read_dir(dir).map_err(|e| (dir.to_path_buf(), e))?;
+    let dir = if rel.as_str().is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(rel.as_str())
+    };
+    let entries = fs::read_dir(&dir).map_err(|e| tree_io(&dir, e))?;
     for entry in entries {
-        let entry = entry.map_err(|e| (dir.to_path_buf(), e))?;
+        let entry = entry.map_err(|e| tree_io(&dir, e))?;
+        *seen = seen.saturating_add(1);
+        if *seen > ceiling.entries() {
+            return Err(tree_exceeded(IngestLimit::Entries(ceiling.entries())));
+        }
         let path = entry.path();
-        let file_type = entry.file_type().map_err(|e| (path.clone(), e))?;
+        let file_type = entry.file_type().map_err(|e| tree_io(&path, e))?;
         if file_type.is_symlink() {
-            return Err((
-                path,
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "symlinks are not permitted in a published package source tree",
-                ),
-            ));
-        } else if file_type.is_dir() {
-            if path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with('.'))
-            {
+            return Err(tree_exceeded(IngestLimit::Symlink));
+        }
+        let child = rel.child(&entry.file_name(), &path)?;
+        if file_type.is_dir() {
+            if child.is_hidden() {
                 continue;
             }
-            collect_files(base, &path, out, depth + 1)?;
+            collect_files(root, &child, out, seen, ceiling, depth.saturating_add(1))?;
         } else if file_type.is_file() {
-            let rel = path
-                .strip_prefix(base)
-                .unwrap_or(&path)
-                .components()
-                .filter_map(|c| c.as_os_str().to_str())
-                .collect::<Vec<_>>()
-                .join("/");
-            out.push((rel, path));
+            out.push((child, path));
+        } else {
+            return Err(tree_exceeded(IngestLimit::SpecialFile));
         }
     }
     Ok(())
@@ -2310,8 +2443,8 @@ mod tests {
         );
     }
 
-    /// A fetched tree containing a symlink must be rejected — the integrity
-    /// hash must never silently omit a tree entry.
+    /// A fetched tree containing a symlink is refused by its shape — the
+    /// integrity hash never silently omits a tree entry.
     #[test]
     #[cfg(unix)]
     fn hash_tree_rejects_symlink() {
@@ -2331,14 +2464,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
 
         assert!(
-            result.is_err(),
-            "hash_tree must reject a tree containing a symlink"
-        );
-        let (_, err) = result.unwrap_err();
-        assert_eq!(
-            err.kind(),
-            std::io::ErrorKind::InvalidInput,
-            "symlink rejection must use InvalidInput"
+            matches!(
+                result,
+                Err(TreeHashError::Exceeded(LocalRefusal {
+                    source: LocalSource::PackageTree,
+                    limit: IngestLimit::Symlink,
+                    name: None,
+                }))
+            ),
+            "hash_tree must refuse a tree containing a symlink, got: {result:?}"
         );
     }
 
@@ -2362,8 +2496,8 @@ mod tests {
         assert_eq!(h1, h2, "hash_tree must be deterministic for plain trees");
     }
 
-    /// A single file over [`MAX_HASHED_FILE_BYTES`] must be refused with a typed
-    /// `InvalidInput` error rather than materialized whole in memory — the `DoS`
+    /// A single file over the production per-file ceiling is refused as a typed
+    /// byte overrun rather than materialized whole in memory — the `DoS`
     /// ceiling on a fetched, still-untrusted checkout.
     #[test]
     fn hash_tree_rejects_a_file_over_the_per_file_ceiling() {
@@ -2375,22 +2509,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("create base");
         // One byte over the ceiling — proves the boundary, not a multi-GiB write.
-        let over = usize::try_from(MAX_HASHED_FILE_BYTES).expect("cap fits usize") + 1;
+        let over = usize::try_from(crate::remote_ingest::PACKAGE_FILE_MAX_BYTES)
+            .expect("cap fits usize")
+            + 1;
         std::fs::write(base.join("Big.ipe"), vec![b'a'; over]).expect("write oversized file");
 
         let result = hash_tree(&base);
         let _ = std::fs::remove_dir_all(&base);
 
-        let (_, err) = result.expect_err("a file over the ceiling must be refused");
-        assert_eq!(
-            err.kind(),
-            std::io::ErrorKind::InvalidInput,
-            "an oversized file must be refused with InvalidInput"
-        );
+        assert!(matches!(
+            result,
+            Err(TreeHashError::Exceeded(LocalRefusal {
+                source: LocalSource::PackageTree,
+                limit: IngestLimit::Bytes(crate::remote_ingest::PACKAGE_FILE_MAX_BYTES),
+                name: None,
+            }))
+        ));
     }
 
-    /// A file exactly at [`MAX_HASHED_FILE_BYTES`] must still hash (the ceiling
-    /// is inclusive — a file at the cap succeeds, one byte over fails).
+    /// A file exactly at the production per-file ceiling still hashes (the
+    /// ceiling is inclusive — a file at the cap succeeds, one byte over fails).
     #[test]
     fn hash_tree_accepts_a_file_at_the_per_file_ceiling() {
         let base = ipe_test_temp::temp_root().join(format!(
@@ -2400,7 +2538,8 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("create base");
-        let at = usize::try_from(MAX_HASHED_FILE_BYTES).expect("cap fits usize");
+        let at =
+            usize::try_from(crate::remote_ingest::PACKAGE_FILE_MAX_BYTES).expect("cap fits usize");
         std::fs::write(base.join("AtCap.ipe"), vec![b'a'; at]).expect("write file at cap");
 
         let result = hash_tree(&base);
@@ -2412,9 +2551,8 @@ mod tests {
         );
     }
 
-    /// A directory tree deeper than [`MAX_TREE_DEPTH`] must be refused with a
-    /// typed `InvalidInput` error rather than recursing until the stack
-    /// overflows.
+    /// A directory tree deeper than the production depth ceiling is refused as
+    /// a typed depth overrun rather than recursing until the stack overflows.
     #[test]
     fn hash_tree_rejects_a_tree_over_the_depth_ceiling() {
         let base = ipe_test_temp::temp_root().join(format!(
@@ -2426,7 +2564,7 @@ mod tests {
         std::fs::create_dir_all(&base).expect("create base");
 
         let mut deep = base.clone();
-        for _ in 0..=(MAX_TREE_DEPTH + 1) {
+        for _ in 0..=(crate::remote_ingest::PACKAGE_TREE_MAX_DEPTH + 1) {
             deep = deep.join("d");
         }
         std::fs::create_dir_all(&deep).expect("create deep tree");
@@ -2435,15 +2573,182 @@ mod tests {
         let result = hash_tree(&base);
         let _ = std::fs::remove_dir_all(&base);
 
-        let (_, err) = result.expect_err("a tree over the depth ceiling must be refused");
-        assert_eq!(
-            err.kind(),
-            std::io::ErrorKind::InvalidInput,
-            "an over-deep tree must be refused with InvalidInput"
+        assert!(matches!(
+            result,
+            Err(TreeHashError::Exceeded(LocalRefusal {
+                source: LocalSource::PackageTree,
+                limit: IngestLimit::Depth(crate::remote_ingest::PACKAGE_TREE_MAX_DEPTH),
+                name: None,
+            }))
+        ));
+    }
+
+    /// A two-file, three-entry tree of 16 bytes: `a` (10 bytes), `sub/`, `sub/b` (6 bytes).
+    fn capped_tree(tag: &str) -> PathBuf {
+        let base = ipe_test_temp::temp_root().join(format!(
+            "ipe-cache-test-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("sub")).expect("create tree");
+        std::fs::write(base.join("a"), [b'a'; 10]).expect("write a");
+        std::fs::write(base.join("sub").join("b"), [b'b'; 6]).expect("write b");
+        base
+    }
+
+    /// A test tree ceiling; the pairing it must satisfy holds for every caller.
+    fn ceiling(bytes: u64, entries: u64, per_file: u64, depth: u32) -> TreeCeiling {
+        TreeCeiling::for_test(bytes, entries, per_file, depth).expect("paired tree ceiling")
+    }
+
+    /// The package-tree refusal `limit` names.
+    const fn refused(limit: IngestLimit) -> LocalRefusal {
+        LocalRefusal {
+            source: LocalSource::PackageTree,
+            limit,
+            name: None,
+        }
+    }
+
+    /// A file exactly at the per-file ceiling hashes; one byte under the
+    /// largest file refuses the tree by that file's size.
+    #[test]
+    fn a_file_at_the_per_file_ceiling_hashes_and_one_past_is_refused() {
+        let base = capped_tree("tree-per-file");
+        let at = tree_hasher_within(&base, &ceiling(16, 3, 10, 8));
+        let past = tree_hasher_within(&base, &ceiling(16, 3, 9, 8));
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(at.is_ok(), "a file at the per-file ceiling must hash");
+        assert!(
+            matches!(past, Err(TreeHashError::Exceeded(refusal)) if refusal == refused(IngestLimit::Bytes(9)))
         );
     }
 
-    /// `tree_hasher` finalized to hex MUST equal `hash_tree` byte-for-byte —
+    /// A tree exactly as deep as its depth ceiling hashes; one level deeper is refused.
+    #[test]
+    fn a_tree_at_the_depth_ceiling_hashes_and_one_level_past_is_refused() {
+        let base = ipe_test_temp::temp_root().join(format!(
+            "ipe-cache-test-depth-edge-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let deep = base.join("d").join("d").join("d");
+        std::fs::create_dir_all(&deep).expect("create deep tree");
+        std::fs::write(deep.join("Leaf.ipe"), b"module Leaf\n").expect("write leaf");
+
+        let at = tree_hasher_within(&base, &ceiling(64, 16, 64, 3));
+        let past = tree_hasher_within(&base, &ceiling(64, 16, 64, 2));
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(at.is_ok(), "a tree at the depth ceiling must hash");
+        assert!(
+            matches!(past, Err(TreeHashError::Exceeded(refusal)) if refusal == refused(IngestLimit::Depth(2)))
+        );
+    }
+
+    /// A file name that is not UTF-8 is refused by its shape rather than
+    /// dropped from the hash.
+    #[test]
+    #[cfg(unix)]
+    fn hash_tree_refuses_a_non_utf8_name() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let base = ipe_test_temp::temp_root().join(format!(
+            "ipe-cache-test-non-utf8-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create base");
+        let name = std::ffi::OsStr::from_bytes(b"bad\xff.ipe");
+        std::fs::write(base.join(name), b"module Bad\n").expect("write non-UTF-8 name");
+
+        let result = hash_tree(&base);
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            matches!(result, Err(TreeHashError::Exceeded(refusal)) if refusal == refused(IngestLimit::NonUtf8Name))
+        );
+    }
+
+    /// A FIFO is refused by its shape rather than opened (which would block).
+    #[test]
+    #[cfg(unix)]
+    fn hash_tree_refuses_a_fifo() {
+        let base = ipe_test_temp::temp_root().join(format!(
+            "ipe-cache-test-fifo-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create base");
+        let made = std::process::Command::new("mkfifo")
+            .arg(base.join("pipe.ipe"))
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo must create the FIFO");
+
+        let result = hash_tree(&base);
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            matches!(result, Err(TreeHashError::Exceeded(refusal)) if refusal == refused(IngestLimit::SpecialFile))
+        );
+    }
+
+    /// A tree exactly at both cumulative ceilings hashes, and equals the unbounded hash.
+    #[test]
+    fn a_tree_at_its_cumulative_ceilings_hashes() {
+        let base = capped_tree("tree-at-cap");
+        let within = tree_hasher_within(&base, &ceiling(16, 3, 16, 8));
+        let full = hash_tree(&base);
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            matches!((&within, &full), (Ok(_), Ok(_))),
+            "a tree at its ceilings must hash"
+        );
+        let (Ok(within), Ok(full)) = (within, full) else {
+            return;
+        };
+        assert_eq!(
+            hex::encode(within.finalize()),
+            full,
+            "a tree at its ceilings must hash to the same value"
+        );
+    }
+
+    /// A tree one byte past its cumulative byte ceiling is refused as a local-limit overrun.
+    #[test]
+    fn a_tree_one_byte_past_its_cumulative_ceiling_is_refused() {
+        let base = capped_tree("tree-bytes-over");
+        let result = tree_hasher_within(&base, &ceiling(15, 3, 15, 8));
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(matches!(
+            result,
+            Err(TreeHashError::Exceeded(LocalRefusal {
+                source: LocalSource::PackageTree,
+                limit: IngestLimit::Bytes(15),
+                name: None,
+            }))
+        ));
+    }
+
+    /// A tree one entry past its cumulative entry ceiling is refused as a local-limit overrun.
+    #[test]
+    fn a_tree_one_entry_past_its_cumulative_ceiling_is_refused() {
+        let base = capped_tree("tree-entries-over");
+        let result = tree_hasher_within(&base, &ceiling(16, 2, 16, 8));
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(matches!(
+            result,
+            Err(TreeHashError::Exceeded(LocalRefusal {
+                source: LocalSource::PackageTree,
+                limit: IngestLimit::Entries(2),
+                name: None,
+            }))
+        ));
+    }
+
+    /// `TreeDigest` finalized to hex MUST equal `hash_tree` byte-for-byte —
     /// the un-finalized hasher fed to sigstore's `verify_digest` finalizes to
     /// exactly the pinned tree hash, so the digest-binding check is over the
     /// same value the resolver hash-verifies.
@@ -2462,13 +2767,15 @@ mod tests {
         std::fs::write(base.join("sub").join("Helper.ipe"), b"module Helper\n")
             .expect("write nested file");
 
-        let via_hasher = hex::encode(tree_hasher(&base).expect("hasher ok").finalize());
+        let via_hasher = TreeDigest::of_tree_within(&base, PACKAGE_SOURCE.tree())
+            .expect("digest ok")
+            .to_hex();
         let via_hash_tree = hash_tree(&base).expect("hash_tree ok");
         let _ = std::fs::remove_dir_all(&base);
 
         assert_eq!(
             via_hasher, via_hash_tree,
-            "hex(tree_hasher(t).finalize()) must equal hash_tree(t) exactly"
+            "TreeDigest::to_hex must equal hash_tree(t) exactly"
         );
     }
 

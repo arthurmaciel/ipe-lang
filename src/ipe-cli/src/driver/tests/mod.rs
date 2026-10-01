@@ -3291,13 +3291,8 @@ fn audit_entry_rejects_on_hash_mismatch() {
     // Build a tiny local git repo.
     let repo = temp_dir_unique("ae-mismatch-repo");
     let git = |args: &[&str]| {
-        let ok = std::process::Command::new("git")
+        let ok = crate::remote_ingest::fixture_git(&repo)
             .args(args)
-            .current_dir(&repo)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@t")
             .output()
             .expect("git runs")
             .status
@@ -3309,9 +3304,8 @@ fn audit_entry_rejects_on_hash_mismatch() {
     git(&["add", "."]);
     git(&["commit", "--quiet", "-m", "seed"]);
     // Get the HEAD commit hash.
-    let rev_out = std::process::Command::new("git")
+    let rev_out = crate::remote_ingest::fixture_git(&repo)
         .args(["rev-parse", "HEAD"])
-        .current_dir(&repo)
         .output()
         .expect("git rev-parse");
     let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_owned();
@@ -4617,4 +4611,123 @@ fn homed_warning_with_unknown_home_is_refused() {
         ),
         "an unknown home must fail closed as a compiler bug, got {rendered:?}"
     );
+}
+
+/// Version `1.0.0` of `audited`, published from a fresh one-file repo under
+/// `root` and pinned to `sha256` (the tree's own hash when `None`), read back
+/// through the index parser.
+fn audited_version(root: &Path, sha256: Option<&str>) -> crate::index::EntryVersion {
+    let source = root.join("source");
+    std::fs::create_dir_all(&source).expect("source dir");
+    let git = |args: &[&str]| -> Vec<u8> {
+        let out = crate::remote_ingest::fixture_git(&source)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(out.status.success(), "git {args:?} must succeed");
+        out.stdout
+    };
+    git(&["init", "--quiet"]);
+    std::fs::write(source.join("lib.ipe"), "module Lib\n").expect("write file");
+    git(&["add", "."]);
+    git(&["commit", "--quiet", "-m", "seed"]);
+    let rev = String::from_utf8(git(&["rev-parse", "HEAD"])).expect("utf-8 rev");
+    let hash = crate::resolve::hash_source_tree(&source).expect("hash source");
+    let sha256 = sha256.unwrap_or(hash.as_str());
+    let index_root = root.join("index");
+    let packages = index_root.join("packages");
+    std::fs::create_dir_all(&packages).expect("packages dir");
+    let entry = format!(
+        "name = \"audited\"\npublisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+         source = \"{}\"\nrev = \"{}\"\nsha256 = \"{sha256}\"\ncapabilities = []\n",
+        source.display(),
+        rev.trim(),
+    );
+    std::fs::write(packages.join("audited.toml"), entry).expect("write entry");
+    let entry = crate::index::read_entry(&index_root, "audited").expect("fixture entry parses");
+    let req = "^1".parse().expect("valid req");
+    crate::index::resolve_version(&entry, &req)
+        .expect("fixture version resolves")
+        .clone()
+}
+
+/// Every way `certify_versions` ends — a pass, an audit rejection, a hash
+/// mismatch and a fetch refusal — leaves no scratch directory under the cache
+/// base.
+#[test]
+fn certify_versions_leaves_no_scratch_under_the_cache_base() {
+    use crate::remote_ingest::{
+        ByteBudget, FetchBudget, IngestLimit, IngestRefusal, IngestSource, PACKAGE_SOURCE,
+        TreeCeiling,
+    };
+
+    let fixture = crate::scratch::ScratchDir::new("ipe-audit-fixture").expect("fixture dir");
+    let cache = crate::scratch::ScratchDir::new("ipe-audit-cache").expect("cache dir");
+    let scratch_parent = cache.path().join("ipe");
+    let leftovers = || std::fs::read_dir(&scratch_parent).map_or(0, Iterator::count);
+    let name = crate::package_name::PackageName::parse("audited").expect("name parses");
+    let good = audited_version(&fixture.path().join("good"), None);
+
+    let mut audited = Vec::new();
+    let certified = certify_versions(
+        cache.path(),
+        &name,
+        &[&good],
+        &PACKAGE_SOURCE,
+        |checkout, _| {
+            audited
+                .push(checkout.starts_with(&scratch_parent) && checkout.join("lib.ipe").is_file());
+            Ok(())
+        },
+    )
+    .expect("a verified version certifies");
+    assert_eq!(certified, ["1.0.0"]);
+    assert_eq!(
+        audited,
+        [true],
+        "the audit ran on the verified checkout in the scratch dir"
+    );
+    assert_eq!(leftovers(), 0, "a pass leaves no scratch dir");
+
+    let rejected = certify_versions(cache.path(), &name, &[&good], &PACKAGE_SOURCE, |_, _| {
+        Err(CliError::Interrupted)
+    });
+    assert!(
+        matches!(rejected, Err(CliError::Interrupted)),
+        "{rejected:?}"
+    );
+    assert_eq!(leftovers(), 0, "an audit rejection leaves no scratch dir");
+
+    let zeros = "0".repeat(64);
+    let forged = audited_version(&fixture.path().join("forged"), Some(&zeros));
+    let mismatch = certify_versions(cache.path(), &name, &[&forged], &PACKAGE_SOURCE, |_, _| {
+        Ok(())
+    });
+    assert!(
+        matches!(mismatch, Err(CliError::HashMismatch { .. })),
+        "{mismatch:?}"
+    );
+    assert_eq!(leftovers(), 0, "a hash mismatch leaves no scratch dir");
+
+    let starved = FetchBudget::for_test(
+        PACKAGE_SOURCE
+            .transfer()
+            .with_disk_bytes(ByteBudget::for_test(1).expect("in-range byte budget")),
+        *PACKAGE_SOURCE.refs(),
+        TreeCeiling::for_test(0, 1, 0, 1).expect("paired tree ceiling"),
+    )
+    .expect("paired budget");
+    let refused = certify_versions(cache.path(), &name, &[&good], &starved, |_, _| Ok(()));
+    assert!(
+        matches!(
+            refused,
+            Err(CliError::RemoteIngestExceeded(IngestRefusal {
+                source: IngestSource::PackageFetch,
+                limit: IngestLimit::Bytes(_),
+                name: Some(ref named),
+            })) if named.as_str() == "audited"
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(leftovers(), 0, "a fetch refusal leaves no scratch dir");
 }

@@ -4,6 +4,7 @@ mod extract;
 mod model;
 mod pipeline;
 mod query;
+mod static_re;
 mod store;
 mod walk;
 
@@ -289,8 +290,8 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
 }
 
 /// Incremental refresh: for each repo, diff `last_sha:<tag>..HEAD`, re-extract
-/// only the changed files. Falls back to a full `index` when the DB is absent or
-/// a repo has no recorded sha.
+/// only the changed files. Falls back to a full `index` when the DB is absent,
+/// its rows are of another schema version, or a repo has no recorded sha.
 fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
     if !std::path::Path::new(db).exists() {
         return cmd_index(repo_specs, db);
@@ -300,12 +301,9 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
         .map(|s| parse_repo(s))
         .collect::<Result<_>>()?;
     let store = store::Store::open(db)?;
-    // Any repo without a recorded sha can't be diffed → full rebuild.
-    for (tag, _) in &repos {
-        if store.get_meta(&format!("last_sha:{tag}"))?.is_none() {
-            drop(store);
-            return cmd_index(repo_specs, db);
-        }
+    if needs_full_index(&store, &repos)? {
+        drop(store);
+        return cmd_index(repo_specs, db);
     }
     store.begin()?;
     let mut changed_count = 0usize;
@@ -391,6 +389,20 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
     Ok(())
 }
 
+/// An incremental `update` can only diff a DB whose rows are in the current
+/// format and that records a sha for every repo; anything else is rebuilt.
+fn needs_full_index(store: &store::Store, repos: &[(String, String)]) -> Result<bool> {
+    if !store.schema_is_current()? {
+        return Ok(true);
+    }
+    for (tag, _) in repos {
+        if store.get_meta(&format!("last_sha:{tag}"))?.is_none() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
@@ -423,5 +435,37 @@ fn main() -> Result<()> {
             map,
             db,
         } => query::cmd_rename_symbol(&db, &old, to.as_deref(), &preserve, map.as_deref()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repos() -> Vec<(String, String)> {
+        vec![("ipe".to_string(), ".".to_string())]
+    }
+
+    #[test]
+    fn current_db_with_shas_updates_incrementally() {
+        let s = store::Store::open(":memory:").unwrap();
+        s.set_meta("last_sha:ipe", "abc").unwrap();
+        assert!(!needs_full_index(&s, &repos()).unwrap());
+    }
+
+    #[test]
+    fn missing_repo_sha_rebuilds() {
+        let s = store::Store::open(":memory:").unwrap();
+        assert!(needs_full_index(&s, &repos()).unwrap());
+    }
+
+    // Rows of an older schema carry hashes in the old format; an incremental
+    // update would keep them for every unchanged file, so it rebuilds instead.
+    #[test]
+    fn older_schema_rebuilds() {
+        let s = store::Store::open(":memory:").unwrap();
+        s.set_meta("last_sha:ipe", "abc").unwrap();
+        s.set_meta("schema_version", "2").unwrap();
+        assert!(needs_full_index(&s, &repos()).unwrap());
     }
 }

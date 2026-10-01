@@ -18,19 +18,21 @@
 //! the source the publisher registered, so nothing derived from them is trusted.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use ipe_ir::Capability;
 
 use crate::CliError;
 use crate::index::{
     self, CommitId, EntryVersion, PinnedRev, RequestedRev, RevMismatch, Sha256Hex, SourceUrl,
-    check_served, served_commit,
+    check_served,
 };
 use crate::lockfile::{LocalSource, LockedDep, LockedOrigin, Lockfile};
 use crate::package_name::PackageName;
 use crate::project::IpeDep;
 use crate::published_version::PublishedVersion;
+use crate::remote_ingest::{
+    self, Captured, FetchBudget, Git, IngestLimit, RefsCeiling, RunError, Transfer, TreeCeiling,
+};
 
 /// The environment variable overriding the index checkout root; tests point it
 /// at a fixture index. Absent, the standard location ([`default_index_root`]) is
@@ -46,8 +48,11 @@ const INDEX_DIR_ENV: &str = "IPE_INDEX_DIR";
 ///
 /// # Errors
 /// [`CliError::Resolve`] if the package or a matching version is not found, or a
-/// `git` fetch fails; [`CliError::HashMismatch`] if the fetched source's hash
-/// does not equal the pinned hash; [`CliError::Io`] on a filesystem failure.
+/// `git` fetch fails; [`CliError::RemoteIngestExceeded`] when the fetch crosses
+/// its transfer ceiling; [`CliError::LocalLimitExceeded`] when the fetched tree
+/// crosses its tree ceiling or holds a refused entry; [`CliError::HashMismatch`]
+/// if the fetched source's hash does not equal the pinned hash; [`CliError::Io`]
+/// on a filesystem failure.
 pub fn resolve_and_add(
     project_root: &Path,
     name: &str,
@@ -65,23 +70,40 @@ pub fn resolve_and_add(
     let package_name = PackageName::parse(name)?;
     let entry = crate::registry::read_entry_via_pages(package_name.as_str(), index_root)?;
     let version = index::resolve_version(&entry, req)?;
+    resolve_and_add_within(
+        project_root,
+        &package_name,
+        req,
+        version,
+        &remote_ingest::PACKAGE_SOURCE,
+    )
+}
 
+/// [`resolve_and_add`] from the resolved index `version`, its fetch and tree
+/// hash held to `budget`.
+fn resolve_and_add_within(
+    project_root: &Path,
+    package_name: &PackageName,
+    req: &semver::VersionReq,
+    version: &EntryVersion,
+    budget: &FetchBudget,
+) -> Result<(), CliError> {
+    let name = package_name.as_str();
     // Trust-verification ordering INVARIANT: nothing is installed or recorded
     // until BOTH the publisher signature (if any) and the pinned content hash
-    // have verified against the FETCHED tree. The signature's digest-binding
-    // check hashes that tree (the signed subject digest must equal the tree
-    // hash), so it necessarily runs after the fetch; the pinned-`sha256` check
-    // does too. A rejected signature OR a hash mismatch aborts here, before
-    // `write_records`, so no unverified bytes are ever trusted.
+    // have verified against the FETCHED tree. Both read ONE budgeted walk of
+    // that tree (`tree`): the signed subject digest must equal it, and so must
+    // the pinned `sha256`. A crossed tree ceiling, a rejected signature OR a
+    // hash mismatch aborts here, before `write_records`, so no unverified bytes
+    // are ever trusted.
     let policy = crate::signing::load_trust_policy(project_root)?;
     let verifier = signature_verifier();
 
-    let checkout = fetch_source(
-        project_root,
-        &package_name,
-        &version.version.to_string(),
-        version,
-    )?;
+    let fetched = fetch_source(project_root, package_name, version, budget)?;
+    let checkout = fetched.path().to_path_buf();
+    let tree = crate::cache::TreeDigest::of_tree_within(&checkout, budget.tree())
+        .map_err(CliError::from)
+        .map_err(naming(package_name))?;
 
     // Publisher-identity provenance over the pinned `sha256`, at the same
     // verify-before-trust seam. Deny-by-default and fail-closed: a present
@@ -94,7 +116,7 @@ pub fn resolve_and_add(
         &policy,
         version.signature.as_ref(),
         version.sha256.as_str(),
-        &checkout,
+        &tree,
         verifier.as_ref(),
     )? {
         crate::signing::SignatureOutcome::UnsignedAllowed => {
@@ -113,10 +135,11 @@ pub fn resolve_and_add(
         crate::signing::SignatureOutcome::Verified(_) => {}
     }
 
-    verify_hash(name, &checkout, &version.sha256)?;
+    check_pin(name, &Sha256Hex::of_digest(&tree), &version.sha256)?;
+    fetched.keep();
 
     let locked = LockedDep {
-        name: package_name,
+        name: package_name.clone(),
         version: version.version.clone(),
         origin: LockedOrigin::Index {
             source: version.source.clone(),
@@ -141,12 +164,24 @@ pub fn resolve_and_add(
 ///
 /// # Errors
 /// [`CliError::Resolve`] if a `git` fetch fails or a path source is missing;
-/// [`CliError::Io`] on a filesystem failure.
+/// [`CliError::RemoteIngestExceeded`] when a `git` fetch crosses its transfer
+/// ceiling; [`CliError::LocalLimitExceeded`] when the tree crosses its tree
+/// ceiling or holds a refused entry; [`CliError::Io`] on a filesystem failure.
 pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(), CliError> {
+    resolve_escape_within(project_root, name, dep, &remote_ingest::PACKAGE_SOURCE)
+}
+
+/// [`resolve_escape`] with a `git` fetch and the tree hash held to `budget`.
+fn resolve_escape_within(
+    project_root: &Path,
+    name: &str,
+    dep: &IpeDep,
+    budget: &FetchBudget,
+) -> Result<(), CliError> {
     // Parse-don't-validate: gate the name into a safe path component here, at the
     // boundary, before it reaches any cache-directory join.
     let package_name = PackageName::parse(name)?;
-    let (origin, checkout) = match dep {
+    let (origin, checkout, fetched) = match dep {
         IpeDep::Git { url, rev } => {
             // Parse-don't-validate: convert the raw manifest strings to typed
             // newtypes at this escape-path boundary before they reach the git
@@ -159,11 +194,17 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
             // Classify the request's shape once, from the already
             // injection-validated `CommitId` — never re-parse the raw string.
             let shape = RequestedRev::classify(&package_name, &requested)?;
-            // Fetch first into a temporary location keyed by the requested ref,
-            // then read the commit git actually checked out.
-            let checkout =
-                fetch_git_requested(project_root, &package_name, &typed_url, &requested)?;
-            let pinned = served_commit(&package_name, &checkout)?;
+            // Fetch into the escape's fetch slot; the pin is the commit the
+            // checkout holds, read from it after the fetch.
+            let (fetched, commit) = fetch_git_requested(
+                project_root,
+                &package_name,
+                &typed_url,
+                &requested,
+                &shape,
+                budget,
+            )?;
+            let pinned = commit.into_pin();
             match check_served(&shape, &pinned) {
                 None => {}
                 Some(RevMismatch::Different { requested, served }) => {
@@ -192,25 +233,26 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
             }
             // Re-key the cache dir by the immutable SHA so fetch and verify
             // share the same key regardless of what ref was requested.
-            let final_dest = escape_cache_dir(project_root, &package_name, &pinned);
-            if checkout != final_dest {
-                if final_dest.exists() {
-                    std::fs::remove_dir_all(&final_dest).map_err(|e| CliError::Io {
-                        path: final_dest.clone(),
-                        source: e,
-                    })?;
-                }
-                std::fs::rename(&checkout, &final_dest).map_err(|e| CliError::Io {
-                    path: checkout.clone(),
+            let final_dest = cache_dir(project_root, &package_name, CacheSlot::Escape(&pinned));
+            if final_dest.exists() {
+                std::fs::remove_dir_all(&final_dest).map_err(|e| CliError::Io {
+                    path: final_dest.clone(),
                     source: e,
                 })?;
             }
+            std::fs::rename(fetched.path(), &final_dest).map_err(|e| CliError::Io {
+                path: fetched.path().to_path_buf(),
+                source: e,
+            })?;
+            fetched.keep();
+            let fetched = UnverifiedCheckout::new(final_dest.clone());
             (
                 LockedOrigin::Git {
                     source: typed_url,
                     rev: pinned,
                 },
                 final_dest,
+                Some(fetched),
             )
         }
         IpeDep::Path(path) => {
@@ -225,7 +267,8 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
                 ));
             }
             let source = LocalSource::from_path(&package_name, path)?;
-            (LockedOrigin::Path { source }, resolved)
+            // The author's own directory: never removed on a failure.
+            (LockedOrigin::Path { source }, resolved, None)
         }
         IpeDep::Index(_) => {
             return Err(CliError::Resolve(
@@ -234,7 +277,10 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
         }
     };
 
-    let sha256 = hash_checkout(&checkout)?;
+    let sha256 = hash_checkout(&checkout, budget.tree()).map_err(naming(&package_name))?;
+    if let Some(fetched) = fetched {
+        fetched.keep();
+    }
     // An escape has no published version; `0.0.0` marks "locked from an escape,
     // not the index" without inventing a version the source does not claim.
     let version = PublishedVersion::new(0, 0, 0);
@@ -329,12 +375,16 @@ fn index_root_from(index_dir: Option<std::ffi::OsString>) -> Result<PathBuf, Cli
 /// The same hash the index pins and the resolver verifies against. Exposed so a
 /// caller (e.g. `ipe package publish`, or a test building a fixture index)
 /// computes the exact hash the resolver expects, rather than reimplementing the
-/// tree walk.
+/// tree walk. The walk is held to the tree ceiling of
+/// [`remote_ingest::PACKAGE_SOURCE`], the one a fetch of the published tree is
+/// verified under, so a tree that hashes here is never refused on fetch.
 ///
 /// # Errors
-/// [`CliError::Io`] if the tree cannot be walked or a file cannot be read.
+/// [`CliError::LocalLimitExceeded`] when the tree crosses its tree ceiling or
+/// holds a refused entry; [`CliError::Io`] if the tree cannot be walked or a
+/// file cannot be read.
 pub fn hash_source_tree(root: &Path) -> Result<Sha256Hex, CliError> {
-    hash_checkout(root)
+    hash_checkout(root, remote_ingest::PACKAGE_SOURCE.tree())
 }
 
 /// Fetch a specific published index version's source at its pinned revision into
@@ -348,18 +398,36 @@ pub fn hash_source_tree(root: &Path) -> Result<Sha256Hex, CliError> {
 /// at install).
 ///
 /// # Errors
-/// [`CliError::Resolve`] on a `git` fetch failure; [`CliError::HashMismatch`]
-/// when the fetched tree's hash does not equal the pinned hash; [`CliError::Io`]
-/// on a filesystem failure.
+/// [`CliError::Resolve`] on a `git` fetch failure;
+/// [`CliError::RemoteIngestExceeded`] when the fetch crosses its transfer
+/// ceiling; [`CliError::LocalLimitExceeded`] when the fetched tree crosses its
+/// tree ceiling or holds a refused entry; [`CliError::HashMismatch`] when the
+/// fetched tree's hash does not equal the pinned hash; [`CliError::Io`] on a
+/// filesystem failure.
 pub fn fetch_and_verify_index_version(
     project_root: &Path,
     name: &str,
     version: &EntryVersion,
 ) -> Result<PathBuf, CliError> {
     let name = PackageName::parse(name)?;
-    let checkout = fetch_source(project_root, &name, &version.version.to_string(), version)?;
-    verify_hash(name.as_str(), &checkout, &version.sha256)?;
-    Ok(checkout)
+    fetch_and_verify_index_version_within(
+        project_root,
+        &name,
+        version,
+        &remote_ingest::PACKAGE_SOURCE,
+    )
+}
+
+/// [`fetch_and_verify_index_version`] with the fetch and tree hash held to `budget`.
+pub(crate) fn fetch_and_verify_index_version_within(
+    project_root: &Path,
+    name: &PackageName,
+    version: &EntryVersion,
+    budget: &FetchBudget,
+) -> Result<PathBuf, CliError> {
+    let fetched = fetch_source(project_root, name, version, budget)?;
+    verify_hash(name, fetched.path(), &version.sha256, budget.tree())?;
+    Ok(fetched.keep())
 }
 
 /// Re-verify that every locked Ipê dependency's cached source still hashes to the
@@ -370,22 +438,28 @@ pub fn fetch_and_verify_index_version(
 /// (the SP4 supply-chain check). A dependency whose cached bytes drifted from the
 /// locked hash is a hard [`CliError::HashMismatch`] — the same verify-before-trust
 /// boundary, never a warning. A dependency whose cache directory is absent is not
-/// a mismatch (nothing was tampered; a build re-fetches it), so it is skipped.
+/// a mismatch (nothing was tampered; a build re-fetches it), so it is skipped,
+/// as is a path escape, which is never cached.
 ///
 /// # Errors
 /// [`CliError::HashMismatch`] when a cached tree no longer matches its locked
-/// hash; [`CliError::Io`] on a read failure; [`CliError::Resolve`] on a malformed
-/// lockfile.
+/// hash; [`CliError::LocalLimitExceeded`] when a cached tree crosses its tree
+/// ceiling or holds a refused entry; [`CliError::Io`] on a read failure;
+/// [`CliError::Resolve`] on a malformed lockfile.
 pub fn verify_lockfile_hashes(project_root: &Path) -> Result<(), CliError> {
     let lockfile = Lockfile::read(project_root)?;
     for dep in lockfile.packages() {
-        let cache_dir = dep_cache_dir(project_root, dep);
-        if !cache_dir.is_dir() {
+        let Some(cached) = dep_cache_dir(project_root, dep).filter(|dir| dir.is_dir()) else {
             // Not cached locally — nothing to re-verify here; a build re-fetches
             // and re-verifies against this same pin.
             continue;
-        }
-        verify_hash(dep.name.as_str(), &cache_dir, &dep.sha256)?;
+        };
+        verify_hash(
+            &dep.name,
+            &cached,
+            &dep.sha256,
+            remote_ingest::PACKAGE_SOURCE.tree(),
+        )?;
     }
     Ok(())
 }
@@ -418,86 +492,301 @@ fn manifest_path(project_root: &Path) -> PathBuf {
     project_root.join(crate::package_manifest::PACKAGE_IPE)
 }
 
-/// The package cache directory for one resolved `(name, version)` under the
-/// project's `.ipe/packages/` tree.
+/// Which fetched source a package cache directory holds.
+#[derive(Debug, Clone, Copy)]
+enum CacheSlot<'a> {
+    /// An index version, keyed by its published version.
+    Index(&'a PublishedVersion),
+    /// A git escape, keyed by the commit it resolved to.
+    Escape(&'a PinnedRev),
+    /// A git escape being fetched, before the commit it names is known.
+    EscapeFetch,
+}
+
+/// The package cache directory of `slot` for `name` under the project's
+/// `.ipe/packages/` tree.
+///
+/// The single SSOT for the cache key — the fetch path and the verify path both
+/// call this, so they can never key by different values. The three slot shapes
+/// never overlap: an index slot is `{name}-{version}`, and a package name never
+/// starts with `.`, while an escape slot is `.git-{name}-{sha}` (a fixed-length
+/// hex commit) and a fetch slot is `.fetch-{name}`. A requested ref never
+/// reaches the path, so an escape pinned to a ref spelled like a version cannot
+/// land in (or remove) that version's index slot.
 ///
 /// Takes a validated [`PackageName`] so the name is a single, non-traversing
 /// path component by construction — an unvalidated string cannot reach this
 /// join and reroot the cache directory outside the project.
-fn package_cache_dir(project_root: &Path, name: &PackageName, version: &str) -> PathBuf {
-    project_root
-        .join(".ipe")
-        .join("packages")
-        .join(format!("{}-{version}", name.as_str()))
+fn cache_dir(project_root: &Path, name: &PackageName, slot: CacheSlot<'_>) -> PathBuf {
+    let key = match slot {
+        CacheSlot::Index(version) => format!("{}-{version}", name.as_str()),
+        CacheSlot::Escape(pinned) => format!(".git-{}-{}", name.as_str(), pinned.as_str()),
+        CacheSlot::EscapeFetch => format!(".fetch-{}", name.as_str()),
+    };
+    project_root.join(".ipe").join("packages").join(key)
 }
 
-/// The cache directory for a git escape dep, keyed by its pinned SHA.
+/// The cache directory for a locked dep, or `None` for a path escape, which is
+/// read in place and never cached.
 ///
-/// This is the single SSOT for the escape cache key — both the fetch path and
-/// the verify path call this so they can never key by different values.
-fn escape_cache_dir(project_root: &Path, name: &PackageName, pinned: &PinnedRev) -> PathBuf {
-    package_cache_dir(project_root, name, pinned.as_str())
-}
-
-/// The cache directory for a locked dep.
-///
-/// A git escape keys by its pinned SHA ([`escape_cache_dir`], the key its fetch
-/// used); a path escape and an index dep key by their version. The
-/// [`LockedOrigin`] is the sole authority — field shapes are never re-derived —
-/// and the name is a [`PackageName`] parsed at [`Lockfile::read`], so a
-/// traversing name never reaches this join.
-fn dep_cache_dir(project_root: &Path, dep: &LockedDep) -> PathBuf {
+/// The [`LockedOrigin`] is the sole authority — field shapes are never
+/// re-derived — and the name is a [`PackageName`] parsed at [`Lockfile::read`],
+/// so a traversing name never reaches the join.
+fn dep_cache_dir(project_root: &Path, dep: &LockedDep) -> Option<PathBuf> {
     match &dep.origin {
-        LockedOrigin::Git { rev, .. } => escape_cache_dir(project_root, &dep.name, rev),
-        LockedOrigin::Index { .. } | LockedOrigin::Path { .. } => {
-            package_cache_dir(project_root, &dep.name, &dep.version.to_string())
+        LockedOrigin::Git { rev, .. } => {
+            Some(cache_dir(project_root, &dep.name, CacheSlot::Escape(rev)))
+        }
+        LockedOrigin::Index { .. } => Some(cache_dir(
+            project_root,
+            &dep.name,
+            CacheSlot::Index(&dep.version),
+        )),
+        LockedOrigin::Path { .. } => None,
+    }
+}
+
+/// A fetched package checkout not yet verified, removed on drop unless kept.
+///
+/// Every fetch hands its checkout back in this form, so a fetch or a
+/// verification that fails leaves nothing in the package cache.
+#[derive(Debug)]
+struct UnverifiedCheckout {
+    /// The checkout directory.
+    dir: PathBuf,
+    /// Whether the checkout was kept.
+    kept: bool,
+}
+
+impl UnverifiedCheckout {
+    /// Take ownership of the freshly fetched `dir`.
+    const fn new(dir: PathBuf) -> Self {
+        Self { dir, kept: false }
+    }
+
+    /// The checkout directory.
+    fn path(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Keep the checkout in the cache, returning its directory.
+    fn keep(mut self) -> PathBuf {
+        self.kept = true;
+        std::mem::take(&mut self.dir)
+    }
+}
+
+impl Drop for UnverifiedCheckout {
+    fn drop(&mut self) {
+        if !self.kept {
+            // Best effort: the refusal already carries the real error.
+            let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
 }
 
 /// Fetch an index version's source at its pinned revision into the package
-/// cache, returning the checkout directory.
+/// cache under `budget`, returning the unverified checkout.
 fn fetch_source(
     project_root: &Path,
     name: &PackageName,
-    version: &str,
     entry: &EntryVersion,
-) -> Result<PathBuf, CliError> {
-    let dest = package_cache_dir(project_root, name, version);
-    fetch_git_into(name.as_str(), &entry.source, entry.rev.as_str(), &dest)?;
-    Ok(dest)
+    budget: &FetchBudget,
+) -> Result<UnverifiedCheckout, CliError> {
+    let dest = cache_dir(project_root, name, CacheSlot::Index(&entry.version));
+    fetch_git_into(
+        name,
+        &entry.source,
+        &Wanted::of_commit(&entry.rev),
+        &dest,
+        budget,
+    )
+    .map(|(checkout, _)| checkout)
+    .map_err(naming(name))
 }
 
-/// Fetch a git escape's source at the requested ref into a temporary cache
-/// location keyed by the requested ref string.
+/// Fetch a git escape's source at the requested ref into the escape's fetch
+/// slot under `budget`.
 ///
-/// The returned path holds the checked-out tree; the caller reads the
-/// concrete SHA git actually served via [`index::served_commit`] and then
-/// renames the directory to the SHA-keyed final location.
+/// The returned checkout holds the checked-out tree, and the commit it holds is
+/// the pin the caller records before renaming the directory to its SHA-keyed
+/// final location.
 fn fetch_git_requested(
     project_root: &Path,
     name: &PackageName,
     url: &SourceUrl,
     requested: &CommitId,
-) -> Result<PathBuf, CliError> {
-    let dest = package_cache_dir(project_root, name, requested.as_str());
-    fetch_git_into(name.as_str(), url, requested.as_str(), &dest)?;
-    Ok(dest)
+    shape: &RequestedRev,
+    budget: &FetchBudget,
+) -> Result<(UnverifiedCheckout, CheckedOutCommit), CliError> {
+    let dest = cache_dir(project_root, name, CacheSlot::EscapeFetch);
+    let wanted = Wanted::of_request(requested, shape);
+    fetch_git_into(name, url, &wanted, &dest, budget).map_err(naming(name))
 }
 
-/// Clone `url` into `dest` and check out exactly `rev_str`. A pre-existing
-/// `dest` is removed first so a re-add always fetches fresh.
+/// What a fetch asks the server for.
+///
+/// A full commit SHA names exactly one commit, and only that commit satisfies
+/// the fetch: no advertised ref, whatever its name, stands in for it. Any
+/// other spelling names a ref (or an abbreviated SHA) the server resolves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Wanted<'a> {
+    /// A full commit SHA.
+    Commit(PinnedRev),
+    /// A ref name or an abbreviated SHA — never a full SHA.
+    Name(&'a CommitId),
+}
+
+impl<'a> Wanted<'a> {
+    /// A fetch of the pinned commit `rev`.
+    fn of_commit(rev: &PinnedRev) -> Self {
+        Self::Commit(rev.clone())
+    }
+
+    /// A fetch of what the author requested, by its classified `shape`: a full
+    /// SHA is a [`Wanted::Commit`], anything else a [`Wanted::Name`].
+    fn of_request(requested: &'a CommitId, shape: &RequestedRev) -> Self {
+        match shape {
+            RequestedRev::FullSha(sha) => Self::Commit(sha.clone()),
+            RequestedRev::Head | RequestedRev::AbbrevHex(_) | RequestedRev::Name(_) => {
+                Self::Name(requested)
+            }
+        }
+    }
+
+    /// The spelling passed to git — safe in argv, since both a [`PinnedRev`]
+    /// and a [`CommitId`] never begin with `-`.
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Commit(sha) => sha.as_str(),
+            Self::Name(name) => name.as_str(),
+        }
+    }
+
+    /// What to check out once a single ref's tip was fetched: a commit by its
+    /// SHA, so a tip that is not it fails closed; a name by `FETCH_HEAD`.
+    fn fetched_tip(&self) -> &str {
+        match self {
+            Self::Commit(sha) => sha.as_str(),
+            Self::Name(_) => "FETCH_HEAD",
+        }
+    }
+}
+
+/// The commit a fetch left checked out, read from `HEAD` after the checkout.
+///
+/// This is the only source of a recorded pin: the pin is what the tree on disk
+/// is, never what the server's advertisement said it would be.
+#[derive(Debug)]
+struct CheckedOutCommit(PinnedRev);
+
+impl CheckedOutCommit {
+    /// Read the commit checked out in `dest` as a step of `transfer`, and
+    /// [`check`](Self::check) it against `wanted`.
+    fn read(
+        name: &PackageName,
+        wanted: &Wanted<'_>,
+        dest: &Path,
+        transfer: &Transfer,
+    ) -> Result<Self, CliError> {
+        let args = ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"];
+        let head =
+            git_step(&args, dest, transfer).map_err(|failed| failed.into_cli(name, &args))?;
+        let served = PinnedRev::from_full_sha(name, String::from_utf8_lossy(&head.stdout).trim())?;
+        Self::check(name, wanted, served)
+    }
+
+    /// Accept `served` as the fetch of `wanted`: a requested commit must be
+    /// exactly the commit served, and a requested name is whatever it served.
+    fn check(name: &PackageName, wanted: &Wanted<'_>, served: PinnedRev) -> Result<Self, CliError> {
+        match wanted {
+            Wanted::Commit(requested) if *requested != served => Err(CliError::Resolve(
+                crate::text::msg::resolve_fetched_commit_mismatch(name, requested, &served),
+            )),
+            Wanted::Commit(_) | Wanted::Name(_) => Ok(Self(served)),
+        }
+    }
+
+    /// The commit, as the pin to record.
+    fn into_pin(self) -> PinnedRev {
+        self.0
+    }
+}
+
+/// Clone `url` into `dest` and check out exactly `wanted`, returning the
+/// checkout and the commit it holds. A pre-existing `dest` is removed first so
+/// a re-add always fetches fresh.
 ///
 /// `url` is a [`SourceUrl`] newtype — a raw unvalidated string cannot reach
-/// this function. `rev_str` must come from either a [`CommitId`] or a
-/// [`PinnedRev`] `.as_str()` — both newtypes guarantee no leading `-` so the
-/// value is safe to pass to `git checkout` without `--`.
+/// this function — and `wanted` is built only from a [`CommitId`] or a
+/// [`PinnedRev`], both of which never begin with `-`, so its spelling is safe
+/// to pass to `git checkout` without `--`.
 ///
-/// Defense-in-depth: `GIT_ALLOW_PROTOCOL` restricts transports (network +
-/// `file`) even if a value somehow bypassed the parse boundary. `--` terminates
-/// git's option list for clone so the URL is always a positional; checkout
-/// omits `--` because in checkout it means "treat as a path, not a ref".
-fn fetch_git_into(name: &str, url: &SourceUrl, rev_str: &str, dest: &Path) -> Result<(), CliError> {
+/// Defense-in-depth: [`Git::isolated`] restricts transports to the
+/// [`Transport`](crate::index::Transport) set even if a value somehow bypassed
+/// the parse boundary, and reads no user or system configuration.
+///
+/// The whole fetch is one [`Transfer`] under `budget`'s transfer ceilings: every step shares its
+/// deadline, `dest` (object store and working tree) is measured against its
+/// disk ceilings while git runs, and a crossing kills git with every process it
+/// started and refuses the fetch. On any failure — a served commit that is not
+/// the requested one included — `dest` is removed, so nothing partial stays in
+/// the cache.
+fn fetch_git_into(
+    name: &PackageName,
+    url: &SourceUrl,
+    wanted: &Wanted<'_>,
+    dest: &Path,
+    budget: &FetchBudget,
+) -> Result<(UnverifiedCheckout, CheckedOutCommit), CliError> {
+    let checkout = UnverifiedCheckout::new(dest.to_path_buf());
+    let transfer = Transfer::begin(*budget.transfer());
+    stage_origin(name, url, dest, &transfer)?;
+    // Fetch the EXACT pinned object rather than cloning a branch and hoping it
+    // contains the rev. `git init` + `fetch <sha>` pulls precisely the pinned
+    // commit and its tree — a shallow, single-object fetch independent of which
+    // branch (if any) currently points at it. A server that refuses the
+    // request is asked through its ref advertisement instead; any other failure
+    // ends the fetch.
+    //
+    // `--end-of-options` ends git's option list before the remote-supplied or
+    // requested positionals; `checkout <rev>` takes no terminator, since `--`
+    // there means "path, not ref" — the spelling never begins with `-`.
+    let exact = [
+        "fetch",
+        "--quiet",
+        "--depth",
+        "1",
+        "--end-of-options",
+        "origin",
+        wanted.as_str(),
+    ];
+    match git_step(&exact, dest, &transfer) {
+        Ok(_) => {
+            run_git(
+                name,
+                &["checkout", "--quiet", wanted.fetched_tip()],
+                dest,
+                &transfer,
+            )?;
+        }
+        Err(failed) if failed.widens() => {
+            fetch_advertised(name, wanted, dest, &transfer, budget.refs())?;
+        }
+        Err(failed) => return Err(failed.into_cli(name, &exact)),
+    }
+    let commit = CheckedOutCommit::read(name, wanted, dest, &transfer)?;
+    Ok((checkout, commit))
+}
+
+/// Make `dest` an empty repository whose `origin` is `url`, as the first steps
+/// of `transfer`. A pre-existing `dest` is removed first.
+fn stage_origin(
+    name: &PackageName,
+    url: &SourceUrl,
+    dest: &Path,
+    transfer: &Transfer,
+) -> Result<(), CliError> {
     if dest.exists() {
         std::fs::remove_dir_all(dest).map_err(|e| CliError::Io {
             path: dest.to_path_buf(),
@@ -509,110 +798,370 @@ fn fetch_git_into(name: &str, url: &SourceUrl, rev_str: &str, dest: &Path) -> Re
         path: dest.to_path_buf(),
         source: e,
     })?;
-    // Fetch the EXACT pinned object rather than cloning a branch and hoping it
-    // contains the rev. `git init` + `fetch <sha>` pulls precisely the pinned
-    // commit and its tree — cheaper than a full clone (a shallow, single-object
-    // fetch) and independent of which branch (if any) currently points at it, so
-    // a rev that has scrolled off its branch tip but is still ref-reachable is
-    // still fetched. A server that refuses a raw-SHA want falls back to fetching
-    // all refs, then checking the rev out from among them.
-    //
-    // `--` terminates git's option list where a URL is positional; for
-    // `checkout` / `fetch <rev>` it is omitted so git treats the rev as a ref,
-    // not a path — `rev_str` / `url` come from parse-validated newtypes with no
-    // leading `-`.
-    run_git(name, &["init", "--quiet"], dest, Some(dest))?;
-    // `git remote add` has no `--` option terminator; the URL is a
-    // parse-validated newtype (no leading `-`), so it is a safe trailing arg.
+    run_git(name, &["init", "--quiet"], dest, transfer)?;
+    // `git remote add` has no option terminator; the URL is a parse-validated
+    // newtype (no leading `-`), so it is a safe trailing arg.
     run_git(
         name,
         &["remote", "add", "origin", url.as_str()],
         dest,
-        Some(dest),
+        transfer,
     )?;
-    if run_git(
-        name,
-        &["fetch", "--quiet", "--depth", "1", "origin", rev_str],
-        dest,
-        Some(dest),
-    )
-    .is_err()
-    {
-        // Fallback for a server that disallows fetching an arbitrary SHA (e.g. a
-        // local `file://` remote with `allowReachableSHA1InWant` off): pull every
-        // branch AND tag, from which any ref-reachable rev — including one held
-        // alive only by a tag — resolves.
-        run_git(
+    Ok(())
+}
+
+/// Fetch `wanted` from a server that refused it as a raw want.
+///
+/// The server's tag and branch advertisement is read first under `refs`, as a
+/// step of `transfer` whose output is capped at `refs.bytes()`; a longer or
+/// malformed advertisement refuses the fetch before any object arrives. When
+/// an advertised ref matches `wanted` — a requested commit by its tip (the
+/// peeled commit of an annotated tag) only, a requested name by its name only
+/// — that ref alone is fetched, at depth 1. Only a `wanted` reachable solely
+/// through history fetches every tag and branch, still under `transfer`'s
+/// disk, entry and wall ceilings.
+fn fetch_advertised(
+    name: &PackageName,
+    wanted: &Wanted<'_>,
+    dest: &Path,
+    transfer: &Transfer,
+    refs: &RefsCeiling,
+) -> Result<(), CliError> {
+    let list = ["ls-remote", "origin", "refs/tags/*", "refs/heads/*"];
+    let listed = git_step(&list, dest, &transfer.with_stdout_ceiling(refs.bytes()))
+        .map_err(|failed| failed.into_cli(name, &list))?;
+    let advertised = parse_advertisement(&listed.stdout, refs)
+        .map_err(|limit| CliError::RemoteIngestExceeded(transfer.refusal(limit)))?;
+    let tip = advertised
+        .iter()
+        .filter_map(|advert| {
+            advert
+                .matches(wanted)
+                .map(|rank| (rank, advert.name.as_str()))
+        })
+        .min_by_key(|(rank, _)| *rank)
+        .map(|(_, tip)| tip);
+    if let Some(tip) = tip {
+        let fetch = [
+            "fetch",
+            "--quiet",
+            "--depth",
+            "1",
+            "--no-tags",
+            "--end-of-options",
+            "origin",
+            tip,
+        ];
+        run_git(name, &fetch, dest, transfer)?;
+        return run_git(
             name,
-            &["fetch", "--quiet", "--tags", "origin"],
+            &["checkout", "--quiet", wanted.fetched_tip()],
             dest,
-            Some(dest),
-        )?;
-        run_git(name, &["checkout", "--quiet", rev_str], dest, Some(dest))?;
-        return Ok(());
+            transfer,
+        );
     }
-    // The exact-SHA fetch lands the commit at FETCH_HEAD.
     run_git(
         name,
-        &["checkout", "--quiet", "FETCH_HEAD"],
+        &[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--end-of-options",
+            "origin",
+            "refs/tags/*:refs/tags/*",
+            "refs/heads/*:refs/remotes/origin/*",
+        ],
         dest,
-        Some(dest),
+        transfer,
     )?;
-    Ok(())
+    // A 40-hex argument is always an object name to `git checkout`, never a
+    // ref spelled like one, so a requested commit checks out only itself.
+    run_git(
+        name,
+        &["checkout", "--quiet", wanted.as_str()],
+        dest,
+        transfer,
+    )
 }
 
-/// Run `git <args>`, treating a spawn failure or a non-zero exit as a
-/// [`CliError::Resolve`] naming the package. When `cwd` is `Some`, git runs
-/// there; otherwise the final arg of a `clone` is the destination path (git's
-/// own convention), so `dest` is appended.
+/// Parse `ls-remote` output into at most `refs.count()` advertised refs.
 ///
-/// `GIT_ALLOW_PROTOCOL` is always set, restricting git to the same transports
-/// the index parse boundary allows (network transports plus `file`).
-/// `GIT_TERMINAL_PROMPT=0` ensures git never blocks waiting for interactive
-/// credentials.
-fn run_git(name: &str, args: &[&str], dest: &Path, cwd: Option<&Path>) -> Result<(), CliError> {
-    let mut command = Command::new("git");
-    command.args(args);
-    if cwd.is_none() {
-        // A `clone` takes the destination as its final positional argument.
-        command.arg(dest);
+/// More lines is [`IngestLimit::Entries`]; a line that is not a SHA, a tab and
+/// a safe tag or branch name is [`IngestLimit::MalformedRef`] — the whole
+/// advertisement is refused. The one line skipped rather than refused is a
+/// valid SHA beside a ref name that is not UTF-8: git allows such a name, no
+/// requested name can equal it, and it never reaches argv, so dropping it only
+/// sends a commit at its tip through the full fetch.
+fn parse_advertisement(
+    stdout: &[u8],
+    refs: &RefsCeiling,
+) -> Result<Vec<AdvertisedRef>, IngestLimit> {
+    let body = stdout.strip_suffix(b"\n").unwrap_or(stdout);
+    if body.is_empty() {
+        return Ok(Vec::new());
     }
-    if let Some(cwd) = cwd {
-        command.current_dir(cwd);
+    let mut parsed = Vec::new();
+    for (count, line) in (1_u64..).zip(body.split(|byte| *byte == b'\n')) {
+        if count > refs.count() {
+            return Err(IngestLimit::Entries(refs.count()));
+        }
+        match AdvertisedRef::parse(line).ok_or(IngestLimit::MalformedRef)? {
+            Advertised::Ref(advert) => parsed.push(advert),
+            Advertised::Unmatchable => {}
+        }
     }
-    // Defense-in-depth: restrict git transports at the subprocess level so a
-    // value that bypassed the parse boundary still cannot open an arbitrary
-    // transport (`file` is included for local-path and file:// sources).
-    // `GIT_TERMINAL_PROMPT=0` prevents credential prompts that would block a
-    // non-interactive `ipe add`.
-    command
-        .env("GIT_ALLOW_PROTOCOL", "https:git:ssh:file")
-        .env("GIT_TERMINAL_PROMPT", "0");
-    let output = command
-        .output()
-        .map_err(|e| CliError::Resolve(crate::text::msg::resolve_git_unavailable(&name, &e)))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CliError::Resolve(crate::text::msg::resolve_git_failed(
-            &name,
-            &crate::style::TerminalSafe::sanitize(&args.join(" ")),
-            &crate::style::TerminalSafe::sanitize(stderr.trim()),
-        )));
-    }
-    Ok(())
+    Ok(parsed)
 }
 
-/// Hash the fetched source tree, mapping a walk/read failure to an IO error.
-fn hash_checkout(checkout: &Path) -> Result<Sha256Hex, CliError> {
-    Sha256Hex::of_tree(checkout).map_err(|(path, source)| CliError::Io { path, source })
+/// One line of a server's ref advertisement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AdvertisedRef {
+    /// The commit the line names; for a peeled line, the tag's commit.
+    sha: PinnedRev,
+    /// The ref, without any peeled suffix.
+    name: RefName,
+}
+
+/// A well-formed advertisement line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Advertised {
+    /// A safe tag or branch ref.
+    Ref(AdvertisedRef),
+    /// A ref whose name is not UTF-8, which no request can match.
+    Unmatchable,
+}
+
+/// How an advertised ref matches what a fetch wants, strongest first — git's
+/// own order for resolving a short name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum TipMatch {
+    /// The requested name is the ref's full name.
+    FullName,
+    /// The requested name is the tag's short name.
+    Tag,
+    /// The requested name is the branch's short name.
+    Branch,
+    /// The ref's tip is the requested commit.
+    Commit,
+}
+
+impl AdvertisedRef {
+    /// Parse `<sha>\t<ref>`, where a peeled `<ref>^{}` is accepted on a tag
+    /// only; `None` when the line is malformed.
+    fn parse(line: &[u8]) -> Option<Advertised> {
+        let mut fields = line.splitn(2, |byte| *byte == b'\t');
+        let sha = std::str::from_utf8(fields.next()?).ok()?;
+        let sha = PinnedRev::parse_sha(sha)?;
+        let Ok(name) = std::str::from_utf8(fields.next()?) else {
+            return Some(Advertised::Unmatchable);
+        };
+        let name = match name.strip_suffix("^{}") {
+            Some(base) if base.starts_with(RefName::TAGS) => base,
+            Some(_) => return None,
+            None => name,
+        };
+        Some(Advertised::Ref(Self {
+            sha,
+            name: RefName::parse(name)?,
+        }))
+    }
+
+    /// How this ref matches `wanted`, if it does. A requested commit matches
+    /// only by the ref's tip, never by its name, so a ref named like a SHA
+    /// cannot stand in for that commit.
+    fn matches(&self, wanted: &Wanted<'_>) -> Option<TipMatch> {
+        let name = self.name.as_str();
+        match *wanted {
+            Wanted::Commit(ref sha) => (self.sha == *sha).then_some(TipMatch::Commit),
+            Wanted::Name(rev) if name == rev.as_str() => Some(TipMatch::FullName),
+            Wanted::Name(rev) if name.strip_prefix(RefName::TAGS) == Some(rev.as_str()) => {
+                Some(TipMatch::Tag)
+            }
+            Wanted::Name(rev) if name.strip_prefix(RefName::HEADS) == Some(rev.as_str()) => {
+                Some(TipMatch::Branch)
+            }
+            Wanted::Name(_) => None,
+        }
+    }
+}
+
+/// A remote-supplied tag or branch name, safe as a fetch refspec in argv.
+///
+/// It lies under `refs/tags/` or `refs/heads/` and obeys exactly the
+/// `git check-ref-format` rules: none of `: * ^ ~ ? [ \`, a space or a control
+/// byte, no `..`, `@{`, `//`, trailing `/` or `.`, and no component that
+/// starts with `.` or ends with `.lock` in any case. Its `refs/` prefix keeps it from ever
+/// being an option or a forced update, and the absent `:` keeps it from naming
+/// a destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RefName(String);
+
+impl RefName {
+    const TAGS: &'static str = "refs/tags/";
+    const HEADS: &'static str = "refs/heads/";
+
+    /// Parse `raw`, or `None` when it is not a safe tag or branch name.
+    fn parse(raw: &str) -> Option<Self> {
+        let rest = raw
+            .strip_prefix(Self::TAGS)
+            .or_else(|| raw.strip_prefix(Self::HEADS))?;
+        let unsafe_char = |c: char| {
+            c.is_ascii_control() || matches!(c, ' ' | ':' | '*' | '^' | '~' | '?' | '[' | '\\')
+        };
+        let safe = !rest.is_empty()
+            && !raw.chars().any(unsafe_char)
+            && !raw.contains("..")
+            && !raw.contains("@{")
+            && !raw.contains("//")
+            && !raw.ends_with('/')
+            && !raw.ends_with('.')
+            && rest
+                .split('/')
+                .all(|component| !component.starts_with('.') && !has_lock_suffix(component));
+        safe.then(|| Self(raw.to_owned()))
+    }
+
+    const fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+/// Why one `git` step of a package fetch failed.
+///
+/// Only [`GitStepError::Exited`] — git ran and the server refused the request
+/// — may widen the fetch; every other failure ends it.
+#[derive(Debug)]
+enum GitStepError {
+    /// Git ran and exited non-zero, with this (truncated) stderr.
+    Exited { stderr: Vec<u8> },
+    /// The step crossed its budget.
+    Refused(remote_ingest::IngestRefusal),
+    /// A process git started held an output pipe past the grace.
+    PipeHeld(remote_ingest::Stream),
+    /// Git could not be started or waited on.
+    Unavailable(std::io::Error),
+    /// The staged path could not be measured.
+    Measure(PathBuf, std::io::Error),
+    /// A signal ended the step.
+    Interrupted,
+}
+
+impl GitStepError {
+    /// The step failure a run error is.
+    fn from_run(error: RunError) -> Self {
+        match error {
+            RunError::Spawn(e) | RunError::Wait(e)
+                if e.kind() == std::io::ErrorKind::Interrupted =>
+            {
+                Self::Interrupted
+            }
+            RunError::Spawn(e) | RunError::Wait(e) => Self::Unavailable(e),
+            RunError::Measure(path, e) => Self::Measure(path, e),
+            RunError::Exceeded(refusal) => Self::Refused(refusal),
+            RunError::PipeDrainTimeout(stream) => Self::PipeHeld(stream),
+        }
+    }
+
+    /// Whether the fetch may ask the server again, more widely, after this failure.
+    const fn widens(&self) -> bool {
+        match self {
+            Self::Exited { .. } => true,
+            Self::Refused(_)
+            | Self::PipeHeld(_)
+            | Self::Unavailable(_)
+            | Self::Measure(..)
+            | Self::Interrupted => false,
+        }
+    }
+
+    /// The CLI error for this failure of `git <args>` fetching `name`.
+    fn into_cli(self, name: &PackageName, args: &[&str]) -> CliError {
+        match self {
+            Self::Exited { stderr } => {
+                let stderr = String::from_utf8_lossy(&stderr);
+                CliError::Resolve(crate::text::msg::resolve_git_failed(
+                    name,
+                    &crate::style::TerminalSafe::sanitize(&args.join(" ")),
+                    &crate::style::TerminalSafe::sanitize(stderr.trim()),
+                ))
+            }
+            Self::Refused(refusal) => CliError::RemoteIngestExceeded(refusal),
+            Self::PipeHeld(stream) => CliError::ChildPipeHeld(stream),
+            Self::Unavailable(e) => {
+                CliError::Resolve(crate::text::msg::resolve_git_unavailable(name, &e))
+            }
+            Self::Measure(path, source) => CliError::Io { path, source },
+            Self::Interrupted => CliError::Interrupted,
+        }
+    }
+}
+
+/// Run `git <args>` in `dest` as one step of `transfer`, with `dest` watched.
+fn git_step(args: &[&str], dest: &Path, transfer: &Transfer) -> Result<Captured, GitStepError> {
+    let output = Git::isolated(dest)
+        .args(args)
+        .run_detached(Some(dest), transfer)
+        .map_err(GitStepError::from_run)?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(GitStepError::Exited {
+            stderr: output.stderr,
+        })
+    }
+}
+
+/// Run `git <args>` in `dest` as one step of `transfer` fetching `name`.
+///
+/// A spawn failure or a non-zero exit is a [`CliError::Resolve`] naming the
+/// package; a crossed budget is [`CliError::RemoteIngestExceeded`].
+fn run_git(
+    name: &PackageName,
+    args: &[&str],
+    dest: &Path,
+    transfer: &Transfer,
+) -> Result<(), CliError> {
+    git_step(args, dest, transfer)
+        .map(drop)
+        .map_err(|failed| failed.into_cli(name, args))
+}
+
+/// Hash the fetched source tree under `ceiling`; a crossed ceiling or refused
+/// entry is a [`CliError::LocalLimitExceeded`], a walk/read failure an IO error.
+fn hash_checkout(checkout: &Path, ceiling: &TreeCeiling) -> Result<Sha256Hex, CliError> {
+    Sha256Hex::of_tree_within(checkout, ceiling).map_err(CliError::from)
 }
 
 /// Verify the fetched tree's content hash equals the index-pinned hash. This is
 /// the verify-before-trust boundary: a mismatch is a hard error, so nothing
 /// derived from an unverified fetch is ever written.
-fn verify_hash(name: &str, checkout: &Path, expected: &Sha256Hex) -> Result<(), CliError> {
-    let actual = hash_checkout(checkout)?;
-    if actual == *expected {
+fn verify_hash(
+    name: &PackageName,
+    checkout: &Path,
+    expected: &Sha256Hex,
+    ceiling: &TreeCeiling,
+) -> Result<(), CliError> {
+    let actual = hash_checkout(checkout, ceiling).map_err(naming(name))?;
+    check_pin(name.as_str(), &actual, expected)
+}
+
+/// Name the package `name` in a fetch or tree refusal an error carries; every
+/// other error passes through unchanged.
+fn naming(name: &PackageName) -> impl Fn(CliError) -> CliError + '_ {
+    move |err| match err {
+        CliError::RemoteIngestExceeded(refusal) => {
+            CliError::RemoteIngestExceeded(refusal.with_name(name))
+        }
+        CliError::LocalLimitExceeded(refusal) => {
+            CliError::LocalLimitExceeded(refusal.with_name(name))
+        }
+        other => other,
+    }
+}
+
+/// Compare a fetched tree's `actual` hash with the index-pinned `expected`.
+fn check_pin(name: &str, actual: &Sha256Hex, expected: &Sha256Hex) -> Result<(), CliError> {
+    if actual == expected {
         Ok(())
     } else {
         Err(CliError::HashMismatch {
@@ -683,24 +1232,41 @@ fn added_report(
     out
 }
 
+/// Whether a ref-name component ends in `.lock`, in any case: git reserves it
+/// for its lock files, and a case-folding filesystem makes `.LOCK` the same file.
+fn has_lock_suffix(component: &str) -> bool {
+    component
+        .get(component.len().saturating_sub(".lock".len())..)
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(".lock"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        INDEX_DIR_ENV, added_report, cache_base_from, dep_cache_dir, escape_cache_dir,
-        fetch_git_into, index_root_from, package_cache_dir, resolve_and_remove, resolve_escape,
-        verify_hash, verify_lockfile_hashes,
+        CacheSlot, CheckedOutCommit, GitStepError, INDEX_DIR_ENV, Wanted, added_report,
+        cache_base_from, cache_dir, dep_cache_dir, fetch_advertised,
+        fetch_and_verify_index_version_within, fetch_git_into, hash_checkout, hash_source_tree,
+        index_root_from, parse_advertisement, resolve_and_add_within, resolve_and_remove,
+        resolve_escape, resolve_escape_within, stage_origin, verify_hash, verify_lockfile_hashes,
     };
     use crate::CliError;
-    use crate::index::{CommitId, PinnedRev, Sha256Hex, SourceUrl};
+    use crate::index::{
+        self, CommitId, EntryVersion, PinnedRev, RequestedRev, Sha256Hex, SourceUrl,
+    };
     use crate::lockfile::{LockedDep, LockedOrigin, Lockfile};
     use crate::package_name::PackageName;
     use crate::project::IpeDep;
     use crate::published_version::PublishedVersion;
+    use crate::remote_ingest::{
+        self, ByteBudget, FetchBudget, IngestLimit, IngestRefusal, IngestSource, LocalRefusal,
+        LocalSource, PACKAGE_FILE_MAX_BYTES, PACKAGE_SOURCE, PACKAGE_TREE_MAX_BYTES,
+        PACKAGE_TREE_MAX_DEPTH, PACKAGE_TREE_MAX_ENTRIES, REFS_MAX_BYTES, REFS_MAX_COUNT,
+        RefsCeiling, RunError, Stream, Transfer, TreeCeiling,
+    };
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
 
     /// A fixture package name.
     #[allow(clippy::expect_used)] // fixture names are literal registry names
@@ -710,9 +1276,7 @@ mod tests {
 
     fn temp_dir(_tag: &str) -> PathBuf {
         let sd = crate::scratch::ScratchDir::new("ipe-resolve-test").expect("scratch dir");
-        let p = sd.path().to_path_buf();
-        std::mem::forget(sd); // caller's explicit remove_dir_all handles cleanup
-        p
+        sd.into_path() // caller's explicit remove_dir_all handles cleanup
     }
 
     fn scaffold_project(root: &Path) {
@@ -730,13 +1294,8 @@ mod tests {
     fn git_source(tag: &str, content: &str) -> PathBuf {
         let repo = temp_dir(&format!("src-{tag}"));
         let git = |args: &[&str]| {
-            let ok = Command::new("git")
+            let ok = remote_ingest::fixture_git(&repo)
                 .args(args)
-                .current_dir(&repo)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@t")
                 .output()
                 .expect("git runs")
                 .status
@@ -750,6 +1309,80 @@ mod tests {
         repo
     }
 
+    /// The HEAD commit of the fixture repo `repo`.
+    fn head_rev(repo: &Path) -> String {
+        let out = remote_ingest::fixture_git(repo)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git rev-parse HEAD");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    /// Version `1.0.0` of `name`, published from `source` at its HEAD and
+    /// pinned to `sha256`, read back through the index parser.
+    fn index_version(name: &str, source: &Path, sha256: &str) -> EntryVersion {
+        let index_root = temp_dir("index");
+        let packages = index_root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        let entry = format!(
+            "name = \"{name}\"\npublisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
+             source = \"{}\"\nrev = \"{}\"\nsha256 = \"{sha256}\"\ncapabilities = []\n",
+            source.display(),
+            head_rev(source),
+        );
+        std::fs::write(packages.join(format!("{name}.toml")), entry).expect("write entry");
+        let entry = index::read_entry(&index_root, name).expect("fixture entry parses");
+        let req = "^1".parse().expect("valid req");
+        let version = index::resolve_version(&entry, &req)
+            .expect("fixture version resolves")
+            .clone();
+        let _ = std::fs::remove_dir_all(&index_root);
+        version
+    }
+
+    /// A fixture git repo with `count` small files at HEAD.
+    fn git_source_of(tag: &str, count: usize) -> PathBuf {
+        let repo = git_source(tag, "module Lib\n");
+        for index in 1..count {
+            std::fs::write(repo.join(format!("f{index}.ipe")), "x").expect("write file");
+        }
+        let git = |args: &[&str]| {
+            remote_ingest::fixture_git(&repo)
+                .args(args)
+                .output()
+                .expect("git runs")
+                .status
+                .success()
+        };
+        assert!(git(&["add", "."]));
+        assert!(git(&["commit", "--quiet", "-m", "more"]));
+        repo
+    }
+
+    /// A budget whose transfer and ref ceilings are production and whose tree
+    /// ceiling is `tree`.
+    fn with_tree(tree: TreeCeiling) -> FetchBudget {
+        FetchBudget::for_test(*PACKAGE_SOURCE.transfer(), *PACKAGE_SOURCE.refs(), tree)
+            .expect("paired budget")
+    }
+
+    /// Nothing is recorded or cached in `proj`: no lock, the manifest as it
+    /// was, and an empty package cache.
+    fn assert_nothing_recorded(proj: &Path, manifest_before: &[u8]) {
+        assert!(
+            !proj.join("ipe.lock").exists(),
+            "a refused fetch writes no lock"
+        );
+        assert_eq!(
+            std::fs::read(proj.join("package.ipe")).expect("manifest"),
+            manifest_before,
+            "a refused fetch leaves the manifest untouched"
+        );
+        let packages = proj.join(".ipe").join("packages");
+        let leftover = std::fs::read_dir(&packages).map_or(0, Iterator::count);
+        assert_eq!(leftover, 0, "a refused fetch leaves nothing in the cache");
+    }
+
     #[test]
     fn verify_hash_rejects_a_mismatch() {
         // The verify-before-trust boundary: a wrong expected hash is a hard
@@ -757,9 +1390,9 @@ mod tests {
         let dir = temp_dir("verify");
         std::fs::write(dir.join("a.txt"), "hello").expect("write");
         let real = Sha256Hex::of_tree(&dir).expect("hash");
-        verify_hash("p", &dir, &real).expect("matching hash passes");
+        verify_hash(&pn("p"), &dir, &real, PACKAGE_SOURCE.tree()).expect("matching hash passes");
         let wrong = Sha256Hex::parse(&pn("p"), &"0".repeat(64)).expect("valid digest");
-        let err = verify_hash("p", &dir, &wrong).unwrap_err();
+        let err = verify_hash(&pn("p"), &dir, &wrong, PACKAGE_SOURCE.tree()).unwrap_err();
         assert!(matches!(err, crate::CliError::HashMismatch { .. }));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -818,25 +1451,19 @@ mod tests {
             "locked rev must be lowercase hex"
         );
         assert_ne!(rev_str, "HEAD", "locked rev must not be the string HEAD");
-        // The cached checkout must be keyed by the SHA, not by "HEAD".
+        // The cached checkout must be keyed by the SHA, not by the fetch slot.
         let remotelib = PackageName::parse("remotelib").expect("valid name");
         assert!(
-            !package_cache_dir(&proj, &remotelib, "HEAD").exists(),
-            "HEAD-keyed cache dir must not exist"
+            !cache_dir(&proj, &remotelib, CacheSlot::EscapeFetch).exists(),
+            "the fetch slot must be renamed away"
         );
+        let pinned = entry.origin.pinned_rev().expect("a git escape pins a rev");
         assert!(
-            package_cache_dir(&proj, &remotelib, rev_str).exists(),
+            cache_dir(&proj, &remotelib, CacheSlot::Escape(pinned)).exists(),
             "SHA-keyed cache dir must exist"
         );
         // Verify the locked SHA matches the fixture repo's actual HEAD.
-        let actual_head = {
-            let out = Command::new("git")
-                .args(["rev-parse", "HEAD"])
-                .current_dir(&src)
-                .output()
-                .expect("git rev-parse HEAD");
-            String::from_utf8_lossy(&out.stdout).trim().to_owned()
-        };
+        let actual_head = head_rev(&src);
         assert_eq!(
             rev_str, actual_head,
             "locked SHA must equal the fixture HEAD"
@@ -876,13 +1503,8 @@ mod tests {
 
         // Add C2 on the same branch — moves HEAD forward.
         let git = |args: &[&str]| {
-            Command::new("git")
+            remote_ingest::fixture_git(&src)
                 .args(args)
-                .current_dir(&src)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@t")
                 .output()
                 .expect("git")
                 .status
@@ -946,14 +1568,10 @@ mod tests {
 
         // Tamper a file inside the cache dir.
         let escapedep = PackageName::parse("escapedep").expect("valid name");
-        let cache = package_cache_dir(
+        let cache = cache_dir(
             &proj,
             &escapedep,
-            entry
-                .origin
-                .pinned_rev()
-                .map(PinnedRev::as_str)
-                .expect("a git escape pins a rev"),
+            CacheSlot::Escape(entry.origin.pinned_rev().expect("a git escape pins a rev")),
         );
         assert!(cache.is_dir(), "cache dir must exist at the SHA key");
         std::fs::write(cache.join("TAMPERED"), "evil").expect("tamper");
@@ -1002,22 +1620,28 @@ mod tests {
             sha256: digest,
         };
 
-        // Escape: dep_cache_dir must equal escape_cache_dir (keyed by SHA).
+        // Escape: dep_cache_dir must equal the escape slot (keyed by SHA).
         let myescape = PackageName::parse("myescape").expect("valid name");
-        let via_escape = escape_cache_dir(&proj, &myescape, &pinned_sha);
+        let via_escape = cache_dir(&proj, &myescape, CacheSlot::Escape(&pinned_sha));
         let via_dep = dep_cache_dir(&proj, &escape_dep);
         assert_eq!(
-            via_escape, via_dep,
+            Some(via_escape.clone()),
+            via_dep,
             "fetch and verify must key escape by the same path"
         );
 
         // Index dep: dep_cache_dir must key by version, not rev.
         let mypkg = PackageName::parse("mypkg").expect("valid name");
-        let via_version = package_cache_dir(&proj, &mypkg, "1.2.0");
+        let version = PublishedVersion::parse("1.2.0").expect("valid");
+        let via_version = cache_dir(&proj, &mypkg, CacheSlot::Index(&version));
         let via_index = dep_cache_dir(&proj, &index_dep);
-        assert_eq!(via_version, via_index, "index dep must be keyed by version");
+        assert_eq!(
+            Some(via_version.clone()),
+            via_index,
+            "index dep must be keyed by version"
+        );
         assert_ne!(
-            via_escape, via_index,
+            via_escape, via_version,
             "escape and index deps must not share a cache dir"
         );
 
@@ -1095,11 +1719,933 @@ mod tests {
         let url = SourceUrl::parse(&pn("p"), &src.display().to_string())
             .expect("local path is a valid source URL");
         let rev = CommitId::parse(&pn("p"), "HEAD").expect("HEAD is a valid commit id");
-        fetch_git_into("p", &url, rev.as_str(), &dest)
-            .expect("clone succeeds for a valid local repo");
-        assert!(dest.is_dir(), "destination was populated");
+        let shape = RequestedRev::classify(&pn("p"), &rev).expect("HEAD classifies");
+        let (checkout, commit) = fetch_git_into(
+            &pn("p"),
+            &url,
+            &Wanted::of_request(&rev, &shape),
+            &dest,
+            &PACKAGE_SOURCE,
+        )
+        .expect("clone succeeds for a valid local repo");
+        assert_eq!(commit.into_pin().as_str(), head_rev(&src));
+        assert!(checkout.keep().is_dir(), "destination was populated");
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&dest);
+    }
+
+    // --- the want-by-SHA fallback: the ref advertisement ---
+
+    /// Run `git <args>` in the fixture repo `repo` with `stdin`, asserting it
+    /// succeeds; returns its stdout.
+    fn run_fixture(repo: &Path, args: &[&str], stdin: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut child = remote_ingest::fixture_git(repo)
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("git spawns");
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(stdin)
+            .expect("feed git stdin");
+        let out = child.wait_with_output().expect("git runs");
+        assert!(out.status.success(), "git {args:?} must succeed");
+        out.stdout
+    }
+
+    /// Commit `file` to the fixture repo `repo`, returning the new HEAD.
+    fn commit_file(repo: &Path, file: &str) -> String {
+        std::fs::write(repo.join(file), "x").expect("write file");
+        run_fixture(repo, &["add", "."], b"");
+        run_fixture(repo, &["commit", "--quiet", "-m", file], b"");
+        head_rev(repo)
+    }
+
+    /// A fixture repo with `tags` packed lightweight tags at HEAD beside its
+    /// one branch, so it advertises `tags + 1` refs; returns it and HEAD.
+    fn tagged_source(tag: &str, tags: u64) -> (PathBuf, String) {
+        use std::fmt::Write as _;
+        let repo = git_source(tag, "module Lib\n");
+        let head = head_rev(&repo);
+        let script = (0..tags).fold(String::new(), |mut script, n| {
+            let _ = writeln!(script, "create refs/tags/t{n:05} {head}");
+            script
+        });
+        run_fixture(&repo, &["update-ref", "--stdin"], script.as_bytes());
+        run_fixture(&repo, &["pack-refs", "--all"], b"");
+        (repo, head)
+    }
+
+    /// The byte length of `repo`'s tag and branch advertisement.
+    fn advertisement_len(repo: &Path) -> u64 {
+        let out = run_fixture(
+            repo,
+            &["ls-remote", ".", "refs/tags/*", "refs/heads/*"],
+            b"",
+        );
+        u64::try_from(out.len()).expect("advertisement length fits u64")
+    }
+
+    /// `dest` staged with `src` as its origin, and the fresh transfer it is under.
+    fn staged(src: &Path, dest: &Path) -> Transfer {
+        let url = SourceUrl::parse(&pn("p"), &src.display().to_string())
+            .expect("local path is a valid source URL");
+        let transfer = Transfer::begin(*PACKAGE_SOURCE.transfer());
+        stage_origin(&pn("p"), &url, dest, &transfer).expect("origin stages");
+        transfer
+    }
+
+    /// No object pack reached `dest`.
+    fn assert_no_pack(dest: &Path) {
+        let packs = std::fs::read_dir(dest.join(".git").join("objects").join("pack"))
+            .map_or(0, Iterator::count);
+        assert_eq!(packs, 0, "no object may be fetched before the refusal");
+    }
+
+    /// Whether `dest` holds a shallow (depth-limited) history.
+    fn is_shallow(dest: &Path) -> bool {
+        dest.join(".git").join("shallow").is_file()
+    }
+
+    /// The refusal a package fetch reports for `limit`.
+    const fn fetch_refused(limit: IngestLimit) -> IngestRefusal {
+        IngestRefusal {
+            source: IngestSource::PackageFetch,
+            limit,
+            name: None,
+        }
+    }
+
+    /// The byte ceiling `bytes`, which a fixture keeps inside the remote range.
+    #[allow(clippy::expect_used)] // fixture ceilings are measured in-range sizes
+    fn byte_budget(bytes: u64) -> ByteBudget {
+        ByteBudget::for_test(bytes).expect("in-range byte budget")
+    }
+
+    /// A fetch of the fixture commit `sha`.
+    #[allow(clippy::expect_used)] // fixture SHAs come from `git rev-parse`
+    fn commit(sha: &str) -> Wanted<'static> {
+        Wanted::Commit(PinnedRev::parse_sha(sha).expect("fixture SHA parses"))
+    }
+
+    /// An advertisement of exactly `REFS_MAX_COUNT` lines is read, and the rev
+    /// at a tip is fetched from it.
+    #[test]
+    fn an_advertisement_at_the_ref_count_ceiling_fetches_the_tip() {
+        let (src, head) = tagged_source("refs-at", REFS_MAX_COUNT - 1);
+        let dest = temp_dir("refs-at-dest");
+        let transfer = staged(&src, &dest);
+        fetch_advertised(
+            &pn("p"),
+            &commit(&head),
+            &dest,
+            &transfer,
+            PACKAGE_SOURCE.refs(),
+        )
+        .expect("a tip within the ref ceilings fetches");
+        assert_eq!(head_rev(&dest), head);
+        assert!(
+            dest.join("lib.ipe").is_file(),
+            "the tip's tree is checked out"
+        );
+        let _ = std::fs::remove_dir_all(&dest);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// One advertised line past `REFS_MAX_COUNT` refuses the fetch before any
+    /// object is fetched.
+    #[test]
+    fn an_advertisement_past_the_ref_count_ceiling_is_refused_before_any_fetch() {
+        let (src, head) = tagged_source("refs-past", REFS_MAX_COUNT);
+        let dest = temp_dir("refs-past-dest");
+        let transfer = staged(&src, &dest);
+        let result = fetch_advertised(
+            &pn("p"),
+            &commit(&head),
+            &dest,
+            &transfer,
+            PACKAGE_SOURCE.refs(),
+        );
+        assert!(
+            matches!(
+                result,
+                Err(CliError::RemoteIngestExceeded(ref refusal))
+                    if *refusal == fetch_refused(IngestLimit::Entries(REFS_MAX_COUNT))
+            ),
+            "got {result:?}"
+        );
+        assert_no_pack(&dest);
+        let _ = std::fs::remove_dir_all(&dest);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// An advertisement exactly at its byte ceiling is read; one byte past it
+    /// is refused as a byte overrun before any object is fetched.
+    #[test]
+    fn an_advertisement_at_the_ref_byte_ceiling_is_read_and_one_byte_past_is_refused() {
+        let (src, head) = tagged_source("refs-bytes", 8);
+        let len = advertisement_len(&src);
+
+        let past_dest = temp_dir("refs-bytes-past");
+        let transfer = staged(&src, &past_dest);
+        let past = RefsCeiling::for_test(byte_budget(len - 1), REFS_MAX_COUNT);
+        let result = fetch_advertised(&pn("p"), &commit(&head), &past_dest, &transfer, &past);
+        assert!(
+            matches!(
+                result,
+                Err(CliError::RemoteIngestExceeded(ref refusal))
+                    if *refusal == fetch_refused(IngestLimit::Bytes(len - 1))
+            ),
+            "got {result:?}"
+        );
+        assert_no_pack(&past_dest);
+
+        let at_dest = temp_dir("refs-bytes-at");
+        let transfer = staged(&src, &at_dest);
+        let at = RefsCeiling::for_test(byte_budget(len), REFS_MAX_COUNT);
+        fetch_advertised(&pn("p"), &commit(&head), &at_dest, &transfer, &at)
+            .expect("an advertisement at its byte ceiling is read");
+        assert_eq!(head_rev(&at_dest), head);
+        for dir in [past_dest, at_dest, src] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// A tag whose name starts with `-` is a legal ref; its `refs/` prefix keeps
+    /// it a positional, so the commit at its tip is fetched through it alone.
+    #[test]
+    fn a_dash_leading_tag_name_is_fetched_as_a_positional() {
+        let src = git_source("refs-dash", "module Lib\n");
+        let base = head_rev(&src);
+        let tip = commit_file(&src, "tip.ipe");
+        run_fixture(
+            &src,
+            &["update-ref", "--stdin"],
+            format!("create refs/tags/-x {tip}\n").as_bytes(),
+        );
+        run_fixture(&src, &["reset", "--hard", "--quiet", &base], b"");
+        let dest = temp_dir("refs-dash-dest");
+        let transfer = staged(&src, &dest);
+        fetch_advertised(
+            &pn("p"),
+            &commit(&tip),
+            &dest,
+            &transfer,
+            PACKAGE_SOURCE.refs(),
+        )
+        .expect("the tip of a dash-leading tag fetches");
+        assert_eq!(head_rev(&dest), tip);
+        assert!(is_shallow(&dest), "the tag's tip is fetched at depth 1");
+        let _ = std::fs::remove_dir_all(&dest);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// A tag named like the requested commit's SHA but pointing elsewhere never
+    /// stands in for that commit: the commit itself is checked out, and it is
+    /// the pin read back.
+    #[test]
+    fn a_tag_named_like_the_requested_sha_is_never_fetched_in_its_place() {
+        let src = git_source("refs-sha-named", "module Lib\n");
+        let wanted_sha = commit_file(&src, "wanted.ipe");
+        commit_file(&src, "hostile.ipe");
+        run_fixture(&src, &["tag", &wanted_sha], b"");
+        let dest = temp_dir("refs-sha-named-dest");
+        let transfer = staged(&src, &dest);
+        let wanted = commit(&wanted_sha);
+        fetch_advertised(&pn("p"), &wanted, &dest, &transfer, PACKAGE_SOURCE.refs())
+            .expect("the requested commit fetches");
+        assert_eq!(head_rev(&dest), wanted_sha);
+        assert!(
+            !dest.join("hostile.ipe").exists(),
+            "the SHA-named tag's tree must not be checked out"
+        );
+        let pinned = CheckedOutCommit::read(&pn("p"), &wanted, &dest, &transfer)
+            .expect("the checked-out commit is the requested one");
+        assert_eq!(pinned.into_pin().as_str(), wanted_sha);
+        let _ = std::fs::remove_dir_all(&dest);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// A requested commit accepts only itself as the checked-out commit; a
+    /// requested name accepts whatever commit it served.
+    #[test]
+    fn a_served_commit_other_than_the_requested_one_is_refused() {
+        let other = "fedcba9876543210fedcba9876543210fedcba98";
+        let served = || PinnedRev::parse_sha(other).expect("fixture SHA parses");
+        let refused = CheckedOutCommit::check(&pn("p"), &commit(SHA), served());
+        assert!(
+            matches!(&refused, Err(CliError::Resolve(msg)) if msg.to_string().contains(other)),
+            "got {refused:?}"
+        );
+        let same = CheckedOutCommit::check(&pn("p"), &commit(other), served())
+            .expect("the requested commit is accepted");
+        assert_eq!(same.into_pin().as_str(), other);
+        let named = CheckedOutCommit::check(
+            &pn("p"),
+            &Wanted::Name(&CommitId::parse(&pn("p"), "v1").expect("v1 is a valid commit id")),
+            served(),
+        )
+        .expect("a requested name accepts the commit it served");
+        assert_eq!(named.into_pin().as_str(), other);
+    }
+
+    /// A full-SHA fetch from a server that can serve only other commits — its
+    /// every tag, one spelled like the requested SHA included, tips elsewhere —
+    /// is refused end to end, and the partial checkout is removed.
+    #[test]
+    fn a_commit_the_server_cannot_serve_is_refused_and_leaves_no_checkout() {
+        let absent = "fedcba9876543210fedcba9876543210fedcba98";
+        let src = git_source("commit-absent", "module Lib\n");
+        commit_file(&src, "served.ipe");
+        run_fixture(&src, &["tag", "v1.0.0"], b"");
+        run_fixture(&src, &["tag", absent], b"");
+        let url = SourceUrl::parse(&pn("p"), &src.display().to_string())
+            .expect("local path is a valid source URL");
+        let dest = temp_dir("commit-absent-dest");
+        let result = fetch_git_into(&pn("p"), &url, &commit(absent), &dest, &PACKAGE_SOURCE);
+        assert!(
+            matches!(&result, Err(CliError::Resolve(msg)) if msg.to_string().contains(absent)),
+            "{result:?}"
+        );
+        assert!(!dest.exists(), "a refused fetch leaves no checkout behind");
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// A git escape pinned by tag name locks the tag's commit, not the branch
+    /// tip past it.
+    #[test]
+    fn a_git_escape_by_tag_name_locks_the_tags_commit() {
+        let proj = temp_dir("git-escape-tag");
+        scaffold_project(&proj);
+        let src = git_source("git-tag", "module Lib\n");
+        let tagged = head_rev(&src);
+        run_fixture(&src, &["tag", "v1.0.0"], b"");
+        commit_file(&src, "later.ipe");
+        let dep = IpeDep::Git {
+            url: src.display().to_string(),
+            rev: Some("v1.0.0".into()),
+        };
+        resolve_escape(&proj, "taglib", &dep).expect("a tag escape resolves");
+        let lock = Lockfile::read(&proj).expect("lock");
+        let entry = lock
+            .packages()
+            .iter()
+            .find(|p| p.name.as_str() == "taglib")
+            .expect("taglib must be locked");
+        let pinned = entry.origin.pinned_rev().expect("a git escape pins a rev");
+        assert_eq!(pinned.as_str(), tagged);
+        let checkout = cache_dir(&proj, &pn("taglib"), CacheSlot::Escape(pinned));
+        assert!(
+            checkout.join("lib.ipe").is_file(),
+            "the tag's tree is cached"
+        );
+        assert!(
+            !checkout.join("later.ipe").exists(),
+            "a commit past the tag must not be cached"
+        );
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// An annotated tag whose commit is the rev is fetched alone at depth 1,
+    /// matched by its peeled line; the same tag also matches by its name.
+    #[test]
+    fn an_annotated_tag_whose_commit_is_the_rev_fetches_that_tag() {
+        let src = git_source("refs-peeled", "module Lib\n");
+        let tagged = commit_file(&src, "tagged.ipe");
+        run_fixture(&src, &["tag", "-a", "v1", "-m", "v1"], b"");
+        commit_file(&src, "later.ipe");
+
+        let by_sha = temp_dir("refs-peeled-sha");
+        let transfer = staged(&src, &by_sha);
+        fetch_advertised(
+            &pn("p"),
+            &commit(&tagged),
+            &by_sha,
+            &transfer,
+            PACKAGE_SOURCE.refs(),
+        )
+        .expect("a peeled tip fetches");
+        assert_eq!(head_rev(&by_sha), tagged);
+        assert!(is_shallow(&by_sha), "a tip is fetched at depth 1");
+        assert!(!by_sha.join("later.ipe").exists());
+
+        let by_name = temp_dir("refs-peeled-name");
+        let transfer = staged(&src, &by_name);
+        fetch_advertised(
+            &pn("p"),
+            &Wanted::Name(&CommitId::parse(&pn("p"), "v1").expect("v1 is a valid commit id")),
+            &by_name,
+            &transfer,
+            PACKAGE_SOURCE.refs(),
+        )
+        .expect("a tag named by the rev fetches");
+        assert_eq!(head_rev(&by_name), tagged);
+        assert!(is_shallow(&by_name), "a named tip is fetched at depth 1");
+        for dir in [by_sha, by_name, src] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// A rev behind every tip is reached only through history: the full fetch
+    /// runs and checks it out.
+    #[test]
+    fn a_rev_behind_every_tip_takes_the_full_fetch() {
+        let src = git_source("refs-history", "module Lib\n");
+        let old = commit_file(&src, "old.ipe");
+        commit_file(&src, "new.ipe");
+        let dest = temp_dir("refs-history-dest");
+        let transfer = staged(&src, &dest);
+        fetch_advertised(
+            &pn("p"),
+            &commit(&old),
+            &dest,
+            &transfer,
+            PACKAGE_SOURCE.refs(),
+        )
+        .expect("a rev in history fetches");
+        assert_eq!(head_rev(&dest), old);
+        assert!(
+            !is_shallow(&dest),
+            "a rev behind the tips needs the full history"
+        );
+        let _ = std::fs::remove_dir_all(&dest);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    /// An advertisement line for `name` at the fixture SHA.
+    fn line(name: &str) -> String {
+        format!("{SHA}\t{name}\n")
+    }
+
+    /// The parser accepts exactly its line ceiling, with or without a final
+    /// newline, and a peeled tag line; one line more is an entry overrun.
+    #[test]
+    fn the_advertisement_parser_holds_its_line_ceiling() {
+        let two = RefsCeiling::for_test(REFS_MAX_BYTES, 2);
+        let at = format!("{}{}", line("refs/tags/v1"), line("refs/tags/v1^{}"));
+        let parsed =
+            parse_advertisement(at.as_bytes(), &two).expect("two lines at a ceiling of two");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parse_advertisement(at.trim_end().as_bytes(), &two).map(|refs| refs.len()),
+            Ok(2)
+        );
+        assert_eq!(parse_advertisement(b"", &two).map(|refs| refs.len()), Ok(0));
+        let past = format!("{at}{}", line("refs/heads/main"));
+        assert_eq!(
+            parse_advertisement(past.as_bytes(), &two).map(|refs| refs.len()),
+            Err(IngestLimit::Entries(2))
+        );
+    }
+
+    /// A line that is not a SHA, a tab and a ref is refused, never skipped.
+    #[test]
+    fn a_malformed_advertisement_line_is_refused() {
+        let refs = *PACKAGE_SOURCE.refs();
+        let upper = SHA.to_uppercase();
+        let short = SHA.trim_end_matches('7');
+        let cases: [Vec<u8>; 7] = [
+            format!("{short}\trefs/tags/v1\n").into_bytes(),
+            format!("{upper}\trefs/tags/v1\n").into_bytes(),
+            format!("{SHA} refs/tags/v1\n").into_bytes(),
+            format!("{SHA}\trefs/tags/v\0\n").into_bytes(),
+            format!("{SHA}\trefs/heads/main^{{}}\n").into_bytes(),
+            format!("{SHA}\trefs/tags/v1\n\n").into_bytes(),
+            b"\n\n".to_vec(),
+        ];
+        for case in cases {
+            assert_eq!(
+                parse_advertisement(&case, &refs).map(|parsed| parsed.len()),
+                Err(IngestLimit::MalformedRef),
+                "{:?}",
+                String::from_utf8_lossy(&case)
+            );
+        }
+    }
+
+    /// A valid SHA beside a ref name that is not UTF-8 is skipped rather than
+    /// refused, still counted against the line ceiling; a SHA that is not
+    /// UTF-8 is refused.
+    #[test]
+    fn a_non_utf8_ref_name_is_skipped_but_counted() {
+        let refs = *PACKAGE_SOURCE.refs();
+        let skipped = [SHA.as_bytes(), b"\trefs/tags/\xff\n"].concat();
+        assert_eq!(
+            parse_advertisement(&skipped, &refs).map(|parsed| parsed.len()),
+            Ok(0)
+        );
+        let beside = [line("refs/tags/v1").as_bytes(), skipped.as_slice()].concat();
+        assert_eq!(
+            parse_advertisement(&beside, &refs).map(|parsed| parsed.len()),
+            Ok(1)
+        );
+        let one = RefsCeiling::for_test(REFS_MAX_BYTES, 1);
+        assert_eq!(
+            parse_advertisement(&beside, &one).map(|parsed| parsed.len()),
+            Err(IngestLimit::Entries(1))
+        );
+        let bad_sha = b"\xff\trefs/tags/v1\n".to_vec();
+        assert_eq!(
+            parse_advertisement(&bad_sha, &refs).map(|parsed| parsed.len()),
+            Err(IngestLimit::MalformedRef)
+        );
+    }
+
+    /// A hostile or unsafe ref name refuses the advertisement; a safe one parses.
+    #[test]
+    fn only_a_safe_tag_or_branch_name_parses() {
+        let refs = *PACKAGE_SOURCE.refs();
+        let hostile = [
+            "refs/tags/*",
+            "refs/tags/a:b",
+            "refs/tags/a..b",
+            "refs/tags/a@{b",
+            "refs/tags/a~1",
+            "refs/tags/a^b",
+            "refs/tags/a?",
+            "refs/tags/a[b",
+            "refs/tags/a\\b",
+            "refs/heads/a b",
+            "refs/tags/a\x7f",
+            "refs/tags/x.lock",
+            "refs/tags/x.LOCK",
+            "refs/tags/a/b.Lock",
+            "refs/tags/.x",
+            "refs/tags/a/.b",
+            "refs/tags/a//b",
+            "refs/tags/a/",
+            "refs/tags/a.",
+            "refs/tags/",
+            "refs/remotes/origin/main",
+            "HEAD",
+            "-x",
+        ];
+        for name in hostile {
+            assert_eq!(
+                parse_advertisement(line(name).as_bytes(), &refs).map(|parsed| parsed.len()),
+                Err(IngestLimit::MalformedRef),
+                "{name:?} must be refused"
+            );
+        }
+        for name in [
+            "refs/tags/v1.0.0",
+            "refs/tags/v1.0.0+build.1",
+            "refs/tags/+a",
+            "refs/tags/-x",
+            "refs/heads/-x",
+            "refs/heads/feature/x-y",
+            "refs/tags/a-b_c",
+        ] {
+            assert_eq!(
+                parse_advertisement(line(name).as_bytes(), &refs).map(|parsed| parsed.len()),
+                Ok(1),
+                "{name:?} must parse"
+            );
+        }
+    }
+
+    /// Only a git exit widens the fetch: a crossed budget, a held pipe, an
+    /// unavailable git, a failed measure and a signal all end it, typed.
+    #[test]
+    fn only_an_exit_widens_a_fetch() {
+        use std::io::{Error, ErrorKind};
+
+        assert!(GitStepError::Exited { stderr: Vec::new() }.widens());
+        let ending = [
+            GitStepError::Refused(fetch_refused(IngestLimit::Bytes(1))),
+            GitStepError::PipeHeld(Stream::Stdout),
+            GitStepError::Unavailable(Error::from(ErrorKind::NotFound)),
+            GitStepError::Measure(PathBuf::from("stage"), Error::from(ErrorKind::NotFound)),
+            GitStepError::Interrupted,
+        ];
+        for failed in ending {
+            assert!(!failed.widens(), "{failed:?} must not widen the fetch");
+        }
+
+        let run = |error: RunError| GitStepError::from_run(error).into_cli(&pn("p"), &["fetch"]);
+        assert!(matches!(
+            run(RunError::Wait(Error::from(ErrorKind::Interrupted))),
+            CliError::Interrupted
+        ));
+        assert!(matches!(
+            run(RunError::Spawn(Error::from(ErrorKind::Interrupted))),
+            CliError::Interrupted
+        ));
+        assert!(matches!(
+            run(RunError::Spawn(Error::from(ErrorKind::NotFound))),
+            CliError::Resolve(_)
+        ));
+        assert!(matches!(
+            run(RunError::Measure(
+                PathBuf::from("stage"),
+                Error::from(ErrorKind::NotFound)
+            )),
+            CliError::Io { .. }
+        ));
+        assert!(matches!(
+            run(RunError::Exceeded(fetch_refused(IngestLimit::Bytes(1)))),
+            CliError::RemoteIngestExceeded(_)
+        ));
+        assert!(matches!(
+            run(RunError::PipeDrainTimeout(Stream::Stderr)),
+            CliError::ChildPipeHeld(Stream::Stderr)
+        ));
+    }
+
+    /// A git escape one byte past its fetch budget is refused, and the refusal
+    /// leaves no lock, no manifest change and no cached checkout.
+    #[test]
+    fn a_git_escape_past_its_fetch_budget_records_nothing() {
+        let src = git_source("budget", "module Lib\n");
+        let dep = IpeDep::Git {
+            url: src.display().to_string(),
+            rev: None,
+        };
+        // Measure the exact on-disk size of a full fetch of this source.
+        let sized = temp_dir("budget-sized");
+        scaffold_project(&sized);
+        resolve_escape(&sized, "lib", &dep).expect("an in-budget fetch resolves");
+        let lock = Lockfile::read(&sized).expect("lock");
+        let entry = lock.packages().first().expect("locked");
+        let cached = dep_cache_dir(&sized, entry).expect("a git escape is cached");
+        let usage = remote_ingest::measure(&cached, PACKAGE_SOURCE.transfer()).expect("measure");
+        assert!(usage.bytes > 0, "a fetch stages bytes");
+
+        let proj = temp_dir("budget-over");
+        scaffold_project(&proj);
+        let manifest_before = std::fs::read(proj.join("package.ipe")).expect("manifest");
+        let result = resolve_escape_within(&proj, "lib", &dep, &under_transfer(usage.bytes));
+        assert!(matches!(
+            result,
+            Err(CliError::RemoteIngestExceeded(IngestRefusal {
+                source: IngestSource::PackageFetch,
+                limit: IngestLimit::Bytes(_),
+                name: Some(ref named),
+            })) if named.as_str() == "lib"
+        ));
+        assert_nothing_recorded(&proj, &manifest_before);
+        let _ = std::fs::remove_dir_all(&sized);
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// A git escape whose transfer outlasts its wall time is refused as a
+    /// timeout naming the package, and the refusal records nothing.
+    #[test]
+    fn a_git_escape_past_its_wall_time_records_nothing() {
+        let src = git_source("slow-drip", "module Lib\n");
+        let dep = IpeDep::Git {
+            url: src.display().to_string(),
+            rev: None,
+        };
+        let budget = FetchBudget::for_test(
+            PACKAGE_SOURCE
+                .transfer()
+                .with_wall(std::time::Duration::from_millis(1)),
+            *PACKAGE_SOURCE.refs(),
+            *PACKAGE_SOURCE.tree(),
+        )
+        .expect("paired budget");
+        let proj = temp_dir("slow-drip-over");
+        scaffold_project(&proj);
+        let manifest_before = std::fs::read(proj.join("package.ipe")).expect("manifest");
+        let result = resolve_escape_within(&proj, "lib", &dep, &budget);
+        assert!(
+            matches!(
+                result,
+                Err(CliError::RemoteIngestExceeded(IngestRefusal {
+                    source: IngestSource::PackageFetch,
+                    limit: IngestLimit::Time(_),
+                    name: Some(ref named),
+                })) if named.as_str() == "lib"
+            ),
+            "{result:?}"
+        );
+        assert_nothing_recorded(&proj, &manifest_before);
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// A budget one byte short of staging `bytes`, its tree ceiling halved to
+    /// stay paired.
+    fn under_transfer(bytes: u64) -> FetchBudget {
+        let disk_bytes = bytes.saturating_sub(1);
+        let tree = disk_bytes / 2;
+        FetchBudget::for_test(
+            PACKAGE_SOURCE
+                .transfer()
+                .with_disk_bytes(byte_budget(disk_bytes)),
+            *PACKAGE_SOURCE.refs(),
+            TreeCeiling::for_test(tree, PACKAGE_TREE_MAX_ENTRIES, tree, PACKAGE_TREE_MAX_DEPTH)
+                .expect("paired tree ceiling"),
+        )
+        .expect("paired budget")
+    }
+
+    /// An index add whose fetched tree is past its entry ceiling is refused as
+    /// a local limit, and records and caches nothing.
+    #[test]
+    fn an_index_add_past_its_tree_entry_ceiling_records_nothing() {
+        let src = git_source_of("tree-entries", 5);
+        let sha = hash_source_tree(&src).expect("hash source");
+        let version = index_version("wide", &src, sha.as_str());
+        let proj = temp_dir("tree-entries");
+        scaffold_project(&proj);
+        let manifest_before = std::fs::read(proj.join("package.ipe")).expect("manifest");
+        let budget = with_tree(
+            TreeCeiling::for_test(
+                PACKAGE_TREE_MAX_BYTES,
+                4,
+                PACKAGE_FILE_MAX_BYTES,
+                PACKAGE_TREE_MAX_DEPTH,
+            )
+            .expect("paired tree ceiling"),
+        );
+        let req = "^1".parse().expect("valid req");
+        let result = resolve_and_add_within(&proj, &pn("wide"), &req, &version, &budget);
+        assert!(
+            matches!(
+                result,
+                Err(CliError::LocalLimitExceeded(LocalRefusal {
+                    source: LocalSource::PackageTree,
+                    limit: IngestLimit::Entries(4),
+                    name: Some(ref named),
+                })) if named.as_str() == "wide"
+            ),
+            "{result:?}"
+        );
+        assert_nothing_recorded(&proj, &manifest_before);
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// An index add whose fetched tree is exactly at its entry ceiling — three
+    /// files beside the `.git` directory the walk counts — is locked.
+    #[test]
+    fn an_index_add_at_its_tree_entry_ceiling_is_locked() {
+        let src = git_source_of("tree-entries-at", 3);
+        let sha = hash_source_tree(&src).expect("hash source");
+        let version = index_version("snug", &src, sha.as_str());
+        let proj = temp_dir("tree-entries-at");
+        scaffold_project(&proj);
+        let budget = with_tree(
+            TreeCeiling::for_test(
+                PACKAGE_TREE_MAX_BYTES,
+                4,
+                PACKAGE_FILE_MAX_BYTES,
+                PACKAGE_TREE_MAX_DEPTH,
+            )
+            .expect("paired tree ceiling"),
+        );
+        let req = "^1".parse().expect("valid req");
+        resolve_and_add_within(&proj, &pn("snug"), &req, &version, &budget)
+            .expect("an index add at its tree entry ceiling is accepted");
+        let lock = Lockfile::read(&proj).expect("lock");
+        assert!(
+            lock.packages().iter().any(|p| p.name.as_str() == "snug"),
+            "the add at its ceiling is locked"
+        );
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// A signed index add whose fetched tree is past its entry ceiling, under a
+    /// policy trusting two identities, is refused once as a local limit by the
+    /// one budgeted walk every identity shares — the verifier is handed that
+    /// walk's digest, never a path it could walk again — and records nothing.
+    #[test]
+    fn a_signed_add_past_its_tree_ceiling_is_refused_once_before_any_signature_check() {
+        let src = git_source_of("signed-tree", 5);
+        let sha = hash_source_tree(&src).expect("hash source");
+        let mut version = index_version("signed", &src, sha.as_str());
+        version.signature = Some(
+            crate::signing::SignatureBundle::parse("signed", r#"{ "dsseEnvelope": {} }"#)
+                .expect("bundle parses"),
+        );
+        let proj = temp_dir("signed-tree");
+        scaffold_project(&proj);
+        let identity = |repo: &str| {
+            format!(
+                "  {{ issuer = \"{}\", identity = \"https://github.com/o/{repo}/.github/workflows/publish.yml@refs/heads/main\" }},\n",
+                crate::signing::GITHUB_ACTIONS_ISSUER
+            )
+        };
+        std::fs::write(
+            proj.join("ipe.toml"),
+            format!(
+                "[registry.trust]\ntrusted_identities = [\n{}{}]\n",
+                identity("a"),
+                identity("b")
+            ),
+        )
+        .expect("trust config");
+        let policy = crate::signing::load_trust_policy(&proj).expect("trust policy loads");
+        assert!(
+            policy.trusted_identities().len() >= 2,
+            "two identities trusted"
+        );
+        let manifest_before = std::fs::read(proj.join("package.ipe")).expect("manifest");
+        let budget = with_tree(
+            TreeCeiling::for_test(
+                PACKAGE_TREE_MAX_BYTES,
+                4,
+                PACKAGE_FILE_MAX_BYTES,
+                PACKAGE_TREE_MAX_DEPTH,
+            )
+            .expect("paired tree ceiling"),
+        );
+        let req = "^1".parse().expect("valid req");
+        let result = resolve_and_add_within(&proj, &pn("signed"), &req, &version, &budget);
+        assert!(
+            matches!(
+                result,
+                Err(CliError::LocalLimitExceeded(LocalRefusal {
+                    source: LocalSource::PackageTree,
+                    limit: IngestLimit::Entries(4),
+                    name: Some(ref named),
+                })) if named.as_str() == "signed"
+            ),
+            "{result:?}"
+        );
+        assert_nothing_recorded(&proj, &manifest_before);
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// An index add whose fetched tree does not hash to its pin is a hash
+    /// mismatch, and records and caches nothing.
+    #[test]
+    fn an_index_add_with_a_wrong_pin_records_nothing() {
+        let src = git_source("wrong-pin", "module Lib\n");
+        let version = index_version("pinned", &src, &"0".repeat(64));
+        let proj = temp_dir("wrong-pin");
+        scaffold_project(&proj);
+        let manifest_before = std::fs::read(proj.join("package.ipe")).expect("manifest");
+        let req = "^1".parse().expect("valid req");
+        let result = resolve_and_add_within(&proj, &pn("pinned"), &req, &version, &PACKAGE_SOURCE);
+        assert!(
+            matches!(result, Err(CliError::HashMismatch { .. })),
+            "{result:?}"
+        );
+        assert_nothing_recorded(&proj, &manifest_before);
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// The baseline fetch of a published version one byte past its transfer
+    /// ceiling is refused, and leaves nothing in the cache.
+    #[test]
+    fn a_baseline_fetch_past_its_transfer_ceiling_leaves_nothing() {
+        let src = git_source("baseline", "module Lib\n");
+        let sha = hash_source_tree(&src).expect("hash source");
+        let version = index_version("baseline", &src, sha.as_str());
+        let proj = temp_dir("baseline");
+        scaffold_project(&proj);
+        let name = pn("baseline");
+        let fetched =
+            fetch_and_verify_index_version_within(&proj, &name, &version, &PACKAGE_SOURCE)
+                .expect("an in-budget baseline fetch verifies");
+        let usage = remote_ingest::measure(&fetched, PACKAGE_SOURCE.transfer()).expect("measure");
+        std::fs::remove_dir_all(&fetched).expect("clear the baseline");
+
+        let result = fetch_and_verify_index_version_within(
+            &proj,
+            &name,
+            &version,
+            &under_transfer(usage.bytes),
+        );
+        assert!(
+            matches!(
+                result,
+                Err(CliError::RemoteIngestExceeded(IngestRefusal {
+                    source: IngestSource::PackageFetch,
+                    limit: IngestLimit::Bytes(_),
+                    name: Some(ref named),
+                })) if named.as_str() == "baseline"
+            ),
+            "{result:?}"
+        );
+        assert!(
+            !cache_dir(&proj, &name, CacheSlot::Index(&version.version)).exists(),
+            "a refused baseline fetch leaves no checkout"
+        );
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// A tree exactly at the production entry ceiling hashes alike for the
+    /// publisher and the consumer; one entry more is refused by both.
+    #[test]
+    fn publisher_and_consumer_share_the_tree_entry_ceiling() {
+        let root = temp_dir("entry-ceiling");
+        for index in 0..PACKAGE_TREE_MAX_ENTRIES {
+            std::fs::write(root.join(format!("f{index}")), "").expect("write file");
+        }
+        let published = hash_source_tree(&root).expect("a tree at the ceiling publishes");
+        let fetched =
+            hash_checkout(&root, PACKAGE_SOURCE.tree()).expect("a tree at the ceiling verifies");
+        assert_eq!(published, fetched);
+
+        std::fs::write(root.join("one-more"), "").expect("write file");
+        let refused = LocalRefusal {
+            source: LocalSource::PackageTree,
+            limit: IngestLimit::Entries(PACKAGE_TREE_MAX_ENTRIES),
+            name: None,
+        };
+        assert!(matches!(
+            hash_source_tree(&root),
+            Err(CliError::LocalLimitExceeded(refusal)) if refusal == refused
+        ));
+        assert!(matches!(
+            hash_checkout(&root, PACKAGE_SOURCE.tree()),
+            Err(CliError::LocalLimitExceeded(refusal)) if refusal == refused
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An escape pinned to a ref spelled like a version neither lands in nor
+    /// clears that version's index cache slot.
+    #[test]
+    fn an_escape_ref_spelled_like_a_version_keeps_the_index_slot() {
+        let src = git_source("version-ref", "module Lib\n");
+        let tagged = remote_ingest::fixture_git(&src)
+            .args(["tag", "1.0.0"])
+            .output()
+            .expect("git tag")
+            .status
+            .success();
+        assert!(tagged, "git tag must succeed");
+        let proj = temp_dir("version-ref");
+        scaffold_project(&proj);
+        let name = pn("lib");
+        let version = PublishedVersion::parse("1.0.0").expect("valid");
+        let index_slot = cache_dir(&proj, &name, CacheSlot::Index(&version));
+        std::fs::create_dir_all(&index_slot).expect("index slot");
+        std::fs::write(index_slot.join("marker"), "index").expect("marker");
+
+        let dep = IpeDep::Git {
+            url: src.display().to_string(),
+            rev: Some("1.0.0".to_owned()),
+        };
+        resolve_escape(&proj, "lib", &dep).expect("escape resolves");
+        assert_eq!(
+            std::fs::read_to_string(index_slot.join("marker")).expect("marker kept"),
+            "index"
+        );
+        let lock = Lockfile::read(&proj).expect("lock");
+        let entry = lock.packages().first().expect("locked");
+        let escape_slot = dep_cache_dir(&proj, entry).expect("a git escape is cached");
+        assert_ne!(escape_slot, index_slot);
+        assert!(escape_slot.is_dir(), "the escape is cached at its own slot");
+        let _ = std::fs::remove_dir_all(&proj);
+        let _ = std::fs::remove_dir_all(&src);
     }
 
     #[test]
@@ -1181,13 +2727,8 @@ mod tests {
     /// The second commit becomes `HEAD`.
     fn two_commits(repo: &Path) -> (String, String) {
         let git = |args: &[&str]| {
-            let ok = Command::new("git")
+            let ok = remote_ingest::fixture_git(repo)
                 .args(args)
-                .current_dir(repo)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@t")
                 .output()
                 .expect("git runs")
                 .status
@@ -1195,9 +2736,8 @@ mod tests {
             assert!(ok, "git {args:?} must succeed");
         };
         let head = || {
-            let out = Command::new("git")
+            let out = remote_ingest::fixture_git(repo)
                 .args(["rev-parse", "HEAD"])
-                .current_dir(repo)
                 .output()
                 .expect("git rev-parse HEAD");
             String::from_utf8_lossy(&out.stdout).trim().to_owned()
@@ -1220,9 +2760,8 @@ mod tests {
         // actually served (C1), not C2.
         let src = git_source("shadow-warn-src", "module Lib\nv = 1\n");
         let (c1, _c2) = two_commits(&src);
-        let tag_ok = Command::new("git")
+        let tag_ok = remote_ingest::fixture_git(&src)
             .args(["tag", "abcd123", &c1])
-            .current_dir(&src)
             .output()
             .expect("git tag runs")
             .status
@@ -1266,9 +2805,8 @@ mod tests {
         // so a source that substituted C2 anyway is refused, not locked.
         let src = git_source("shadow-full-src", "module Lib\nv = 1\n");
         let (c1, c2) = two_commits(&src);
-        let tag_ok = Command::new("git")
+        let tag_ok = remote_ingest::fixture_git(&src)
             .args(["tag", &c1, &c2])
-            .current_dir(&src)
             .output()
             .expect("git tag runs")
             .status

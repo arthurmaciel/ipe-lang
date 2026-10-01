@@ -374,8 +374,15 @@ mod tests {
             .block_on(fut)
     }
 
-    fn make_path(s: &str) -> crate::path::Path {
-        crate::path::path_literal(s.to_string())
+    /// Seal a test fixture path through the runtime's one constructor.
+    pub fn make_path(s: &str) -> crate::path::Path {
+        let sealed: Result<_, crate::IpeError> = match crate::path::path_from_string(s.to_string())
+        {
+            IpeResult::Ok(p) => Ok(p),
+            IpeResult::Err(e) => Err(e),
+        };
+        #[allow(clippy::expect_used)] // fixture paths are absolute temp paths the seal accepts
+        sealed.expect("test fixture path passes the seal")
     }
 
     /// Functional correctness (independent of whether `run_blocking` takes
@@ -486,7 +493,7 @@ mod stream_from_file_spawn_blocking_tests {
             }
             std::fs::write(&p, content).unwrap();
         }
-        let path = crate::path::path_literal(p.to_string_lossy().into_owned());
+        let path = super::tests::make_path(&p.to_string_lossy());
 
         let ticks = rt.block_on(async move {
             let counter = Arc::new(AtomicU64::new(0));

@@ -1095,8 +1095,8 @@ fn probe_scratch_dir(root: &Path) -> Result<CanonicalPath, CliError> {
         source: e,
     })?;
     let path = canonical_jail_path(scratch.path())?;
-    // The caller removes the scratch once the verdict is in; skip Drop here.
-    std::mem::forget(scratch);
+    // The caller removes the scratch once the verdict is in.
+    let _dir = scratch.into_path();
     Ok(path)
 }
 

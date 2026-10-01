@@ -11,6 +11,7 @@ clap = { version = "4", features = ["derive"] }
 regex = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde_json = "1"
+sha2 = "0.10"
 tree-sitter = "0.22"
 tree-sitter-rust = "0.21"
 tree-sitter-typescript = "0.21"
@@ -18,6 +19,10 @@ tree-sitter-typescript = "0.21"
 [lints.rust]
 # Mirrors the compiler workspace's `unsafe_code` deny for this standalone tool.
 unsafe_code = "deny"
+
+[lints.clippy]
+# Mirrors the workspace `mem_forget` deny: a forgotten `Drop` guard leaks.
+mem_forget = "deny"
 
 [profile.dev]
 debug = 0

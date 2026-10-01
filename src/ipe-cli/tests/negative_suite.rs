@@ -1118,6 +1118,31 @@ fn custom_element_ctor_nul_path_rejected() {
     assert_rejected("custom_element_nul", &src, "IPE-P0063");
 }
 
+/// Refusal: a widget path the Unix seal accepts but the Windows seal refuses
+/// is still IPE-P0063 — the compiler does not know the build host's separator
+/// regime, so the literal must be safe under every regime.
+#[test]
+fn custom_element_ctor_windows_only_traversal_rejected() {
+    for (i, literal) in [
+        "..\\\\secret",
+        "...",
+        ".. \\\\x",
+        "C:..\\\\x",
+        "a\\\\..\\\\..\\\\b",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let src = format!(
+            "{HEAD}import Ipe.Ffi.Js.CustomElement as CustomElement\n\
+             editor : CustomElement Int String\n\
+             editor = CustomElement.fromFile \"{literal}\"\n\
+             main = 1\n"
+        );
+        assert_rejected(&format!("custom_element_win_{i}"), &src, "IPE-P0063");
+    }
+}
+
 /// Refusal: `path "…"` is no literal form, so with no `path` in scope it is an
 /// unresolved name (IPE-N0001).
 #[test]

@@ -67,6 +67,9 @@ indexing_slicing = "deny"
 unreachable = "deny"
 todo = "deny"
 unimplemented = "deny"
+# `mem::forget` on a `Drop` type leaks what it owns; a guard hands its
+# resource out by moving it (`ScratchDir::into_path`), never by being forgotten.
+mem_forget = "deny"
 # The broad lint GROUPS, at priority -1 so the specific allows below override them.
 correctness = { level = "deny", priority = -1 }
 suspicious = { level = "deny", priority = -1 }

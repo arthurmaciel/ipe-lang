@@ -185,7 +185,7 @@ pub enum Expr_ {
     /// entire body of a `CustomElement`-annotated binding, applied to a single
     /// string literal. The carried [`String`] is the CLEANED, NUL-free,
     /// non-escaping relative path to the author's widget-hook JS file, validated
-    /// at canonicalisation with `ipe_diagnostics::path_check::validate` (the
+    /// at canonicalisation with `ipe_diagnostics::path_check::PathLitText::seal` (the
     /// all-targets path seal shared through `ipe_path_core`); a non-literal argument,
     /// a bare `CustomElement.fromFile` value, or a traversing path is a compile error
     /// emitted before this node is ever constructed. The file's existence is

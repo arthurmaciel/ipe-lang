@@ -821,17 +821,24 @@ fn post_signing_key(
 
 /// GitHub's `message` field, stripped of control characters and capped, so a
 /// hostile response cannot drive the terminal.
+///
+/// The body is read through [`crate::remote_ingest::read_capped`] at
+/// [`crate::remote_ingest::JSON_RESPONSE_MAX_BYTES`]; an over-budget body
+/// carries no message.
 fn github_message(response: ureq::Response) -> String {
-    let message = response
-        .into_string()
-        .ok()
-        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
-        .and_then(|json| {
-            json.get("message")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_default();
+    let message = crate::remote_ingest::read_capped(
+        response.into_reader(),
+        crate::remote_ingest::JSON_RESPONSE_MAX_BYTES,
+        crate::remote_ingest::IngestSource::GithubApi,
+    )
+    .ok()
+    .and_then(|body| serde_json::from_slice::<serde_json::Value>(&body).ok())
+    .and_then(|json| {
+        json.get("message")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    })
+    .unwrap_or_default();
     let cleaned: String = message
         .chars()
         .filter(|c| !c.is_control())

@@ -2696,8 +2696,8 @@ Ipe.System -- process environment + args + termination
 
 | Export | Summary |
 |--------|----------|
-| `args` | (no summary) |
-| `getArg` | `getArg n` -- zero-indexed positional arg lookup.  `Nothing` |
+| `args` | `args ()` -- the command-line arguments after the program name. |
+| `getArg` | `getArg n` -- zero-indexed positional arg lookup over the whole |
 | `getenv` | (no summary) |
 | `getenvOr` | `getenvOr key default` -- returns the env value if present, |
 | `getenvInt` | (no summary) |

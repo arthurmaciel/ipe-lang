@@ -142,7 +142,9 @@ every : Duration -> msg -> Sub msg
 
 `every interval msg` -- Ipe.Web / Ipe.Tui subscription that emits `msg` once
 per `interval`.  Takes a typed `Ipe.Duration` (e.g. `Duration.seconds 1`); the
-raw milliseconds are unwrapped for the runtime kernel.
+raw milliseconds are unwrapped for the runtime kernel.  A non-positive
+`interval` emits nothing.  In the browser a period longer than `2^31 - 1`
+milliseconds (about 24.8 days) is capped at that maximum.
 
 ## `isLeapYear`
 

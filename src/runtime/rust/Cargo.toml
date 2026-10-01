@@ -14,7 +14,7 @@ path = "src/mod.rs"
 # scan) lives in this crate's OWN `src/path_core.rs` sibling module, NOT an
 # extern crate — so it vendors automatically with `mod ipe_runtime` into every
 # emitted app (an extern crate would not survive that source-copy). The
-# compiler's `path "…"` gate shares the SAME file via the `ipe_path_core` crate,
+# compiler's literal-path gate shares the SAME file via the `ipe_path_core` crate,
 # which `include!`s `src/path_core.rs`, so the runtime seal and the compile-time
 # gate cannot drift.
 # `preserve_order`: `Json.Encode.object` takes an ordered `List (String, Value)`
@@ -691,3 +691,5 @@ unsafe_code = "deny"
 # inventoried by tools/panic-scan.
 unwrap_used = "deny"
 expect_used = "deny"
+# Mirrors the workspace `mem_forget` deny: a forgotten `Drop` guard leaks.
+mem_forget = "deny"

@@ -224,7 +224,7 @@ pub mod trace;
 pub use file::*;
 
 // The lexical path-validation algorithm — the SINGLE source of truth shared
-// with the compiler's `path "…"` gate (the `ipe_path_core` crate `include!`s
+// with the compiler's literal-path gate (the `ipe_path_core` crate `include!`s
 // this exact file). A sibling module (not an extern crate) so it also resolves
 // when the runtime is vendored as `mod ipe_runtime` into an emitted app. No
 // glob re-export: `path` reaches it via `super::path_core::…`.

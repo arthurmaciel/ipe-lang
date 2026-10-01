@@ -230,7 +230,7 @@ pub fn http_stream_close<E: From<String> + Send + 'static>(sid: IpeStreamId) -> 
 // Dedup guard: `subscriptions` is re-evaluated on every TEA `update`, so a naive
 // implementation would spawn a fresh drain per update and race over the parked
 // response. We spawn the real drain ONCE per id (the first subscribe), as a
-// DETACHED task — the SubManager's abort-on-respawn only ever hits the dummy
+// DETACHED task — `SubRuntime`'s abort-on-respawn only ever hits the dummy
 // handle, never the drain. Same shape as `ws_client`'s `ws_mark_subscribed`.
 fn chunk_subscribed() -> &'static Mutex<HashSet<i64>> {
     static R: OnceLock<Mutex<HashSet<i64>>> = OnceLock::new();
@@ -318,6 +318,6 @@ where
                     .remove(&id);
             });
         }
-        tokio::spawn(async {}) // dummy handle for the SubManager to abort harmlessly
+        tokio::spawn(async {}) // dummy handle for `SubRuntime` to abort harmlessly
     }))
 }
