@@ -24996,7 +24996,7 @@ impl<'a> Lowerer<'a> {
                 // ── Http arity-1 ────────────────────────────────────────
                 // `HttpGet` : String -> Task Error HttpResponse
                 // `HttpRequest` : HttpRequest -> Task Error HttpResponse
-                // `HttpParseQuery` : String -> Dict String String (pure)
+                // `HttpParseQuery` : String -> Result Error (Dict String String) (pure, parse boundary)
                 // `HttpDefaultRequest` : Url -> Result Error HttpRequest (pure builder, scheme-narrowed)
                 // `HttpDefaultRequestFromString` : String -> Result Error HttpRequest (pure, marked parse boundary)
                 // `HttpMethodFromString` : String -> Maybe HttpMethod (pure, parse boundary)

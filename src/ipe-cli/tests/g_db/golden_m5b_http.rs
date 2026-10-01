@@ -18,8 +18,9 @@
 //! ## Golden catalogue
 //!
 //! * `http_parse_query` — `Http.parseQuery "a=1&b=two%20words&a=ignored&c"`
-//!   first-key-wins, percent-decodes, empty-value for key-only, sorted via
-//!   `Dict.toList`. Output: three `key=value` lines.
+//!   first-key-wins, percent-decodes, empty-value for key-only, probed via
+//!   `Dict.get`; then `Http.parseQuery "a=1&b=%zz"` is refused whole as `Err`.
+//!   Output: four probed values, then `refused`.
 //!
 //! * `http_builders` — `defaultRequestFromString "http://example.com"` (the
 //!   marked parse-at-the-boundary helper) then, on the `Ok` branch,
@@ -93,8 +94,9 @@ fn assert_runs_and_matches_oracle(name: &str) {
 // ── Http.parseQuery ───────────────────────────────────────────────────────────
 
 /// `Http.parseQuery "a=1&b=two%20words&a=ignored&c"` — first-key-wins,
-/// percent-decodes spaces, empty-value for bare key.  Output: 3 `key=value`
-/// lines (sorted by `Dict.toList`).  golden-verified oracle.
+/// percent-decodes spaces, empty-value for bare key; a malformed escape
+/// (`a=1&b=%zz`) is refused whole as `Err`.  Output: four probed values, then
+/// `refused`.
 #[test]
 fn http_parse_query() {
     assert_runs_and_matches_oracle("http_parse_query");

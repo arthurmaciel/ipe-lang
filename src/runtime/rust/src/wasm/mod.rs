@@ -524,7 +524,11 @@ where
     FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
     FSetPage: Fn(Page, Model) -> Model + 'static,
 {
-    use crate::web::route::{match_routes, matches_any};
+    use crate::web::route::{DecodedPath, match_routes, matches_any, refuse_route_table};
+
+    // A malformed literal in the route table fails the mount loudly, with the
+    // same refusal the server's `web_app_routed` starts with.
+    refuse_route_table(&routes)?;
 
     let document = document()?;
     let body: web_sys::HtmlElement = document.body().ok_or("document has no <body>")?;
@@ -535,8 +539,12 @@ where
     // Seed the model from `init`, then immediately apply the current URL so the
     // `page` field reflects the browser's address bar before the first render.
     // This mirrors the server's per-request `set_page(match_routes(…), init_model)` call.
+    // A malformed address-bar path names no route: it resolves to `not_found`.
     let (init_model, cmd0) = init(req);
-    let initial_page = match_routes(&routes, &not_found, &initial_path);
+    let initial_page = match DecodedPath::parse(&initial_path) {
+        Ok(path) => match_routes(&routes, &not_found, &path),
+        Err(_) => not_found.clone(),
+    };
     let model = set_page(initial_page, init_model);
 
     let mut tree = view(model.clone());
@@ -561,11 +569,13 @@ where
         let routes = Rc::clone(&routes_rc);
         let not_found = Rc::clone(&not_found_rc);
         let set_page = Rc::clone(&set_page_rc);
-        Box::new(move |path: &str, m: Model| {
-            if !matches_any(&routes, path) {
+        Box::new(move |raw: &str, m: Model| {
+            // Parsed once; a malformed path is refused like an unrouted one.
+            let path = DecodedPath::parse(raw).ok()?;
+            if !matches_any(&routes, &path) {
                 return None;
             }
-            let page = match_routes(&routes, &not_found, path);
+            let page = match_routes(&routes, &not_found, &path);
             Some((set_page)(page, m))
         })
     };

@@ -669,6 +669,10 @@ code! {
     /// Re-carrying the stored functions a mapper receives needs one fresh
     /// parameter per wrapper and adapter position, bounded per call site.
     IPE_L0155 = "IPE-L0155", "a collection mapper needs more adapter parameters than one call site allows", "IPE-L0155";
+    /// a literal route pattern or server route path is malformed.
+    ///
+    /// The runtime refuses the same literal at startup; `ipe` refuses it first.
+    IPE_L0156 = "IPE-L0156", "a literal route pattern or server route path is malformed", "IPE-L0156";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 
