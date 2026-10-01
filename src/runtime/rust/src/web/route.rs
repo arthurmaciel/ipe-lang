@@ -727,7 +727,7 @@ mod tests {
         let params = match_params(&rs, &dp("/items/42"));
         assert_eq!(params.get("key").map(String::as_str), Some("42"));
         assert_eq!(params.get("id"), None);
-        assert!(match_params(&rs, &dp("/nope")).get("key").is_none());
+        assert!(!match_params(&rs, &dp("/nope")).contains_key("key"));
     }
 
     #[cfg(feature = "server")]

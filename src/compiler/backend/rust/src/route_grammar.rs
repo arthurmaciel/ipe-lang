@@ -169,9 +169,11 @@ pub fn web_route_segments(pattern: &str) -> Result<Vec<SegmentShape>, RoutePatte
     let mut names = Names::default();
     trimmed
         .split('/')
-        .map(|raw| match raw.strip_prefix(':') {
-            Some(name) => names.admit(name).map(|()| SegmentShape::Param),
-            None => literal_segment(raw).map(SegmentShape::Literal),
+        .map(|raw| {
+            raw.strip_prefix(':').map_or_else(
+                || literal_segment(raw).map(SegmentShape::Literal),
+                |name| names.admit(name).map(|()| SegmentShape::Param),
+            )
         })
         .collect()
 }

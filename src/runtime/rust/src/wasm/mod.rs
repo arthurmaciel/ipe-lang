@@ -555,7 +555,12 @@ where
     let (init_model, init_cmd) = init(req);
     let (model, entry_cmd) = match DecodedPath::parse(&initial_path) {
         Ok(path) => {
-            let entered = enter(resolve(&routes, &path, &render), &not_found, init_model, &set_page);
+            let entered = enter(
+                resolve(&routes, &path, &render),
+                &not_found,
+                init_model,
+                &set_page,
+            );
             (entered.model, entered.cmd)
         }
         Err(_) => set_page(not_found.clone(), init_model),

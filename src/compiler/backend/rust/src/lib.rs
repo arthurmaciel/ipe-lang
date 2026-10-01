@@ -5196,7 +5196,7 @@ fn disambiguated_rust_name(
 /// prepend (the marker-attr pattern that `row` / `column` / `wrappedRow` /
 /// `grid` / `paragraph` / `textColumn` lower to), and nested kernel calls.
 /// Is `e` a `Web.route pattern builder` kernel call?
-pub(crate) fn is_web_route_call(e: &Expr) -> bool {
+pub(crate) const fn is_web_route_call(e: &Expr) -> bool {
     matches!(
         e,
         Expr::Call {

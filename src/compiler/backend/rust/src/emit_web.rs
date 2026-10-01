@@ -755,29 +755,13 @@ fn refuse_overlapping_routes(
     Ok(())
 }
 
-/// Emit the page renderer a routed app hands its runtime entry:
-/// `move |page: &Page| -> Result<RoutePath, RenderRefusal>`, the inverse of
-/// the table's builders. Each page constructor renders through the FIRST
-/// route that builds it (its canonical route), one `RenderArg` per payload
-/// field. The `match` is exhaustive with no wildcard, so a constructor no
-/// route builds is a compile-time refusal here (IPE-L0159), never a runtime
-/// fallthrough; an ambiguous or dead route is refused before it.
-fn emit_route_render(
-    ctx: &EmitCtx,
-    routes_e: &Expr,
-    routes_s: &str,
-    page_ty: &IrType,
-    page_ty_s: &str,
-) -> DResult<String> {
-    let IrType::Enum {
-        home: page_home,
-        name: page_name,
-        ..
-    } = page_ty
-    else {
-        return Err(route_refusal(LowerError::RoutedPageNotCustomType));
-    };
-    let items = recover_route_table(ctx, routes_e)?;
+/// Read each route of a routed table as a [`RouteRow`]: a literal pattern
+/// split into segments and the bare page constructor it builds.
+fn route_rows<'a>(
+    items: &'a [Expr],
+    page_home: &ipe_ir::ModPath,
+    page_name: ipe_intern::Symbol,
+) -> DResult<Vec<RouteRow<'a>>> {
     let mut rows = Vec::with_capacity(items.len());
     for item in items {
         let Expr::Call { args, .. } = item else {
@@ -801,7 +785,7 @@ fn emit_route_render(
         if !ctor_args.is_empty() {
             return Err(route_refusal(LowerError::RouteBuilderUnsupportedShape));
         }
-        if home != page_home || ty != page_name {
+        if home != page_home || *ty != page_name {
             return Err(Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_web::emit_route_render",
                 detail: "a route builds another type than the page; \
@@ -821,6 +805,32 @@ fn emit_route_render(
             variant: *variant,
         });
     }
+    Ok(rows)
+}
+
+/// Emit the page renderer a routed app hands its runtime entry:
+/// `move |page: &Page| -> Result<RoutePath, RenderRefusal>`, the inverse of
+/// the table's builders. Each page constructor renders through the FIRST
+/// route that builds it (its canonical route), one `RenderArg` per payload
+/// field. The `match` is exhaustive with no wildcard, so a constructor no
+/// route builds is a compile-time refusal here (IPE-L0159), never a runtime
+/// fallthrough; an ambiguous or dead route is refused before it.
+fn emit_route_render(
+    ctx: &EmitCtx,
+    routes_e: &Expr,
+    routes_s: &str,
+    page_ty: &IrType,
+    page_ty_s: &str,
+) -> DResult<String> {
+    let IrType::Enum {
+        home: page_home,
+        name: page_name,
+        ..
+    } = page_ty
+    else {
+        return Err(route_refusal(LowerError::RoutedPageNotCustomType));
+    };
+    let rows = route_rows(recover_route_table(ctx, routes_e)?, page_home, *page_name)?;
     let variants = ctx.enum_variant_payloads(page_home, *page_name);
     if variants.is_empty() {
         return Err(Diagnostic::CompilerBug {

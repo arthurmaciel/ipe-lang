@@ -5086,18 +5086,15 @@ mod tests {
         let empty = uf
             .fresh(Content::Structure(FlatType::EmptyRecord))
             .expect("fresh empty tail");
-        let cfg_tail_var = match nav {
-            None => empty,
-            Some(shape) => {
-                let nav_var = uf.fresh(Content::Structure(shape)).expect("fresh nav");
-                let nav_sym = interner.intern("onNavigate").expect("intern onNavigate");
-                uf.fresh(Content::Structure(FlatType::Record(
-                    BTreeMap::from([(nav_sym, nav_var)]),
-                    empty,
-                )))
-                .expect("fresh cfg tail")
-            }
-        };
+        let cfg_tail_var = nav.map_or(empty, |shape| {
+            let nav_var = uf.fresh(Content::Structure(shape)).expect("fresh nav");
+            let nav_sym = interner.intern("onNavigate").expect("intern onNavigate");
+            uf.fresh(Content::Structure(FlatType::Record(
+                BTreeMap::from([(nav_sym, nav_var)]),
+                empty,
+            )))
+            .expect("fresh cfg tail")
+        });
         let check = RoutedWebCheck {
             model_var,
             msg_var,
