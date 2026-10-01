@@ -73,6 +73,67 @@ pub struct Unit {
     pub updated_sha: String,
 }
 
+/// A repository tag: the `tag` of every stored `tag:relpath` path.
+///
+/// `parse` is the only constructor, so a tag is never empty and holds no `/`
+/// and no `:` — exactly the tags `split_tag` reads back from a stored path.
+/// The code-review app's `RepoPath.parseTag` admits the same set; both sides
+/// are pinned by `tests/repo_tag_vectors.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoTag(String);
+
+/// Why a repository tag was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagError {
+    /// The tag is empty: `split_tag` reads `":rel"` as untagged.
+    Empty,
+    /// The tag holds a `/`: `split_tag` reads `"a/b:rel"` as untagged.
+    Slash,
+    /// The tag holds a `:`: `split_tag` splits `"a:b:rel"` at the first `:`.
+    Colon,
+}
+
+impl std::fmt::Display for TagError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Empty => "the tag is empty",
+            Self::Slash => "the tag holds a `/`",
+            Self::Colon => "the tag holds a `:`",
+        })
+    }
+}
+
+impl std::error::Error for TagError {}
+
+impl RepoTag {
+    /// Parses `raw` as a tag, refusing every spelling `split_tag` misreads.
+    pub fn parse(raw: &str) -> Result<Self, TagError> {
+        if raw.is_empty() {
+            Err(TagError::Empty)
+        } else if raw.contains('/') {
+            Err(TagError::Slash)
+        } else if raw.contains(':') {
+            Err(TagError::Colon)
+        } else {
+            Ok(Self(raw.to_string()))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The stored form of `rel` under this tag: `tag:rel`.
+    pub fn tagged(&self, rel: &str) -> String {
+        format!("{}:{rel}", self.0)
+    }
+
+    /// The `meta` key recording the HEAD sha this tag was last indexed at.
+    pub fn last_sha_key(&self) -> String {
+        format!("last_sha:{}", self.0)
+    }
+}
+
 /// Split a repo-tagged path (`"ipe:crates/foo.rs"`) into `(tag, relpath)`.
 /// Untagged paths (no `:` before the first `/`) return `("", path)`.
 pub fn split_tag(path: &str) -> (&str, &str) {
@@ -251,6 +312,62 @@ mod tests {
         assert_eq!(
             stage_of("src/compiler/backend/rust/src/builder.rs"),
             Some(Stage::Generate)
+        );
+    }
+
+    const TAG_VECTORS: &str = include_str!("../tests/repo_tag_vectors.json");
+
+    fn tag_refusal_name(e: TagError) -> &'static str {
+        match e {
+            TagError::Empty => "Empty",
+            TagError::Slash => "Slash",
+            TagError::Colon => "Colon",
+        }
+    }
+
+    // Every vector row: `RepoTag::parse` accepts exactly the rows with no
+    // refusal, an accepted tag reads back through `split_tag` unchanged under
+    // nested, top-level and colon-holding relpaths, and a refused tag never
+    // reads back as itself.
+    #[test]
+    fn repo_tag_vectors_agree_with_split_tag() {
+        let rows: Vec<serde_json::Value> = serde_json::from_str(TAG_VECTORS).unwrap();
+        assert!(rows.len() >= 6, "the shared tag vector file lost rows");
+        for row in rows {
+            let raw = row["raw"].as_str().unwrap();
+            let want = row["refusal"].as_str().map_or(Ok(raw), Err);
+            let parsed = RepoTag::parse(raw);
+            assert_eq!(
+                parsed
+                    .as_ref()
+                    .map(RepoTag::as_str)
+                    .map_err(|e| tag_refusal_name(*e)),
+                want,
+                "{raw:?}"
+            );
+            match parsed {
+                Ok(tag) => {
+                    for rel in ["a/b.rs", "c.rs", "d:e/f.rs"] {
+                        assert_eq!(split_tag(&tag.tagged(rel)), (raw, rel), "{raw:?} {rel}");
+                    }
+                }
+                Err(_) => {
+                    let stored = format!("{raw}:x/y.rs");
+                    let (back, _) = split_tag(&stored);
+                    assert!(back.is_empty() || back != raw, "{raw:?} reads back tagged");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repo_tag_refuses_each_misread_spelling() {
+        assert_eq!(RepoTag::parse(""), Err(TagError::Empty));
+        assert_eq!(RepoTag::parse("a/b"), Err(TagError::Slash));
+        assert_eq!(RepoTag::parse("a:b"), Err(TagError::Colon));
+        assert_eq!(
+            RepoTag::parse("ipe").map(|t| t.tagged("x")),
+            Ok("ipe:x".to_string())
         );
     }
 
