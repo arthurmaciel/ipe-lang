@@ -20,7 +20,7 @@ import Lib.Index as Index
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
 import Lib.Queue as Queue exposing (QueueState(..))
-import Lib.RepoPath as RepoPath exposing (PathError(..))
+import Lib.RepoPath as RepoPath exposing (PathError(..), Root, RootMap)
 import Lib.Settings as Settings
 
 
@@ -945,8 +945,17 @@ refusalName err =
         InvalidRelative _ _ ->
             "invalid"
 
+        UnknownTag _ ->
+            "unknown-tag"
+
         NotUnderRoot _ _ ->
             "not-under-root"
+
+        NoRoots ->
+            "no-roots"
+
+        DuplicateTag _ ->
+            "duplicate-tag"
 
 
 refusedAs : String -> Result PathError Path.Path -> Bool
@@ -1006,14 +1015,26 @@ relativeFromCwd abs =
             )
 
 
+-- A root map binding each `( tag, root )`, failing the task on a refusal.
+mapOf : List ( String, Root ) -> Task.Task Error RootMap
+mapOf bindings =
+    bindings
+        |> List.map (\( name, root ) -> RepoPath.parseTag name |> Result.map (\tag -> ( tag, root )))
+        |> Result.combine
+        |> Result.andThen RepoPath.rootMap
+        |> Result.mapError RepoPath.toError
+        |> Task.fromResult
+
+
 storedPathRefusals : Task.Task Error Bool
 storedPathRefusals =
     do
         cwd <- System.cwd ()
-        root <- RepoPath.parseRoot cwd
+        cwdRoot <- RepoPath.parseRoot cwd
+        root <- mapOf [ ( "ipe", cwdRoot ) ]
         let
             base =
-                Path.toString (RepoPath.rootPath root)
+                Path.toString (RepoPath.rootPath cwdRoot)
         in
         Task.succeed
             (List.all identity
@@ -1052,13 +1073,136 @@ relativeRootAccepted =
         rel <- relativeFromCwd (Path.toString cwdPath)
         root <- RepoPath.parseRoot rel
         dotRoot <- RepoPath.parseRoot "."
+        System.setenv "IPE_INDEX_DB" (cwd ++ "/unused-index.db")
+        System.setenv "IPE_INDEX_ROOT" rel
+        settings <- Settings.indexSettings
         Task.succeed
             (Path.toString (RepoPath.rootPath root)
                 == Path.toString cwdPath
                 && Path.toString (RepoPath.rootPath dotRoot)
                 == Path.toString cwdPath
-                && resolvesTo (Path.toString cwdPath ++ "/package.ipe") (RepoPath.resolve root "ipe:package.ipe")
+                && resolvesTo (Path.toString cwdPath ++ "/package.ipe") (RepoPath.resolve settings.roots "ipe:package.ipe")
+                && refusedAs "unknown-tag" (RepoPath.resolve settings.roots "other:package.ipe")
+                && Result.map RepoPath.tagName Settings.ipeTag
+                == Ok "ipe"
             )
+
+
+-- A map binding only `ipe` refuses a stored path under any other tag rather
+-- than reading it from the one root it has.
+unknownTagRefused : Task.Task Error Bool
+unknownTagRefused =
+    do
+        cwd <- System.cwd ()
+        cwdRoot <- RepoPath.parseRoot cwd
+        roots <- mapOf [ ( "ipe", cwdRoot ) ]
+        Task.succeed
+            (refusedAs "unknown-tag" (RepoPath.resolve roots "other:src/x.ipe")
+                && refusedAs "unknown-tag" (RepoPath.resolve roots "Ipe:package.ipe")
+                && refusalNames "names a repo tag" (RepoPath.resolve roots "other:src/x.ipe")
+            )
+
+
+-- Each tag joins under its own root: with `ipe` bound to A and `other` to B,
+-- `other:f` lands in B and `ipe:f` in A, in either binding order.
+tagSelectsItsRoot : Task.Task Error Bool
+tagSelectsItsRoot =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-tag-roots"
+    in
+    do
+        Task.fromResult (Path.fromString (base ++ "/a")) |> Task.andThen File.mkdirAll
+        Task.fromResult (Path.fromString (base ++ "/b")) |> Task.andThen File.mkdirAll
+        a <- RepoPath.parseRoot (base ++ "/a")
+        b <- RepoPath.parseRoot (base ++ "/b")
+        ipeFirst <- mapOf [ ( "ipe", a ), ( "other", b ) ]
+        otherFirst <- mapOf [ ( "other", b ), ( "ipe", a ) ]
+        let
+            aDir =
+                Path.toString (RepoPath.rootPath a)
+
+            bDir =
+                Path.toString (RepoPath.rootPath b)
+        in
+        Task.succeed
+            (List.all identity
+                [ resolvesTo (bDir ++ "/f") (RepoPath.resolve ipeFirst "other:f")
+                , resolvesTo (aDir ++ "/f") (RepoPath.resolve ipeFirst "ipe:f")
+                , resolvesTo (bDir ++ "/f") (RepoPath.resolve otherFirst "other:f")
+                , resolvesTo (aDir ++ "/f") (RepoPath.resolve otherFirst "ipe:f")
+                ]
+            )
+
+
+-- The tag grammar is the subset of ipe-index's `split_tag` that reads a
+-- stored path back as tagged: `split_tag` takes a `:` as the separator only
+-- before the first `/`.
+tagGrammarMatchesWriter : Task.Task Error Bool
+tagGrammarMatchesWriter =
+    do
+        cwd <- System.cwd ()
+        cwdRoot <- RepoPath.parseRoot cwd
+        roots <- mapOf [ ( "ipe", cwdRoot ), ( "a", cwdRoot ) ]
+        let
+            base =
+                Path.toString (RepoPath.rootPath cwdRoot)
+        in
+        Task.succeed
+            (List.all identity
+                -- split_tag "a/b:c" = (None, "a/b:c"): the `:` follows a `/`
+                [ refusedAs "missing-tag" (RepoPath.resolve roots "a/b:c")
+                -- split_tag ":x" = (Some(""), "x"): an empty tag no repo carries
+                , refusedAs "missing-tag" (RepoPath.resolve roots ":x")
+                -- split_tag "ipe:a:b" = (Some("ipe"), "a:b")
+                , resolvesTo (base ++ "/a:b") (RepoPath.resolve roots "ipe:a:b")
+                , tagRefused "a/b"
+                , tagRefused "a:b"
+                , tagRefused ""
+                , Result.map RepoPath.tagName (RepoPath.parseTag "ipe") == Ok "ipe"
+                ]
+            )
+
+
+-- `parseTag` refuses `raw` as `MissingTag`.
+tagRefused : String -> Bool
+tagRefused raw =
+    case RepoPath.parseTag raw of
+        Ok _ ->
+            False
+
+        Err err ->
+            refusalName err == "missing-tag"
+
+
+-- A root map is never empty and never binds a tag twice.
+rootMapRefusals : Task.Task Error Bool
+rootMapRefusals =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-tag-roots"
+    in
+    do
+        Task.fromResult (Path.fromString (base ++ "/a")) |> Task.andThen File.mkdirAll
+        Task.fromResult (Path.fromString (base ++ "/b")) |> Task.andThen File.mkdirAll
+        a <- RepoPath.parseRoot (base ++ "/a")
+        b <- RepoPath.parseRoot (base ++ "/b")
+        ipe <- Task.fromResult (RepoPath.parseTag "ipe" |> Result.mapError RepoPath.toError)
+        Task.succeed
+            (mapRefusedAs "no-roots" (RepoPath.rootMap [])
+                && mapRefusedAs "duplicate-tag" (RepoPath.rootMap [ ( ipe, a ), ( ipe, b ) ])
+                && mapRefusedAs "duplicate-tag" (RepoPath.rootMap [ ( ipe, a ), ( ipe, a ) ])
+            )
+
+
+mapRefusedAs : String -> Result PathError RootMap -> Bool
+mapRefusedAs expected result =
+    case result of
+        Ok _ ->
+            False
+
+        Err err ->
+            refusalName err == expected
 
 
 rootRefused : String -> String -> Task.Task Error Bool
@@ -2030,6 +2174,26 @@ main =
             (\results ->
                 relativeRootAccepted
                     |> Task.map (\ok -> results ++ [ ( "relative root resolves against the working directory", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                unknownTagRefused
+                    |> Task.map (\ok -> results ++ [ ( "stored path under an unbound tag refused", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                tagSelectsItsRoot
+                    |> Task.map (\ok -> results ++ [ ( "each tag joins under its own root", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                tagGrammarMatchesWriter
+                    |> Task.map (\ok -> results ++ [ ( "tag grammar matches the index writer", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                rootMapRefusals
+                    |> Task.map (\ok -> results ++ [ ( "empty and duplicate-tag root maps refused", ok ) ])
             )
         |> Task.andThen
             (\results ->

@@ -1,4 +1,4 @@
-module Lib.Settings exposing (DbLocation, IndexSettings, dbFileName, encodeFilePath, indexReadUrl, indexSettings, indexWriteUrl, parseDbLocation, reviewDb, reviewUrl)
+module Lib.Settings exposing (DbLocation, IndexSettings, dbFileName, encodeFilePath, indexReadUrl, indexSettings, indexWriteUrl, ipeTag, parseDbLocation, reviewDb, reviewUrl)
 
 import Ipe.Encoding as Encoding
 import Ipe.Error as Error
@@ -7,7 +7,7 @@ import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
-import Lib.RepoPath as RepoPath exposing (Root)
+import Lib.RepoPath as RepoPath exposing (PathError, RootMap, Tag)
 
 
 -- Where a SQLite database lives: an absolute file path. Every accepted
@@ -23,8 +23,16 @@ type DbLocation
 -- The index configuration, parsed from `IPE_INDEX_DB` and `IPE_INDEX_ROOT`.
 type alias IndexSettings =
     { db : DbLocation
-    , root : Root
+    , roots : RootMap
     }
+
+
+-- The repo tag `IPE_INDEX_ROOT` binds: `ipe`, the tag of ipe-index's default
+-- `--repo ipe:.`. It is the only bound tag, so a unit stored under any other
+-- tag is refused as `UnknownTag` rather than read from this root.
+ipeTag : Result PathError Tag
+ipeTag =
+    RepoPath.parseTag "ipe"
 
 
 -- The one boundary that turns the index environment into typed values. It
@@ -38,7 +46,12 @@ indexSettings =
         rawRoot <- System.getenv "IPE_INDEX_ROOT"
         db <- parseDbLocation "IPE_INDEX_DB" rawDb
         root <- RepoPath.parseRoot rawRoot
-        Task.succeed { db = db, root = root }
+        roots <-
+            ipeTag
+                |> Result.andThen (\tag -> RepoPath.rootMap [ ( tag, root ) ])
+                |> Result.mapError RepoPath.toError
+                |> Task.fromResult
+        Task.succeed { db = db, roots = roots }
 
 
 -- The review database location from `IPE_REVIEW_DB`, `review.db` in the

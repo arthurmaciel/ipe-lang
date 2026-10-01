@@ -1,12 +1,15 @@
-module Lib.RepoPath exposing (PathError(..), Root, absolutize, describe, parseRoot, resolve, rootPath, toError)
+module Lib.RepoPath exposing (PathError(..), Root, RootMap, Tag, absolutize, describe, parseRoot, parseTag, resolve, rootMap, rootPath, tagName, toError)
 
 import Ipe.Error as Error
 import Ipe.File as File
+import Ipe.List as List
+import Ipe.Maybe as Maybe
 import Ipe.Path as Path exposing (Path)
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
+import Ipe.Tuple as Tuple
 
 
 -- The directory the index's `tag:relative` paths are relative to: an absolute,
@@ -16,13 +19,97 @@ type Root
     = Root Path
 
 
--- Why a stored `tag:relative` index path was refused. Each variant carries the
--- stored path as it came off the index; the path refusals also carry the
--- `Ipe.Path` error that decided them, so the rules live in `Ipe.Path` alone.
+-- A repository tag: the `tag` of a stored `tag:relative` path. Opaque —
+-- `parseTag` is the only way to build one, so every tag is non-empty and holds
+-- no `/` and no `:`, the subset of ipe-index's `split_tag` that reads a stored
+-- path back as tagged.
+type Tag
+    = Tag String
+
+
+-- Which root each repository tag's paths join under. Opaque — `rootMap` is the
+-- only way to build one, so a map is never empty and binds each tag once. A
+-- tag reaches a `Root` only through this map: there is no default root.
+type RootMap
+    = RootMap (List ( Tag, Root ))
+
+
+-- Why a stored `tag:relative` index path, or a root map, was refused. Each
+-- stored-path variant carries the stored path as it came off the index; the
+-- path refusals also carry the `Ipe.Path` error that decided them, so the
+-- rules live in `Ipe.Path` alone. `UnknownTag` is a well-formed tag the map
+-- does not bind; `NoRoots` and `DuplicateTag` refuse a map's construction.
 type PathError
     = MissingTag String
+    | UnknownTag String
     | InvalidRelative String Error
     | NotUnderRoot String Error
+    | NoRoots
+    | DuplicateTag String
+
+
+-- A tag as written before the `:` of a stored path. Refused (as `MissingTag`
+-- of `raw`): empty, or holding a `/` or a `:` — ipe-index's `split_tag` reads
+-- a path whose first `:` follows a `/` as untagged.
+parseTag : String -> Result PathError Tag
+parseTag raw =
+    if raw == "" || String.contains "/" raw || String.contains ":" raw then
+        Err (MissingTag raw)
+
+    else
+        Ok (Tag raw)
+
+
+tagName : Tag -> String
+tagName tag =
+    case tag of
+        Tag name ->
+            name
+
+
+-- A root map from its bindings. Refused: no binding (`NoRoots`), or a tag
+-- bound twice (`DuplicateTag`), which would make the lookup order decide the
+-- root.
+rootMap : List ( Tag, Root ) -> Result PathError RootMap
+rootMap bindings =
+    if List.isEmpty bindings then
+        Err NoRoots
+
+    else
+        case firstDuplicate (List.map (\( tag, _ ) -> tagName tag) bindings) of
+            Just name ->
+                Err (DuplicateTag name)
+
+            Nothing ->
+                Ok (RootMap bindings)
+
+
+firstDuplicate : List String -> Maybe String
+firstDuplicate names =
+    List.foldl
+        (\name ( seen, found ) ->
+            case found of
+                Just _ ->
+                    ( seen, found )
+
+                Nothing ->
+                    if List.member name seen then
+                        ( seen, Just name )
+
+                    else
+                        ( name :: seen, Nothing )
+        )
+        ( [], Nothing )
+        names
+        |> Tuple.second
+
+
+rootFor : RootMap -> Tag -> Maybe Root
+rootFor map tag =
+    case map of
+        RootMap bindings ->
+            List.find (\( bound, _ ) -> tagName bound == tagName tag) bindings
+                |> Maybe.map Tuple.second
 
 
 rootPath : Root -> Path
@@ -84,28 +171,33 @@ rootRefusal raw problem =
         ]
 
 
--- A stored `tag:relative` path joined under the root. The first `:`-segment is
--- the repo tag; the rest is the relative path, sealed by `Path.fromString`
--- and joined by `Path.under`, which alone decide every path refusal: a NUL
--- byte or a `..` climbing out of the path is `InvalidRelative`; an empty,
--- `.`, or absolute path, or a join not strictly below the root, is
--- `NotUnderRoot`. The check is lexical: a symlink under the root is followed
--- by the read that uses the result.
-resolve : Root -> String -> Result PathError Path
-resolve root stored =
+-- A stored `tag:relative` path joined under its tag's root. The prefix
+-- before the first `:` is the repo tag, parsed by `parseTag` (a stored path
+-- with no `:` or an invalid tag is `MissingTag`) and looked up in the map (an
+-- unbound tag is `UnknownTag`, never a default root). The rest is the
+-- relative path, sealed by `Path.fromString` and joined by `Path.under`, which
+-- alone decide every path refusal: a NUL byte or a `..` climbing out of the
+-- path is `InvalidRelative`; an empty, `.`, or absolute path, or a join not
+-- strictly below the root, is `NotUnderRoot`. The check is lexical: a symlink
+-- under the root is followed by the read that uses the result.
+resolve : RootMap -> String -> Result PathError Path
+resolve roots stored =
     case String.split ":" stored of
-        [] ->
+        prefix :: first :: more ->
+            case parseTag prefix of
+                Err _ ->
+                    Err (MissingTag stored)
+
+                Ok tag ->
+                    case rootFor roots tag of
+                        Nothing ->
+                            Err (UnknownTag stored)
+
+                        Just root ->
+                            joinUnder root stored (String.join ":" (first :: more))
+
+        _ ->
             Err (MissingTag stored)
-
-        _ :: [] ->
-            Err (MissingTag stored)
-
-        tag :: rest ->
-            if tag == "" then
-                Err (MissingTag stored)
-
-            else
-                joinUnder root stored (String.join ":" rest)
 
 
 joinUnder : Root -> String -> String -> Result PathError Path
@@ -128,8 +220,17 @@ describe err =
         InvalidRelative stored e ->
             "index path \"" ++ stored ++ "\" is not a valid relative path (" ++ Error.message e ++ ")"
 
+        UnknownTag stored ->
+            "index path \"" ++ stored ++ "\" names a repo tag no configured root binds"
+
         NotUnderRoot stored e ->
-            "index path \"" ++ stored ++ "\" does not join to a path under IPE_INDEX_ROOT (" ++ Error.message e ++ ")"
+            "index path \"" ++ stored ++ "\" does not join to a path under its repo root (" ++ Error.message e ++ ")"
+
+        NoRoots ->
+            "no repository root is configured"
+
+        DuplicateTag tag ->
+            "repo tag \"" ++ tag ++ "\" is bound to more than one root"
 
 
 toError : PathError -> Error
