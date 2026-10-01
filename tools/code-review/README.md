@@ -31,7 +31,7 @@ joining a stored path outside the repo:
 | Variable         | Meaning                                                       |
 |------------------|---------------------------------------------------------------|
 | `IPE_INDEX_DB`   | Path or `sqlite://` URL of the `ipe-index` DB.                |
-| `IPE_INDEX_ROOT` | Repo root the index's `tag:relative` paths join to; must be an existing directory. |
+| `IPE_INDEX_ROOT` | Repo root the index's `ipe:relative` paths join to; must be an existing directory. |
 | `IPE_REVIEW_DB`  | Optional path or `sqlite://` URL of the review DB; defaults to `review.db`. |
 
 A relative path in any of the three resolves against the working directory. A
@@ -42,8 +42,14 @@ must name a database: the app appends the open mode itself. A `sqlite:` or
 by variable name only, never by value, since a mistyped URL can carry a
 password.
 
+`IPE_INDEX_ROOT` binds the repo tag `ipe`, the tag of `ipe-index`'s default
+`--repo ipe:.`. A unit stored under any other tag (an index built with a second
+`--repo`) is refused rather than read from that root, so the page never shows a
+different file than the one the index recorded. A tag is the text before the
+first `:` when no `/` precedes it, matching how `ipe-index` reads it back.
+
 Every stored `tag:relative` path is sealed with `Ipe.Path.fromString` and joined
-with `Ipe.Path.under`, so it must land strictly under `IPE_INDEX_ROOT`: an
+with `Ipe.Path.under`, so it must land strictly under its tag's root: an
 empty, absolute, or NUL-bearing stored path, or one whose `..` climbs out of it,
 is refused with an error naming it and the `Ipe.Path` reason. The check is lexical — a symlink inside the repo is
 followed, so it can point a read outside the root. A source file larger than
