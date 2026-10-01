@@ -1,0 +1,135 @@
+module Lib.SafeText exposing (SafeText, concat, isHazard, literal, quoted, render, renderForeign, toString)
+
+-- Text that is safe to write to an operator's terminal or show on a page:
+-- every log-hazard character is spelled out as a visible escape. Untrusted
+-- text (index rows, environment values, an error message built from either)
+-- enters only through `render`, `quoted` or `renderForeign`; `literal` is for
+-- text this tool writes itself, so its callers pass string literals only.
+-- `toString` is the one exit, used at a sink. The tool constants `key` and
+-- `hint` that `Main.requireEnv` prints are such literals.
+--
+-- The hazard set mirrors the runtime's `is_log_hazard`
+-- (`src/runtime/rust/src/system.rs`), and the escapes mirror
+-- `scrub_log_controls`: `\n`, `\r` and `\t` by name, every other hazard as
+-- `\u{hex}` in lowercase. One deliberate deviation: `render` also escapes a
+-- literal `\` as `\\`, so untrusted text cannot pre-forge an escape that reads
+-- as an innocent character, and a `"` as `\"`, so a `quoted` value cannot
+-- close its own quotes. With `\` escaped the mapping stays injective.
+-- `renderForeign` leaves `\` and `"` alone: it is the
+-- sink-side pass over text that may already be rendered, where doubling every
+-- `\` again would garble it.
+
+import Ipe.Bitwise as Bitwise
+import Ipe.Char as Char
+import Ipe.List as List
+import Ipe.String as String
+
+
+type SafeText
+    = SafeText String
+
+
+-- A character that must never reach a terminal or page raw: every Unicode
+-- `Cc` control (C0 0x00-0x1F incl. CR/LF/ESC, DEL 0x7F, C1 0x80-0x9F), the
+-- line/paragraph separators U+2028/U+2029, and the bidirectional formatting
+-- controls U+061C, U+200E/F, U+202A-E and U+2066-9.
+isHazard : Char -> Bool
+isHazard c =
+    let
+        code =
+            Char.toCode c
+    in
+    -- 0x00-0x1F, 0x7F-0x9F, U+061C, U+200E-U+200F, U+2028-U+202E, U+2066-U+2069
+    (code <= 31)
+        || (code >= 127 && code <= 159)
+        || (code == 1564)
+        || (code >= 8206 && code <= 8207)
+        || (code >= 8232 && code <= 8238)
+        || (code >= 8294 && code <= 8297)
+
+
+-- Untrusted text with every hazard, every `\` and every `"` escaped.
+render : String -> SafeText
+render raw =
+    SafeText (escapeWith True raw)
+
+
+-- Untrusted text that may already hold rendered escapes: every hazard is
+-- escaped, `\` and `"` are kept as is.
+renderForeign : String -> SafeText
+renderForeign raw =
+    SafeText (escapeWith False raw)
+
+
+-- Untrusted text rendered and wrapped in double quotes, the form a diagnostic
+-- uses to name a foreign value.
+quoted : String -> SafeText
+quoted raw =
+    SafeText ("\"" ++ escapeWith True raw ++ "\"")
+
+
+-- Text this tool wrote itself; callers pass a string literal.
+literal : String -> SafeText
+literal text =
+    SafeText text
+
+
+concat : List SafeText -> SafeText
+concat pieces =
+    SafeText (String.concat (List.map toString pieces))
+
+
+toString : SafeText -> String
+toString text =
+    case text of
+        SafeText s ->
+            s
+
+
+escapeWith : Bool -> String -> String
+escapeWith escapeBackslash raw =
+    if String.any (\c -> isHazard c || (escapeBackslash && (c == '\\' || c == '"'))) raw then
+        String.concat (List.map (escapeChar escapeBackslash) (String.toList raw))
+
+    else
+        raw
+
+
+escapeChar : Bool -> Char -> String
+escapeChar escapeBackslash c =
+    if c == '\n' then
+        "\\n"
+
+    else if c == '\r' then
+        "\\r"
+
+    else if c == '\t' then
+        "\\t"
+
+    else if escapeBackslash && c == '\\' then
+        "\\\\"
+
+    else if escapeBackslash && c == '"' then
+        "\\\""
+
+    else if isHazard c then
+        "\\u{" ++ hex (Char.toCode c) ++ "}"
+
+    else
+        String.fromChar c
+
+
+-- `n` (non-negative) in lowercase hex, no leading zeros. Each step drops one
+-- nibble, so a code point (at most 0x10FFFF) takes at most six steps.
+hex : Int -> String
+hex n =
+    if n < 16 then
+        hexDigit n
+
+    else
+        hex (Bitwise.shiftRightBy 4 n) ++ hexDigit (Bitwise.and 15 n)
+
+
+hexDigit : Int -> String
+hexDigit d =
+    String.slice d (d + 1) "0123456789abcdef"
