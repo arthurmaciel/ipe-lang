@@ -549,9 +549,10 @@ code! {
     /// `Web.route` pattern `:param` count does not match the page-constructor
     /// payload count; the route can never deliver the right number of arguments
     IPE_L0122 = "IPE-L0122", "`Web.route` `:param` count does not match page-constructor payload count", "IPE-L0122";
-    /// `Web.route` page builder is neither a page constructor, an inline lambda,
-    /// nor a named function — the Rust backend cannot emit a type-directed closure
-    IPE_L0123 = "IPE-L0123", "`Web.route` page builder is not a constructor, lambda, or named function", "IPE-L0123";
+    /// `Web.route` page builder is not a bare page constructor, or a page payload
+    /// field has a type a URL segment cannot carry. A function builder has no
+    /// inverse, so the page's canonical path could not be rendered.
+    IPE_L0123 = "IPE-L0123", "`Web.route` page builder is not a bare page constructor", "IPE-L0123";
     /// `Web.tea` routes list is non-empty but Model has no `page` field.
     ///
     /// The routes are forwarded to the non-routed runtime path and never update the
@@ -673,6 +674,23 @@ code! {
     ///
     /// The runtime refuses the same literal at startup; `ipe` refuses it first.
     IPE_L0156 = "IPE-L0156", "a literal route pattern or server route path is malformed", "IPE-L0156";
+    /// two routes of a routed app have equivalent patterns but build different
+    /// page constructors; the later one can never match.
+    IPE_L0157 = "IPE-L0157", "two routes have equivalent patterns but build different pages", "IPE-L0157";
+    /// a route of a routed app can never match: an earlier route matches every
+    /// path it matches.
+    IPE_L0158 = "IPE-L0158", "a route can never match because an earlier route matches first", "IPE-L0158";
+    /// a constructor of a routed app's page type has no route, so the page has
+    /// no canonical path.
+    IPE_L0159 = "IPE-L0159", "a page constructor has no route", "IPE-L0159";
+    /// a routed app's `routes` is not a list of `Web.route "<literal>" Ctor`
+    /// the compiler can read, so the page renderer cannot be derived.
+    IPE_L0160 = "IPE-L0160", "a routed app's routes are not a literal list of `Web.route` calls", "IPE-L0160";
+    /// a routed app's `Model.page` field is not a custom type.
+    IPE_L0161 = "IPE-L0161", "the `page` field of a routed app's Model is not a custom type", "IPE-L0161";
+    /// an app sets `onNavigate` but its Model has no `page` field, so nothing
+    /// would ever call it.
+    IPE_L0162 = "IPE-L0162", "`onNavigate` is set but the Model has no `page` field", "IPE-L0162";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

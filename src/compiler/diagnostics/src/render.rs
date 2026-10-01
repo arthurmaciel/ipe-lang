@@ -706,8 +706,25 @@ fn lower_prose(msg: &LowerError) -> String {
             format!("The path you gave `{call}` isn't a valid route.")
         }
         LowerError::RouteBuilderUnsupportedShape => {
-            "I can't read this route's page builder — it isn't in a shape I can compile."
-                .to_string()
+            "A route's page builder must be the page constructor itself.".to_string()
+        }
+        LowerError::RouteAmbiguous { .. } => {
+            "Two routes match the same paths but build different pages.".to_string()
+        }
+        LowerError::RouteUnreachable { .. } => {
+            "This route can never match: an earlier route always wins.".to_string()
+        }
+        LowerError::RoutedPageWithoutRoute { .. } => {
+            "One of your pages has no route, so it has no address.".to_string()
+        }
+        LowerError::RouteTableOpaque => {
+            "I can't read this app's `routes` as a list of `Web.route` calls.".to_string()
+        }
+        LowerError::RoutedPageNotCustomType => {
+            "Your Model's `page` field needs to be a custom type of pages.".to_string()
+        }
+        LowerError::OnNavigateWithoutPage => {
+            "`onNavigate` is set, but your Model has no `page` field to route.".to_string()
         }
         LowerError::RouteParamUnsupportedType { .. } => {
             "One of this route's fields has a type I can't read out of a URL.".to_string()
@@ -1863,9 +1880,27 @@ fn lower_label(msg: &LowerError) -> String {
         ),
         LowerError::RoutePatternMalformed { defect, .. } => route_pattern_label(defect),
         LowerError::RouteBuilderUnsupportedShape => {
-            "this page builder shape is not supported — inline a constructor or lambda \
-             at the `Web.route` call site"
+            "this page builder is not a bare page constructor — a function builder has \
+             no inverse, so the page's path cannot be rendered"
                 .to_string()
+        }
+        LowerError::RouteAmbiguous { first, second } => {
+            format!("`{second}` is equivalent to the earlier `{first}` but builds a different page")
+        }
+        LowerError::RouteUnreachable { pattern, earlier } => {
+            format!("`{pattern}` can never match: the earlier `{earlier}` matches first")
+        }
+        LowerError::RoutedPageWithoutRoute { ctor } => {
+            format!("page constructor `{ctor}` has no route")
+        }
+        LowerError::RouteTableOpaque => {
+            "`routes` is not a list of `Web.route \"<literal>\" PageConstructor`".to_string()
+        }
+        LowerError::RoutedPageNotCustomType => {
+            "the Model's `page` field is not a custom type".to_string()
+        }
+        LowerError::OnNavigateWithoutPage => {
+            "`onNavigate` is set but the Model has no `page` field".to_string()
         }
         LowerError::RouteParamUnsupportedType {
             field_index,

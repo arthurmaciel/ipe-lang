@@ -28,6 +28,7 @@ use ipe_ir::{Callee, Expr, IrType, KernelFn};
 use crate::EmitCtx;
 use crate::emit_expr::emit_expr_at;
 use crate::emit_types::{GenericScope, render_type};
+use crate::route_grammar::{self, SegmentShape};
 
 /// Wrap an emitted `view : Model -> Element Msg` so its result type is the
 /// `Html` the runtime sink mounts: the emitted `Element`-returning view is
@@ -194,27 +195,14 @@ pub fn emit_web_call(
 /// Emit `Web.route pattern builder` → `Route::new(&pattern, closure)`.
 ///
 /// `Web.route : String -> builder -> WebRoute page`.
-/// The builder argument is one of:
-///
-/// * A page-constructor reference ([`Expr::Ctor`], nullary or partial — the
-///   lower-tier `lower_route_builder` peephole carries a bare payload ctor
-///   through as a zero-arg `Ctor`).  A nullary/fully-applied ctor wraps as a
-///   constant closure; a partial ctor emits one type-directed `params.get(i)`
-///   conversion per declared payload field (T6, [`route_param_get`]):
-///
-///   | field | conversion |
-///   |-------|------------|
-///   | `String` | `.cloned().unwrap_or_default()` |
-///   | `Int`    | `.and_then(\|s\| s.parse::<i64>().ok()).unwrap_or_default()` |
-///   | `Float`  | `.and_then(\|s\| s.parse::<f64>().ok()).unwrap_or_default()` |
-///   | `Bool`   | `.map(\|s\| s == "true").unwrap_or_default()` |
-///   | other    | compile-time error (unsupported payload type) |
-///
-/// * A named function or inline lambda ([`builder_fn_params`]) — same
-///   per-parameter conversion table; a single `List String` parameter is the
-///   raw-params builder shape and receives the whole vec.
-///
-/// * Anything else — fail CLOSED (see the final arm).
+/// The builder is a bare page constructor ([`Expr::Ctor`] with no applied
+/// arguments — the lower-tier `lower_route_builder` peephole carries a bare
+/// payload ctor through as a zero-arg `Ctor`): the one shape whose inverse,
+/// the page renderer ([`emit_route_render`]), is derivable. A nullary ctor
+/// wraps as a constant closure; a payload ctor emits one type-directed
+/// `params.get(i)` conversion per declared payload field ([`route_param_get`]).
+/// Every other shape — lambda, function, applied ctor — fails CLOSED with
+/// IPE-L0123; the type checker refuses it first.
 ///
 /// Parity note: the reference backend assumes all payloads are String
 /// (`ExprEmitter.hs:1823`). The type-directed path is a sanctioned divergence —
@@ -235,113 +223,69 @@ fn emit_web_route(
     };
     let pattern_s = emit_expr_at(ctx, pattern_e, indent, child, generics)?;
 
-    let build_closure = if let Expr::Ctor {
+    let unsupported = || Diagnostic::Lower {
+        span: Span::DUMMY,
+        msg: LowerError::RouteBuilderUnsupportedShape,
+    };
+    let Expr::Ctor {
         home,
         ty,
         variant,
         args: ctor_args,
     } = builder_e
-    {
-        // The full field-type slice (not just the count) so each slot can
-        // emit a type-directed conversion.
-        let variant_tys = ctx.variant_fields(home, *ty, *variant)?;
-        let ctor_s = emit_expr_at(ctx, builder_e, indent, child, generics)?;
-        if variant_tys.is_empty() || !ctor_args.is_empty() {
-            // Nullary ctor or fully-applied ctor: hoist the page value out of
-            // the closure and clone it per call (`ExprEmitter.hs:1809` parity
-            // — `{ let __c = ctor; move |_p| __c.clone() }`).  Constructing it
-            // inside the body would move any captured payload out of an `Fn`
-            // closure (E0507); every page ADT derives `Clone`.
-            //
-            // Returns `Some(…)` — the builder signature is now
-            // `Fn(Vec<String>) -> Option<Page>` so decode failures in other
-            // routes fall through to `not_found` (§B-route-param).
-            format!(
-                "{{ let __c = {ctor_s}; \
-                 move |_params: ::std::vec::Vec<::std::string::String>| \
-                 ::std::option::Option::Some(__c.clone()) }}"
-            )
-        } else {
-            // Partial-ctor with N payload fields.
-            //
-            // Item 1: static arity check — count ':param' segments in
-            // the pattern and compare against the constructor's payload count.
-            // A mismatch is a compile-time error (IPE-L0122): the route can
-            // never deliver the right arguments.  Only checked when the pattern
-            // is a string literal (the only shape the parser accepts for a
-            // route pattern); other shapes are left to cargo for now.
-            if let Expr::Str(pat_s) = pattern_e {
-                let param_count = pat_s.split('/').filter(|seg| seg.starts_with(':')).count();
-                let ctor_payload_count = variant_tys.len();
-                if param_count != ctor_payload_count {
-                    return Err(Diagnostic::Lower {
-                        span: Span::DUMMY,
-                        msg: LowerError::RouteParamCountMismatch {
-                            pattern: pat_s.as_str().into(),
-                            param_count,
-                            ctor_payload_count,
-                        },
-                    });
-                }
-            }
-            // Emit type-directed fallible `params.get(i)` conversions using
-            // `?`-propagation inside a closure that returns `Option<Page>`.
-            // A decode failure for any slot returns `None`, which `match_routes`
-            // maps to `not_found` (§B-route-param — sanctioned divergence from
-            // the reference which silently substitutes a default value).
-            let mut param_gets = Vec::with_capacity(variant_tys.len());
-            for (i, field_ty) in variant_tys.iter().enumerate() {
-                param_gets.push(route_param_get(field_ty, i)?);
-            }
-            format!(
-                "move |params: ::std::vec::Vec<::std::string::String>| \
-                 ::std::option::Option::Some({ctor_s}({}))",
-                param_gets.join(", ")
-            )
-        }
-    } else if let Some(param_tys) = builder_fn_params(builder_e) {
-        // A named function or inline lambda used as the page builder. Its
-        // parameter types are the `:param` payload slots — one type-directed
-        // conversion per parameter.  (Special case: a single `List String`
-        // parameter is the raw-params builder shape `List String -> Page`;
-        // pass the whole vec through.)
-        // Hoist the builder value OUT of the route closure (`let __b = …;`):
-        // constructing it inside the body would re-evaluate per call AND, for
-        // a capturing lambda, move captured state out of an `Fn` closure
-        // (E0507).  Calling through the binding (`(__b)(…)`) goes via `&__b`,
-        // which `Box<F: Fn>` / any `Fn` value supports.
-        let builder_s = emit_expr_at(ctx, builder_e, indent, child, generics)?;
-        if matches!(param_tys.as_slice(),
-            [IrType::List(elem)] if matches!(elem.as_ref(), IrType::Str))
-        {
-            format!(
-                "{{ let __b = {builder_s}; \
-                 move |params: ::std::vec::Vec<::std::string::String>| \
-                 ::std::option::Option::Some((__b)(params)) }}"
-            )
-        } else {
-            let mut param_gets = Vec::with_capacity(param_tys.len());
-            for (i, field_ty) in param_tys.iter().enumerate() {
-                param_gets.push(route_param_get(field_ty, i)?);
-            }
-            format!(
-                "{{ let __b = {builder_s}; \
-                 move |params: ::std::vec::Vec<::std::string::String>| \
-                 ::std::option::Option::Some((__b)({})) }}",
-                param_gets.join(", ")
-            )
-        }
+    else {
+        return Err(unsupported());
+    };
+    if !ctor_args.is_empty() {
+        return Err(unsupported());
+    }
+    // The full field-type slice (not just the count) so each slot can emit a
+    // type-directed conversion.
+    let variant_tys = ctx.variant_fields(home, *ty, *variant)?;
+    let ctor_s = emit_expr_at(ctx, builder_e, indent, child, generics)?;
+    let build_closure = if variant_tys.is_empty() {
+        // Nullary ctor: hoist the page value out of the closure and clone it
+        // per call (`ExprEmitter.hs:1809` parity —
+        // `{ let __c = ctor; move |_p| __c.clone() }`); every page ADT derives
+        // `Clone`. A decode failure in another route falls through to
+        // `not_found` (§B-route-param), hence `Some(…)`.
+        format!(
+            "{{ let __c = {ctor_s}; \
+             move |_params: ::std::vec::Vec<::std::string::String>| \
+             ::std::option::Option::Some(__c.clone()) }}"
+        )
     } else {
-        // Any other builder shape (a `Var` referencing a local, a call
-        // result, …) carries no recoverable parameter types, so the builder
-        // closure cannot be emitted soundly — fail CLOSED with IPE-L0123.
-        // Pre-round-4 this arm emitted `(builder)(params)` untyped, which
-        // cargo-failed (E0308/E0618) for every shape except the rare raw
-        // `List String -> Page` builder — a silent seal hole.
-        return Err(Diagnostic::Lower {
-            span: Span::DUMMY,
-            msg: LowerError::RouteBuilderUnsupportedShape,
-        });
+        // Static arity check: the pattern's `:param` segment count must equal
+        // the constructor's payload count (IPE-L0122), else the route can
+        // never deliver the right arguments. Only a string-literal pattern is
+        // checked — the only shape the parser accepts for a route pattern.
+        if let Expr::Str(pat_s) = pattern_e {
+            let param_count = pat_s.split('/').filter(|seg| seg.starts_with(':')).count();
+            let ctor_payload_count = variant_tys.len();
+            if param_count != ctor_payload_count {
+                return Err(Diagnostic::Lower {
+                    span: Span::DUMMY,
+                    msg: LowerError::RouteParamCountMismatch {
+                        pattern: pat_s.as_str().into(),
+                        param_count,
+                        ctor_payload_count,
+                    },
+                });
+            }
+        }
+        // Type-directed fallible `params.get(i)` conversions, `?`-propagated
+        // inside a closure returning `Option<Page>`: a decode failure for any
+        // slot returns `None`, which `match_routes` maps to `not_found`
+        // (§B-route-param — the reference silently substitutes a default).
+        let mut param_gets = Vec::with_capacity(variant_tys.len());
+        for (i, field_ty) in variant_tys.iter().enumerate() {
+            param_gets.push(route_param_get(field_ty, i)?);
+        }
+        format!(
+            "move |params: ::std::vec::Vec<::std::string::String>| \
+             ::std::option::Option::Some({ctor_s}({}))",
+            param_gets.join(", ")
+        )
     };
 
     // `Route::new` takes `pattern: &str`.  Ipê string literals emit as
@@ -500,6 +444,7 @@ fn emit_web_app_inner(
             let not_found_s = emit_expr_at(ctx, not_found_e, indent, child, generics)?;
             let model_ty_s = render_type(ctx, model_ty, generics)?;
             let page_ty_s = render_type(ctx, page_ty, generics)?;
+            let render_s = emit_route_render(ctx, routes_e, &routes_s, page_ty, &page_ty_s)?;
             let set_page = set_page_closure(
                 ctx,
                 fields,
@@ -518,7 +463,8 @@ fn emit_web_app_inner(
                  {subs_s}, \
                  {routes_s}, \
                  {not_found_s}, \
-                 {set_page}\
+                 {set_page}, \
+                 {render_s}\
                  )"
             )));
         }
@@ -588,6 +534,7 @@ fn emit_routed_web_leaf(
     let not_found_s = emit_expr_at(ctx, not_found_e, indent, child, generics)?;
     let model_ty_s = render_type(ctx, model_ty, generics)?;
     let page_ty_s = render_type(ctx, page_ty, generics)?;
+    let render_s = emit_route_render(ctx, routes_e, &routes_s, page_ty, &page_ty_s)?;
     let set_page = set_page_closure(
         ctx,
         fields,
@@ -601,7 +548,7 @@ fn emit_routed_web_leaf(
     let register = granted_web_features_register_stmt(ctx);
     let args = format!(
         "{init_s}, {update_s}, {view_s}, {subs_s}, {routes_s}, {not_found_s}, {set_page}, \
-         {WEB_STORE_ARGS}"
+         {render_s}, {WEB_STORE_ARGS}"
     );
     let handle = if mountable {
         format!("ipe_runtime::web::web_embed_routed({args})")
@@ -697,20 +644,235 @@ fn route_param_get(field_ty: &IrType, i: usize) -> DResult<String> {
     })
 }
 
-/// The parameter types of a function-shaped route page builder — a named
-/// function reference ([`Expr::FuncValue`]) or an inline lambda
-/// ([`Expr::Lambda`]).  Both carry concrete, solved parameter [`IrType`]s
-/// (the same property `emit_model_gate::fn_param_ty` relies on).  `None` for
-/// any other expression shape — the caller fails closed.
-fn builder_fn_params(e: &Expr) -> Option<Vec<&IrType>> {
-    match e {
-        Expr::FuncValue {
-            ty: IrType::Fun(params, _),
+/// The `Web.route` items of a routed app's `routes` table: an inline list
+/// literal, or a reference to a nullary top-level binding whose body is one
+/// (`EmitCtx::route_tables`). Any other shape is refused with IPE-L0160: the
+/// page renderer cannot be derived from it.
+fn recover_route_table<'a>(ctx: &'a EmitCtx, routes_e: &'a Expr) -> DResult<&'a [Expr]> {
+    match routes_e {
+        Expr::List { items, .. } if items.iter().all(crate::is_web_route_call) => Ok(items),
+        Expr::Call {
+            callee: Callee::Func(id),
+            args,
             ..
-        } => Some(params.iter().collect()),
-        Expr::Lambda { params, .. } => Some(params.iter().map(|(_, ty)| ty).collect()),
-        _ => None,
+        } if args.is_empty() => ctx
+            .route_tables
+            .get(id)
+            .map(Vec::as_slice)
+            .ok_or_else(|| route_refusal(LowerError::RouteTableOpaque)),
+        _ => Err(route_refusal(LowerError::RouteTableOpaque)),
     }
+}
+
+const fn route_refusal(msg: LowerError) -> Diagnostic {
+    Diagnostic::Lower {
+        span: Span::DUMMY,
+        msg,
+    }
+}
+
+/// One route of a routed app's table, read for the table checks.
+struct RouteRow<'a> {
+    pattern: &'a str,
+    segments: Vec<SegmentShape>,
+    variant: ipe_intern::Symbol,
+}
+
+/// Whether two patterns match exactly the same paths: equal segment count,
+/// and at each position both parameters or both literals with equal decoded
+/// text. Parameter names and types do not separate them.
+fn equivalent(a: &[SegmentShape], b: &[SegmentShape]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|pair| match pair {
+            (SegmentShape::Param, SegmentShape::Param) => true,
+            (SegmentShape::Literal(x), SegmentShape::Literal(y)) => x == y,
+            _ => false,
+        })
+}
+
+/// Whether `earlier` matches every path `later` matches and always builds its
+/// page: at each position, the same literal, or an earlier `String` parameter
+/// (whose decode never fails) facing a parameter or a non-empty literal.
+/// `earlier_fields` are the payload types its parameters fill, in order.
+fn covers(earlier: &[SegmentShape], earlier_fields: &[IrType], later: &[SegmentShape]) -> bool {
+    if earlier.len() != later.len() {
+        return false;
+    }
+    let mut param = 0usize;
+    earlier.iter().zip(later).all(|pair| match pair {
+        (SegmentShape::Literal(x), SegmentShape::Literal(y)) => x == y,
+        (SegmentShape::Literal(_), SegmentShape::Param) => false,
+        (SegmentShape::Param, other) => {
+            let text = matches!(earlier_fields.get(param), Some(IrType::Str));
+            param = param.saturating_add(1);
+            text && !matches!(other, SegmentShape::Literal(l) if l.is_empty())
+        }
+    })
+}
+
+/// Refuse a routed table in which a route builds another page than an
+/// equivalent earlier route (IPE-L0157), or can never match because an
+/// earlier route always matches first (IPE-L0158).
+fn refuse_overlapping_routes(
+    rows: &[RouteRow<'_>],
+    payloads: &[(ipe_intern::Symbol, Vec<IrType>)],
+) -> DResult<()> {
+    let fields_of = |variant: ipe_intern::Symbol| {
+        payloads
+            .iter()
+            .find(|(v, _)| *v == variant)
+            .map_or(&[][..], |(_, fields)| fields.as_slice())
+    };
+    for (index, later) in rows.iter().enumerate() {
+        for earlier in rows.iter().take(index) {
+            let msg = if equivalent(&earlier.segments, &later.segments) {
+                if earlier.variant == later.variant {
+                    LowerError::RouteUnreachable {
+                        pattern: route_grammar::excerpt(later.pattern),
+                        earlier: route_grammar::excerpt(earlier.pattern),
+                    }
+                } else {
+                    LowerError::RouteAmbiguous {
+                        first: route_grammar::excerpt(earlier.pattern),
+                        second: route_grammar::excerpt(later.pattern),
+                    }
+                }
+            } else if covers(
+                &earlier.segments,
+                fields_of(earlier.variant),
+                &later.segments,
+            ) {
+                LowerError::RouteUnreachable {
+                    pattern: route_grammar::excerpt(later.pattern),
+                    earlier: route_grammar::excerpt(earlier.pattern),
+                }
+            } else {
+                continue;
+            };
+            return Err(route_refusal(msg));
+        }
+    }
+    Ok(())
+}
+
+/// Emit the page renderer a routed app hands its runtime entry:
+/// `move |page: &Page| -> Result<RoutePath, RenderRefusal>`, the inverse of
+/// the table's builders. Each page constructor renders through the FIRST
+/// route that builds it (its canonical route), one `RenderArg` per payload
+/// field. The `match` is exhaustive with no wildcard, so a constructor no
+/// route builds is a compile-time refusal here (IPE-L0159), never a runtime
+/// fallthrough; an ambiguous or dead route is refused before it.
+fn emit_route_render(
+    ctx: &EmitCtx,
+    routes_e: &Expr,
+    routes_s: &str,
+    page_ty: &IrType,
+    page_ty_s: &str,
+) -> DResult<String> {
+    let IrType::Enum {
+        home: page_home,
+        name: page_name,
+        ..
+    } = page_ty
+    else {
+        return Err(route_refusal(LowerError::RoutedPageNotCustomType));
+    };
+    let items = recover_route_table(ctx, routes_e)?;
+    let mut rows = Vec::with_capacity(items.len());
+    for item in items {
+        let Expr::Call { args, .. } = item else {
+            return Err(route_refusal(LowerError::RouteTableOpaque));
+        };
+        let [pattern_e, builder_e] = args.as_slice() else {
+            return Err(route_refusal(LowerError::RouteTableOpaque));
+        };
+        let Expr::Str(pattern) = pattern_e else {
+            return Err(route_refusal(LowerError::RouteTableOpaque));
+        };
+        let Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: ctor_args,
+        } = builder_e
+        else {
+            return Err(route_refusal(LowerError::RouteBuilderUnsupportedShape));
+        };
+        if !ctor_args.is_empty() {
+            return Err(route_refusal(LowerError::RouteBuilderUnsupportedShape));
+        }
+        if home != page_home || ty != page_name {
+            return Err(Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::emit_web::emit_route_render",
+                detail: "a route builds another type than the page; \
+                         the type checker unifies every builder with the page"
+                    .into(),
+            });
+        }
+        let segments = route_grammar::web_route_segments(pattern).map_err(|defect| {
+            route_refusal(LowerError::RoutePatternMalformed {
+                call: "Web.route".into(),
+                defect,
+            })
+        })?;
+        rows.push(RouteRow {
+            pattern,
+            segments,
+            variant: *variant,
+        });
+    }
+    let variants = ctx.enum_variant_payloads(page_home, *page_name);
+    if variants.is_empty() {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::emit_web::emit_route_render",
+            detail: "the routed page enum has no variants".into(),
+        });
+    }
+    refuse_overlapping_routes(&rows, variants)?;
+    let enum_s = ctx.enum_name(page_home, *page_name)?;
+    let mut arms = Vec::with_capacity(variants.len());
+    for (variant, fields) in variants {
+        // The first route listed for a constructor is its canonical route.
+        let Some(index) = rows.iter().position(|row| row.variant == *variant) else {
+            return Err(route_refusal(LowerError::RoutedPageWithoutRoute {
+                ctor: ctx.resolve_ident(*variant)?.into(),
+            }));
+        };
+        let path = format!("{enum_s}::{}", ctx.emit_ident(*variant)?);
+        let mut binds = Vec::with_capacity(fields.len());
+        let mut render_args = Vec::with_capacity(fields.len());
+        for (i, field_ty) in fields.iter().enumerate() {
+            binds.push(format!("a{i}"));
+            render_args.push(match field_ty {
+                IrType::Int => format!("ipe_runtime::web::route::RenderArg::Int(*a{i})"),
+                IrType::Bool => format!("ipe_runtime::web::route::RenderArg::Bool(*a{i})"),
+                IrType::Float => format!("ipe_runtime::web::route::RenderArg::Float(*a{i})"),
+                IrType::Str => format!("ipe_runtime::web::route::RenderArg::Text(a{i}.as_str())"),
+                other => {
+                    return Err(route_refusal(LowerError::RouteParamUnsupportedType {
+                        field_index: i,
+                        type_name: ir_type_display_name(other).into(),
+                    }));
+                }
+            });
+        }
+        let pat = if binds.is_empty() {
+            path
+        } else {
+            format!("{path}({})", binds.join(", "))
+        };
+        arms.push(format!(
+            "{pat} => ipe_runtime::web::route::render_route(&__routes, {index}, &[{}]),",
+            render_args.join(", ")
+        ));
+    }
+    Ok(format!(
+        "{{ let __routes = {routes_s}; \
+         move |__page: &{page_ty_s}| -> ::std::result::Result<\
+         ipe_runtime::web::route::RoutePath, ipe_runtime::web::route::RenderRefusal> \
+         {{ match __page {{ {} }} }} }}",
+        arms.join(" ")
+    ))
 }
 
 /// Detect whether the Model type (recovered from `view`'s first parameter)

@@ -169,7 +169,7 @@ where
 ///
 /// `init` receives a `WebReq` synthesised from `location` + cookies, the same
 /// shape `wasm_app` uses.
-pub fn wasm_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
+pub fn wasm_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage, FRender>(
     init: FInit,
     update: FUpdate,
     view: FView,
@@ -177,6 +177,7 @@ pub fn wasm_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPa
     routes: Vec<crate::web::route::Route<Page>>,
     not_found: Page,
     set_page: FSetPage,
+    render: FRender,
 ) -> IpeTask<E, ()>
 where
     E: From<String> + 'static,
@@ -188,6 +189,8 @@ where
     FView: Fn(Model) -> Html<Msg> + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
     FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + 'static,
+    FRender: Fn(&Page) -> Result<crate::web::route::RoutePath, crate::web::route::RenderRefusal>
+        + 'static,
 {
     Box::pin(async move {
         match mount_app_routed(
@@ -198,6 +201,7 @@ where
             routes,
             not_found,
             set_page,
+            render,
         ) {
             Ok(()) => IpeResult::Ok(()),
             Err(e) => {
@@ -292,11 +296,11 @@ struct App<Model, Msg> {
     origin: String,
     /// Client-side router: enters a URL path, yielding the new model and the
     /// page's entry Cmd (present only for routed apps). Called on `popstate`
-    /// and in-app navigation. Returns `None` when the path does not match any
-    /// declared route — the current model and DOM are left unchanged and no
-    /// Cmd runs, matching the server's `matches_any` unrouted-GET guard
-    /// (`web::route::matches_any`; prevents handler-index orphaning on noise
-    /// paths like `/favicon.ico`).
+    /// and in-app navigation. Returns `None` when no route builds a page that
+    /// renders back (`web::route::resolve` misses) — the current model and DOM
+    /// are left unchanged and no Cmd runs, matching the server's unrouted-GET
+    /// guard (prevents handler-index orphaning on noise paths like
+    /// `/favicon.ico`).
     router: Option<Box<WasmRouter<Model, Msg>>>,
     /// Development-only time-travelling debugger recorder. Passive: records
     /// each live-pass `update` step without re-firing any `Cmd`. Present only
@@ -510,7 +514,7 @@ where
 ///    after `init`'s.
 /// 2. A `popstate` listener is installed so back/forward navigation enters the
 ///    URL (running its entry Cmd).
-fn mount_app_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
+fn mount_app_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage, FRender>(
     init: FInit,
     update: FUpdate,
     view: FView,
@@ -518,6 +522,7 @@ fn mount_app_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
     routes: Vec<crate::web::route::Route<Page>>,
     not_found: Page,
     set_page: FSetPage,
+    render: FRender,
 ) -> Result<(), String>
 where
     Model: Clone + 'static,
@@ -528,8 +533,10 @@ where
     FView: Fn(Model) -> Html<Msg> + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + 'static,
     FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + 'static,
+    FRender: Fn(&Page) -> Result<crate::web::route::RoutePath, crate::web::route::RenderRefusal>
+        + 'static,
 {
-    use crate::web::route::{DecodedPath, enter, matches_any, refuse_route_table};
+    use crate::web::route::{DecodedPath, Matched, enter, refuse_route_table, resolve};
 
     // A malformed literal in the route table fails the mount loudly, with the
     // same refusal the server's `web_app_routed` starts with.
@@ -548,7 +555,7 @@ where
     let (init_model, init_cmd) = init(req);
     let (model, entry_cmd) = match DecodedPath::parse(&initial_path) {
         Ok(path) => {
-            let entered = enter(&routes, &not_found, &path, init_model, &set_page);
+            let entered = enter(resolve(&routes, &path, &render), &not_found, init_model, &set_page);
             (entered.model, entered.cmd)
         }
         Err(_) => set_page(not_found.clone(), init_model),
@@ -564,7 +571,7 @@ where
     // Shared router closure: enters a URL path → new model + entry Cmd, or
     // `None` when the path does not match any declared route.
     //
-    // The `matches_any` guard before `enter` is the browser-client
+    // The resolved-hit guard before `enter` is the browser-client
     // analogue of the server's routed-app noise-path guard: a popstate to an
     // unrouted path (e.g.
     // `/favicon.ico`) must not re-route the model to `not_found` and rebuild
@@ -573,14 +580,20 @@ where
     let routes_rc = Rc::new(routes);
     let not_found_rc = Rc::new(not_found);
     let set_page_rc = Rc::new(set_page);
+    let render_rc = Rc::new(render);
     let router: Box<WasmRouter<Model, Msg>> = {
         let routes = Rc::clone(&routes_rc);
         let not_found = Rc::clone(&not_found_rc);
         let set_page = Rc::clone(&set_page_rc);
+        let render = Rc::clone(&render_rc);
         Box::new(move |raw: &str, m: Model| {
             // Parsed once; a malformed path is refused like an unrouted one.
             let path = DecodedPath::parse(raw).ok()?;
-            matches_any(&routes, &path).then(|| enter(&routes, &not_found, &path, m, &*set_page))
+            let matched = resolve(&routes, &path, &*render);
+            // An empty table serves only `/`, as on the server.
+            let routed =
+                matches!(matched, Matched::Hit { .. }) || (routes.is_empty() && path.is_root());
+            routed.then(|| enter(matched, &not_found, m, &*set_page))
         })
     };
 

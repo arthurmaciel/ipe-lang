@@ -1574,6 +1574,11 @@ pub(crate) struct EmitCtx<'a> {
     /// this map at the call site falls through to the ordinary emit, conservative
     /// by construction.
     pub(crate) ui_structural_wrappers: BTreeMap<FuncId, crate::emit_ui_template::WrapperBody>,
+    /// The route items of every nullary function whose body is a list literal
+    /// of `Web.route` calls, so a routed app's `routes = table` reference
+    /// recovers the same table an inline list carries. An id absent here is
+    /// an opaque table, refused by the routed-app emit.
+    pub(crate) route_tables: BTreeMap<FuncId, Vec<Expr>>,
     /// The transient, per-scope emit state (literal accumulator, transition-arm
     /// and subscriptions arming). Kept apart from the immutable config above so a
     /// scope field cannot leak into a config flag; reachable only through the
@@ -2379,6 +2384,19 @@ impl<'a> EmitCtx<'a> {
                 })
                 .collect();
 
+        let route_tables: BTreeMap<FuncId, Vec<Expr>> = program
+            .modules
+            .iter()
+            .flat_map(|m| m.funcs.iter())
+            .filter(|f| f.params.is_empty())
+            .filter_map(|f| match &f.body {
+                Expr::List { items, .. } if items.iter().all(is_web_route_call) => {
+                    Some((f.id, items.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+
         let mut ctx = Self {
             interner,
             uses_db,
@@ -2463,6 +2481,7 @@ impl<'a> EmitCtx<'a> {
             // and `web_content_kernel_does_not_hoist_on_tui_shape` pin the shapes.
             hot_appearance: hot_appearance && (uses_web || uses_tui),
             ui_structural_wrappers,
+            route_tables,
             scope: ScopeState::default(),
             web_capabilities: program.imported_web_capabilities.clone(),
         };
@@ -5176,6 +5195,17 @@ fn disambiguated_rust_name(
 /// may contain `Var`/`CloneVar` references to value parameters, `Cons`
 /// prepend (the marker-attr pattern that `row` / `column` / `wrappedRow` /
 /// `grid` / `paragraph` / `textColumn` lower to), and nested kernel calls.
+/// Is `e` a `Web.route pattern builder` kernel call?
+pub(crate) fn is_web_route_call(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::WebRoute),
+            ..
+        }
+    )
+}
+
 fn is_ipe_ui_structural_wrapper(func: &ipe_ir::Func, interner: &Interner) -> bool {
     // Gate 1: home module is exactly `Ipe.Ui`.
     let home = &func.home.0;

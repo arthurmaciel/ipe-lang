@@ -174,6 +174,155 @@ pub fn decode_path_segments(path: &str) -> Result<Vec<String>, DecodeRefusal> {
         .collect()
 }
 
+/// One path segment, percent-encoded so [`decode_path_segment`] reads back
+/// exactly the text it was encoded from.
+///
+/// The RFC 3986 unreserved bytes (`A-Z a-z 0-9 - . _ ~`) stay plain and every
+/// other byte becomes an uppercase `%HH`, so a `/` inside the text never
+/// becomes a separator and a `+` is never read as a space.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncodedSegment(String);
+
+impl EncodedSegment {
+    /// The encoded text, ready to join with `/`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Why a text cannot be a path segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EncodeRefusal {
+    /// The empty text: the path split trims and collapses it away.
+    Empty,
+    /// `.` or `..`: a client normalizes it away before the path reaches a matcher.
+    Dot,
+    /// The encoded segment would be longer than `cap` bytes.
+    TooLong { cap: ComponentLen },
+}
+
+impl std::fmt::Display for EncodeRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "an empty text cannot be a path segment"),
+            Self::Dot => write!(f, "`.` and `..` cannot be path segments"),
+            Self::TooLong { cap } => write!(f, "encoded segment longer than {} bytes", cap.get()),
+        }
+    }
+}
+
+/// Encode `text` as one path segment, the inverse of [`decode_path_segment`].
+///
+/// # Errors
+///
+/// `Empty` and `Dot` for a text no segment can carry back unchanged, and
+/// `TooLong` when the encoding exceeds `MAX_URL_COMPONENT_LEN`.
+pub fn encode_path_segment(text: &str) -> Result<EncodedSegment, EncodeRefusal> {
+    let too_long = EncodeRefusal::TooLong {
+        cap: MAX_URL_COMPONENT_LEN,
+    };
+    match text {
+        "" => return Err(EncodeRefusal::Empty),
+        "." | ".." => return Err(EncodeRefusal::Dot),
+        _ if text.len() > MAX_URL_COMPONENT_LEN.get() => return Err(too_long),
+        _ => {}
+    }
+    let encoded = utf8_percent_encode(text, QUERY).to_string();
+    if encoded.len() > MAX_URL_COMPONENT_LEN.get() {
+        return Err(too_long);
+    }
+    Ok(EncodedSegment(encoded))
+}
+
+/// A raw query string proven safe to copy byte-for-byte into a `Location`.
+///
+/// It holds only printable ASCII (`0x21..=0x7E`) other than `#`, every `%`
+/// starts a two-hex-digit escape, and it is at most `MAX_URL_COMPONENT_LEN`
+/// bytes, so it is a subset of what an HTTP header value admits and can never
+/// end the query or reach the authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueryText(String);
+
+/// Why a raw query cannot be copied into a `Location`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueryTextRefusal {
+    /// A control byte, space, `#` or non-ASCII byte at this offset.
+    Byte { at: ByteOffset },
+    /// A `%` at this offset is not followed by two hex digits.
+    MalformedEscape { at: ByteOffset },
+    /// The query is longer than `cap` bytes.
+    TooLong { cap: ComponentLen },
+}
+
+impl QueryText {
+    /// Admit `raw` (the query without its leading `?`).
+    ///
+    /// # Errors
+    ///
+    /// The first byte outside the admitted alphabet, the first malformed
+    /// escape, or `TooLong`.
+    pub fn parse(raw: &str) -> Result<Self, QueryTextRefusal> {
+        if raw.len() > MAX_URL_COMPONENT_LEN.get() {
+            return Err(QueryTextRefusal::TooLong {
+                cap: MAX_URL_COMPONENT_LEN,
+            });
+        }
+        let bytes = raw.as_bytes();
+        let hex_at = |k: usize| bytes.get(k).copied().and_then(hex_value).is_some();
+        for (i, b) in bytes.iter().copied().enumerate() {
+            match b {
+                b'%' if !(hex_at(i.saturating_add(1)) && hex_at(i.saturating_add(2))) => {
+                    return Err(QueryTextRefusal::MalformedEscape { at: ByteOffset(i) });
+                }
+                b'#' => return Err(QueryTextRefusal::Byte { at: ByteOffset(i) }),
+                0x21..=0x7E => {}
+                _ => return Err(QueryTextRefusal::Byte { at: ByteOffset(i) }),
+            }
+        }
+        Ok(Self(raw.to_owned()))
+    }
+
+    /// The admitted query text, without a leading `?`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A mount base path, encoded once for a browser-visible `Location`: `""` for
+/// the root base, else `/seg/...` with no trailing `/`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncodedBase(String);
+
+impl EncodedBase {
+    /// Encode every segment of `base` with [`encode_path_segment`].
+    ///
+    /// # Errors
+    ///
+    /// The refusal of the first segment no path can carry back unchanged, or
+    /// `TooLong` once the encoded base passes `MAX_URL_COMPONENT_LEN`.
+    pub fn encode(base: &DecodedPath) -> Result<Self, EncodeRefusal> {
+        let mut text = String::new();
+        for segment in base.segments() {
+            text.push('/');
+            text.push_str(encode_path_segment(segment)?.as_str());
+            if text.len() > MAX_URL_COMPONENT_LEN.get() {
+                return Err(EncodeRefusal::TooLong {
+                    cap: MAX_URL_COMPONENT_LEN,
+                });
+            }
+        }
+        Ok(Self(text))
+    }
+
+    /// The encoded base, `""` or `/seg/...`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A request path split on its raw `/` separators, each segment decoded once
 /// under the RFC 3986 path grammar ([`decode_path_segments`]).
 ///
@@ -640,6 +789,54 @@ mod tests {
         fn url_roundtrip_any_string(s in ".*") {
             let decoded: IpeResult<String, String> = url_decode(url_encode(s.clone()));
             prop_assert_eq!(decoded, IpeResult::Ok(s));
+        }
+
+        // Every text a segment can carry reads back unchanged, stays ONE segment
+        // under the path split, and spells only unreserved bytes and `%HH`.
+        #[test]
+        fn path_segment_roundtrip_any_string(s in ".+") {
+            prop_assume!(s != "." && s != "..");
+            let encoded = encode_path_segment(&s);
+            prop_assert!(encoded.is_ok(), "{s:?} must encode");
+            let encoded = encoded.map(|e| e.as_str().to_owned()).unwrap_or_default();
+            prop_assert_eq!(raw_path_segments(&encoded), Ok(vec![encoded.as_str()]));
+            prop_assert_eq!(decode_path_segment(&encoded), Ok(s));
+            prop_assert!(encoded.bytes().all(|b| b.is_ascii_alphanumeric()
+                || matches!(b, b'-' | b'.' | b'_' | b'~' | b'%')));
+        }
+    }
+
+    /// Prove the refusals: a text no segment carries back unchanged is refused,
+    /// and the encoding is the canonical uppercase-hex form.
+    #[test]
+    fn path_segment_encoding_refusals_and_form() {
+        assert_eq!(encode_path_segment(""), Err(EncodeRefusal::Empty));
+        assert_eq!(encode_path_segment("."), Err(EncodeRefusal::Dot));
+        assert_eq!(encode_path_segment(".."), Err(EncodeRefusal::Dot));
+        let huge = "a".repeat(MAX_URL_COMPONENT_LEN.get() + 1);
+        assert!(matches!(
+            encode_path_segment(&huge),
+            Err(EncodeRefusal::TooLong { .. })
+        ));
+        let grows = "/".repeat(MAX_URL_COMPONENT_LEN.get() / 3 + 1);
+        assert!(matches!(
+            encode_path_segment(&grows),
+            Err(EncodeRefusal::TooLong { .. })
+        ));
+        for (text, want) in [
+            ("...", "..."),
+            ("a b", "a%20b"),
+            ("a+b", "a%2Bb"),
+            ("a/b", "a%2Fb"),
+            ("caf\u{e9}", "caf%C3%A9"),
+            ("%41", "%2541"),
+            ("A-z_0.9~", "A-z_0.9~"),
+        ] {
+            assert_eq!(
+                encode_path_segment(text).map(|e| e.as_str().to_owned()),
+                Ok(want.to_owned()),
+                "{text:?}"
+            );
         }
     }
 
