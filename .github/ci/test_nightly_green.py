@@ -59,7 +59,8 @@ class FakeApi:
 
     `main`/`own` answer the workflow listing filtered by event and branch/commit;
     `event_only` answers the workflow listing filtered by event alone;
-    `repo_main`/`repo_own` answer the repository listing filtered by event and branch/commit.
+    `repo_main`/`repo_own` answer the repository listing filtered by event and branch/commit;
+    `by_id` answers a run's own document, by default its copy in the scope's last listings.
     """
 
     def __init__(
@@ -71,7 +72,10 @@ class FakeApi:
         event_only: object = None,
         repo_main: object = None,
         repo_own: object = None,
+        by_id: dict | None = None,
     ) -> None:
+        self.by_id = by_id or {}
+        self.served: list[object] = []
         self.main, self.own, self.pr = main, own if own is not None else _listing(), pr
         self.event_only = event_only if event_only is not None else _listing()
         self.repo_main = repo_main if repo_main is not None else _listing()
@@ -81,12 +85,27 @@ class FakeApi:
 
     def __call__(self, path: str) -> object:
         self.calls.append(path)
+        served = self._route(path)
+        if "/runs?" in path:
+            self.served.append(served)
+        return served
+
+    def _route(self, path: str) -> object:
         if "/pulls/" in path:
             if self.pr is None:
                 raise ng.NightlyError("no such PR")
             return self.pr
         if "/compare/" in path:
             return self.compare
+        if path.startswith(f"repos/{REPO}/actions/runs/"):
+            rid = int(path.rsplit("/", 1)[-1])
+            if rid in self.by_id:
+                return self.by_id[rid]
+            for listing in self.served[-len(ng._listing_paths(REPO, "")):]:
+                for run in listing.get("workflow_runs", []) if isinstance(listing, dict) else []:
+                    if isinstance(run, dict) and run.get("id") == rid:
+                        return run
+            raise AssertionError(f"run {rid} was never listed")
         if f"repos/{REPO}/actions/runs?" in path:
             if "head_sha=" in path:
                 return self.repo_own
@@ -278,7 +297,39 @@ class UnionTest(unittest.TestCase):
                     chosen = _pick(_listing(order[0]), _listing(order[1]))
                     self.assertEqual(chosen and chosen["conclusion"], "failure")
                     self.assertTrue(_verdict(FakeApi(_listing(order[0]), event_only=_listing(order[1]))))
-        self.assertIsNone(_pick(_listing(stale_green), _listing(rerunning)))
+        chosen = _pick(_listing(stale_green), _listing(rerunning))
+        self.assertEqual(chosen and chosen["status"], "in_progress")
+
+    def test_rerun_in_flight_shadows_an_older_green(self) -> None:
+        # A nightly that concluded red and is being re-run has a verdict not yet
+        # known; an older green nightly must not stand in for it.
+        older_green = _run(id=4, created_at=_stamp(timedelta(hours=30)))
+        rerunning = _run(id=5, run_attempt=2, status="in_progress", conclusion=None)
+        chosen = _pick(_listing(older_green, rerunning))
+        self.assertEqual(chosen and chosen["id"], 5)
+        reasons = _verdict(FakeApi(_listing(older_green, rerunning)))
+        self.assertTrue(any("status is 'in_progress'" in r for r in reasons), reasons)
+        first_run = _run(id=5, status="in_progress", conclusion=None)
+        self.assertEqual(_verdict(FakeApi(_listing(older_green, first_run))), [])
+
+    def test_chosen_run_reread_beats_stale_listed_copy(self) -> None:
+        stale_green = _run(id=5, run_attempt=1, updated_at=_stamp(timedelta(hours=7)))
+        for fresh in (
+            _run(id=5, run_attempt=2, conclusion="failure", updated_at=_stamp(timedelta(hours=1))),
+            _run(id=5, run_attempt=2, status="in_progress", conclusion=None, updated_at=_stamp(timedelta(hours=1))),
+            _run(id=5, run_attempt=1, conclusion="failure", updated_at=_stamp(timedelta(hours=1))),
+        ):
+            with self.subTest(fresh):
+                api = FakeApi(_listing(stale_green), by_id={5: fresh})
+                self.assertTrue(_verdict(api))
+                self.assertIn(f"repos/{REPO}/actions/runs/5", api.calls)
+        self.assertEqual(_verdict(FakeApi(_listing(stale_green), by_id={5: dict(stale_green)})), [])
+
+    def test_chosen_run_reread_malformed_refused(self) -> None:
+        listed = _run(id=5)
+        for bad in ([], None, _run(id=6), _run(id="5"), _run(id=5, created_at=None), _run(id=5, conclusion="failure")):
+            with self.subTest(bad), self.assertRaises(ng.NightlyError):
+                _verdict(FakeApi(_listing(listed), by_id={5: bad}))
 
     def test_equally_fresh_copies_that_disagree_refused(self) -> None:
         a = _run(id=5, updated_at=_stamp(timedelta(hours=1)))

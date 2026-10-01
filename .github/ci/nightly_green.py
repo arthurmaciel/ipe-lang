@@ -8,7 +8,8 @@ is a required context that passes only on proof the full gate is green:
   1. the change's own commit passed a dispatched full gate (the recovery path:
      a PR that fixes a red nightly is dispatched on its branch, proves itself,
      and can merge), or
-  2. the latest completed nightly on main concluded `success`, is at most
+  2. the latest concluded nightly on main (a re-run in flight counts, its
+     verdict not yet known) concluded `success`, is at most
      MAX_AGE_H hours old (a stopped nightly is not a green one), and ran on a
      commit of main's own history in this repository (a tag or branch merely
      named `main` proves nothing).
@@ -110,8 +111,11 @@ def newest_dispatch(listings: list[object], *, branch: str | None, sha: str | No
     listing is read, runs are unioned by id (the freshest copy of each wins),
     and selection happens here: event, workflow path, branch or commit, and
     completion are matched client-side, and the newest by `created_at` is
-    chosen. A listing only ever omits runs, so the union is at least as fresh as
-    any one listing. Any malformed listing or entry refuses.
+    chosen. A run re-running (attempt above 1, not completed) already
+    concluded once, so it is a candidate: it shadows every older run and is
+    judged unfinished, never skipped for an older green. A listing only ever
+    omits runs, so the union is at least as fresh as any one listing. Any
+    malformed listing or entry refuses.
     """
     union: dict[int, dict] = {}
     for listing in listings:
@@ -122,13 +126,14 @@ def newest_dispatch(listings: list[object], *, branch: str | None, sha: str | No
             if not isinstance(run, dict):
                 raise NightlyError("run listing entry is not an object")
             rid = _run_id(run)
+            _attempt(run)
             _parse_time(run.get("created_at"))
             seen = union.get(rid)
             union[rid] = run if seen is None else _fresher(seen, run)
     newest: tuple[datetime, dict] | None = None
     for run in union.values():
         if (
-            run.get("status") != "completed"
+            (run.get("status") != "completed" and _attempt(run) == 1)
             or run.get("event") != NIGHTLY_EVENT
             or run.get("path") != NIGHTLY_WORKFLOW_PATH
             or (branch is not None and run.get("head_branch") != branch)
@@ -245,9 +250,24 @@ def _listing_paths(repo: str, scope: str) -> tuple[str, ...]:
     )
 
 
+def _reread(repo: str, run: dict) -> dict:
+    """Return the freshest of `run`'s listed copy and its own `actions/runs/<id>` document.
+
+    Every listing can carry a stale copy of the chosen run (an earlier attempt's
+    verdict); the run's own document is read and the later state judged.
+    """
+    rid = _run_id(run)
+    fresh = _gh_json(f"repos/{repo}/actions/runs/{rid}")
+    if not isinstance(fresh, dict) or _run_id(fresh) != rid:
+        raise NightlyError(f"run {rid} document is not that run")
+    _parse_time(fresh.get("created_at"))
+    return _fresher(run, fresh)
+
+
 def _newest(repo: str, scope: str, *, branch: str | None, sha: str | None) -> dict | None:
     listings = [_gh_json(path) for path in _listing_paths(repo, scope)]
-    return newest_dispatch(listings, branch=branch, sha=sha)
+    chosen = newest_dispatch(listings, branch=branch, sha=sha)
+    return None if chosen is None else _reread(repo, chosen)
 
 
 def verdict(env: dict[str, str], now: datetime) -> list[str]:
