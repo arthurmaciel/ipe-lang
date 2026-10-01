@@ -56,8 +56,6 @@ const LOSSY_TEXT_SITES: &[(&str, usize)] = &[
     ("src/system.rs", 4),
     // Terminal input bytes.
     ("src/tui/key.rs", 1),
-    // A test's SSE reader, whose chunks may split a UTF-8 sequence.
-    ("src/web/mod.rs", 1),
 ];
 
 /// The lenient query readers that are methods, matched by name.

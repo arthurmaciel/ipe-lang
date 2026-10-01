@@ -8195,6 +8195,20 @@ mod hot_wiring_handler_tests {
     }
 }
 
+/// The longest UTF-8 prefix of streamed body bytes. A chunk boundary may
+/// split a code point, so an unfinished tail waits for the next chunk; bytes
+/// are never replaced, so a marker past an invalid sequence is never found.
+#[cfg(all(test, feature = "server"))]
+fn utf8_prefix(bytes: &[u8]) -> &str {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(split) => bytes
+            .get(..split.valid_up_to())
+            .and_then(|valid| std::str::from_utf8(valid).ok())
+            .unwrap_or_default(),
+    }
+}
+
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod bind_error_tests {
@@ -8661,16 +8675,14 @@ mod emitted_router_behavior_tests {
             // heartbeat keepalive means it never EOFs, so stop on the frame).
             use futures_util::StreamExt;
             let mut stream = resp.into_body().into_data_stream();
-            let mut acc = String::new();
+            let mut bytes = Vec::new();
             let read = tokio::time::timeout(Duration::from_secs(5), async {
-                while acc.len() < 256 * 1024 {
+                while bytes.len() < 256 * 1024 {
                     match stream.next().await {
                         Some(Ok(chunk)) => {
-                            #[allow(clippy::disallowed_methods)]
-                            // a chunk may split a UTF-8 sequence; only ASCII markers are sought
-                            let text = String::from_utf8_lossy(&chunk);
-                            acc.push_str(&text);
-                            if acc.contains("event: patch") && acc.contains("data-ipe-hid") {
+                            bytes.extend_from_slice(&chunk);
+                            let text = utf8_prefix(&bytes);
+                            if text.contains("event: patch") && text.contains("data-ipe-hid") {
                                 break;
                             }
                         }
@@ -8679,6 +8691,7 @@ mod emitted_router_behavior_tests {
                 }
             })
             .await;
+            let acc = utf8_prefix(&bytes);
             assert!(read.is_ok(), "SSE read timed out before the resync frame");
             assert!(
                 acc.contains("event: patch"),
@@ -9153,9 +9166,7 @@ mod route_entry_cmd_tests {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("read body");
-        #[allow(clippy::disallowed_methods)]
-        // test body text: only ASCII page markers are compared
-        let body = String::from_utf8_lossy(&bytes).into_owned();
+        let body = String::from_utf8(bytes.to_vec()).expect("a UTF-8 page body");
         (status, retry_after, sid, body)
     }
 
@@ -9406,22 +9417,17 @@ mod route_entry_cmd_tests {
             .await
             .expect("router responds");
         let mut stream = resp.into_body().into_data_stream();
-        let mut acc = String::new();
+        let mut bytes = Vec::new();
         let _ = tokio::time::timeout(Duration::from_secs(5), async {
-            while acc.len() < 64 * 1024 && !acc.contains("event: patch") {
+            while bytes.len() < 64 * 1024 && !utf8_prefix(&bytes).contains("event: patch") {
                 match stream.next().await {
-                    Some(Ok(chunk)) => {
-                        #[allow(clippy::disallowed_methods)]
-                        // a chunk may split a UTF-8 sequence; only ASCII markers are sought
-                        let text = String::from_utf8_lossy(&chunk);
-                        acc.push_str(&text);
-                    }
+                    Some(Ok(chunk)) => bytes.extend_from_slice(&chunk),
                     _ => break,
                 }
             }
         })
         .await;
-        acc
+        utf8_prefix(&bytes).to_owned()
     }
 
     /// The GET that creates a page and the SSE open that follows at the same
