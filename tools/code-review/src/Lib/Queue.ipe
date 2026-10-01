@@ -10,6 +10,7 @@ import Ipe.Task as Task
 import Lib.Db as LibDb
 import Lib.Format as Format
 import Lib.Index as Index
+import Lib.SafeText as SafeText
 import Lib.Settings as Settings
 
 
@@ -61,7 +62,7 @@ queueStatusText state =
             Just "Loading queue…"
 
         Failed e ->
-            Just ("Queue failed to load: " ++ Error.toString e)
+            Just ("Queue failed to load: " ++ SafeText.toString (SafeText.renderForeign (Error.toString e)))
 
         Loaded page ->
             if page.total == 0 then
