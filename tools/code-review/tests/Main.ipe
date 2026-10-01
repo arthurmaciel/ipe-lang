@@ -1105,17 +1105,23 @@ unknownTagRefused =
             )
 
 
+-- A directory `File.tempDir` makes unique to this call, holding the two
+-- subdirectories `a` and `b`, so concurrent runs never share roots.
+freshRootBase : Task.Task Error String
+freshRootBase =
+    do
+        base <- File.tempDir "ipe-review-tag-roots-"
+        Task.fromResult (Path.fromString (base ++ "/a")) |> Task.andThen File.mkdirAll
+        Task.fromResult (Path.fromString (base ++ "/b")) |> Task.andThen File.mkdirAll
+        Task.succeed base
+
+
 -- Each tag joins under its own root: with `ipe` bound to A and `other` to B,
 -- `other:f` lands in B and `ipe:f` in A, in either binding order.
 tagSelectsItsRoot : Task.Task Error Bool
 tagSelectsItsRoot =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-tag-roots"
-    in
     do
-        Task.fromResult (Path.fromString (base ++ "/a")) |> Task.andThen File.mkdirAll
-        Task.fromResult (Path.fromString (base ++ "/b")) |> Task.andThen File.mkdirAll
+        base <- freshRootBase
         a <- RepoPath.parseRoot (base ++ "/a")
         b <- RepoPath.parseRoot (base ++ "/b")
         ipeFirst <- mapOf [ ( "ipe", a ), ( "other", b ) ]
@@ -1180,13 +1186,8 @@ tagRefused raw =
 -- A root map is never empty and never binds a tag twice.
 rootMapRefusals : Task.Task Error Bool
 rootMapRefusals =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-tag-roots"
-    in
     do
-        Task.fromResult (Path.fromString (base ++ "/a")) |> Task.andThen File.mkdirAll
-        Task.fromResult (Path.fromString (base ++ "/b")) |> Task.andThen File.mkdirAll
+        base <- freshRootBase
         a <- RepoPath.parseRoot (base ++ "/a")
         b <- RepoPath.parseRoot (base ++ "/b")
         ipe <- Task.fromResult (RepoPath.parseTag "ipe" |> Result.mapError RepoPath.toError)
@@ -1429,6 +1430,18 @@ backslashCannotForge =
         , rendered "a\\nb" /= rendered "a\nb"
         , renderedForeign "a\\b" == "a\\b"
         , renderedForeign ("a\\" ++ codeText 27) == "a\\\\u{1b}"
+        ]
+
+
+-- `render` escapes `"`, so a quoted foreign value cannot close its own quotes
+-- and fake a boundary in the diagnostic around it.
+quoteCannotForgeBoundary : Bool
+quoteCannotForgeBoundary =
+    List.all identity
+        [ rendered "a\"b" == "a\\\"b"
+        , SafeText.toString (SafeText.quoted "x\" ok \"y") == "\"x\\\" ok \\\"y\""
+        , String.contains "\"ipe:a\\\" has\"" (describeText (MissingTag "ipe:a\" has"))
+        , rendered "\\\"" /= rendered "\""
         ]
 
 
@@ -2478,6 +2491,7 @@ main =
                         ++ [ ( "safe text escapes exactly the log-hazard set", safeTextHazardTable )
                         , ( "describe escapes the stored path", describeEscapesStoredPath )
                         , ( "a literal backslash cannot forge an escape", backslashCannotForge )
+                        , ( "a quote cannot forge a quoted boundary", quoteCannotForgeBoundary )
                         , ( "queue failure line escapes its error", sinkRendersEscape )
                         ]
                     )
