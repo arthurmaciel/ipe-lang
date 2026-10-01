@@ -707,10 +707,26 @@ const ENTER_QUEUE_CAP: std::num::NonZeroUsize = std::num::NonZeroUsize::MIN.satu
 #[cfg(feature = "server")]
 const ENTER_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// A URL entry for a session driver: the base-relative path and where to send the rendered body.
+/// Whether the session driver enters a queued path unconditionally or only when it is new.
+///
+/// The choice is made by the driver when it commits, the one point that
+/// serialises every entry of a session, so two requests queued for one path
+/// cannot both see it as new.
+#[cfg(feature = "server")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnterMode {
+    /// A page GET: its requester renders the reply, so the path is always entered.
+    Load,
+    /// A reconnect's displayed path: entered only when it differs from the
+    /// session's `entered_path` at commit time.
+    Reconcile,
+}
+
+/// A URL entry for a session driver: the base-relative path, how to enter it, and where to send the rendered body.
 #[cfg(feature = "server")]
 pub struct EnterRequest {
     path: route::RoutePath,
+    mode: EnterMode,
     reply: tokio::sync::oneshot::Sender<EnterReply>,
 }
 
@@ -723,7 +739,7 @@ pub struct EnterReply {
     body: String,
 }
 
-/// Queue an entry of `path` on the session driver behind `enter_tx`.
+/// Queue an entry of `path` in `mode` on the session driver behind `enter_tx`.
 ///
 /// `None` when the queue is full or the driver is gone; the caller refuses
 /// rather than waiting without a bound.
@@ -731,10 +747,11 @@ pub struct EnterReply {
 fn queue_entry(
     enter_tx: &Sender<EnterRequest>,
     path: route::RoutePath,
+    mode: EnterMode,
 ) -> Option<tokio::sync::oneshot::Receiver<EnterReply>> {
     let (reply, reply_rx) = tokio::sync::oneshot::channel();
     enter_tx
-        .try_send(EnterRequest { path, reply })
+        .try_send(EnterRequest { path, mode, reply })
         .ok()
         .map(|()| reply_rx)
 }
@@ -753,9 +770,11 @@ async fn await_entry(reply_rx: tokio::sync::oneshot::Receiver<EnterReply>) -> Op
 /// What reconnect reconciliation did with the path the browser reports.
 #[cfg(feature = "server")]
 pub enum ReconcileOutcome {
-    /// The path is invalid, unrouted, or the one the session already entered.
+    /// The path is invalid, unrouted, or outside the base.
     Unchanged,
-    /// The driver accepted an entry; await the reply before the resync frame.
+    /// The driver accepted a `Reconcile` entry; await it before
+    /// the resync frame. A path the session already entered when the driver
+    /// reaches it is dropped unanswered.
     Entering(tokio::sync::oneshot::Receiver<EnterReply>),
     /// The enter queue is full or closed; the current view stands and the next reconnect retries.
     Refused,
@@ -766,10 +785,11 @@ pub enum ReconcileOutcome {
 /// `client_path` is the raw `location.pathname` the SSE client sends; it must
 /// be a bare path (leading `/`, no `?` or `#`). `base` (the sub-app mount
 /// prefix) is stripped once at a segment boundary — a path outside the base
-/// enters nothing — then the path is entered only when it is routed and its
-/// [`route::RoutePath`] differs from the session's `entered_path`, so the GET
-/// that created the page and the SSE open that follows it run the page's entry
-/// Cmd once.
+/// enters nothing — then a routed path is queued as a [`EnterMode::Reconcile`]
+/// entry. The driver enters it only when its [`route::RoutePath`] differs from
+/// the session's `entered_path` at commit time, so the GET that created the
+/// page, the SSE open that follows it, and concurrent reconnects at one path
+/// run the page's entry Cmd once.
 #[cfg(feature = "server")]
 fn reconcile_path<Model, Msg>(
     entry: &store::SessionHandle<Model, Msg>,
@@ -791,14 +811,13 @@ fn reconcile_path<Model, Msg>(
     if !route_matched(route_path.as_str()) {
         return ReconcileOutcome::Unchanged;
     }
-    let enter_tx = {
-        let g = entry.lock().unwrap_or_else(|e| e.into_inner());
-        if g.entered_path.as_ref() == Some(&route_path) {
-            return ReconcileOutcome::Unchanged;
-        }
-        g.enter_tx.clone()
-    };
-    queue_entry(&enter_tx, route_path).map_or(ReconcileOutcome::Refused, ReconcileOutcome::Entering)
+    let enter_tx = entry
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .enter_tx
+        .clone();
+    queue_entry(&enter_tx, route_path, EnterMode::Reconcile)
+        .map_or(ReconcileOutcome::Refused, ReconcileOutcome::Entering)
 }
 
 /// The 503 a request gets when its session cannot enter the URL within the bounds.
@@ -1013,13 +1032,27 @@ fn spawn_subs<Msg: Clone + Send + 'static>(
     go(sub, tx, handles);
 }
 
+/// What the session driver did with one queued [`EnterRequest`].
+#[cfg(feature = "server")]
+enum EntryCommit<Model, Msg> {
+    /// The path was entered and committed; the driver runs the Cmd.
+    Entered(Model, IpeCmd<Msg>),
+    /// A [`EnterMode::Reconcile`] path the session had already entered; nothing ran.
+    AlreadyEntered,
+    /// The session is gone; the driver exits.
+    SessionGone,
+}
+
 /// Commit one URL entry on the session driver and hand back the entered model and its Cmd.
 ///
-/// Enters `request.path` under the session's sid, renders, commits model, view,
+/// A [`EnterMode::Reconcile`] request whose path equals the session's
+/// `entered_path` is dropped unanswered here, on the driver, so the check and
+/// the commit that follows cannot interleave with another entry. Otherwise
+/// enters `request.path` under the session's sid, renders, commits model, view,
 /// index and `entered_path`, then replies with the rendered body. A requester
 /// that stopped waiting gets the committed page as a full resync frame over
 /// the attached SSE channel instead, so the browser never keeps a DOM the
-/// server no longer diffs against. `None` when the session is gone.
+/// server no longer diffs against.
 #[cfg(feature = "server")]
 async fn commit_entry<Model, Msg, FView>(
     entry: &Weak<Mutex<SessionEntry<Model, Msg>>>,
@@ -1028,19 +1061,27 @@ async fn commit_entry<Model, Msg, FView>(
     view: &FView,
     store: &Arc<dyn store::SessionStore<Model, Msg>>,
     sid: &str,
-) -> Option<(Model, IpeCmd<Msg>)>
+) -> EntryCommit<Model, Msg>
 where
     Model: Clone,
     Msg: Clone,
     FView: Fn(Model) -> Html<Msg> + ?Sized,
 {
-    let strong = entry.upgrade()?;
-    let model = strong
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .model
-        .clone();
-    let EnterRequest { path, reply } = request;
+    let Some(strong) = entry.upgrade() else {
+        return EntryCommit::SessionGone;
+    };
+    let EnterRequest { path, mode, reply } = request;
+    let model = {
+        let g = strong.lock().unwrap_or_else(|e| e.into_inner());
+        let already_entered = match mode {
+            EnterMode::Load => false,
+            EnterMode::Reconcile => g.entered_path.as_ref() == Some(&path),
+        };
+        if already_entered {
+            return EntryCommit::AlreadyEntered;
+        }
+        g.model.clone()
+    };
     let entered = pubsub::with_session_sid(sid.to_owned(), || route_entry(model, path.as_str()));
     let mut tree = view(entered.model.clone());
     assign_ipe_ids(&mut tree, "r");
@@ -1067,7 +1108,7 @@ where
         }
     }
     store.set(sid, strong).await;
-    Some((entered.model, entered.cmd))
+    EntryCommit::Entered(entered.model, entered.cmd)
 }
 
 /// The per-session driver: folds each Msg through `update`, diffs the new view
@@ -1179,11 +1220,12 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
                 let Some(request) = maybe else {
                     break;
                 };
-                let Some((next, cmd)) =
-                    commit_entry(&entry, request, &route_entry, &*view, &store, &sid).await
-                else {
-                    break;
-                };
+                let (next, cmd) =
+                    match commit_entry(&entry, request, &route_entry, &*view, &store, &sid).await {
+                        EntryCommit::Entered(next, cmd) => (next, cmd),
+                        EntryCommit::AlreadyEntered => continue,
+                        EntryCommit::SessionGone => break,
+                    };
                 pubsub::with_session_sid(sid.clone(), || run_cmd(cmd, &msg_tx, &sid));
                 pubsub::with_session_sid(sid.clone(), || {
                     spawn_subs(subs(next), &msg_tx, &mut sub_handles)
@@ -2063,8 +2105,8 @@ where
                 cmd: IpeCmd::None,
             }),
             param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
-            // No route table: only `/` is a page URL.
-            route_matched: Arc::new(|path| path == "/"),
+            // No route table: only the root is a page URL.
+            route_matched: Arc::new(route::is_root),
             session_count: Arc::new(AtomicUsize::new(0)),
             watch_build_status: Arc::new(Mutex::new(None)),
         };
@@ -2160,7 +2202,7 @@ where
                     cmd: IpeCmd::None,
                 }),
                 param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
-                route_matched: Arc::new(|path| path == "/"),
+                route_matched: Arc::new(route::is_root),
                 session_count: Arc::new(AtomicUsize::new(0)),
                 watch_build_status: Arc::new(Mutex::new(None)),
             };
@@ -2748,7 +2790,8 @@ mod handlers {
                     .unwrap_or_else(|e| e.into_inner())
                     .enter_tx
                     .clone();
-                let Some(reply_rx) = queue_entry(&enter_tx, route::RoutePath::of(uri.path()))
+                let Some(reply_rx) =
+                    queue_entry(&enter_tx, route::RoutePath::of(uri.path()), EnterMode::Load)
                 else {
                     return entry_unavailable();
                 };
@@ -5584,11 +5627,14 @@ mod sse_reconnect_reconcile_tests {
     //! the driver's entry commit (`commit_entry`):
     //! 1. A reconnect whose `?path=` differs from the session's entered path
     //!    enters it once, re-rendering `last_view` id-stamped for the resync.
-    //! 2. A reconnect at the already-entered path enters nothing.
+    //! 2. A reconnect at the already-entered path enters nothing: the driver
+    //!    drops it at commit time.
     //! 3. An invalid path (contains `?` or `#`, or no leading `/`) or an
     //!    unrouted path enters nothing.
     //! 4. The sub-app base prefix is stripped once before matching.
     //! 5. A full enter queue refuses rather than waits.
+    //! 6. Reconnects queued at one new path enter it once; a page load
+    //!    re-enters even the entered path.
 
     use super::*;
     use crate::web::route::{Route, matches_any};
@@ -5614,6 +5660,8 @@ mod sse_reconnect_reconcile_tests {
         route_matched: RouteMatched,
         view: TestView,
         store: Arc<dyn store::SessionStore<TestPage, ()>>,
+        /// How many times the app's entry fn ran, i.e. how many entry Cmds were produced.
+        entry_fn_runs: Arc<AtomicUsize>,
     }
 
     fn routes() -> Vec<Route<TestPage>> {
@@ -5636,9 +5684,16 @@ mod sse_reconnect_reconcile_tests {
     fn make_session(page: TestPage, entered_path: Option<&str>, view: TestView) -> Fixture {
         let routes_arc = Arc::new(routes());
         let routes_for_match = routes_arc.clone();
-        let route_entry = routed_entry(routes_arc, TestPage::Home, |p: TestPage, _m: TestPage| {
-            (p, IpeCmd::None)
-        });
+        let entry_fn_runs = Arc::new(AtomicUsize::new(0));
+        let runs = entry_fn_runs.clone();
+        let route_entry = routed_entry(
+            routes_arc,
+            TestPage::Home,
+            move |p: TestPage, _m: TestPage| {
+                runs.fetch_add(1, Ordering::SeqCst);
+                (p, IpeCmd::None)
+            },
+        );
         let route_matched: RouteMatched =
             Arc::new(move |path| matches_any(&routes_for_match, path));
         let model = page.clone();
@@ -5667,7 +5722,26 @@ mod sse_reconnect_reconcile_tests {
             route_matched,
             view,
             store: Arc::new(MemoryStore::new(Duration::from_secs(60))),
+            entry_fn_runs,
         }
+    }
+
+    /// Commit one queued request as the driver would: 1 when it entered, 0 when it was already entered.
+    async fn drive_one(fx: &Fixture, request: EnterRequest) -> usize {
+        let commit = commit_entry(
+            &Arc::downgrade(&fx.entry),
+            request,
+            &fx.route_entry,
+            &*fx.view,
+            &fx.store,
+            "sid-test",
+        )
+        .await;
+        assert!(
+            !matches!(commit, EntryCommit::SessionGone),
+            "a live session never reports itself gone"
+        );
+        usize::from(matches!(commit, EntryCommit::Entered(..)))
     }
 
     /// Reconcile `client_path` under `base` and, when an entry was queued, commit it as the driver would.
@@ -5690,17 +5764,57 @@ mod sse_reconnect_reconcile_tests {
         let Ok(request) = queued else {
             return (0, None);
         };
-        let committed = commit_entry(
-            &Arc::downgrade(&fx.entry),
-            request,
-            &fx.route_entry,
-            &*fx.view,
-            &fx.store,
-            "sid-test",
-        )
-        .await;
-        assert!(committed.is_some(), "a live session commits the entry");
-        (1, await_entry(reply_rx).await.map(|r| r.body))
+        let committed = drive_one(fx, request).await;
+        (committed, await_entry(reply_rx).await.map(|r| r.body))
+    }
+
+    /// Two reconnects at one new path, both queued before the driver runs,
+    /// enter it once: the driver, not the enqueuer, decides "already entered".
+    #[tokio::test]
+    async fn concurrent_reconciles_at_one_path_enter_once() {
+        let mut fx = make_session(
+            TestPage::Detail("42".into()),
+            Some("/items/42"),
+            label_view(),
+        );
+        let first = reconcile_path(&fx.entry, &fx.route_matched, "/items/7", "");
+        let second = reconcile_path(&fx.entry, &fx.route_matched, "/items/7/", "");
+        assert!(matches!(first, ReconcileOutcome::Entering(_)));
+        assert!(matches!(second, ReconcileOutcome::Entering(_)));
+
+        let mut committed = 0;
+        while let Ok(request) = fx.enter_rx.try_recv() {
+            committed += drive_one(&fx, request).await;
+        }
+
+        assert_eq!(committed, 1, "one path, one committed entry");
+        assert_eq!(
+            fx.entry_fn_runs.load(Ordering::SeqCst),
+            1,
+            "the entry fn (and so its Cmd) ran once"
+        );
+        assert_eq!(model_of(&fx.entry), TestPage::Detail("7".into()));
+    }
+
+    /// A page GET re-enters even the path the session already entered, so a
+    /// reload runs the entry Cmd again.
+    #[tokio::test]
+    async fn load_of_the_entered_path_enters_again() {
+        let mut fx = make_session(TestPage::Home, Some("/"), label_view());
+        let enter_tx = fx
+            .entry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enter_tx
+            .clone();
+        assert!(queue_entry(&enter_tx, route::RoutePath::of("/"), EnterMode::Load).is_some());
+        let queued = fx.enter_rx.try_recv();
+        assert!(queued.is_ok(), "the load was queued");
+        let Ok(request) = queued else {
+            return;
+        };
+        assert_eq!(drive_one(&fx, request).await, 1);
+        assert_eq!(fx.entry_fn_runs.load(Ordering::SeqCst), 1);
     }
 
     /// Helper: read the current rendered text from the session's `last_view`.
@@ -5880,7 +5994,7 @@ mod sse_reconnect_reconcile_tests {
             .enter_tx
             .clone();
         for _ in 0..ENTER_QUEUE_CAP.get() {
-            assert!(queue_entry(&enter_tx, route::RoutePath::of("/")).is_some());
+            assert!(queue_entry(&enter_tx, route::RoutePath::of("/"), EnterMode::Load).is_some());
         }
         assert!(matches!(
             reconcile_path(&fx.entry, &fx.route_matched, "/items/1", ""),
@@ -5888,7 +6002,7 @@ mod sse_reconnect_reconcile_tests {
         ));
         drop(fx.enter_rx);
         assert!(
-            queue_entry(&enter_tx, route::RoutePath::of("/")).is_none(),
+            queue_entry(&enter_tx, route::RoutePath::of("/"), EnterMode::Load).is_none(),
             "a closed driver queue refuses"
         );
     }
@@ -6119,7 +6233,7 @@ mod watch_status_handler_tests {
         crate::dict::dict_empty()
     }
     fn test_route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     fn make_state(store: Arc<TestStore>) -> TestWebState {
@@ -6776,7 +6890,7 @@ mod hot_transition_handler_tests {
         crate::dict::dict_empty()
     }
     fn test_route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     fn make_router() -> Router {
@@ -7013,7 +7127,7 @@ mod hot_init_session_scoping_tests {
     }
 
     fn test_route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     // ── Type aliases ─────────────────────────────────────────────────────────
@@ -7279,7 +7393,7 @@ mod hot_msg_handler_tests {
         crate::dict::dict_empty()
     }
     fn test_route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     fn make_router() -> Router {
@@ -7492,7 +7606,7 @@ mod hot_init_handler_tests {
         crate::dict::dict_empty()
     }
     fn test_route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     fn make_router() -> Router {
@@ -7709,7 +7823,7 @@ mod hot_wiring_handler_tests {
         crate::dict::dict_empty()
     }
     fn test_route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     fn make_router() -> Router {
@@ -8120,7 +8234,7 @@ mod emitted_router_behavior_tests {
         crate::dict::dict_empty()
     }
     fn route_matched(p: &str) -> bool {
-        p == "/"
+        route::is_root(p)
     }
 
     fn make_state(store: Arc<Store>) -> State {
@@ -8767,7 +8881,7 @@ mod route_entry_cmd_tests {
                 .enter_tx
                 .clone();
             let held: Vec<_> = (0..ENTER_QUEUE_CAP.get())
-                .filter_map(|_| queue_entry(&enter_tx, route::RoutePath::of("/")))
+                .filter_map(|_| queue_entry(&enter_tx, route::RoutePath::of("/"), EnterMode::Load))
                 .collect();
             assert_eq!(held.len(), ENTER_QUEUE_CAP.get());
 

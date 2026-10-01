@@ -50,6 +50,15 @@ fn split_path(p: &str) -> Vec<&str> {
     }
 }
 
+/// Is `path` the root page, the one URL a single-page app (no route table) serves?
+///
+/// Root is every path the matcher's segment splitter turns into no segments
+/// (`/`, `//`, the empty path), so a single-page app and a routed app with a
+/// `/` route agree on it.
+pub fn is_root(path: &str) -> bool {
+    split_path(path).is_empty()
+}
+
 /// A path in the matcher's canonical form: one leading `/`, no trailing `/`.
 ///
 /// Two paths [`split_path`] splits alike (`/a/b` and `a/b/`, `` and `/`)
@@ -110,7 +119,7 @@ pub fn match_routes<Page: Clone>(routes: &[Route<Page>], not_found: &Page, path:
 }
 
 /// Does `path` match ANY declared route? With no
-/// routes only `/` is a page URL (the single-page `Web.tea` shape). The page
+/// routes only the root ([`is_root`]) is a page URL (the single-page `Web.tea` shape). The page
 /// handler uses this to keep unrouted GETs (browser noise like
 /// `/favicon.ico`, asset probes, unknown paths) from re-routing a live
 /// session's model — an unrouted re-route would rebuild the handler index
@@ -118,7 +127,7 @@ pub fn match_routes<Page: Clone>(routes: &[Route<Page>], not_found: &Page, path:
 /// is actually showing.
 pub fn matches_any<Page>(routes: &[Route<Page>], path: &str) -> bool {
     if routes.is_empty() {
-        return path == "/";
+        return is_root(path);
     }
     routes
         .iter()
@@ -298,5 +307,24 @@ mod tests {
             assert_ne!(RoutePath::of(a), RoutePath::of(b), "{a:?} vs {b:?}");
         }
         assert_eq!(RoutePath::of("").as_str(), "/");
+    }
+
+    /// A single-page app's root agrees with a routed app whose only route is
+    /// `/`: every spelling the matcher splits to no segments is root, and no
+    /// other path is.
+    #[test]
+    fn single_page_root_agrees_with_the_routed_matcher() {
+        let none: Vec<Route<Page>> = Vec::new();
+        let root_only = [Route::new("/", |_| Some(Page::Home))];
+        for p in ["/", "", "//", "///"] {
+            assert!(is_root(p), "{p:?} is root");
+            assert!(matches_any(&root_only, p), "routed: {p:?} is root");
+            assert!(matches_any(&none, p), "single-page: {p:?} is root");
+        }
+        for p in ["/x", "x", "/x/", "//x", "/favicon.ico"] {
+            assert!(!is_root(p), "{p:?} is not root");
+            assert!(!matches_any(&root_only, p), "routed: {p:?} is not root");
+            assert!(!matches_any(&none, p), "single-page: {p:?} is not root");
+        }
     }
 }
