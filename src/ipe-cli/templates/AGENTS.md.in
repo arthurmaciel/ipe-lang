@@ -558,7 +558,8 @@ Paths are case-sensitive.
   pages are refused (IPE-L0157).
 - A `:name` is `[A-Za-z_][A-Za-z0-9_]*` and unique within its pattern; a
   literal segment's `%` starts a two-hex-digit UTF-8 escape (`%25` = `%`). A
-  literal pattern breaking either rule is refused at compile time (IPE-L0156).
+  literal pattern breaking either rule is refused at compile time (IPE-L0156),
+  as is a routed literal segment that is empty or decodes to `.` or `..`.
 - `onNavigate : Page -> Msg` (optional) turns each navigation into a Msg;
   only a routed app may set it (IPE-L0162).
 

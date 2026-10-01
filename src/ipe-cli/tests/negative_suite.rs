@@ -3228,8 +3228,8 @@ fn lower_routed_equivalent_patterns_are_ambiguous() {
 }
 
 /// A route an earlier route always matches first is refused with IPE-L0158:
-/// the same pattern for the same page, or a literal under an earlier `String`
-/// parameter.
+/// the same pattern for the same page, or a literal under an earlier
+/// parameter whose decode accepts it (`String` always, `Int` for `7`).
 #[test]
 fn lower_routed_shadowed_route_is_unreachable() {
     for (name, head) in [
@@ -3240,6 +3240,10 @@ fn lower_routed_shadowed_route_is_unreachable() {
         (
             "string_param_first",
             r#"Web.route "/apps/:s" SPage, Web.route "/apps/new" NewPage, "#,
+        ),
+        (
+            "int_param_first",
+            r#"Web.route "/n/:n" NPage, Web.route "/n/7" NewPage, "#,
         ),
     ] {
         let src = routed_fixture(ROUTED_PAGES, &routed_table(head), "HomePage", "");
@@ -3262,6 +3266,37 @@ fn lower_routed_page_without_route() {
         "",
     );
     assert_rejected("lower_routed_page_without_route", &src, "IPE-L0159");
+}
+
+/// A routed literal segment no URL carries back (empty, `.` or `..`, plain or
+/// percent-encoded) is refused with IPE-L0156: its page could never render.
+#[test]
+fn lower_routed_unrenderable_literal() {
+    for (name, pattern) in [
+        ("empty", "/a//b"),
+        ("dot", "/a/./b"),
+        ("dot_dot_encoded", "/a/%2E%2E"),
+    ] {
+        let src = routed_fixture(
+            "type Page = HomePage | APage",
+            &format!(r#"[ Web.route "/" HomePage, Web.route "{pattern}" APage ]"#),
+            "HomePage",
+            "",
+        );
+        assert_rejected(
+            &format!("lower_routed_unrenderable_literal_{name}"),
+            &src,
+            "IPE-L0156",
+        );
+    }
+}
+
+/// A routed app whose `Model.page` is not a custom type is refused with
+/// IPE-L0161: no constructor can render a page path.
+#[test]
+fn lower_routed_page_not_custom_type() {
+    let src = routed_fixture("type alias Page = String", "[]", "\"home\"", "");
+    assert_rejected("lower_routed_page_not_custom_type", &src, "IPE-L0161");
 }
 
 /// A function page builder (lambda, named, partially applied, let-bound) in a

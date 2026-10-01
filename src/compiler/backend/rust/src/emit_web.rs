@@ -22,7 +22,7 @@
 //!   `lower_app_entry_cfg` path as `Web.tea`; its arm here is a
 //!   defensive invariant check.
 
-use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span};
+use ipe_diagnostics::{DResult, Diagnostic, LowerError, RoutePatternDefect, Span};
 use ipe_ir::{Callee, Expr, IrType, KernelFn};
 
 use crate::EmitCtx;
@@ -690,10 +690,27 @@ fn equivalent(a: &[SegmentShape], b: &[SegmentShape]) -> bool {
         })
 }
 
+/// Whether a route `:param` of type `field_ty` decodes `text`: the same
+/// standard-library parse [`route_param_get`] emits for that type, so the
+/// table check and the emitted builder accept one set of segments.
+fn param_decodes(field_ty: &IrType, text: &str) -> bool {
+    match field_ty {
+        IrType::Str => true,
+        IrType::Int => text.parse::<i64>().is_ok(),
+        IrType::Float => text.parse::<f64>().is_ok(),
+        IrType::Bool => text.parse::<bool>().is_ok(),
+        // Every other payload type is refused by `route_param_get` (IPE-L0123);
+        // claiming no coverage here never accepts a table that check refuses.
+        _ => false,
+    }
+}
+
 /// Whether `earlier` matches every path `later` matches and always builds its
-/// page: at each position, the same literal, or an earlier `String` parameter
-/// (whose decode never fails) facing a parameter or a non-empty literal.
-/// `earlier_fields` are the payload types its parameters fill, in order.
+/// page: at each position, the same literal, an earlier `String` parameter
+/// (whose decode never fails) facing anything, or an earlier parameter of
+/// another type facing a literal its decode accepts (`/n/:k` with `Int` before
+/// `/n/7`). `earlier_fields` are the payload types its parameters fill, in
+/// order.
 fn covers(earlier: &[SegmentShape], earlier_fields: &[IrType], later: &[SegmentShape]) -> bool {
     if earlier.len() != later.len() {
         return false;
@@ -703,9 +720,13 @@ fn covers(earlier: &[SegmentShape], earlier_fields: &[IrType], later: &[SegmentS
         (SegmentShape::Literal(x), SegmentShape::Literal(y)) => x == y,
         (SegmentShape::Literal(_), SegmentShape::Param) => false,
         (SegmentShape::Param, other) => {
-            let text = matches!(earlier_fields.get(param), Some(IrType::Str));
+            let field = earlier_fields.get(param);
             param = param.saturating_add(1);
-            text && !matches!(other, SegmentShape::Literal(l) if l.is_empty())
+            match (field, other) {
+                (Some(IrType::Str), _) => true,
+                (Some(field_ty), SegmentShape::Literal(text)) => param_decodes(field_ty, text),
+                (Some(_) | None, SegmentShape::Param) | (None, SegmentShape::Literal(_)) => false,
+            }
         }
     })
 }
@@ -793,12 +814,22 @@ fn route_rows<'a>(
                     .into(),
             });
         }
-        let segments = route_grammar::web_route_segments(pattern).map_err(|defect| {
+        let malformed = |defect| {
             route_refusal(LowerError::RoutePatternMalformed {
                 call: "Web.route".into(),
                 defect,
             })
-        })?;
+        };
+        let segments = route_grammar::web_route_segments(pattern).map_err(malformed)?;
+        // A literal no URL carries back (the browser drops an empty, `.` or
+        // `..` segment) would make every page of this route unrenderable.
+        if let Some(SegmentShape::Literal(segment)) = segments.iter().find(|seg| {
+            matches!(seg, SegmentShape::Literal(text) if matches!(text.as_str(), "" | "." | ".."))
+        }) {
+            return Err(malformed(RoutePatternDefect::UnrenderableLiteral {
+                segment: route_grammar::excerpt(segment),
+            }));
+        }
         rows.push(RouteRow {
             pattern,
             segments,
@@ -3586,5 +3617,80 @@ mod hot_appearance_tests {
             "flag-off: no wiring composition, the arm stays byte-identical"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod route_table_tests {
+    use ipe_ir::IrType;
+
+    use super::{covers, param_decodes};
+    use crate::route_grammar::SegmentShape;
+
+    fn lit(text: &str) -> SegmentShape {
+        SegmentShape::Literal(text.to_owned())
+    }
+
+    /// An earlier parameter of any decodable type covers a later literal its
+    /// decode accepts: `/n/:k` (`Int`) before `/n/7` leaves `/n/7` dead.
+    #[test]
+    fn typed_param_covers_a_literal_it_decodes() {
+        let earlier = [lit("n"), SegmentShape::Param];
+        for (field, text) in [
+            (IrType::Int, "7"),
+            (IrType::Int, "+007"),
+            (IrType::Float, "1.5"),
+            (IrType::Float, "inf"),
+            (IrType::Bool, "true"),
+            (IrType::Str, "anything"),
+        ] {
+            assert!(
+                covers(
+                    &earlier,
+                    std::slice::from_ref(&field),
+                    &[lit("n"), lit(text)]
+                ),
+                "{field:?} param must cover literal {text:?}"
+            );
+        }
+    }
+
+    /// A literal the earlier parameter's decode refuses, or a later parameter
+    /// facing a non-`String` one, stays reachable.
+    #[test]
+    fn typed_param_leaves_other_segments_reachable() {
+        let earlier = [lit("n"), SegmentShape::Param];
+        for (field, text) in [
+            (IrType::Int, "latest"),
+            (IrType::Int, "1.5"),
+            (IrType::Float, "x"),
+            (IrType::Bool, "True"),
+        ] {
+            assert!(
+                !covers(
+                    &earlier,
+                    std::slice::from_ref(&field),
+                    &[lit("n"), lit(text)]
+                ),
+                "{field:?} param must not cover literal {text:?}"
+            );
+        }
+        assert!(!covers(
+            &earlier,
+            &[IrType::Int],
+            &[lit("n"), SegmentShape::Param]
+        ));
+        assert!(!covers(&earlier, &[IrType::Int], &[lit("m"), lit("7")]));
+    }
+
+    /// The check's decode and the emitted builder's are one parse per type.
+    #[test]
+    fn param_decodes_mirrors_the_emitted_parse() {
+        assert!(param_decodes(&IrType::Int, "-9223372036854775808"));
+        assert!(!param_decodes(&IrType::Int, "9223372036854775808"));
+        assert!(param_decodes(&IrType::Bool, "false"));
+        assert!(!param_decodes(&IrType::Bool, "1"));
+        assert!(param_decodes(&IrType::Float, "NaN"));
+        assert!(!param_decodes(&IrType::Unit, "x"));
     }
 }

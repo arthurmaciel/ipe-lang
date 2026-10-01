@@ -1695,6 +1695,13 @@ pub enum RoutePatternDefect {
         /// The ceiling in bytes.
         cap: usize,
     },
+    /// A literal segment of a routed app's pattern decodes to the empty text,
+    /// `.` or `..`, which no rendered URL can carry back, so the route's page
+    /// would have no address.
+    UnrenderableLiteral {
+        /// The offending literal segment, as written.
+        segment: Box<str>,
+    },
 }
 
 /// Why a `Store.eq` / `Store.eqBy` column argument was rejected at lowering.
@@ -2988,6 +2995,10 @@ fn route_pattern_malformed_help(defect: &RoutePatternDefect) -> Vec<HelpLine> {
         }
         RoutePatternDefect::TooLong { cap } => {
             format!("a route path is at most {cap} bytes — shorten it")
+        }
+        RoutePatternDefect::UnrenderableLiteral { .. } => {
+            "a page's path is rendered back into a URL, and a browser drops an empty,              `.` or `..` segment — remove the empty segment or rename the literal"
+                .to_string()
         }
     };
     vec![HelpLine::Note(note.into_boxed_str())]

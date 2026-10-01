@@ -2071,6 +2071,11 @@ fn route_pattern_label(defect: &RoutePatternDefect) -> String {
         RoutePatternDefect::TooLong { cap } => {
             format!("this path is longer than the {cap}-byte route ceiling")
         }
+        RoutePatternDefect::UnrenderableLiteral { segment } => {
+            format!(
+                "segment `{segment}` is empty, `.` or `..`, so this route's URL cannot be rendered"
+            )
+        }
     }
 }
 

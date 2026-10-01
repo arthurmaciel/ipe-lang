@@ -5172,6 +5172,17 @@ fn disambiguated_rust_name(
     })
 }
 
+/// Is `e` a `Web.route pattern builder` kernel call?
+pub(crate) const fn is_web_route_call(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::WebRoute),
+            ..
+        }
+    )
+}
+
 /// Whether a function is a qualifying `Ipe.Ui` structural wrapper for the
 /// subtree partition pass.
 ///
@@ -5195,17 +5206,6 @@ fn disambiguated_rust_name(
 /// may contain `Var`/`CloneVar` references to value parameters, `Cons`
 /// prepend (the marker-attr pattern that `row` / `column` / `wrappedRow` /
 /// `grid` / `paragraph` / `textColumn` lower to), and nested kernel calls.
-/// Is `e` a `Web.route pattern builder` kernel call?
-pub(crate) const fn is_web_route_call(e: &Expr) -> bool {
-    matches!(
-        e,
-        Expr::Call {
-            callee: Callee::Kernel(KernelFn::WebRoute),
-            ..
-        }
-    )
-}
-
 fn is_ipe_ui_structural_wrapper(func: &ipe_ir::Func, interner: &Interner) -> bool {
     // Gate 1: home module is exactly `Ipe.Ui`.
     let home = &func.home.0;

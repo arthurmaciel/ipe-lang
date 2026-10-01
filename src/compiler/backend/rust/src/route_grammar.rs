@@ -581,6 +581,7 @@ mod agreement_tests {
         MalformedEscape(usize),
         InvalidUtf8(usize),
         TooLong(usize),
+        Unrenderable,
     }
 
     fn ours(r: Result<(), RoutePatternDefect>) -> Verdict {
@@ -592,6 +593,7 @@ mod agreement_tests {
             Err(RoutePatternDefect::MalformedEscape { at, .. }) => Verdict::MalformedEscape(at),
             Err(RoutePatternDefect::InvalidUtf8 { at, .. }) => Verdict::InvalidUtf8(at),
             Err(RoutePatternDefect::TooLong { cap }) => Verdict::TooLong(cap),
+            Err(RoutePatternDefect::UnrenderableLiteral { .. }) => Verdict::Unrenderable,
         }
     }
 

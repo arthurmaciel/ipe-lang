@@ -156,6 +156,19 @@ fn param_route_solo_compiles_and_emits_param_conversion() {
         main_rs.contains("web_app_routed"),
         "#108: the param-route app must emit `web_app_routed`",
     );
+    // One typed render arg per payload type the routes decode; the `IPE_E2E`
+    // build below proves each arm cargo-builds.
+    for arg in [
+        "RenderArg::Text(a0.as_str())",
+        "RenderArg::Int(*a0)",
+        "RenderArg::Bool(*a0)",
+        "RenderArg::Float(*a0)",
+    ] {
+        assert!(
+            main_rs.contains(arg),
+            "the emitted page renderer must render `{arg}`"
+        );
+    }
 }
 
 /// MIXED nullary + param routes in one list → ipe-0.
@@ -285,11 +298,23 @@ fn param_route_solo_cargo_builds_and_delivers_param() {
         .expect("emitted binary must spawn");
 
     let ready = wait_ready(&mut child, port);
-    let response = if ready {
-        http_get(port, "/u/42").unwrap_or_default()
-    } else {
-        String::new()
+    let get = |path: &str| {
+        if ready {
+            http_get(port, path).unwrap_or_default()
+        } else {
+            String::new()
+        }
     };
+    let response = get("/u/42");
+    // Non-canonical spellings of typed params redirect to the rendered path.
+    let redirects: Vec<(&str, &str, String)> = [
+        ("/i/007", "/i/7"),
+        ("/u/%34%32", "/u/42"),
+        ("/s/1.50", "/s/1.5"),
+    ]
+    .into_iter()
+    .map(|(from, to)| (from, to, get(from)))
+    .collect();
     let _ = child.kill();
     let _ = child.wait();
 
@@ -302,4 +327,14 @@ fn param_route_solo_cargo_builds_and_delivers_param() {
         "#108 hole 3: GET /u/42 must deliver the captured `:param` to the \
          page constructor (expected body to contain `user:42`)\n--- response ---\n{response}",
     );
+    for (from, to, resp) in redirects {
+        let status_ok = resp.starts_with("HTTP/1.1 308");
+        let location_ok = resp
+            .lines()
+            .any(|l| l.eq_ignore_ascii_case(&format!("location: {to}")));
+        assert!(
+            status_ok && location_ok,
+            "GET {from} must 308 to {to}\n--- response ---\n{resp}"
+        );
+    }
 }
