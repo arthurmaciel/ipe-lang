@@ -238,7 +238,7 @@ pub fn extract_file(
         .unwrap_or(path)
         .to_string();
     let base = module_path(path, lang);
-    emit_unit(
+    let uid = emit_unit(
         store,
         src,
         UnitSpec {
@@ -254,7 +254,45 @@ pub fn extract_file(
         },
         &mut ord,
     )?;
+    let residual = residual_text(src, &store.child_spans(path)?);
+    store.set_residual_hash(&uid, &view::attest(&residual))?;
     Ok(())
+}
+
+/// The lines of `src` no span in `spans` covers, blank lines dropped, each run
+/// of covered lines marked by one `"\0"` line: the content a `file` unit
+/// reviews beyond its children.
+///
+/// It keys the file unit's queue changes, so editing a child queues the child
+/// alone while editing an import, attribute or other top-level line queues
+/// the file. Spans are 1-based inclusive; a span outside `src` covers only its
+/// in-range part.
+pub fn residual_text(src: &str, spans: &[(i64, i64)]) -> String {
+    let lines = view::view_lines(src);
+    let mut covered = vec![false; lines.len()];
+    for &(start, end) in spans {
+        let first = usize::try_from(start.saturating_sub(1)).unwrap_or(0);
+        let Ok(last) = usize::try_from(end) else {
+            continue;
+        };
+        for slot in covered.iter_mut().take(last).skip(first) {
+            *slot = true;
+        }
+    }
+    let mut out: Vec<&str> = Vec::new();
+    let mut gap = false;
+    for (line, is_covered) in lines.into_iter().zip(covered) {
+        if is_covered {
+            gap = true;
+        } else if !line.trim().is_empty() {
+            if gap && !out.is_empty() {
+                out.push("\0");
+            }
+            gap = false;
+            out.push(line);
+        }
+    }
+    out.join("\n")
 }
 
 #[cfg(test)]
@@ -266,6 +304,47 @@ mod tests {
     fn built_in_shell_patterns_compile() {
         assert!(RE_SH_SOURCE.get().is_ok());
         assert!(RE_SH_FUNC.get().is_ok());
+    }
+
+    #[test]
+    fn residual_keeps_uncovered_lines_and_marks_gaps() {
+        let src = "use a;\n\nfn f() {\n}\nconst X: u8 = 1;\nfn g() {}\n";
+        assert_eq!(
+            residual_text(src, &[(3, 4), (6, 6)]),
+            "use a;\n\0\nconst X: u8 = 1;"
+        );
+        // No spans: every non-blank line.
+        assert_eq!(residual_text(src, &[]).lines().count(), 5);
+        // Out-of-range and inverted spans cover nothing past the source.
+        assert_eq!(
+            residual_text("a\nb\n", &[(i64::MIN, 0), (2, i64::MAX), (5, 1)]),
+            "a"
+        );
+    }
+
+    fn file_key(store: &Store, path: &str) -> String {
+        store
+            .conn
+            .query_row(
+                "SELECT residual_hash FROM units WHERE path=? AND kind='file'",
+                [path],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    // The file unit's change key moves with its own lines only.
+    #[test]
+    fn file_key_ignores_child_bodies() {
+        let key = |src: &str| {
+            let store = Store::open(":memory:").unwrap();
+            extract_file(&store, "m.rs", Lang::Rust, src, "sha").unwrap();
+            file_key(&store, "m.rs")
+        };
+        let base = key("use a;\n\nfn f() -> u8 {\n    1\n}\n");
+        assert_eq!(key("use a;\n\nfn f() -> u8 {\n    2\n}\n"), base);
+        assert_eq!(key("use a;\n\n\nfn f() -> u8 {\n    1\n}\n"), base);
+        assert_ne!(key("use b;\n\nfn f() -> u8 {\n    1\n}\n"), base);
     }
 
     // A line past the end of the script, or before its start, slices nothing

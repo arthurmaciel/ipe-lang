@@ -1,4 +1,4 @@
-module Lib.Settings exposing (DbLocation, IndexSettings, dbFileName, encodeFilePath, indexReadUrl, indexSettings, indexWriteUrl, ipeTag, parseDbLocation, reviewDb, reviewUrl)
+module Lib.Settings exposing (DbLocation, IndexSettings, dbFileName, encodeFilePath, indexReadUrl, indexSettings, indexWriteUrl, ipeTag, openFailure, parseDbLocation, reviewDb, reviewUrl)
 
 import Ipe.Encoding as Encoding
 import Ipe.Error as Error
@@ -8,6 +8,7 @@ import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
 import Lib.RepoPath as RepoPath exposing (PathError, RootMap, Tag)
+import Lib.SafeText as SafeText exposing (SafeText)
 
 
 -- Where a SQLite database lives: an absolute file path. Every accepted
@@ -66,27 +67,28 @@ reviewDb =
 -- `sqlite://` URL is parsed by `parseSqliteUrl`. Any other URL, and a
 -- `sqlite:` or `file:` value without `//`, is refused rather than read as a
 -- file of that name. A refusal names the variable, never its value: a
--- mistyped URL can carry a password.
+-- mistyped URL can carry a password. Each refusal states its problem and
+-- exactly one fix.
 parseDbLocation : String -> String -> Task.Task Error DbLocation
 parseDbLocation var raw =
     if String.trim raw == "" then
-        Task.fail (Error.invalidInput (dbRefusal var "is empty"))
+        Task.fail (Error.invalidInput (dbRefusal var "is empty" dbFix))
 
     else if String.startsWith "sqlite://" raw then
         parseSqliteUrl var (String.dropLeft (String.length "sqlite://") raw)
 
     else if String.contains "://" raw then
-        Task.fail (Error.invalidInput (dbRefusal var "is a URL that is not `sqlite://`"))
+        Task.fail (Error.invalidInput (dbRefusal var "is a URL that is not `sqlite://`" dbFix))
 
     else if String.startsWith "sqlite:" raw || String.startsWith "file:" raw then
-        Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite:` or `file:` value without `//`; write `sqlite:///absolute/path` or a plain file path"))
+        Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite:` or `file:` value without `//`" "write `sqlite:///absolute/path` or a plain file path"))
 
     else if String.contains "?" raw || String.contains "#" raw || String.contains "%" raw then
-        Task.fail (Error.invalidInput (dbRefusal var "is a file path containing `?`, `#` or `%`; pass it as a percent-encoded `sqlite://` URL instead"))
+        Task.fail (Error.invalidInput (dbRefusal var "is a file path containing `?`, `#` or `%`" "pass it as a percent-encoded `sqlite://` URL instead"))
 
     else
         RepoPath.absolutize raw
-            |> Task.mapError (\_ -> Error.invalidInput (dbRefusal var "is not a valid file path"))
+            |> Task.mapError (\_ -> Error.invalidInput (dbRefusal var "is not a valid file path" dbFix))
             |> Task.andThen (toDbFile var)
 
 
@@ -100,25 +102,25 @@ parseDbLocation var raw =
 parseSqliteUrl : String -> String -> Task.Task Error DbLocation
 parseSqliteUrl var encoded =
     if String.contains "?" encoded || String.contains "#" encoded then
-        Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL with a query or fragment; the app sets the open mode, so drop it"))
+        Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL with a query or fragment" "drop it: the app sets the open mode"))
 
     else
         case Encoding.percentDecode encoded of
             Err _ ->
-                Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL with a malformed percent-escape"))
+                Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL with a malformed percent-escape" dbFix))
 
             Ok decoded ->
                 if decoded == "" then
-                    Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL naming no database"))
+                    Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL naming no database" dbFix))
 
                 else if String.startsWith "/" decoded then
                     Path.fromString decoded
                         |> Task.fromResult
-                        |> Task.mapError (\_ -> Error.invalidInput (dbRefusal var "is a `sqlite://` URL whose path is not a valid file path"))
+                        |> Task.mapError (\_ -> Error.invalidInput (dbRefusal var "is a `sqlite://` URL whose path is not a valid file path" dbFix))
                         |> Task.andThen (toDbFile var)
 
                 else
-                    Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL whose path is not absolute; write `sqlite:///absolute/path`"))
+                    Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL whose path is not absolute" "write `sqlite:///absolute/path`"))
 
 
 -- The one step both spellings end in: a cleaned absolute path becomes a
@@ -127,15 +129,52 @@ parseSqliteUrl var encoded =
 toDbFile : String -> Path -> Task.Task Error DbLocation
 toDbFile var path =
     if Path.toString path == "/" then
-        Task.fail (Error.invalidInput (dbRefusal var "names the root directory, not a database file"))
+        Task.fail (Error.invalidInput (dbRefusal var "names the root directory, not a database file" dbFix))
 
     else
         Task.succeed (DbFile path)
 
 
-dbRefusal : String -> String -> String
-dbRefusal var problem =
-    String.concat [ var, " ", problem, "; set it to a SQLite file path or a `sqlite://` URL" ]
+dbRefusal : String -> String -> String -> String
+dbRefusal var problem fix =
+    String.concat [ var, " ", problem, "; ", fix ]
+
+
+-- The fix for a refusal whose problem names no more specific one.
+dbFix : String
+dbFix =
+    "set it to a SQLite file path or a `sqlite://` URL"
+
+
+-- A parsed location that failed to open or to pass its startup probe: the
+-- variable, the resolved file, the cause and one fix. A parsed location is a
+-- plain absolute file path (`parseDbLocation` refuses a URL with a host,
+-- credentials or a query), so naming it leaks no secret; it is still
+-- rendered, since it came from the environment. `var` and `fix` are this
+-- tool's own text.
+openFailure : String -> SafeText -> DbLocation -> Error -> Error
+openFailure var fix loc e =
+    Error.withMessage
+        (SafeText.toString
+            (SafeText.concat
+                [ SafeText.literal var
+                , SafeText.literal ": cannot open "
+                , SafeText.quoted (locationPath loc)
+                , SafeText.literal " ("
+                , SafeText.render (Error.message e)
+                , SafeText.literal "); "
+                , fix
+                ]
+            )
+        )
+        e
+
+
+locationPath : DbLocation -> String
+locationPath loc =
+    case loc of
+        DbFile path ->
+            Path.toString path
 
 
 -- The database file's name without its directory, for display.
