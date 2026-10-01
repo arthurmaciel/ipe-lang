@@ -111,18 +111,19 @@ mod tests {
         bindings.first().map(|b| &b.body)
     }
 
-    fn names(fields: Option<Vec<ipe_intern::Symbol>>, i: &Interner) -> Option<Vec<String>> {
-        fields.map(|fs| {
-            fs.iter()
-                .map(|s| i.resolve(*s).unwrap_or_default().to_owned())
-                .collect()
-        })
+    fn names(fields: &[ipe_intern::Symbol], i: &Interner) -> Vec<String> {
+        fields
+            .iter()
+            .map(|s| i.resolve(*s).unwrap_or_default().to_owned())
+            .collect()
     }
 
     #[test]
     fn an_accessor_is_recognised_with_its_path() {
         let (m, i) = parse_body(".a.b");
-        let path = names(value_body(&m).and_then(field_accessor), &i);
+        let path = value_body(&m)
+            .and_then(field_accessor)
+            .map(|fs| names(&fs, &i));
         assert_eq!(path, Some(vec!["a".to_owned(), "b".to_owned()]));
     }
 

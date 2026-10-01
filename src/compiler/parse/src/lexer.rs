@@ -754,12 +754,13 @@ fn push_escape(lx: &mut Lexer, out: &mut String) {
         return;
     };
     lx.advance();
-    match ESCAPES.iter().find(|(letter, _)| *letter == next) {
-        Some((_, value)) => out.push(*value),
-        None => {
-            out.push('\\');
-            out.push(next);
-        }
+    let resolved = ESCAPES
+        .iter()
+        .find(|(letter, _)| *letter == next)
+        .map(|(_, value)| *value);
+    out.push(resolved.unwrap_or('\\'));
+    if resolved.is_none() {
+        out.push(next);
     }
 }
 
