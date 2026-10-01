@@ -41,8 +41,10 @@ NIGHTLY_WORKFLOW_PATH = ".github/workflows/ci.yml"
 NIGHTLY_EVENT = "workflow_dispatch"
 MAIN = "main"
 MAX_AGE_H = 48
-# Runs fetched per listing; the newest of them is judged, whatever their order.
+# Runs fetched per listing; the newest matching run across all listings is judged.
 LISTING_PAGE = 20
+# Fields a run is judged on; two equally fresh copies of one run must agree on them.
+_JUDGED_FIELDS = ("event", "path", "status", "conclusion", "head_branch", "head_sha", "created_at")
 GH_TIMEOUT_S = 60
 VERDICT_INVOCATION = "python3 .github/ci/nightly_green.py --verdict"
 EXPECTED_ENV = {
@@ -67,22 +69,71 @@ def _parse_time(text: object) -> datetime:
     return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
-def latest_run(listing: object) -> dict | None:
-    """Return the newest-created completed run of a `.../runs` listing, or None when it lists none.
+def _run_id(run: dict) -> int:
+    rid = run.get("id")
+    if not isinstance(rid, int) or isinstance(rid, bool) or rid <= 0:
+        raise NightlyError(f"run listing entry id {rid!r} is not a positive integer")
+    return rid
 
-    Neither the listing's order nor its filters are trusted: the API's
-    `status=completed` filter drops recent runs, so the listing is unfiltered and
-    a run still queued or in progress is skipped here; the newest remaining run
-    is chosen by `created_at`.
+
+def _attempt(run: dict) -> int:
+    attempt = run.get("run_attempt", 1)
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt <= 0:
+        raise NightlyError(f"run {run.get('id')} attempt {attempt!r} is not a positive integer")
+    return attempt
+
+
+def _judged(run: dict) -> tuple[object, ...]:
+    head_repo = run.get("head_repository")
+    return (
+        *(run.get(key) for key in _JUDGED_FIELDS),
+        head_repo.get("full_name") if isinstance(head_repo, dict) else head_repo,
+    )
+
+
+def _fresher(a: dict, b: dict) -> dict:
+    """Return the copy of one run that reflects its later state; copies equally fresh must agree."""
+    rank_a = (_attempt(a), _parse_time(a.get("updated_at", a.get("created_at"))))
+    rank_b = (_attempt(b), _parse_time(b.get("updated_at", b.get("created_at"))))
+    if rank_a != rank_b:
+        return a if rank_a > rank_b else b
+    if _judged(a) != _judged(b):
+        raise NightlyError(f"run listings disagree on run {a.get('id')} at the same attempt and update time")
+    return a
+
+
+def newest_dispatch(listings: list[object], *, branch: str | None, sha: str | None) -> dict | None:
+    """Return the newest completed nightly-workflow dispatch on `branch` / at `sha` across `listings`, or None.
+
+    No single listing is trusted to be complete, ordered, or filtered as asked:
+    a server-side filter can serve a stale index or drop recent runs. Every
+    listing is read, runs are unioned by id (the freshest copy of each wins),
+    and selection happens here: event, workflow path, branch or commit, and
+    completion are matched client-side, and the newest by `created_at` is
+    chosen. A listing only ever omits runs, so the union is at least as fresh as
+    any one listing. Any malformed listing or entry refuses.
     """
-    runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
-    if not isinstance(runs, list):
-        raise NightlyError("run listing has no `workflow_runs` list")
+    union: dict[int, dict] = {}
+    for listing in listings:
+        runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
+        if not isinstance(runs, list):
+            raise NightlyError("run listing has no `workflow_runs` list")
+        for run in runs:
+            if not isinstance(run, dict):
+                raise NightlyError("run listing entry is not an object")
+            rid = _run_id(run)
+            _parse_time(run.get("created_at"))
+            seen = union.get(rid)
+            union[rid] = run if seen is None else _fresher(seen, run)
     newest: tuple[datetime, dict] | None = None
-    for run in runs:
-        if not isinstance(run, dict):
-            raise NightlyError("run listing entry is not an object")
-        if run.get("status") != "completed":
+    for run in union.values():
+        if (
+            run.get("status") != "completed"
+            or run.get("event") != NIGHTLY_EVENT
+            or run.get("path") != NIGHTLY_WORKFLOW_PATH
+            or (branch is not None and run.get("head_branch") != branch)
+            or (sha is not None and run.get("head_sha") != sha)
+        ):
             continue
         created = _parse_time(run.get("created_at"))
         if newest is None or created > newest[0]:
@@ -178,11 +229,25 @@ def _gh_json(path: str) -> object:
         raise NightlyError(f"`gh api {path}` returned non-JSON: {exc}") from exc
 
 
-def _runs_path(repo: str, query: str) -> str:
+def _listing_paths(repo: str, scope: str) -> tuple[str, ...]:
+    """Independent `.../runs` listings that each may hold the dispatches in `scope`.
+
+    The workflow listing filtered by event and scope, the workflow listing
+    filtered by event only, and the repository listing filtered by event and
+    scope are separate server-side indexes; none is trusted alone.
+    """
+    workflow = NIGHTLY_WORKFLOW_PATH.rsplit("/", 1)[-1]
+    page = f"event={NIGHTLY_EVENT}&per_page={LISTING_PAGE}"
     return (
-        f"repos/{repo}/actions/workflows/ci.yml/runs"
-        f"?event={NIGHTLY_EVENT}&per_page={LISTING_PAGE}&{query}"
+        f"repos/{repo}/actions/workflows/{workflow}/runs?{page}&{scope}",
+        f"repos/{repo}/actions/workflows/{workflow}/runs?{page}",
+        f"repos/{repo}/actions/runs?{page}&{scope}",
     )
+
+
+def _newest(repo: str, scope: str, *, branch: str | None, sha: str | None) -> dict | None:
+    listings = [_gh_json(path) for path in _listing_paths(repo, scope)]
+    return newest_dispatch(listings, branch=branch, sha=sha)
 
 
 def verdict(env: dict[str, str], now: datetime) -> list[str]:
@@ -201,12 +266,12 @@ def verdict(env: dict[str, str], now: datetime) -> list[str]:
             sha = head.get("sha") if isinstance(head, dict) else None
             if not isinstance(sha, str) or not _SHA.fullmatch(sha):
                 raise NightlyError(f"PR #{value} has no 40-hex head sha")
-        own = latest_run(_gh_json(_runs_path(repo, f"head_sha={sha}")))
+        own = _newest(repo, f"head_sha={sha}", branch=None, sha=sha)
         own_errors = run_errors(own, branch=None, sha=sha, now=None)
         if not own_errors:
             return []
         reasons += [f"change commit {sha[:12]}: {e}" for e in own_errors]
-    main_run = latest_run(_gh_json(_runs_path(repo, f"branch={MAIN}")))
+    main_run = _newest(repo, f"branch={MAIN}", branch=MAIN, sha=None)
     main_errors = run_errors(main_run, branch=MAIN, sha=None, now=now)
     if not main_errors and main_run is not None:
         # `head_branch` is only a name: a tag or a fork branch called `main`
