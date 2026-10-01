@@ -1258,13 +1258,13 @@ mod tests {
     }
 
     #[test]
-    fn git_escape_refuses_when_a_tag_shadows_a_full_sha() {
-        // A tag literally named after C1's full 40-hex SHA points at C2, not
-        // C1. The request, classified as a `FullSha`, is unambiguous — the
-        // author pinned an exact commit — so a same-shaped ref serving a
-        // different commit is a hard refusal, not a warning. This case is
-        // NOT covered by the maintainer's abbreviation-only override.
-        let src = git_source("shadow-refuse-src", "module Lib\nv = 1\n");
+    fn git_escape_locks_the_exact_commit_when_a_tag_shadows_a_full_sha() {
+        // A tag literally named after C1's full 40-hex SHA points at C2. Git
+        // resolves a full object name before any ref of the same spelling, so
+        // the escape serves and locks C1 — the commit the author pinned —
+        // never the tag's C2. `check_served` re-checks served == requested,
+        // so a source that substituted C2 anyway is refused, not locked.
+        let src = git_source("shadow-full-src", "module Lib\nv = 1\n");
         let (c1, c2) = two_commits(&src);
         let tag_ok = Command::new("git")
             .args(["tag", &c1, &c2])
@@ -1275,17 +1275,28 @@ mod tests {
             .success();
         assert!(tag_ok, "creating the shadowing tag must succeed");
 
-        let proj = temp_dir("escape-shadow-refuse");
+        let proj = temp_dir("escape-shadow-full");
         scaffold_project(&proj);
         let dep = IpeDep::Git {
             url: src.display().to_string(),
-            rev: Some(c1),
+            rev: Some(c1.clone()),
         };
-        let err = resolve_escape(&proj, "shadowed", &dep)
-            .expect_err("a full-SHA request shadowed by a differing tag must refuse");
-        assert!(
-            matches!(err, CliError::Resolve(_)),
-            "expected a Resolve refusal, got: {err:?}"
+        resolve_escape(&proj, "shadowed", &dep)
+            .expect("a full-SHA request resolves to the pinned commit");
+        let lock = Lockfile::read(&proj).expect("lock");
+        let entry = lock
+            .packages()
+            .iter()
+            .find(|p| p.name.as_str() == "shadowed")
+            .expect("shadowed must be locked");
+        let rev_str = entry
+            .origin
+            .pinned_rev()
+            .map(PinnedRev::as_str)
+            .expect("a git escape pins a rev");
+        assert_eq!(
+            rev_str, c1,
+            "the pinned full SHA (C1) must be locked, never the shadowing tag's C2"
         );
 
         let _ = std::fs::remove_dir_all(&proj);

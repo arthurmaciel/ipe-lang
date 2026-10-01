@@ -65,6 +65,7 @@ const ESCAPE_HATCH_SITES: &[(&str, usize)] = &[
     ("src/runtime/rust/src/core.rs", 1),
     ("src/runtime/rust/src/scratch_core.rs", 2),
     ("src/runtime/rust/src/system.rs", 5),
+    ("src/runtime/rust/src/terminal_access.rs", 1),
     ("src/runtime/rust/tests/debug_behavior.rs", 1),
 ];
 
