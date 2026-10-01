@@ -55,6 +55,6 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , routes = []
+        , routes = [ Web.route "/" CounterPage ]
         , notFound = CounterPage
         }
