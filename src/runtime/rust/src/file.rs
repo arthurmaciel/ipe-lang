@@ -102,7 +102,7 @@ impl ReadCeiling {
 fn parse_read_ceiling(raw: Result<String, std::env::VarError>) -> Result<ReadCeiling, String> {
     let shown = match raw {
         Err(std::env::VarError::NotPresent) => return Ok(ReadCeiling::Unset),
-        Err(std::env::VarError::NotUnicode(os)) => os.to_string_lossy().into_owned(),
+        Err(std::env::VarError::NotUnicode(os)) => shown_env_value(os.as_encoded_bytes()),
         Ok(v) => {
             if !v.is_empty()
                 && v.bytes().all(|b| b.is_ascii_digit())
@@ -110,13 +110,40 @@ fn parse_read_ceiling(raw: Result<String, std::env::VarError>) -> Result<ReadCei
             {
                 return Ok(ReadCeiling::Bytes(n));
             }
-            v
+            shown_env_value(v.as_bytes())
         }
     };
-    let shown: String = shown.chars().take(READ_CEILING_SHOWN_CHARS).collect();
     Err(format!(
-        "IPE_FILE_READ_MAX must be a decimal byte count (got {shown:?})"
+        "IPE_FILE_READ_MAX must be a decimal byte count (got \"{shown}\")"
     ))
+}
+
+/// Renders a refused environment value for its error text without losing or
+/// smuggling a byte: valid UTF-8 keeps its printable characters and escapes
+/// every other one (`char::escape_debug` — controls, ESC, CR/LF, bidi
+/// overrides, `"` and `\`), and each byte that is not UTF-8 shows as `\xNN`.
+/// At most `READ_CEILING_SHOWN_CHARS` source characters or bytes are shown.
+fn shown_env_value(raw: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let mut budget = READ_CEILING_SHOWN_CHARS;
+    for chunk in raw.utf8_chunks() {
+        for c in chunk.valid().chars() {
+            let Some(left) = budget.checked_sub(1) else {
+                return out;
+            };
+            budget = left;
+            out.extend(c.escape_debug());
+        }
+        for b in chunk.invalid() {
+            let Some(left) = budget.checked_sub(1) else {
+                return out;
+            };
+            budget = left;
+            let _ = write!(out, "\\x{b:02X}");
+        }
+    }
+    out
 }
 
 /// Resolves the `File.readFile` ceiling from `IPE_FILE_READ_MAX`.
@@ -777,6 +804,33 @@ mod read_ceiling_tests {
         assert!(
             matches!(&res, Err(e) if e.contains("IPE_FILE_READ_MAX")),
             "{res:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ceiling_non_unicode_shows_every_byte_escaped() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let raw = std::ffi::OsString::from_vec(vec![b'1', 0xff, 0x1b, b'[', b'2', b'J', 0xfe]);
+        let res = parse_read_ceiling(Err(std::env::VarError::NotUnicode(raw)));
+        assert_eq!(
+            res,
+            Err(
+                r#"IPE_FILE_READ_MAX must be a decimal byte count (got "1\xFF\u{1b}[2J\xFE")"#
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn ceiling_refusal_escapes_controls_and_quotes() {
+        let res = parse_read_ceiling(Ok("1\n\"\u{202e}\\".into()));
+        assert_eq!(
+            res,
+            Err(
+                r#"IPE_FILE_READ_MAX must be a decimal byte count (got "1\n\"\u{202e}\\")"#
+                    .to_string()
+            )
         );
     }
 

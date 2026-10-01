@@ -146,7 +146,17 @@ mod tests {
 
     #[test]
     fn win_triple_dot_disguise_rejected() {
-        assert_eq!(refusal("..."), Some(windows(SealRefusal::DisguisedParent)));
+        assert_eq!(
+            refusal("a/..."),
+            Some(windows(SealRefusal::DisguisedParent))
+        );
+    }
+
+    // A leading all-dots element is refused under Unix first: the escape
+    // check's glued-dot layer fails closed before Windows is tried.
+    #[test]
+    fn leading_triple_dot_rejected_under_unix_first() {
+        assert_eq!(refusal("..."), Some(escape(Regime::Unix, "...")));
     }
 
     #[test]
