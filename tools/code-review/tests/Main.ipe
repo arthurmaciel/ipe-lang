@@ -1508,12 +1508,49 @@ tagGrammarMatchesWriter =
                 , refusedAs "missing-tag" (RepoPath.resolve roots ":x")
                 -- split_tag "ipe:a:b" = (Some("ipe"), "a:b")
                 , resolvesTo (base ++ "/a:b") (RepoPath.resolve roots "ipe:a:b")
-                , tagRefused "a/b"
-                , tagRefused "a:b"
-                , tagRefused ""
-                , Result.map RepoPath.tagName (RepoPath.parseTag "ipe") == Ok "ipe"
                 ]
             )
+
+
+-- One row of ipe-index's tag vectors: a raw tag and the writer's refusal
+-- (`Empty`, `Slash`, `Colon`), or `Nothing` for a tag it accepts.
+type alias TagVector =
+    { name : String
+    , raw : String
+    , refusal : Maybe String
+    }
+
+
+-- `parseTag` accepts exactly the tags ipe-index's writer accepts, on every
+-- row of the shared vectors file, and keeps an accepted tag's text. Every
+-- writer refusal reads here as `MissingTag`. Red if the file is absent or
+-- short, or if the two grammars disagree on any row.
+tagGrammarMatchesVectors : Task.Task Error Bool
+tagGrammarMatchesVectors =
+    do
+        cwd <- System.cwd ()
+        path <- Task.fromResult (Path.fromString (ipeIndexTestFile cwd "repo_tag_vectors.json"))
+        text <- File.readFileLimit path (ByteSize.kib 64)
+        vectors <- Task.fromResult (Decode.decodeString (Decode.list tagVectorDecoder) text)
+        Task.succeed (List.length vectors >= 9 && List.all tagVectorHolds vectors)
+
+
+tagVectorDecoder : Decode.Decoder TagVector
+tagVectorDecoder =
+    Decode.map3 (\name raw refusal -> { name = name, raw = raw, refusal = refusal })
+        (Decode.field "name" Decode.string)
+        (Decode.field "raw" Decode.string)
+        (Decode.field "refusal" (Decode.nullable Decode.string))
+
+
+tagVectorHolds : TagVector -> Bool
+tagVectorHolds v =
+    case v.refusal of
+        Nothing ->
+            Result.map RepoPath.tagName (RepoPath.parseTag v.raw) == Ok v.raw
+
+        Just _ ->
+            tagRefused v.raw
 
 
 -- `parseTag` refuses `raw` as `MissingTag`.
@@ -2805,11 +2842,18 @@ viewHashVectors =
 -- the `tools/code-review` working directory without a `..` segment.
 vectorsPath : String -> String
 vectorsPath cwd =
+    ipeIndexTestFile cwd "view_hash_vectors.json"
+
+
+-- A file in `tools/ipe-index/tests`, reached from the `tools/code-review`
+-- working directory without a `..` segment.
+ipeIndexTestFile : String -> String -> String
+ipeIndexTestFile cwd name =
     let
         segments =
             String.split "/" cwd
     in
-    String.join "/" (List.take (List.length segments - 1) segments) ++ "/ipe-index/tests/view_hash_vectors.json"
+    String.join "/" (List.take (List.length segments - 1) segments) ++ "/ipe-index/tests/" ++ name
 
 
 vectorDecoder : Decode.Decoder HashVector
@@ -3145,6 +3189,7 @@ displayAndStartupChecks =
         , Task.succeed ( "progress counts decided over decided-or-queued units", progressCountsDecidedUnits )
         , Task.map (\ok -> ( "progress total holds while the queue drains", ok )) progressStableAcrossDrain
         , Task.map (\ok -> ( "startup probes name the variable and the file", ok )) probesNameTheirVariable
+        , Task.map (\ok -> ( "tag grammar matches the shared ipe-index tag vectors", ok )) tagGrammarMatchesVectors
         ]
 
 
