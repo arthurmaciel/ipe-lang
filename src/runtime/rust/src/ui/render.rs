@@ -2104,6 +2104,10 @@ mod tests {
             min.contains("flex-grow:1;flex-basis:0"),
             "min fill grows: {min}"
         );
+        assert!(
+            min.starts_with("width:max(100px,100%);"),
+            "minimum is a lower bound: {min}"
+        );
         assert!(min.ends_with("min-width:100px"), "minimum floors: {min}");
 
         let max = size_css(
@@ -2116,6 +2120,10 @@ mod tests {
         assert!(
             max.contains("flex-grow:1;flex-basis:0;min-width:0"),
             "max fill grows: {max}"
+        );
+        assert!(
+            max.starts_with("width:min(200px,100%);"),
+            "maximum is an upper bound: {max}"
         );
         assert!(max.ends_with(";max-width:200px"), "maximum caps: {max}");
 

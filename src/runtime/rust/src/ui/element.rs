@@ -45,6 +45,10 @@ impl Length {
     /// that divides free space depends on the parent's flex axis, so the
     /// parent-aware `render::size_css` emits it, not this context-free renderer.
     ///
+    /// `Min(n, l)` is a lower bound (CSS `max(npx, l)`, never below `n`) and
+    /// `Max(n, l)` an upper bound (CSS `min(npx, l)`, never above `n`), the same
+    /// bounds the TUI layout applies.
+    ///
     /// The shared `Px`/`Vh`/`Vw` units are spelled by the one runtime renderer
     /// ([`crate::length::CssUnit`]); `Ipe.Ui`'s `Length` is a surface carrier
     /// that funnels those shared shapes into `ipe_runtime::length` rather than
@@ -58,8 +62,8 @@ impl Length {
             Self::Px(n) => CssUnit::Px.css(*n),
             Self::Content => "auto".to_owned(),
             Self::Fill(_) => "100%".to_owned(),
-            Self::Min(n, inner) => format!("min({},{})", CssUnit::Px.css(*n), inner.css()),
-            Self::Max(n, inner) => format!("max({},{})", CssUnit::Px.css(*n), inner.css()),
+            Self::Min(n, inner) => format!("max({},{})", CssUnit::Px.css(*n), inner.css()),
+            Self::Max(n, inner) => format!("min({},{})", CssUnit::Px.css(*n), inner.css()),
             Self::Vh(n) => CssUnit::Vh.css(*n),
             Self::Vw(n) => CssUnit::Vw.css(*n),
         }
@@ -357,8 +361,11 @@ mod tests {
         let style =
             super::super::render::block_style_string(&[Attribute::<Msg>::AttrWidth(len.clone())]);
 
-        assert_eq!(direct, "max(320px,80vh)");
+        assert_eq!(direct, "min(320px,80vh)");
         assert_eq!(style, format!("width:{direct}"));
+
+        let floor = Length::Min(100, Box::new(Length::Fill(1)));
+        assert_eq!(floor.css(), "max(100px,100%)", "minimum is a lower bound");
     }
 
     // Cross-language SSOT equivalence: `Length::css` output must be byte-for-byte
