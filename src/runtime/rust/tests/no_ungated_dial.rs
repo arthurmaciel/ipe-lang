@@ -30,7 +30,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use proc_macro2::{TokenStream, TokenTree};
-use std::path::Path;
 use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
@@ -1853,7 +1852,7 @@ use source_tree::rust_sources;
 /// dial names a file the walk read.
 #[test]
 fn every_runtime_source_passes_every_dial_rule() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let root = e2e_support::manifest_dir!().join("src");
     let sources = rust_sources(&root);
     let read = |file: &str| sources.iter().any(|(name, _)| name == file);
     for required in [

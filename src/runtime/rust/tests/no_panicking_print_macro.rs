@@ -18,7 +18,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use proc_macro2::{TokenStream, TokenTree};
-use std::path::Path;
 use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
 use syn::{
@@ -374,7 +373,7 @@ fn a_source_that_does_not_parse_fails_the_scan() {
 /// calls no panicking print macro outside test-only code.
 #[test]
 fn no_runtime_source_calls_a_panicking_print_macro() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let root = e2e_support::manifest_dir!().join("src");
     let sources = rust_sources(&root);
     for required in [
         "system.rs",

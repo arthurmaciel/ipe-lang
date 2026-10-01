@@ -80,12 +80,9 @@ fn todo_writes_located_message_to_stderr_and_exits_nonzero() {
         run_todo_subprocess();
     }
 
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(_) => return, // cannot locate self — skip gracefully
-    };
+    let exe = std::env::current_exe().expect("the test binary must locate itself");
 
-    let output = match std::process::Command::new(&exe)
+    let output = std::process::Command::new(&exe)
         .env(SUBPROCESS_SENTINEL, "1")
         .args([
             "--test-threads=1",
@@ -93,10 +90,7 @@ fn todo_writes_located_message_to_stderr_and_exits_nonzero() {
         ])
         .env("RUST_TEST_NOCAPTURE", "1")
         .output()
-    {
-        Ok(o) => o,
-        Err(_) => return, // cannot spawn — skip gracefully
-    };
+        .expect("the test binary must re-spawn itself");
 
     // The child must exit non-zero.
     assert!(

@@ -487,7 +487,7 @@ fn pinned_allows(rel: &str) -> usize {
 
 /// The workspace root.
 fn workspace() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    e2e_support::manifest_dir!().join("../..")
 }
 
 /// Every scanned file under `src/`, `tools/`, and `examples/` whose path
@@ -1828,7 +1828,7 @@ mod lexical {
 
     /// The workspace root.
     fn workspace() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+        e2e_support::manifest_dir!().join("../..")
     }
 
     #[test]

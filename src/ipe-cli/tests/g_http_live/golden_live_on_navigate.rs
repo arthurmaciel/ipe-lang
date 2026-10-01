@@ -15,17 +15,17 @@
 //!   form is reserved for apps that omit `onNavigate`.
 //!
 //! Pure ipe-pipeline check (parse → canon → types → lower → emit); no cargo
-//! build. Skips if the embedded runtime cannot be resolved.
+//! build.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let joined = e2e_support::manifest_dir!().join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
 /// Compile the on-disk `live_on_navigate` golden and return the emitted
-/// `main.rs`. `None` (skip) when the embedded runtime cannot be resolved.
+/// `main.rs`.
 ///
 /// `slug` uniquely names the emit directory per test: both tests in this file
 /// compile the same golden but run as separate nextest processes sharing one
@@ -34,7 +34,7 @@ fn repo_root() -> PathBuf {
 // test scaffolding: an ipe-compile failure or a missing emitted file IS the
 // failure signal we want to surface loudly.
 #[allow(clippy::expect_used)]
-fn emit_main_rs(slug: &str) -> Option<String> {
+fn emit_main_rs(slug: &str) -> String {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -45,11 +45,11 @@ fn emit_main_rs(slug: &str) -> Option<String> {
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("live_on_navigate_emit_{slug}"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = ipe::resolve_runtime().ok()?;
+    let runtime = e2e_support::require_runtime().into_path_buf();
     ipe::build(&entry, &out, &runtime).expect("onNavigate routed app must ipe-compile");
     // A layout builder is compiled-source Ipê now, so a home may lower to
     // `src/ipe_mods/*.rs` — scan the WHOLE emitted Ipê-side tree.
-    Some(crate::support::read_all_emitted_src(&out))
+    crate::support::read_all_emitted_src(&out)
 }
 
 /// The `onNavigate` cfg field makes the runtime `set_page` closure route the
@@ -57,9 +57,7 @@ fn emit_main_rs(slug: &str) -> Option<String> {
 /// `page`-field write.
 #[test]
 fn on_navigate_dispatches_matched_page_through_update() {
-    let Some(main_rs) = emit_main_rs("dispatch") else {
-        return;
-    };
+    let main_rs = emit_main_rs("dispatch");
     assert!(
         main_rs.contains("web_app_routed"),
         "a Model with a `page` field must emit `web_app_routed`",
@@ -82,9 +80,7 @@ fn on_navigate_dispatches_matched_page_through_update() {
 /// an app that supplies `onNavigate` must never emit it.
 #[test]
 fn on_navigate_present_suppresses_magic_page_struct_update() {
-    let Some(main_rs) = emit_main_rs("suppress") else {
-        return;
-    };
+    let main_rs = emit_main_rs("suppress");
     assert!(
         !main_rs.contains("{ page: __page, ..__model }"),
         "onNavigate present ⇒ the runtime must NOT struct-update the `page` \
