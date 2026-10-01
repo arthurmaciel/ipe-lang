@@ -144,6 +144,40 @@ impl ContainedRelPath {
     }
 }
 
+/// A path resolved by [`std::fs::canonicalize`].
+///
+/// The value is absolute, every symlink on it followed, with no `.` or `..`
+/// component. Containment is decided only between two values of this type, so
+/// a relative, `..`-bearing, or symlinked spelling is never compared against a
+/// resolved root. Its role is source-analysis containment; a jail bind uses
+/// `ipe_sandbox::CanonicalPath`, whose refusals name the jail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedPath(PathBuf);
+
+impl ResolvedPath {
+    /// Canonicalise `path`, which must exist.
+    ///
+    /// # Errors
+    ///
+    /// The [`std::io::Error`] [`std::fs::canonicalize`] returns: `NotFound`
+    /// for a path that does not exist.
+    pub fn of(path: &Path) -> std::io::Result<Self> {
+        std::fs::canonicalize(path).map(Self)
+    }
+
+    /// Whether `self` lies strictly beneath `root`, never `root` itself.
+    #[must_use]
+    pub fn is_strictly_under(&self, root: &Self) -> bool {
+        self.0 != root.0 && self.0.starts_with(&root.0)
+    }
+
+    /// The resolved path.
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +345,61 @@ mod tests {
             crp.resolved(),
             canon_src.join("Generated"),
             "the resolved path is the canonical existing ancestor plus the new tail"
+        );
+    }
+
+    // ── ResolvedPath ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn resolved_path_is_strictly_under_its_parent_only() {
+        let root = fresh_root("resolved_under");
+        std::fs::write(root.join("src/X.ipe"), "").expect("write X.ipe");
+        let src = ResolvedPath::of(&root.join("src"));
+        let file = ResolvedPath::of(&root.join("src/../src/X.ipe"));
+        let top = ResolvedPath::of(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        let (src, file, top) = (
+            src.expect("src/ resolves"),
+            file.expect("a `..`-bearing spelling of X.ipe resolves"),
+            top.expect("root resolves"),
+        );
+        assert!(file.is_strictly_under(&src));
+        assert!(file.is_strictly_under(&top));
+        assert!(
+            !src.is_strictly_under(&src),
+            "a root is not strictly under itself"
+        );
+        assert!(
+            !top.is_strictly_under(&src),
+            "a parent is not under its child"
+        );
+    }
+
+    #[test]
+    fn resolved_path_refuses_a_missing_path_as_not_found() {
+        let root = fresh_root("resolved_missing");
+        let result = ResolvedPath::of(&root.join("src/Missing.ipe"));
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            matches!(&result, Err(e) if e.kind() == std::io::ErrorKind::NotFound),
+            "a missing path must be a NotFound refusal, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn resolved_path_prefix_is_component_wise() {
+        let root = fresh_root("resolved_prefix");
+        std::fs::create_dir_all(root.join("srcx")).expect("create srcx/");
+        let src = ResolvedPath::of(&root.join("src"));
+        let sibling = ResolvedPath::of(&root.join("srcx"));
+        let _ = std::fs::remove_dir_all(&root);
+        let (src, sibling) = (
+            src.expect("src/ resolves"),
+            sibling.expect("srcx/ resolves"),
+        );
+        assert!(
+            !sibling.is_strictly_under(&src),
+            "`srcx` shares a string prefix with `src` but is not under it"
         );
     }
 
