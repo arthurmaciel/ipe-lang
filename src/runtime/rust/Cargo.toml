@@ -688,3 +688,5 @@ unsafe_code = "deny"
 # inventoried by tools/panic-scan.
 unwrap_used = "deny"
 expect_used = "deny"
+# Mirrors the workspace `mem_forget` deny: a forgotten `Drop` guard leaks.
+mem_forget = "deny"

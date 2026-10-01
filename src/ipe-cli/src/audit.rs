@@ -283,8 +283,8 @@ fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
         path: path.clone(),
         source: e,
     })?;
-    // Caller cleans up via `remove_dir_all` after use; Drop is skipped here.
-    std::mem::forget(scratch);
+    // The caller removes the directory via `remove_dir_all` after use.
+    let _dir = scratch.into_path();
     Ok(path)
 }
 
@@ -886,11 +886,8 @@ fn audit_scratch_dir(package: &str) -> Result<PathBuf, CliError> {
         path: PathBuf::from(&prefix),
         source: e,
     })?;
-    let path = scratch.path().to_path_buf();
-    // The directory is cleaned up by the caller's best-effort `remove_dir_all`;
-    // we transfer ownership of the path and skip Drop here.
-    std::mem::forget(scratch);
-    Ok(path)
+    // The caller removes the directory with a best-effort `remove_dir_all`.
+    Ok(scratch.into_path())
 }
 
 // ===========================================================================

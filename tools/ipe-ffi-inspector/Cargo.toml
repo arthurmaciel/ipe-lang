@@ -21,6 +21,8 @@ ipe-test-temp = { path = "../test-temp" }
 unsafe_code = "deny"
 
 [lints.clippy]
+# Mirrors the workspace `mem_forget` deny: a forgotten `Drop` guard leaks.
+mem_forget = "deny"
 # unwrap/expect/panic are used in test assertions and controlled CLI
 # exit-on-error paths; the token-level panic-scan gate governs those, not the
 # clippy lint groups. The pedantic/style/complexity/correctness groups ARE

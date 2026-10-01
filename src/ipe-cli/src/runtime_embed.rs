@@ -581,8 +581,7 @@ mod tests {
     #[test]
     fn mismatched_runtime_version_is_rejected() {
         let sd = crate::scratch::ScratchDir::new("ipe-runtime-version-test").expect("scratch dir");
-        let dir = sd.path().to_path_buf();
-        std::mem::forget(sd); // caller's explicit remove_dir_all handles cleanup
+        let dir = sd.into_path(); // the test's explicit remove_dir_all cleans up
         let bogus = "0.0.0-stale";
         assert_ne!(bogus, COMPILER_VERSION, "the test version must differ");
         std::fs::write(
@@ -615,8 +614,7 @@ mod tests {
     #[test]
     fn matching_runtime_version_is_accepted() {
         let sd = crate::scratch::ScratchDir::new("ipe-runtime-version-ok").expect("scratch dir");
-        let dir = sd.path().to_path_buf();
-        std::mem::forget(sd); // caller's explicit remove_dir_all handles cleanup
+        let dir = sd.into_path(); // the test's explicit remove_dir_all cleans up
         std::fs::write(
             dir.join(MANIFEST),
             format!("[package]\nname = \"{RUNTIME_PACKAGE}\"\nversion = \"{COMPILER_VERSION}\"\n"),
