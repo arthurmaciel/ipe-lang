@@ -11,7 +11,7 @@ import Ipe.List as List
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Task as Task
-import Lib.RepoPath as RepoPath exposing (Root)
+import Lib.RepoPath as RepoPath exposing (RootMap)
 import Lib.Settings as Settings
 
 
@@ -48,7 +48,7 @@ unitByUidSql =
 
 
 -- One unit by uid (decided or not), with its source slice resolved against
--- the index root; Nothing when no such unit exists.
+-- its tag's index root; Nothing when no such unit exists.
 loadUnitByUid : String -> Task.Task Error (Maybe Unit)
 loadUnitByUid uid =
     do
@@ -57,7 +57,7 @@ loadUnitByUid uid =
         rows <- Db.queryDecode conn unitByUidSql [ SqlString uid ] rowDecoder
         case List.head rows of
             Just row ->
-                Task.map Just (loadSource settings.root row)
+                Task.map Just (loadSource settings.roots row)
 
             Nothing ->
                 Task.succeed Nothing
@@ -279,7 +279,7 @@ enqueuedAtDecoder =
 
 
 -- One page of queue units (new + modified) at `cursor`, at most `pageSize`
--- rows, each with its source slice resolved against the index root.
+-- rows, each with its source slice resolved against its tag's index root.
 loadPendingPage : Cursor -> Task.Task Error (List PendingRow)
 loadPendingPage cursor =
     let
@@ -291,7 +291,7 @@ loadPendingPage cursor =
         conn <- Db.open "sqlite" (Settings.indexReadUrl settings.db)
         rows <- Db.queryDecode conn sql params pendingRowDecoder
         rows
-            |> List.map (\( row, at ) -> Task.map (\unit -> { unit = unit, enqueuedAt = at }) (loadSource settings.root row))
+            |> List.map (\( row, at ) -> Task.map (\unit -> { unit = unit, enqueuedAt = at }) (loadSource settings.roots row))
             |> Task.sequence
 
 
@@ -390,9 +390,9 @@ nameFor conn uid =
 -- unit whose stored path is refused by `RepoPath.resolve`, or whose file
 -- cannot be read or exceeds `sourceCeiling`, is a real problem, not a row to
 -- silently skip.
-loadSource : Root -> RowUnit -> Task.Task Error Unit
-loadSource root row =
-    case RepoPath.resolve root row.path of
+loadSource : RootMap -> RowUnit -> Task.Task Error Unit
+loadSource roots row =
+    case RepoPath.resolve roots row.path of
         Err refusal ->
             Task.fail (RepoPath.toError refusal)
 

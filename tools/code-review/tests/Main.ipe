@@ -1,5 +1,6 @@
 module Main exposing (main)
 
+import Ipe.Char as Char
 import Ipe.Db as Db
 import Ipe.Db.Sql as Sql
 import Ipe.Dict as Dict
@@ -20,7 +21,8 @@ import Lib.Index as Index
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
 import Lib.Queue as Queue exposing (QueueState(..))
-import Lib.RepoPath as RepoPath exposing (PathError(..))
+import Lib.RepoPath as RepoPath exposing (PathError(..), Root, RootMap)
+import Lib.SafeText as SafeText
 import Lib.Settings as Settings
 
 
@@ -945,8 +947,17 @@ refusalName err =
         InvalidRelative _ _ ->
             "invalid"
 
+        UnknownTag _ ->
+            "unknown-tag"
+
         NotUnderRoot _ _ ->
             "not-under-root"
+
+        NoRoots ->
+            "no-roots"
+
+        DuplicateTag _ ->
+            "duplicate-tag"
 
 
 refusedAs : String -> Result PathError Path.Path -> Bool
@@ -968,7 +979,7 @@ refusalNames fragment result =
             False
 
         Err err ->
-            String.contains fragment (RepoPath.describe err)
+            String.contains fragment (SafeText.toString (RepoPath.describe err))
 
 
 refused : Result PathError Path.Path -> Bool
@@ -1006,14 +1017,26 @@ relativeFromCwd abs =
             )
 
 
+-- A root map binding each `( tag, root )`, failing the task on a refusal.
+mapOf : List ( String, Root ) -> Task.Task Error RootMap
+mapOf bindings =
+    bindings
+        |> List.map (\( name, root ) -> RepoPath.parseTag name |> Result.map (\tag -> ( tag, root )))
+        |> Result.combine
+        |> Result.andThen RepoPath.rootMap
+        |> Result.mapError RepoPath.toError
+        |> Task.fromResult
+
+
 storedPathRefusals : Task.Task Error Bool
 storedPathRefusals =
     do
         cwd <- System.cwd ()
-        root <- RepoPath.parseRoot cwd
+        cwdRoot <- RepoPath.parseRoot cwd
+        root <- mapOf [ ( "ipe", cwdRoot ) ]
         let
             base =
-                Path.toString (RepoPath.rootPath root)
+                Path.toString (RepoPath.rootPath cwdRoot)
         in
         Task.succeed
             (List.all identity
@@ -1052,12 +1075,407 @@ relativeRootAccepted =
         rel <- relativeFromCwd (Path.toString cwdPath)
         root <- RepoPath.parseRoot rel
         dotRoot <- RepoPath.parseRoot "."
+        System.setenv "IPE_INDEX_DB" (cwd ++ "/unused-index.db")
+        System.setenv "IPE_INDEX_ROOT" rel
+        settings <- Settings.indexSettings
         Task.succeed
             (Path.toString (RepoPath.rootPath root)
                 == Path.toString cwdPath
                 && Path.toString (RepoPath.rootPath dotRoot)
                 == Path.toString cwdPath
-                && resolvesTo (Path.toString cwdPath ++ "/package.ipe") (RepoPath.resolve root "ipe:package.ipe")
+                && resolvesTo (Path.toString cwdPath ++ "/package.ipe") (RepoPath.resolve settings.roots "ipe:package.ipe")
+                && refusedAs "unknown-tag" (RepoPath.resolve settings.roots "other:package.ipe")
+                && Result.map RepoPath.tagName Settings.ipeTag
+                == Ok "ipe"
+            )
+
+
+-- A map binding only `ipe` refuses a stored path under any other tag rather
+-- than reading it from the one root it has.
+unknownTagRefused : Task.Task Error Bool
+unknownTagRefused =
+    do
+        cwd <- System.cwd ()
+        cwdRoot <- RepoPath.parseRoot cwd
+        roots <- mapOf [ ( "ipe", cwdRoot ) ]
+        Task.succeed
+            (refusedAs "unknown-tag" (RepoPath.resolve roots "other:src/x.ipe")
+                && refusedAs "unknown-tag" (RepoPath.resolve roots "Ipe:package.ipe")
+                && refusalNames "names a repo tag" (RepoPath.resolve roots "other:src/x.ipe")
+            )
+
+
+-- A directory `File.tempDir` makes unique to this call, holding the two
+-- subdirectories `a` and `b`, so concurrent runs never share roots.
+freshRootBase : Task.Task Error String
+freshRootBase =
+    do
+        base <- File.tempDir "ipe-review-tag-roots-"
+        Task.fromResult (Path.fromString (base ++ "/a")) |> Task.andThen File.mkdirAll
+        Task.fromResult (Path.fromString (base ++ "/b")) |> Task.andThen File.mkdirAll
+        Task.succeed base
+
+
+-- Each tag joins under its own root: with `ipe` bound to A and `other` to B,
+-- `other:f` lands in B and `ipe:f` in A, in either binding order.
+tagSelectsItsRoot : Task.Task Error Bool
+tagSelectsItsRoot =
+    do
+        base <- freshRootBase
+        a <- RepoPath.parseRoot (base ++ "/a")
+        b <- RepoPath.parseRoot (base ++ "/b")
+        ipeFirst <- mapOf [ ( "ipe", a ), ( "other", b ) ]
+        otherFirst <- mapOf [ ( "other", b ), ( "ipe", a ) ]
+        let
+            aDir =
+                Path.toString (RepoPath.rootPath a)
+
+            bDir =
+                Path.toString (RepoPath.rootPath b)
+        in
+        Task.succeed
+            (List.all identity
+                [ resolvesTo (bDir ++ "/f") (RepoPath.resolve ipeFirst "other:f")
+                , resolvesTo (aDir ++ "/f") (RepoPath.resolve ipeFirst "ipe:f")
+                , resolvesTo (bDir ++ "/f") (RepoPath.resolve otherFirst "other:f")
+                , resolvesTo (aDir ++ "/f") (RepoPath.resolve otherFirst "ipe:f")
+                ]
+            )
+
+
+-- The tag grammar is the subset of ipe-index's `split_tag` that reads a
+-- stored path back as tagged: `split_tag` takes a `:` as the separator only
+-- before the first `/`.
+tagGrammarMatchesWriter : Task.Task Error Bool
+tagGrammarMatchesWriter =
+    do
+        cwd <- System.cwd ()
+        cwdRoot <- RepoPath.parseRoot cwd
+        roots <- mapOf [ ( "ipe", cwdRoot ), ( "a", cwdRoot ) ]
+        let
+            base =
+                Path.toString (RepoPath.rootPath cwdRoot)
+        in
+        Task.succeed
+            (List.all identity
+                -- split_tag "a/b:c" = (None, "a/b:c"): the `:` follows a `/`
+                [ refusedAs "missing-tag" (RepoPath.resolve roots "a/b:c")
+                -- split_tag ":x" = (Some(""), "x"): an empty tag no repo carries
+                , refusedAs "missing-tag" (RepoPath.resolve roots ":x")
+                -- split_tag "ipe:a:b" = (Some("ipe"), "a:b")
+                , resolvesTo (base ++ "/a:b") (RepoPath.resolve roots "ipe:a:b")
+                , tagRefused "a/b"
+                , tagRefused "a:b"
+                , tagRefused ""
+                , Result.map RepoPath.tagName (RepoPath.parseTag "ipe") == Ok "ipe"
+                ]
+            )
+
+
+-- `parseTag` refuses `raw` as `MissingTag`.
+tagRefused : String -> Bool
+tagRefused raw =
+    case RepoPath.parseTag raw of
+        Ok _ ->
+            False
+
+        Err err ->
+            refusalName err == "missing-tag"
+
+
+-- A root map is never empty and never binds a tag twice.
+rootMapRefusals : Task.Task Error Bool
+rootMapRefusals =
+    do
+        base <- freshRootBase
+        a <- RepoPath.parseRoot (base ++ "/a")
+        b <- RepoPath.parseRoot (base ++ "/b")
+        ipe <- Task.fromResult (RepoPath.parseTag "ipe" |> Result.mapError RepoPath.toError)
+        Task.succeed
+            (mapRefusedAs "no-roots" (RepoPath.rootMap [])
+                && mapRefusedAs "duplicate-tag" (RepoPath.rootMap [ ( ipe, a ), ( ipe, b ) ])
+                && mapRefusedAs "duplicate-tag" (RepoPath.rootMap [ ( ipe, a ), ( ipe, a ) ])
+            )
+
+
+mapRefusedAs : String -> Result PathError RootMap -> Bool
+mapRefusedAs expected result =
+    case result of
+        Ok _ ->
+            False
+
+        Err err ->
+            refusalName err == expected
+
+
+-- One character as a string, by code point: the language has no `\u{}`
+-- string escape, so hazard characters are built from their decimal code.
+codeText : Int -> String
+codeText code =
+    String.fromChar (Char.fromCode code)
+
+
+noHazard : String -> Bool
+noHazard text =
+    not (String.any SafeText.isHazard text)
+
+
+rendered : String -> String
+rendered raw =
+    SafeText.toString (SafeText.render raw)
+
+
+renderedForeign : String -> String
+renderedForeign raw =
+    SafeText.toString (SafeText.renderForeign raw)
+
+
+-- Every member of the runtime's `is_log_hazard` set
+-- (`src/runtime/rust/src/system.rs`, the definition this table mirrors): `Cc`
+-- 0x00-0x1F and 0x7F-0x9F, U+061C, U+200E-U+200F, U+2028-U+202E (the
+-- separators and U+202A-U+202E), U+2066-U+2069.
+hazardMembers : List Int
+hazardMembers =
+    List.range 0 31
+        ++ List.range 127 159
+        ++ [ 1564 ]
+        ++ List.range 8206 8207
+        ++ List.range 8232 8238
+        ++ List.range 8294 8297
+
+
+-- The code point one step outside each range edge of `hazardMembers`.
+hazardNeighbours : List Int
+hazardNeighbours =
+    [ 32, 126, 160, 1563, 1565, 8205, 8208, 8231, 8239, 8293, 8298 ]
+
+
+-- `render` escapes exactly the hazard set, in `scrub_log_controls`'s spelling,
+-- and passes every neighbour through unchanged.
+safeTextHazardTable : Bool
+safeTextHazardTable =
+    List.all
+        (\code ->
+            SafeText.isHazard (Char.fromCode code)
+                && rendered (codeText code) /= codeText code
+                && noHazard (rendered (codeText code))
+                && noHazard (renderedForeign (codeText code))
+        )
+        hazardMembers
+        && List.all
+            (\code ->
+                not (SafeText.isHazard (Char.fromCode code))
+                    && rendered (codeText code) == codeText code
+                    && renderedForeign (codeText code) == codeText code
+            )
+            hazardNeighbours
+        && List.all identity
+            [ rendered "\n" == "\\n"
+            , rendered "\r" == "\\r"
+            , rendered "\t" == "\\t"
+            , rendered (codeText 0) == "\\u{0}"
+            , rendered (codeText 27) == "\\u{1b}"
+            , rendered (codeText 127) == "\\u{7f}"
+            , rendered (codeText 159) == "\\u{9f}"
+            , rendered (codeText 1564) == "\\u{61c}"
+            , rendered (codeText 8238) == "\\u{202e}"
+            , rendered (codeText 8297) == "\\u{2069}"
+            , rendered "src/plain.ipe" == "src/plain.ipe"
+            , SafeText.toString (SafeText.quoted ("a" ++ codeText 27)) == "\"a\\u{1b}\""
+            ]
+
+
+describeText : PathError -> String
+describeText err =
+    SafeText.toString (RepoPath.describe err)
+
+
+-- A stored path carrying a terminal escape, a CR, an LF or a bidi override
+-- reaches `describe`'s text only as its visible escape.
+describeEscapesStoredPath : Bool
+describeEscapesStoredPath =
+    let
+        osc =
+            describeText (MissingTag (codeText 27 ++ "]0;x" ++ codeText 7))
+
+        cr =
+            describeText (MissingTag "a\rb")
+
+        lf =
+            describeText (MissingTag "a\nb")
+
+        rlo =
+            describeText (MissingTag (codeText 8238 ++ "gpj.exe"))
+    in
+    List.all identity
+        [ String.contains "\\u{1b}]0;x\\u{7}" osc
+        , String.contains "\"a\\rb\"" cr
+        , String.contains "\"a\\nb\"" lf
+        , String.contains "\\u{202e}gpj.exe" rlo
+        , List.all noHazard [ osc, cr, lf, rlo ]
+        ]
+
+
+rootRefusalMessage : String -> Task.Task Error (Maybe String)
+rootRefusalMessage raw =
+    RepoPath.parseRoot raw
+        |> Task.map (\_ -> Nothing)
+        |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
+
+
+-- An `IPE_INDEX_ROOT` value carrying a terminal escape, refused as a missing
+-- directory or as an invalid path, is echoed only escaped.
+rootRefusalEscapesEnv : Task.Task Error Bool
+rootRefusalEscapesEnv =
+    do
+        clear <- rootRefusalMessage (codeText 27 ++ "[2J/nope")
+        nul <- rootRefusalMessage (codeText 27 ++ "[2J" ++ codeText 0 ++ "/nope")
+        Task.succeed
+            (case ( clear, nul ) of
+                ( Just notDir, Just invalid ) ->
+                    String.contains "\\u{1b}[2J/nope" notDir
+                        && String.contains "not a directory" notDir
+                        && String.contains "\\u{1b}[2J" invalid
+                        && String.contains "not a valid path" invalid
+                        && noHazard notDir
+                        && noHazard invalid
+
+                _ ->
+                    False
+            )
+
+
+-- The same refusal with every foreign field replaced: the `case` names every
+-- `PathError` constructor, so a new one cannot join `allPathErrors` without an
+-- arm here.
+withForeign : String -> Error -> PathError -> PathError
+withForeign stored e err =
+    case err of
+        MissingTag _ ->
+            MissingTag stored
+
+        UnknownTag _ ->
+            UnknownTag stored
+
+        InvalidRelative _ _ ->
+            InvalidRelative stored e
+
+        NotUnderRoot _ _ ->
+            NotUnderRoot stored e
+
+        NoRoots ->
+            NoRoots
+
+        DuplicateTag _ ->
+            DuplicateTag stored
+
+
+allPathErrors : List PathError
+allPathErrors =
+    let
+        e =
+            Error.unexpected ""
+    in
+    [ MissingTag "", UnknownTag "", InvalidRelative "" e, NotUnderRoot "" e, NoRoots, DuplicateTag "" ]
+
+
+-- Every `PathError`, fed a hazard-bearing stored path and a hazard-bearing
+-- nested error, describes itself (and converts to an `Error`) free of hazards;
+-- so do the refusals `resolve` builds from hazard-bearing stored paths.
+diagnosticsNeverRaw : Task.Task Error Bool
+diagnosticsNeverRaw =
+    let
+        hazards =
+            codeText 27 ++ "]0;pwn" ++ codeText 7 ++ "\r\n" ++ codeText 8238 ++ codeText 133 ++ codeText 8233
+
+        nested =
+            Error.invalidInput hazards
+
+        clean err =
+            noHazard (describeText err) && noHazard (Error.message (RepoPath.toError err))
+
+        resolvedClean roots stored =
+            case RepoPath.resolve roots stored of
+                Ok _ ->
+                    False
+
+                Err err ->
+                    clean err
+    in
+    do
+        cwd <- System.cwd ()
+        cwdRoot <- RepoPath.parseRoot cwd
+        roots <- mapOf [ ( "ipe", cwdRoot ) ]
+        Task.succeed
+            (List.length allPathErrors == 6
+                && List.all (\err -> clean (withForeign hazards nested err)) allPathErrors
+                && List.all (resolvedClean roots)
+                    [ hazards
+                    , "other:" ++ hazards
+                    , "ipe:" ++ hazards ++ codeText 0
+                    , "ipe:/etc/" ++ hazards
+                    , "ipe:../" ++ hazards
+                    , hazards ++ "/x:y"
+                    ]
+            )
+
+
+-- `render` escapes a literal `\`, so text spelling an escape cannot pass for
+-- the character it names; `renderForeign` leaves `\` alone.
+backslashCannotForge : Bool
+backslashCannotForge =
+    List.all identity
+        [ rendered "\\u{1b}" /= rendered (codeText 27)
+        , rendered "\\u{1b}" == "\\\\u{1b}"
+        , rendered "a\\nb" /= rendered "a\nb"
+        , renderedForeign "a\\b" == "a\\b"
+        , renderedForeign ("a\\" ++ codeText 27) == "a\\\\u{1b}"
+        ]
+
+
+-- `render` escapes `"`, so a quoted foreign value cannot close its own quotes
+-- and fake a boundary in the diagnostic around it.
+quoteCannotForgeBoundary : Bool
+quoteCannotForgeBoundary =
+    List.all identity
+        [ rendered "a\"b" == "a\\\"b"
+        , SafeText.toString (SafeText.quoted "x\" ok \"y") == "\"x\\\" ok \\\"y\""
+        , String.contains "\"ipe:a\\\" has\"" (describeText (MissingTag "ipe:a\" has"))
+        , rendered "\\\"" /= rendered "\""
+        ]
+
+
+-- The sink renders that live in `Lib`: the queue's failure line escapes a
+-- hazard-bearing error.
+sinkRendersEscape : Bool
+sinkRendersEscape =
+    case Queue.queueStatusText (Failed (Error.unexpected (codeText 27 ++ "[2J" ++ codeText 8238))) of
+        Just text ->
+            noHazard text && String.contains "\\u{1b}[2J\\u{202e}" text
+
+        Nothing ->
+            False
+
+
+-- An `IPE_INDEX_DB` value carrying hazards is refused by naming the variable,
+-- never by echoing the value.
+dbRefusalNamesOnlyVariable : Task.Task Error Bool
+dbRefusalNamesOnlyVariable =
+    do
+        cwd <- System.cwd ()
+        System.setenv "IPE_INDEX_ROOT" cwd
+        refusal <- settingsRefusal ("postgres://" ++ codeText 27 ++ "]0;pwn" ++ codeText 7 ++ "/index")
+        Task.succeed
+            (refusedFor "IPE_INDEX_DB" refusal
+                && not (refusedFor "]0;pwn" refusal)
+                && not (refusedFor "postgres://" refusal)
+                && (case refusal of
+                        Just message ->
+                            noHazard message
+
+                        Nothing ->
+                            False
+                   )
             )
 
 
@@ -2030,6 +2448,53 @@ main =
             (\results ->
                 relativeRootAccepted
                     |> Task.map (\ok -> results ++ [ ( "relative root resolves against the working directory", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                unknownTagRefused
+                    |> Task.map (\ok -> results ++ [ ( "stored path under an unbound tag refused", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                tagSelectsItsRoot
+                    |> Task.map (\ok -> results ++ [ ( "each tag joins under its own root", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                tagGrammarMatchesWriter
+                    |> Task.map (\ok -> results ++ [ ( "tag grammar matches the index writer", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                rootMapRefusals
+                    |> Task.map (\ok -> results ++ [ ( "empty and duplicate-tag root maps refused", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                rootRefusalEscapesEnv
+                    |> Task.map (\ok -> results ++ [ ( "root refusal escapes the env value", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                diagnosticsNeverRaw
+                    |> Task.map (\ok -> results ++ [ ( "every path refusal describes itself without raw hazards", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                dbRefusalNamesOnlyVariable
+                    |> Task.map (\ok -> results ++ [ ( "index db refusal names only the variable", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                Task.succeed
+                    (results
+                        ++ [ ( "safe text escapes exactly the log-hazard set", safeTextHazardTable )
+                        , ( "describe escapes the stored path", describeEscapesStoredPath )
+                        , ( "a literal backslash cannot forge an escape", backslashCannotForge )
+                        , ( "a quote cannot forge a quoted boundary", quoteCannotForgeBoundary )
+                        , ( "queue failure line escapes its error", sinkRendersEscape )
+                        ]
+                    )
             )
         |> Task.andThen
             (\results ->
