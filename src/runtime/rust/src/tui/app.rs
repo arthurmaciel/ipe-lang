@@ -153,83 +153,6 @@ impl Drop for TuiGuard {
     }
 }
 
-// A `NoTerminal` refusal must surface as `Unavailable` (the runtime's
-// caller-should-retry-elsewhere kind), carrying the probe's own text
-// verbatim — never folded into `Unexpected` through the bare-`String`
-// `From` bridge a plain `format!(...).into()` would take.
-#[cfg(test)]
-mod tui_enter_error_tests {
-    use super::{TuiEnterError, classify_raw_mode_error};
-    use crate::error::{IpeError, IpeErrorKind};
-    use crate::terminal_access::NoTerminal;
-
-    #[test]
-    fn a_no_terminal_refusal_is_unavailable_with_the_probes_exact_text() {
-        for reason in [
-            NoTerminal::DumbTerm,
-            NoTerminal::NoStdoutTty,
-            NoTerminal::NoControllingTerminal,
-        ] {
-            let err: IpeError = TuiEnterError::NoTerminal(reason).into_task_error();
-            let IpeError::Error(kind, info) = err;
-            assert_eq!(
-                kind,
-                IpeErrorKind::Unavailable,
-                "{reason:?} must be Unavailable, not folded into Unexpected"
-            );
-            assert_eq!(
-                info.message,
-                reason.text(),
-                "the runtime error message must be exactly terminal_access's \
-                 refusal text — the CLI gate and the runtime guard show the \
-                 SAME text, so neither may restate or truncate it"
-            );
-        }
-    }
-
-    // The residual (non-terminal) raw-mode failure stays `Unexpected`: it is
-    // not a fact `terminal_access::probe()` predicted, so it keeps its raw OS
-    // context instead of being reclassified as a terminal refusal.
-    #[test]
-    fn a_residual_raw_mode_failure_stays_unexpected() {
-        let io_err = std::io::Error::other("boom");
-        let err: IpeError = TuiEnterError::RawMode(io_err).into_task_error();
-        let IpeError::Error(kind, info) = err;
-        assert_eq!(kind, IpeErrorKind::Unexpected);
-        assert!(
-            info.message.contains("enable raw mode"),
-            "got: {}",
-            info.message
-        );
-    }
-
-    // `classify_raw_mode_error` is exercised directly on non-unix targets
-    // (where ENXIO cannot be constructed): every residual error stays
-    // `RawMode`, never silently reclassified.
-    #[cfg(not(unix))]
-    #[test]
-    fn non_unix_raw_mode_errors_are_never_reclassified() {
-        let io_err = std::io::Error::other("boom");
-        assert!(matches!(
-            classify_raw_mode_error(io_err),
-            TuiEnterError::RawMode(_)
-        ));
-    }
-
-    // On unix, an ENXIO raw-mode failure is reclassified as the same
-    // `NoControllingTerminal` refusal the pre-check would have raised — the
-    // residual-failure path and the probe path converge on one fact.
-    #[cfg(unix)]
-    #[test]
-    fn unix_enxio_raw_mode_error_is_reclassified_as_no_controlling_terminal() {
-        let io_err = std::io::Error::from_raw_os_error(rustix::io::Errno::NXIO.raw_os_error());
-        assert!(matches!(
-            classify_raw_mode_error(io_err),
-            TuiEnterError::NoTerminal(NoTerminal::NoControllingTerminal)
-        ));
-    }
-}
-
 fn paint(frame: &str) {
     // Clear and frame content are concatenated into one buffer so the terminal
     // emulator receives a single write: the prior content disappears and the new
@@ -2169,5 +2092,82 @@ mod control_wire_seam_tests {
             "a frame with no run loop to apply it is rejected, not silently accepted; \
              got {reply:?}"
         );
+    }
+}
+
+// A `NoTerminal` refusal must surface as `Unavailable` (the runtime's
+// caller-should-retry-elsewhere kind), carrying the probe's own text
+// verbatim — never folded into `Unexpected` through the bare-`String`
+// `From` bridge a plain `format!(...).into()` would take.
+#[cfg(test)]
+mod tui_enter_error_tests {
+    use super::{TuiEnterError, classify_raw_mode_error};
+    use crate::error::{IpeError, IpeErrorKind};
+    use crate::terminal_access::NoTerminal;
+
+    #[test]
+    fn a_no_terminal_refusal_is_unavailable_with_the_probes_exact_text() {
+        for reason in [
+            NoTerminal::DumbTerm,
+            NoTerminal::NoStdoutTty,
+            NoTerminal::NoControllingTerminal,
+        ] {
+            let err: IpeError = TuiEnterError::NoTerminal(reason).into_task_error();
+            let IpeError::Error(kind, info) = err;
+            assert_eq!(
+                kind,
+                IpeErrorKind::Unavailable,
+                "{reason:?} must be Unavailable, not folded into Unexpected"
+            );
+            assert_eq!(
+                info.message,
+                reason.text(),
+                "the runtime error message must be exactly terminal_access's \
+                 refusal text — the CLI gate and the runtime guard show the \
+                 SAME text, so neither may restate or truncate it"
+            );
+        }
+    }
+
+    // The residual (non-terminal) raw-mode failure stays `Unexpected`: it is
+    // not a fact `terminal_access::probe()` predicted, so it keeps its raw OS
+    // context instead of being reclassified as a terminal refusal.
+    #[test]
+    fn a_residual_raw_mode_failure_stays_unexpected() {
+        let io_err = std::io::Error::other("boom");
+        let err: IpeError = TuiEnterError::RawMode(io_err).into_task_error();
+        let IpeError::Error(kind, info) = err;
+        assert_eq!(kind, IpeErrorKind::Unexpected);
+        assert!(
+            info.message.contains("enable raw mode"),
+            "got: {}",
+            info.message
+        );
+    }
+
+    // `classify_raw_mode_error` is exercised directly on non-unix targets
+    // (where ENXIO cannot be constructed): every residual error stays
+    // `RawMode`, never silently reclassified.
+    #[cfg(not(unix))]
+    #[test]
+    fn non_unix_raw_mode_errors_are_never_reclassified() {
+        let io_err = std::io::Error::other("boom");
+        assert!(matches!(
+            classify_raw_mode_error(io_err),
+            TuiEnterError::RawMode(_)
+        ));
+    }
+
+    // On unix, an ENXIO raw-mode failure is reclassified as the same
+    // `NoControllingTerminal` refusal the pre-check would have raised — the
+    // residual-failure path and the probe path converge on one fact.
+    #[cfg(unix)]
+    #[test]
+    fn unix_enxio_raw_mode_error_is_reclassified_as_no_controlling_terminal() {
+        let io_err = std::io::Error::from_raw_os_error(rustix::io::Errno::NXIO.raw_os_error());
+        assert!(matches!(
+            classify_raw_mode_error(io_err),
+            TuiEnterError::NoTerminal(NoTerminal::NoControllingTerminal)
+        ));
     }
 }
