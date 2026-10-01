@@ -169,75 +169,6 @@ const SESSION_LOST_BODY: &str = "session not found";
 #[cfg(feature = "server")]
 const CLIENT_JS: &str = include_str!("client.js");
 
-/// The listen scope of this process's web listener, installed once at startup.
-static LISTEN_SCOPE: std::sync::OnceLock<crate::telemetry::ListenScope> =
-    std::sync::OnceLock::new();
-
-/// Record the listen scope of the bind host, before any console gate runs.
-///
-/// The first install wins; a later call leaves the recorded scope unchanged.
-pub fn install_listen_scope(host: &str) {
-    let _ = LISTEN_SCOPE.set(crate::telemetry::ListenScope::parse(host));
-}
-
-/// The installed listen scope; `Exposed` when none is installed.
-#[must_use]
-pub fn listen_scope() -> crate::telemetry::ListenScope {
-    scope_or_exposed(LISTEN_SCOPE.get())
-}
-
-/// An absent scope is `Exposed`: the console default never opens unproven.
-const fn scope_or_exposed(
-    installed: Option<&crate::telemetry::ListenScope>,
-) -> crate::telemetry::ListenScope {
-    match installed {
-        Some(scope) => *scope,
-        None => crate::telemetry::ListenScope::Exposed,
-    }
-}
-
-#[cfg(test)]
-mod listen_scope_tests {
-    use super::scope_or_exposed;
-    use crate::telemetry::ListenScope;
-
-    #[test]
-    fn uninstalled_scope_reads_exposed() {
-        assert_eq!(scope_or_exposed(None), ListenScope::Exposed);
-        assert_eq!(
-            scope_or_exposed(Some(&ListenScope::Loopback)),
-            ListenScope::Loopback
-        );
-    }
-
-    #[test]
-    fn only_a_literal_loopback_address_is_loopback() {
-        for host in [
-            "0.0.0.0",
-            "::",
-            "10.0.0.1",
-            "localhost",
-            "",
-            "not-an-ip",
-            "[::1]",
-            "::ffff:127.0.0.1",
-        ] {
-            assert_eq!(
-                ListenScope::parse(host),
-                ListenScope::Exposed,
-                "bind host {host:?} must read as exposed"
-            );
-        }
-        for host in ["127.0.0.1", "::1", " 127.0.0.1 ", "127.1.2.3"] {
-            assert_eq!(
-                ListenScope::parse(host),
-                ListenScope::Loopback,
-                "bind host {host:?} must read as loopback"
-            );
-        }
-    }
-}
-
 /// Content-addressing for the client asset: computed ONCE at first access via
 /// `OnceLock`. Holds `(hex16, base64full)` where:
 ///   - `hex16` — first 16 hex chars of SHA-256(CLIENT_JS) → used in the URL
@@ -4578,7 +4509,7 @@ where
     // before any console gate reads it: the console default opens only for a
     // dev posture on a loopback listener.
     let host = crate::app_config::resolve_host_bind();
-    install_listen_scope(&host);
+    crate::telemetry::ListenScope::install(&host);
     #[cfg(feature = "http_client")]
     let use_console_proxy = console_proxy::ensure_console_proxy().await;
 

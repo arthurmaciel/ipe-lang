@@ -232,17 +232,28 @@ impl ListenScope {
             })
     }
 
+    /// Record the listen scope of the bind host, before any console gate runs.
+    ///
+    /// The first install wins; a later call leaves the recorded scope unchanged.
+    pub fn install(host: &str) {
+        let _ = LISTEN_SCOPE.set(Self::parse(host));
+    }
+
     /// The listen scope installed by the web server, `Exposed` when none is.
     #[must_use]
-    pub fn from_env() -> Self {
-        #[cfg(feature = "web-core")]
-        {
-            crate::web::listen_scope()
-        }
-        #[cfg(not(feature = "web-core"))]
-        {
-            Self::Exposed
-        }
+    pub fn installed() -> Self {
+        scope_or_exposed(LISTEN_SCOPE.get())
+    }
+}
+
+/// The listen scope of this process's web listener, installed once at startup.
+static LISTEN_SCOPE: std::sync::OnceLock<ListenScope> = std::sync::OnceLock::new();
+
+/// An absent scope is `Exposed`: the console default never opens unproven.
+const fn scope_or_exposed(installed: Option<&ListenScope>) -> ListenScope {
+    match installed {
+        Some(scope) => *scope,
+        None => ListenScope::Exposed,
     }
 }
 
@@ -330,7 +341,7 @@ pub fn dev_open_from_env() -> bool {
     dev_open(
         BuildPosture::COMPILED,
         Posture::from_env(),
-        ListenScope::from_env(),
+        ListenScope::installed(),
     )
 }
 
@@ -497,7 +508,7 @@ impl ConsoleAuthResolution {
             RawEnv::from_read(&read),
             BuildPosture::COMPILED,
             Posture::from_env(),
-            ListenScope::from_env(),
+            ListenScope::installed(),
         )
     }
 
@@ -1730,5 +1741,47 @@ mod tests {
         let body = "<body>café — 日本語</body>";
         let out = inject_dev_banner(body, "<B>");
         assert_eq!(out, "<body>café — 日本語<B></body>");
+    }
+}
+
+#[cfg(test)]
+mod listen_scope_tests {
+    use super::ListenScope;
+    use super::scope_or_exposed;
+
+    #[test]
+    fn uninstalled_scope_reads_exposed() {
+        assert_eq!(scope_or_exposed(None), ListenScope::Exposed);
+        assert_eq!(
+            scope_or_exposed(Some(&ListenScope::Loopback)),
+            ListenScope::Loopback
+        );
+    }
+
+    #[test]
+    fn only_a_literal_loopback_address_is_loopback() {
+        for host in [
+            "0.0.0.0",
+            "::",
+            "10.0.0.1",
+            "localhost",
+            "",
+            "not-an-ip",
+            "[::1]",
+            "::ffff:127.0.0.1",
+        ] {
+            assert_eq!(
+                ListenScope::parse(host),
+                ListenScope::Exposed,
+                "bind host {host:?} must read as exposed"
+            );
+        }
+        for host in ["127.0.0.1", "::1", " 127.0.0.1 ", "127.1.2.3"] {
+            assert_eq!(
+                ListenScope::parse(host),
+                ListenScope::Loopback,
+                "bind host {host:?} must read as loopback"
+            );
+        }
     }
 }
