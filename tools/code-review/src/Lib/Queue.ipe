@@ -1,4 +1,4 @@
-module Lib.Queue exposing (QueuePage, QueueState(..), QueuedUnit, loadPage, pageHeaderText, queueStatusText, stateFromResult)
+module Lib.Queue exposing (QueuePage, QueueState(..), QueuedUnit, decide, loadPage, pageHeaderText, queueStatusText, stateFromResult)
 
 import Ipe.Db as Db
 import Ipe.Error as Error
@@ -41,6 +41,31 @@ type QueueState
     = Loading
     | Loaded QueuePage
     | Failed Error
+
+
+-- The one way a decision is recorded: only a shown source can be decided,
+-- and only after `Index.reverify` re-proves it, so the hash written is the
+-- hash of the bytes the reviewer saw. A stale or unreadable unit is refused
+-- before any I/O.
+decide : Db.Db -> Index.Unit -> LibDb.Decision -> Task.Task Error ( Index.Attested, Int )
+decide db unit decision =
+    case unit.view of
+        Shown shown ->
+            do
+                attested <- Index.reverify shown
+                n <- LibDb.insertDecision db (Index.attestedUid attested) (Index.attestedHash attested) decision
+                Task.succeed ( attested, n )
+
+        Stale _ ->
+            Task.fail notDecidable
+
+        Unreadable _ ->
+            Task.fail notDecidable
+
+
+notDecidable : Error
+notDecidable =
+    Error.conflict "this unit's source is not verified, so it cannot be decided"
 
 
 stateFromResult : Result Error QueuePage -> QueueState

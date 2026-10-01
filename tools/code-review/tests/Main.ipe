@@ -511,7 +511,7 @@ execIndex indexDb sql params =
 -- attestation; every other state withholds it, per unit, without failing the
 -- page.
 type alias Scratch =
-    { repo : String, indexDb : String }
+    { repo : String, indexDb : String, reviewDb : String }
 
 
 scratchAt : String -> Scratch
@@ -520,7 +520,7 @@ scratchAt name =
         base =
             System.getenvOr "TMPDIR" "/tmp" ++ "/" ++ name
     in
-    { repo = base ++ "/repo", indexDb = base ++ "/index.db" }
+    { repo = base ++ "/repo", indexDb = base ++ "/index.db", reviewDb = base ++ "/review.db" }
 
 
 -- Seeds the bridge fixture at `name`, runs `mutate`, loads the first page and
@@ -538,6 +538,140 @@ viewTagsAfter name mutate =
         r <- loadFirstPage
         cleanupIndex at.indexDb at.repo
         Task.succeed (List.map (\u -> u.uid ++ "=" ++ viewTag u.view) r.units)
+
+
+-- ── decisions on attested bytes ─────────────────────────────────────────
+--
+-- A decision is written only through `Queue.decide`, which re-proves the shown
+-- source against the current index row and file. Each case seeds the bridge
+-- fixture, runs `prepare`, loads the page, runs `mutate`, decides `u-a` and
+-- reports whether the decision failed as a conflict and how many review rows
+-- `u-a` holds afterwards.
+decideAfter : String -> (Scratch -> Task.Task Error ()) -> (Scratch -> Task.Task Error ()) -> Decision -> Task.Task Error { conflict : Bool, rows : Int }
+decideAfter name prepare mutate decision =
+    let
+        at =
+            scratchAt name
+    in
+    do
+        removeFileIfAny at.indexDb
+        removeFileIfAny at.reviewDb
+        seedIndex at.indexDb at.repo
+        prepare at
+        r <- loadFirstPage
+        mutate at
+        db <- openReviewAt at.reviewDb
+        migrated <- LibDb.migrate db
+        conflict <- decideOutcome db (List.find (\u -> u.uid == "u-a") r.units) decision
+        rows <- countUidRows db "u-a"
+        cleanupIndex at.indexDb at.repo
+        removeFileIfAny at.reviewDb
+        Task.succeed { conflict = conflict, rows = rows }
+
+
+-- True when deciding `found` fails with a conflict; False when it succeeds,
+-- fails otherwise, or the unit was not loaded.
+decideOutcome : Db -> Maybe Index.Unit -> Decision -> Task.Task Error Bool
+decideOutcome db found decision =
+    case found of
+        Just unit ->
+            Queue.decide db unit decision
+                |> Task.map (\_ -> False)
+                |> Task.onError (\e -> Task.succeed (Error.kind e == Error.kind (Error.conflict "")))
+
+        Nothing ->
+            Task.succeed False
+
+
+countUidRows : Db -> String -> Task.Task Error Int
+countUidRows db uid =
+    Db.findWhere db "review" (Sql.eq (Sql.column "uid") (Sql.string uid))
+        |> Task.map List.length
+
+
+noChange : Scratch -> Task.Task Error ()
+noChange _ =
+    Task.succeed ()
+
+
+driftLib : Scratch -> Task.Task Error ()
+driftLib at =
+    writeFileText (at.repo ++ "/src/Lib.rs") ("// inserted above\n" ++ fixtureLibRs)
+
+
+-- The control: an unchanged shown unit is decided under its attested hash.
+decideRecordsShownHash : Task.Task Error Bool
+decideRecordsShownHash =
+    let
+        at =
+            scratchAt "ipe-index-decide-ok"
+    in
+    do
+        removeFileIfAny at.indexDb
+        removeFileIfAny at.reviewDb
+        seedIndex at.indexDb at.repo
+        r <- loadFirstPage
+        db <- openReviewAt at.reviewDb
+        migrated <- LibDb.migrate db
+        recorded <-
+            case List.find (\u -> u.uid == "u-a") r.units of
+                Just unit ->
+                    Queue.decide db unit Approved
+                        |> Task.map (\( a, n ) -> n == 1 && Index.attestedUid a == "u-a" && Index.attestedHash a == Index.attest viewA)
+
+                Nothing ->
+                    Task.succeed False
+        rows <- countReviewRows db "u-a" (Index.attest viewA)
+        cleanupIndex at.indexDb at.repo
+        removeFileIfAny at.reviewDb
+        Task.succeed (recorded && rows == 1)
+
+
+-- R4: the file drifts after the page showed it. Red if `reverify` is removed
+-- from `decide` (the shown hash would be written).
+approveRefusedAfterDrift : Task.Task Error Bool
+approveRefusedAfterDrift =
+    decideAfter "ipe-index-decide-drift" noChange driftLib Approved
+        |> Task.map (\o -> o.conflict && o.rows == 0)
+
+
+-- R5: a re-index after the page loaded: the file and the stored hash move
+-- together to new content, so the fresh row verifies on its own. Red if the
+-- fresh hash is not compared with the shown hash.
+approveRefusedAfterReindex : Task.Task Error Bool
+approveRefusedAfterReindex =
+    let
+        reindex at =
+            Task.map2 (\_ _ -> ())
+                (writeFileText (at.repo ++ "/src/Lib.rs") (String.replace "42" "43" fixtureLibRs))
+                (execIndex at.indexDb "UPDATE units SET body_hash = ? WHERE uid = ?" [ SqlString (Index.attest (String.replace "42" "43" viewA)), SqlString "u-a" ])
+    in
+    decideAfter "ipe-index-decide-reindex" noChange reindex Approved
+        |> Task.map (\o -> o.conflict && o.rows == 0)
+
+
+-- R6: the unit's row is gone from the index after the page loaded.
+approveRefusedAfterUnitDeleted : Task.Task Error Bool
+approveRefusedAfterUnitDeleted =
+    decideAfter "ipe-index-decide-deleted"
+        noChange
+        (\at -> execIndex at.indexDb "DELETE FROM units WHERE uid = ?" [ SqlString "u-a" ])
+        (Refused "x")
+        |> Task.map (\o -> o.conflict && o.rows == 0)
+
+
+-- R7: a unit loaded stale is refused by `decide` itself, for a refusal as
+-- well as an approval.
+staleRefuseAlsoRefused : Task.Task Error Bool
+staleRefuseAlsoRefused =
+    decideAfter "ipe-index-decide-stale" driftLib noChange (Refused "x")
+        |> Task.map (\o -> o.conflict && o.rows == 0)
+
+
+-- True for an `Unreadable` view tag whose rendered error contains `needle`.
+unreadableNaming : String -> String -> Bool
+unreadableNaming needle tag =
+    String.startsWith "unreadable: " tag && String.contains needle tag
 
 
 -- R1: one line inserted above the unit moves its bytes; the stored hash no
@@ -1993,10 +2127,7 @@ oversizedSourceRefused =
         writeFileText (repo ++ "/src/Lib.rs") (String.repeat (16 * 1024 * 1024 + 1) "x")
         r <- loadFirstPage
         cleanupIndex indexDb repo
-        let
-            tag =
-                unitViewTag "u-a" r.units
-        Task.succeed (String.startsWith "unreadable: " tag && String.contains "16777216-byte limit" tag)
+        Task.succeed (unreadableNaming "16777216-byte limit" (unitViewTag "u-a" r.units))
 
 
 -- ── decision drain loop ─────────────────────────────────────────────────
@@ -2625,7 +2756,7 @@ vectorHolds v =
                 _ ->
                     False
 
-        Err (Index.RangeOutOfFile _) ->
+        Err (RangeOutOfFile _) ->
             v.view == Nothing && v.hash == Nothing
 
         Err _ ->
@@ -2852,6 +2983,31 @@ main =
             (\results ->
                 oneMissingFileIsolated
                     |> Task.map (\ok -> results ++ [ ( "one missing file fails only its unit", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                decideRecordsShownHash
+                    |> Task.map (\ok -> results ++ [ ( "a shown unit is decided under its attested hash", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                approveRefusedAfterDrift
+                    |> Task.map (\ok -> results ++ [ ( "a decision after the file drifted is refused", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                approveRefusedAfterReindex
+                    |> Task.map (\ok -> results ++ [ ( "a decision after a re-index is refused", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                approveRefusedAfterUnitDeleted
+                    |> Task.map (\ok -> results ++ [ ( "a decision on a unit gone from the index is refused", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                staleRefuseAlsoRefused
+                    |> Task.map (\ok -> results ++ [ ( "a stale unit cannot be refused either", ok ) ])
             )
         |> Task.andThen
             (\results ->
