@@ -2833,6 +2833,55 @@ fn resolve_analysis_target_drops_a_tests_root_that_is_the_project_root() {
     );
 }
 
+/// A `tests/` root that exists but cannot be canonicalised (a self-loop
+/// symlink, `ELOOP`) is an I/O refusal, never silently treated as absent.
+#[cfg(unix)]
+#[test]
+fn resolve_analysis_target_refuses_an_unresolvable_tests_root() {
+    let tmp = analysis_project("ipe_resolve_target_tests_root_eloop");
+    let tests_link = tmp.join("tests");
+    std::os::unix::fs::symlink("tests", &tests_link).expect("symlink tests -> tests");
+    let arg = tmp.join("src").join("Main.ipe");
+
+    let target = resolve_analysis_target(&arg);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(
+        matches!(&target, Err(CliError::Io { path, .. }) if path.file_name() == tests_link.file_name()),
+        "an unresolvable tests root must refuse with an I/O error on that \
+         root, not fall back to no tests root: {target:?}"
+    );
+}
+
+/// With `sourceRoot = "."` the `tests/` root lies inside the source root, so a
+/// `tests/X.ipe` is under both; the tests root wins and it resolves `TestFile`.
+#[test]
+fn resolve_analysis_target_prefers_test_file_when_tests_is_inside_src_root() {
+    let tmp = ipe_test_temp::temp_root().join("ipe_resolve_target_tests_inside_src_root");
+    let _ = fs::remove_dir_all(&tmp);
+    let tests_dir = tmp.join("tests");
+    fs::create_dir_all(&tests_dir).expect("create tests/");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"app\", sourceRoot = \".\" }\n",
+    )
+    .expect("pkg");
+    let tests_x = tests_dir.join("X.ipe");
+    fs::write(&tests_x, "module X exposing (x)\nx = 1\n").expect("tests/X.ipe");
+    let expected = AnalysisTarget::TestFile {
+        file: resolved(&tests_x),
+        src_root: resolved(&tmp),
+        tests_root: resolved(&tests_dir),
+    };
+
+    let target = resolve_analysis_target(&tests_x);
+    let _ = fs::remove_dir_all(&tmp);
+    assert_eq!(
+        target.expect("resolves"),
+        expected,
+        "a file under both tests/ and the source root resolves to TestFile"
+    );
+}
+
 /// A `tests/Main.ipe` that imports a plain `src/` module type-checks green
 /// over the `tests ∪ src` module set.
 #[test]
