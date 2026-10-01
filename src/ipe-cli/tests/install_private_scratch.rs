@@ -333,7 +333,7 @@ fn scratch_base_verdict_refuses_empty_or_unexpected_reason_output() -> io::Resul
     }
 
     let r = root("install-reason-token")?;
-    let base = r.child("base");
+    let base = leaf(&r, "base")?;
     mkdir_mode(&base, 0o700)?;
     let base_arg = base.to_string_lossy().into_owned();
     for stub in [
@@ -360,7 +360,7 @@ fn scratch_base_verdict_refuses_empty_or_unexpected_reason_output() -> io::Resul
 #[test]
 fn trusted_tmp_base_refuses_a_base_nested_too_deep() -> io::Result<()> {
     let r = root("install-too-deep")?;
-    let mut deep = r.child("deep");
+    let mut deep = leaf(&r, "deep")?;
     for _ in 0..300 {
         deep.push("a");
     }
@@ -384,7 +384,7 @@ fn trusted_tmp_base_refuses_a_base_nested_too_deep() -> io::Result<()> {
 #[test]
 fn trusted_tmp_base_refuses_a_component_ls_cannot_describe() -> io::Result<()> {
     let r = root("install-unreadable")?;
-    let base = r.child("base");
+    let base = leaf(&r, "base")?;
     mkdir_mode(&base, 0o700)?;
     let base_arg = base.to_string_lossy().into_owned();
     let body = format!("ls() {{ return 2; }}\n{REFUSAL_REPORT}");
@@ -405,7 +405,7 @@ fn trusted_tmp_base_refuses_a_component_ls_cannot_describe() -> io::Result<()> {
 #[test]
 fn trusted_tmp_base_names_the_refused_ancestor_not_the_leaf() -> io::Result<()> {
     let r = root("install-refused-ancestor")?;
-    let open = r.child("open");
+    let open = leaf(&r, "open")?;
     mkdir_mode(&open, 0o777)?;
     let leaf = open.join("leaf");
     mkdir_mode(&leaf, 0o700)?;
@@ -434,11 +434,11 @@ fn trusted_tmp_base_names_the_refused_ancestor_not_the_leaf() -> io::Result<()> 
         );
     }
 
-    let missing = r.child("missing").to_string_lossy().into_owned();
+    let missing = leaf(&r, "missing")?.to_string_lossy().into_owned();
     let report = String::from_utf8_lossy(&helper_stdout(REFUSAL_REPORT, &[&missing])?).into_owned();
     assert_eq!(report.lines().nth(1), Some("unresolvable"));
 
-    let sticky = r.child("sticky");
+    let sticky = leaf(&r, "sticky")?;
     mkdir_mode(&sticky, 0o1777)?;
     let sticky_arg = sticky.to_string_lossy().into_owned();
     assert!(
@@ -486,7 +486,7 @@ fn the_refusal_escapes_control_bytes_in_printed_facts() -> io::Result<()> {
     );
 
     let r = root("install-escape")?;
-    let hostile = r.child("open\u{1b}[31m");
+    let hostile = r.path().join("open\u{1b}[31m");
     mkdir_mode(&hostile, 0o777)?;
     let hostile_arg = hostile.to_string_lossy().into_owned();
     let report = helper_stdout(REFUSAL_REPORT, &[&hostile_arg])?;
