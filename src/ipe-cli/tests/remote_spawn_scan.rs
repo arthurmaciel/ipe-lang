@@ -102,7 +102,7 @@ const CAPPED_CALL: &str = "read_capped(";
 
 /// The `ipe` crate's `src/` directory.
 fn src_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")
+    e2e_support::manifest_dir!().join("src")
 }
 
 /// Every `.rs` file under `dir`, recursively.

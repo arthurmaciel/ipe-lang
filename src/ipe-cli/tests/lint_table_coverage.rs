@@ -13,13 +13,14 @@ use std::path::{Path, PathBuf};
 /// Repository crates detached from the workspace, relative to the repo root.
 const STANDALONE: &[&str] = &["tools/ipe-index/Cargo.toml", "editors/zed-ipe/Cargo.toml"];
 
+/// The repository root, two levels above this crate's proven manifest dir.
+#[allow(clippy::expect_used)] // a crate moved off `src/ipe-cli` is a repo-layout failure, not a case under test
 fn repo_root() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
+    e2e_support::manifest_dir!()
         .ancestors()
         .nth(2)
         .map(Path::to_path_buf)
-        .unwrap_or(manifest_dir)
+        .expect("the `ipe` crate sits two levels under the repository root")
 }
 
 /// The parsed manifest at `path`; a read or TOML error names the path.
