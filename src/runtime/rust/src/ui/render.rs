@@ -14,9 +14,11 @@
 //! - T5: `AttrBorderWidthEach(t,r,b,l)` uses `saturating_add` throughout.
 //!
 //! ### Design rationale
-//! `Ui.layout` emits an outer 100 vh flex-column wrapper and the converted root
-//! element inside it. `Ui.layoutWith` additionally applies `wrapperAttrs` to
-//! the outer wrapper and `rootAttrs` to an intermediate flex root.
+//! `Ui.layout` emits an outer 100 vh flex-column wrapper (`VIEWPORT_WRAPPER_CSS`)
+//! and, inside it, a root flex column (`ROOT_FILL_CSS`) that fills the wrapper
+//! on both axes, so an author `fill` beneath it resolves against a definite box.
+//! `Ui.layoutWith` additionally applies `wrapperAttrs` to the outer wrapper and
+//! `rootAttrs` to the root column.
 
 use super::super::css_safety::{CssValueOrigin, SafeCssPropertyName, SafeCssValue};
 use super::super::html::{Attribute as HtmlAttribute, Html};
@@ -1173,33 +1175,62 @@ fn render_node_as<M: Clone>(
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/// Style of the outer page wrapper: a full-viewport flex column.
+const VIEWPORT_WRAPPER_CSS: &str =
+    "display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden";
+
+/// Base style of the root div between the wrapper and the author's element.
+///
+/// It fills the wrapper on both axes (`flex:1 1 0` in the wrapper column,
+/// `min-*:0` so it never overflows it), so an author `fill` beneath it
+/// resolves against a definite box. `overflow:auto` scrolls an app taller than
+/// the viewport instead of clipping it.
+const ROOT_FILL_CSS: &str =
+    "display:flex;flex-direction:column;flex:1 1 0;min-height:0;min-width:0;overflow:auto";
+
+/// Join a base declaration list with an optional author declaration list.
+///
+/// The author list comes last, so its declarations win the cascade.
+fn join_style(base: &str, extra: &str) -> String {
+    if extra.is_empty() {
+        base.to_owned()
+    } else {
+        format!("{base};{extra}")
+    }
+}
+
+/// Build the viewport wrapper and the root div around the author's element.
+///
+/// Both runtime-inserted divs carry a definite size on both axes, so the
+/// author's root sits inside an unbroken size chain.
+fn layout_shell<M: Clone>(
+    wrapper_attrs: &[Attribute<M>],
+    root_attrs: &[Attribute<M>],
+    elem: Element<M>,
+) -> Html<M> {
+    let root_style = join_style(ROOT_FILL_CSS, &build_style_string(root_attrs));
+    let mut root_html_attrs = collect_html_attrs(root_attrs);
+    root_html_attrs.insert(0, HtmlAttribute::Attr("style".to_owned(), root_style));
+    // The root div is a flex column, so the author's element is its column child.
+    let mut root_kids: Vec<Html<M>> = vec![render_element_depth_in(elem, 0, FlexAxis::Column)];
+    root_kids.extend(render_nearby_overlays(root_attrs));
+    let root_div = Html::HElement("div".to_owned(), root_html_attrs, root_kids);
+
+    let wrapper_style = join_style(VIEWPORT_WRAPPER_CSS, &build_style_string(wrapper_attrs));
+    let mut wrapper_html_attrs = collect_html_attrs(wrapper_attrs);
+    wrapper_html_attrs.insert(0, HtmlAttribute::Attr("style".to_owned(), wrapper_style));
+    let mut wrapper_kids: Vec<Html<M>> = vec![root_div];
+    wrapper_kids.extend(render_nearby_overlays(wrapper_attrs));
+    Html::HElement("div".to_owned(), wrapper_html_attrs, wrapper_kids)
+}
+
 /// `Ui.layout : List (Attribute msg) -> Element msg -> Html msg`
 ///
 /// Wraps the element in a full-viewport flex-column page wrapper, then renders
 /// the root element with the given root attributes applied.
 #[must_use]
 pub fn ui_layout<M: Clone>(attrs: Vec<Attribute<M>>, elem: Element<M>) -> Html<M> {
-    // Root element rendered with the caller's root attrs applied.
-    let root_style = build_style_string(&attrs);
-    let mut root_html_attrs = collect_html_attrs(&attrs);
-    if !root_style.is_empty() {
-        root_html_attrs.insert(0, HtmlAttribute::Attr("style".to_owned(), root_style));
-    }
-    let rendered_elem = render_element(elem);
-    let mut root_kids: Vec<Html<M>> = vec![rendered_elem];
-    root_kids.extend(render_nearby_overlays(&attrs));
-
-    let root_div = Html::HElement("div".to_owned(), root_html_attrs, root_kids);
-
-    // Page wrapper: fills the full viewport with a flex column.
-    Html::HElement(
-        "div".to_owned(),
-        vec![HtmlAttribute::Attr(
-            "style".to_owned(),
-            "display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden".to_owned(),
-        )],
-        vec![root_div],
-    )
+    layout_shell(&[], &attrs, elem)
 }
 
 /// `Ui.layoutWith : { wrapperAttrs : List (Attribute msg), rootAttrs : List
@@ -1226,31 +1257,7 @@ pub fn ui_layout_with_vecs<M: Clone>(
     root_attrs: Vec<Attribute<M>>,
     elem: Element<M>,
 ) -> Html<M> {
-    // Root element rendered with `root_attrs`.
-    let root_style = build_style_string(&root_attrs);
-    let mut root_html_attrs = collect_html_attrs(&root_attrs);
-    if !root_style.is_empty() {
-        root_html_attrs.insert(0, HtmlAttribute::Attr("style".to_owned(), root_style));
-    }
-    let rendered_elem = render_element(elem);
-    let mut root_kids: Vec<Html<M>> = vec![rendered_elem];
-    root_kids.extend(render_nearby_overlays(&root_attrs));
-    let root_div = Html::HElement("div".to_owned(), root_html_attrs, root_kids);
-
-    // Wrapper — starts with the page baseline then merges wrapper_attrs on top.
-    let wrapper_base = "display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden";
-    let wrapper_extra = build_style_string(&wrapper_attrs);
-    let wrapper_style = if wrapper_extra.is_empty() {
-        wrapper_base.to_owned()
-    } else {
-        format!("{wrapper_base};{wrapper_extra}")
-    };
-    let mut wrapper_html_attrs = collect_html_attrs(&wrapper_attrs);
-    wrapper_html_attrs.insert(0, HtmlAttribute::Attr("style".to_owned(), wrapper_style));
-    let mut wrapper_kids: Vec<Html<M>> = vec![root_div];
-    wrapper_kids.extend(render_nearby_overlays(&wrapper_attrs));
-
-    Html::HElement("div".to_owned(), wrapper_html_attrs, wrapper_kids)
+    layout_shell(&wrapper_attrs, &root_attrs, elem)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1697,6 +1704,88 @@ mod tests {
             "root padding missing: {s}"
         );
         assert!(s.contains("content"), "content must render: {s}");
+    }
+
+    // ── Layout shell size chain (P1) ─────────────────────────────────────────
+
+    /// The `style` attribute value of an `HElement`, if any.
+    fn style_of<M>(html: &Html<M>) -> Option<&str> {
+        let Html::HElement(_, attrs, _) = html else {
+            return None;
+        };
+        attrs.iter().find_map(|a| match a {
+            HtmlAttribute::Attr(k, v) if k == "style" => Some(v.as_str()),
+            _ => None,
+        })
+    }
+
+    /// The `index`-th child of an `HElement`, if any.
+    fn child_of<M>(html: &Html<M>, index: usize) -> Option<&Html<M>> {
+        let Html::HElement(_, _, kids) = html else {
+            return None;
+        };
+        kids.get(index)
+    }
+
+    /// Both layout entry points put `ROOT_FILL_CSS` on the root div and exactly
+    /// `VIEWPORT_WRAPPER_CSS` (plus any wrapper attrs) on the wrapper.
+    #[test]
+    fn layout_root_div_fills_wrapper() {
+        let plain = ui_layout::<TestMsg>(vec![], Element::Text("a".to_owned()));
+        assert_eq!(style_of(&plain), Some(VIEWPORT_WRAPPER_CSS));
+        let root = child_of(&plain, 0);
+        assert_eq!(root.and_then(style_of), Some(ROOT_FILL_CSS));
+
+        let with = ui_layout_with_vecs::<TestMsg>(
+            vec![Attribute::AttrPadding(1, 1, 1, 1)],
+            vec![],
+            Element::Text("b".to_owned()),
+        );
+        let want = format!("{VIEWPORT_WRAPPER_CSS};padding:1px 1px 1px 1px");
+        assert_eq!(style_of(&with), Some(want.as_str()));
+        let root = child_of(&with, 0);
+        assert_eq!(root.and_then(style_of), Some(ROOT_FILL_CSS));
+    }
+
+    /// An author root-attr size is declared after `ROOT_FILL_CSS`, so it wins
+    /// the cascade.
+    #[test]
+    fn layout_root_attrs_override_root_fill() {
+        let html = ui_layout::<TestMsg>(
+            vec![Attribute::AttrHeight(Length::Px(300))],
+            Element::Text("a".to_owned()),
+        );
+        let root = child_of(&html, 0).and_then(style_of).unwrap_or_default();
+        assert_eq!(
+            root.find(ROOT_FILL_CSS),
+            Some(0),
+            "root style must start with ROOT_FILL_CSS: {root}"
+        );
+        assert!(
+            root.find("height:300px")
+                .is_some_and(|at| at > ROOT_FILL_CSS.len()),
+            "author height must follow ROOT_FILL_CSS: {root}"
+        );
+    }
+
+    /// The author's root element is laid out as a child of the root column, so
+    /// its `height fill` is the column's main axis.
+    #[test]
+    fn layout_renders_author_root_as_column_child() {
+        use crate::ui::helpers::ui_el_;
+        let elem: Element<TestMsg> = ui_el_(
+            vec![Attribute::AttrHeight(Length::Fill(1))],
+            Element::Text("a".to_owned()),
+        );
+        let html = ui_layout(vec![], elem);
+        let author = child_of(&html, 0)
+            .and_then(|root| child_of(root, 0))
+            .and_then(style_of)
+            .unwrap_or_default();
+        assert!(
+            author.contains("flex-grow:1;flex-basis:0;min-height:0"),
+            "author root must grow along the root column: {author}"
+        );
     }
 
     // ── Follow-up 3: CSS injection hardening tests (T3/T4) ───────────────────
