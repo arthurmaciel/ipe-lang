@@ -1,6 +1,6 @@
-use regex::Regex;
+use crate::static_re::StaticRegex;
+use anyhow::Result;
 use std::collections::HashSet;
-use std::sync::OnceLock;
 
 /// A top-level Ipê binding with its coarse extent: the binding's own line
 /// through the line before the next top-level binding (or EOF).
@@ -23,22 +23,14 @@ pub struct IpeScan {
 }
 
 /// `module X.Y exposing (..)` or `module X.Y` / `module X.Y exposing (a, b)`.
-fn re_module() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^module\s+([\w.]+)(?:\s+exposing\s*\(([^)]*)\))?").unwrap())
-}
-fn re_import() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^import\s+([\w.]+)").unwrap())
-}
+static RE_MODULE: StaticRegex =
+    StaticRegex::new(r"^module\s+([\w.]+)(?:\s+exposing\s*\(([^)]*)\))?");
+static RE_IMPORT: StaticRegex = StaticRegex::new(r"^import\s+([\w.]+)");
 /// A candidate top-level binding: a lowercase identifier followed by
 /// whitespace. Declarations that are not bindings (`module`, `import`,
 /// `exposing`, `let`) are excluded — the regex would otherwise capture them as
 /// bogus "bindings".
-fn re_binding() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^([a-z][\w]*)\s").unwrap())
-}
+static RE_BINDING: StaticRegex = StaticRegex::new(r"^([a-z][\w]*)\s");
 
 fn is_decl(line: &str) -> bool {
     line.starts_with("module ")
@@ -47,7 +39,9 @@ fn is_decl(line: &str) -> bool {
         || line.starts_with("let ")
 }
 
-pub fn scan_ipe(src: &str) -> IpeScan {
+pub fn scan_ipe(src: &str) -> Result<IpeScan> {
+    let (re_module, re_import, re_binding) =
+        (RE_MODULE.get()?, RE_IMPORT.get()?, RE_BINDING.get()?);
     let mut module = None;
     let mut exposing: Vec<String> = Vec::new();
     let mut imports = Vec::new();
@@ -56,8 +50,8 @@ pub fn scan_ipe(src: &str) -> IpeScan {
     // stability while `seen` avoids an O(n²) `bindings.contains` scan.
     let mut seen: HashSet<String> = HashSet::new();
     for (lineno, line) in src.lines().enumerate() {
-        if let Some(c) = re_module().captures(line) {
-            module = Some(c[1].to_string());
+        if let Some(c) = re_module.captures(line) {
+            module = c.get(1).map(|m| m.as_str().to_string());
             if let Some(list) = c.get(2) {
                 let raw = list.as_str().trim();
                 exposing = if raw == ".." {
@@ -71,15 +65,15 @@ pub fn scan_ipe(src: &str) -> IpeScan {
             }
             continue;
         }
-        if let Some(c) = re_import().captures(line) {
-            imports.push(c[1].to_string());
+        if let Some(m) = re_import.captures(line).and_then(|c| c.get(1)) {
+            imports.push(m.as_str().to_string());
             continue;
         }
         if is_decl(line) {
             continue;
         }
-        if let Some(c) = re_binding().captures(line) {
-            let b = c[1].to_string();
+        if let Some(m) = re_binding.captures(line).and_then(|c| c.get(1)) {
+            let b = m.as_str().to_string();
             if seen.insert(b.clone()) {
                 names.push((b, lineno));
             }
@@ -97,12 +91,12 @@ pub fn scan_ipe(src: &str) -> IpeScan {
             }
         })
         .collect();
-    IpeScan {
+    Ok(IpeScan {
         module,
         exposing,
         imports,
         bindings,
-    }
+    })
 }
 
 /// Is this binding exported from its module (`exposing (..)` exports all)?
@@ -117,7 +111,8 @@ pub fn is_pub(exposing: &[String], name: &str) -> bool {
 pub fn doc_purpose(src: &str, line: i64) -> Option<String> {
     let lines: Vec<&str> = src.lines().collect();
     let mut top: Option<String> = None;
-    for l in lines[..(line - 1).max(0) as usize].iter().rev() {
+    let above = usize::try_from(line.saturating_sub(1)).unwrap_or(0);
+    for l in lines.iter().take(above).rev() {
         let t = l.trim_start();
         if let Some(rest) = t.strip_prefix("--") {
             // The FIRST line of the block is the topmost (last visited).
@@ -132,10 +127,30 @@ pub fn doc_purpose(src: &str, line: i64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn built_in_patterns_compile() {
+        for re in [&RE_MODULE, &RE_IMPORT, &RE_BINDING] {
+            assert!(re.get().is_ok());
+        }
+    }
+
+    // A binding line past the end of the source (or before its start) reads
+    // no comment block instead of slicing out of bounds.
+    #[test]
+    fn doc_purpose_line_out_of_range_is_none() {
+        let src = "-- | doc\nfoo x = x\n";
+        assert_eq!(doc_purpose(src, 2), Some("doc".to_string()));
+        assert_eq!(doc_purpose(src, 99), None);
+        assert_eq!(doc_purpose(src, 0), None);
+        assert_eq!(doc_purpose(src, i64::MIN), None);
+        assert_eq!(doc_purpose("", 5), None);
+    }
+
     #[test]
     fn scans_ipe() {
         let src = "module Ipe.Core.List exposing (..)\nimport Ipe.Core.Maybe as M\nhead xs = ...\nmap f xs = ...\n";
-        let r = scan_ipe(src);
+        let r = scan_ipe(src).unwrap();
         assert_eq!(r.module.as_deref(), Some("Ipe.Core.List"));
         assert_eq!(r.exposing, vec![".."]);
         assert!(r.imports.contains(&"Ipe.Core.Maybe".to_string()));
@@ -151,7 +166,7 @@ mod tests {
     #[test]
     fn exposing_list_membership() {
         let src = "module X exposing (render, renderInline)\nrender s = s\nhelper x = x\n";
-        let r = scan_ipe(src);
+        let r = scan_ipe(src).unwrap();
         assert_eq!(
             r.exposing,
             vec!["render".to_string(), "renderInline".to_string()]
@@ -165,7 +180,7 @@ mod tests {
     #[test]
     fn purpose_from_leading_doc_comment() {
         let src = "-- | Docs for head\n-- more detail\nhead xs = xs\n\nmap f xs = xs\n";
-        let r = scan_ipe(src);
+        let r = scan_ipe(src).unwrap();
         let head = r.bindings.iter().find(|b| b.name == "head").unwrap();
         let purpose = doc_purpose(src, head.line);
         assert_eq!(purpose.as_deref(), Some("Docs for head"));
@@ -176,7 +191,7 @@ mod tests {
     #[test]
     fn binding_extents_cover_until_next_binding() {
         let src = "head xs = xs\n\nmap f xs = xs\nlast = 0\n";
-        let r = scan_ipe(src);
+        let r = scan_ipe(src).unwrap();
         assert_eq!(r.bindings.len(), 3);
         assert_eq!(r.bindings[0].line, 1);
         assert_eq!(r.bindings[0].line_end, 2); // blank line + next binding start − 1

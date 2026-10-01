@@ -1,17 +1,13 @@
 use super::{UnitSpec, emit_unit, module_path};
 use crate::model::{Facing, Kind, Lang, facing_of};
+use crate::static_re::StaticRegex;
 use crate::store::Store;
 use anyhow::Result;
-use regex::Regex;
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
 
 /// `https?://` URL inside a doc comment → an external link row.
-fn re_url() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"https?://\S+").unwrap())
-}
+static RE_URL: StaticRegex = StaticRegex::new(r"https?://\S+");
 
 fn lang_grammar(path: &str, lang: Lang) -> Option<(tree_sitter::Language, &'static str)> {
     // (grammar, query) — query captures @def (a defined symbol), @imp (an import
@@ -251,7 +247,8 @@ fn is_cfg_test(item: Node, src: &str) -> bool {
 /// comment walk mirrors the old `doc_purpose` (adjacent comments/attributes,
 /// stops at the first gap). `///` and `/** */` markers are stripped for the
 /// purpose line; URLs are scanned from the raw comment text.
-fn doc_scan(item: Node, src: &str) -> (Option<String>, Vec<(String, i64)>) {
+fn doc_scan(item: Node, src: &str) -> Result<(Option<String>, Vec<(String, i64)>)> {
+    let re_url = RE_URL.get()?;
     let mut top: Option<String> = None;
     let mut links: Vec<(String, i64)> = Vec::new();
     let mut next_byte = item.start_byte();
@@ -259,7 +256,7 @@ fn doc_scan(item: Node, src: &str) -> (Option<String>, Vec<(String, i64)>) {
     while let Some(p) = prev {
         match p.kind() {
             "line_comment" | "block_comment" => {
-                if next_byte - p.end_byte() > 1 {
+                if next_byte.saturating_sub(p.end_byte()) > 1 {
                     break;
                 } // blank-line gap
                 let line = p.start_position().row as i64 + 1;
@@ -281,7 +278,7 @@ fn doc_scan(item: Node, src: &str) -> (Option<String>, Vec<(String, i64)>) {
                 if let Some(b) = body {
                     top = Some(b);
                 }
-                for m in re_url().find_iter(&src[p.byte_range()]) {
+                for m in re_url.find_iter(&src[p.byte_range()]) {
                     let url = m
                         .as_str()
                         .trim_end_matches(|c: char| ".,;:)'\"`>]}".contains(c))
@@ -300,7 +297,7 @@ fn doc_scan(item: Node, src: &str) -> (Option<String>, Vec<(String, i64)>) {
             _ => break,
         }
     }
-    (top.filter(|s| !s.is_empty()), links)
+    Ok((top.filter(|s| !s.is_empty()), links))
 }
 
 /// Emit one `external` link row per URL found in the unit's doc comment.
@@ -382,7 +379,7 @@ pub fn extract(
                 } else {
                     facing_of(path, is_pub(item, lang, src))
                 };
-                let (purpose, links) = doc_scan(item, src);
+                let (purpose, links) = doc_scan(item, src)?;
                 let uid = emit_unit(
                     store,
                     src,
@@ -415,7 +412,7 @@ pub fn extract(
                 } else {
                     facing_of(path, is_pub(item, lang, src))
                 };
-                let (purpose, links) = doc_scan(item, src);
+                let (purpose, links) = doc_scan(item, src)?;
                 let uid = emit_unit(
                     store,
                     src,
@@ -493,6 +490,11 @@ pub fn extract(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn built_in_url_pattern_compiles() {
+        assert!(RE_URL.get().is_ok());
+    }
     use crate::model::Lang;
     use crate::store::Store;
     use std::collections::HashMap;

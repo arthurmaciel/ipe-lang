@@ -3,23 +3,14 @@ pub mod treesitter;
 pub mod view;
 
 use crate::model::{Kind, Lang, facing_of};
+use crate::static_re::StaticRegex;
 use crate::store::{Store, unit_uid};
 use anyhow::{Context, Result};
-use regex::Regex;
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
-fn re_sh_source() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^\s*(?:source|\.)\s+(\S+)").unwrap())
-}
-/// Top-level Bash function: `name() {` or `function name {`.
-fn re_sh_func() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r"^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*\{?").unwrap()
-    })
-}
+static RE_SH_SOURCE: StaticRegex = StaticRegex::new(r"^\s*(?:source|\.)\s+(\S+)");
+static RE_SH_FUNC: StaticRegex =
+    StaticRegex::new(r"^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*\{?");
 
 /// The crate-root segment of a Rust `qualified` name: the directory that owns
 /// the crate's `src/` (its basename), so two crates each defining `parse` yield
@@ -150,7 +141,8 @@ pub fn emit_unit(
 fn bash_doc_purpose(src: &str, line: i64) -> Option<String> {
     let lines: Vec<&str> = src.lines().collect();
     let mut top: Option<String> = None;
-    for l in lines[..(line - 1).max(0) as usize].iter().rev() {
+    let above = usize::try_from(line.saturating_sub(1)).unwrap_or(0);
+    for l in lines.iter().take(above).rev() {
         let t = l.trim_start();
         if let Some(rest) = t.strip_prefix('#') {
             // The FIRST line of the block is the topmost (last visited).
@@ -176,7 +168,7 @@ pub fn extract_file(
     let mut ord: HashMap<(String, String), i64> = HashMap::new();
     match lang {
         Lang::Ipe => {
-            let r = ipe::scan_ipe(src);
+            let r = ipe::scan_ipe(src)?;
             for i in r.imports {
                 store.put_edge(path, &i, "import")?;
             }
@@ -202,12 +194,13 @@ pub fn extract_file(
             }
         }
         Lang::Bash => {
+            let (re_source, re_func) = (RE_SH_SOURCE.get()?, RE_SH_FUNC.get()?);
             let mut funcs: Vec<(String, i64)> = Vec::new();
             for (i, line) in src.lines().enumerate() {
-                if let Some(c) = re_sh_source().captures(line) {
-                    store.put_edge(path, &c[1], "import")?;
-                } else if let Some(c) = re_sh_func().captures(line) {
-                    let name = c[1].to_string();
+                if let Some(m) = re_source.captures(line).and_then(|c| c.get(1)) {
+                    store.put_edge(path, m.as_str(), "import")?;
+                } else if let Some(m) = re_func.captures(line).and_then(|c| c.get(1)) {
+                    let name = m.as_str().to_string();
                     store.put_symbol(path, &name, "def", i as i64 + 1, 0)?;
                     funcs.push((name, i as i64 + 1));
                 }
@@ -268,6 +261,22 @@ pub fn extract_file(
 mod tests {
     use super::*;
     use crate::store::Store;
+
+    #[test]
+    fn built_in_shell_patterns_compile() {
+        assert!(RE_SH_SOURCE.get().is_ok());
+        assert!(RE_SH_FUNC.get().is_ok());
+    }
+
+    // A line past the end of the script, or before its start, slices nothing
+    // out of bounds.
+    #[test]
+    fn bash_doc_purpose_line_out_of_range() {
+        let src = "# helper\nf() {\n";
+        assert_eq!(bash_doc_purpose(src, 2), Some("helper".to_string()));
+        assert_eq!(bash_doc_purpose(src, 50), None);
+        assert_eq!(bash_doc_purpose(src, i64::MIN), None);
+    }
 
     fn defs(store: &Store, path: &str) -> Vec<(String, i64)> {
         let mut st = store
