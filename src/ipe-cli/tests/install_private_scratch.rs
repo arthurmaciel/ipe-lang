@@ -407,9 +407,9 @@ fn trusted_tmp_base_names_the_refused_ancestor_not_the_leaf() -> io::Result<()> 
     let r = root("install-refused-ancestor")?;
     let open = leaf(&r, "open")?;
     mkdir_mode(&open, 0o777)?;
-    let leaf = open.join("leaf");
-    mkdir_mode(&leaf, 0o700)?;
-    let leaf_arg = leaf.to_string_lossy().into_owned();
+    let nested = open.join("leaf");
+    mkdir_mode(&nested, 0o700)?;
+    let leaf_arg = nested.to_string_lossy().into_owned();
     let report =
         String::from_utf8_lossy(&helper_stdout(REFUSAL_REPORT, &[&leaf_arg])?).into_owned();
     let open_physical = std::fs::canonicalize(&open)?.to_string_lossy().into_owned();
