@@ -94,10 +94,7 @@ fn an_imported_alias_naming_a_module_only_its_definer_imports_compiles() {
          label : Unit -> String\n\
          label u = u.name\n",
     ]);
-    let Ok((queue, _)) = result else {
-        assert!(result.is_ok(), "Lib.Queue must canonicalise: {result:?}");
-        return;
-    };
+    let (queue, _) = result.expect("Lib.Queue must canonicalise");
     let lang = annotation(&queue, &i, "label").and_then(|t| field(t, &i, "lang"));
     assert_eq!(
         lang.and_then(|t| con_name(t, &i)).as_deref(),
@@ -157,10 +154,7 @@ fn an_importers_same_named_alias_never_captures_the_definers_body() {
          codeOf : Unit -> String\n\
          codeOf u = u.code\n",
     ]);
-    let Ok((queue, _)) = result else {
-        assert!(result.is_ok(), "Lib.Queue must canonicalise: {result:?}");
-        return;
-    };
+    let (queue, _) = result.expect("Lib.Queue must canonicalise");
     let code = annotation(&queue, &i, "codeOf").and_then(|t| field(t, &i, "code"));
     assert_eq!(
         code.and_then(|t| con_name(t, &i)).as_deref(),
@@ -182,10 +176,7 @@ fn an_alias_of_an_imported_parametric_alias_resolves_across_three_modules() {
          valueOf : Named -> String\n\
          valueOf n = n.value\n",
     ]);
-    let Ok((top, _)) = result else {
-        assert!(result.is_ok(), "Lib.Top must canonicalise: {result:?}");
-        return;
-    };
+    let (top, _) = result.expect("Lib.Top must canonicalise");
     let ann = annotation(&top, &i, "valueOf");
     assert_eq!(
         ann.and_then(|t| field(t, &i, "value"))
@@ -293,10 +284,7 @@ fn a_qualified_union_reference_never_expands_a_same_named_local_alias() {
          pick : Counter.Msg -> Int\n\
          pick m = 0\n",
     ]);
-    let Ok((page, _)) = result else {
-        assert!(result.is_ok(), "Lib.Page must canonicalise: {result:?}");
-        return;
-    };
+    let (page, _) = result.expect("Lib.Page must canonicalise");
     let arg = match annotation(&page, &i, "pick") {
         Some(Type::Lambda(arg, _)) => Some(arg.as_ref()),
         _ => None,
