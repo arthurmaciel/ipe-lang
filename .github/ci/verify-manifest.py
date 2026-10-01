@@ -193,7 +193,9 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       fails unless `changes` succeeded and the tier agrees with the event,
       fails on any failed or cancelled need, and on an event of its phase in
       scope fails on any skipped need; it passes vacuously only off-phase or
-      out of scope.
+      out of scope.  Every tests-phase work job is a direct need of a phase
+      verdict whose context is a `gate`, so a merge-queue red always blocks
+      the merge; a tests-phase proof that is not to block runs post_merge.
   12. Gate integrity.  (a) A `pull_request_target` run holds the base
       repository's token beside a PR author's input, so every workflow
       triggering on it must provably run no head code: no `uses:` at step or
@@ -1726,6 +1728,21 @@ def check_phase_routing(gate_contexts: set[str], errors: list[str], root: str = 
                 errors.append(
                     f"check 11: {where} reports required context {ctx!r} from the {phase} phase; a skipped "
                     "check reads as passing, so it must report through a phase verdict"
+                )
+        # Direct aggregation only: a work job's `if:` may admit `always()`, so a
+        # job reached through another work job's `needs` is not proven to gate.
+        required = {
+            n
+            for a in aggregators
+            if str(jobs[a].get("name", a)) in gate_contexts
+            for n in _needs_list(jobs[a]) or []
+            if n != "changes"
+        }
+        for jid, phase in phases.items():
+            if phase == "tests" and jid not in required:
+                errors.append(
+                    f"check 11: {fname}: tests-phase job {jid!r} is aggregated by no required phase verdict; "
+                    "its red never reaches the merge decision"
                 )
         for jid, phase in phases.items():
             needs = _needs_list(jobs[jid]) or []

@@ -3891,8 +3891,11 @@ class TestPhaseRouting(unittest.TestCase):
         self.assertEqual(self.errors(_PH_OK), [])
 
     def test_repo_workflows_pass(self) -> None:
+        gates = {
+            str(e["context"]) for e in verify_manifest.load_manifest()["checks"] if e.get("disposition") == "gate"
+        }
         errors: list[str] = []
-        check_phase_routing(set(_PH_GATES), errors)
+        check_phase_routing(gates, errors)
         self.assertEqual(errors, [])
 
     def test_workflow_outside_the_merge_queue_is_not_routed(self) -> None:
@@ -3987,6 +3990,23 @@ class TestPhaseRouting(unittest.TestCase):
     def test_required_context_from_a_post_merge_job_refused(self) -> None:
         errors = self.errors(_PH_OK, gates=_PH_GATES | {"asan"})
         self.assertTrue(any("reports required context 'asan' from the post_merge phase" in e for e in errors), errors)
+
+    def test_tests_phase_job_no_required_verdict_aggregates_refused(self) -> None:
+        self.assertRefused(
+            "  test:\n",
+            "  seal:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    needs: changes\n"
+            "    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'\n"
+            "    steps:\n      - run: echo seal\n"
+            "  test:\n",
+            "tests-phase job 'seal' is aggregated by no required phase verdict",
+        )
+
+    def test_tests_phase_job_behind_a_non_required_verdict_refused(self) -> None:
+        errors = self.errors(_PH_OK, gates=_PH_GATES - {"test"})
+        needle = "tests-phase job 'test-run' is aggregated by no required phase verdict"
+        self.assertTrue(any(needle in e for e in errors), errors)
 
     # (e) the verdict's exact shape.
     def test_verdict_not_always_refused(self) -> None:

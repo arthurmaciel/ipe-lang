@@ -369,8 +369,8 @@ checks:
     local:
       ci-only: run-history
     guards: >-
-      Soundness / SEAL — every `nightly-gate` proof (jail, sanitizers,
-      seal-modset, browser-e2e) holds on main before another change lands.
+      Soundness / SEAL — every `nightly-gate` proof (jail, sanitizers) holds
+      on main before another change lands.
 
   # ── Editor tooling (per-change gate) ──────────────────────────────────────
   # The tree-sitter grammar must accept every reference `.ipe` file (stdlib +
@@ -413,8 +413,15 @@ checks:
             IPE_E2E: "1"
             IPE_RUNTIME_DIR: "{repo_root}/src/runtime/rust/src"
           differs: CI runs the same suite from one archive split into heavy and light partitions
-    guards: SEAL
-    aggregates: [e2e]
+    guards: >-
+      SEAL, and Security — the vendored-emit SEAL, the real Linux x64 build
+      jail, and the browser port-glue proofs report through this verdict, so a
+      red in any of them blocks a landing.
+    aggregates:
+      - e2e
+      - "seal-modset (vendored emit model)"
+      - "linux-x64-tier2 (bwrap+seccomp — the real Linux jail proof)"
+      - "browser-e2e (Ipe.Browser geo+clipboard — headless Playwright)"
   - context: seal-slice
     disposition: gate
     producer: ci.yml
@@ -433,14 +440,6 @@ checks:
     disposition: nightly-gate
     producer: ci.yml
     guards: Soundness
-  - context: "seal-modset (vendored emit model)"
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: SEAL
-  - context: "browser-e2e (Ipe.Browser geo+clipboard — headless Playwright)"
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: Security
 
   # ── Required-set enforcement — nightly-gate ───────────────────────────────
   - context: ruleset-drift
@@ -459,16 +458,12 @@ checks:
       read instead of passing it.
 
   # ── Cross-platform jail proofs — nightly-gate (Security §1) ───────────────
-  # The Linux jail Tier-2 proofs — the containment gate CI produces on GitHub-
-  # hosted runners. macOS/Windows/FreeBSD Tier-2 jails need real-OS substrate a
+  # The post-merge jail proofs (the linux-x64 Tier-2 proof is a tests-phase job
+  # `e2e-all` aggregates). macOS/Windows/FreeBSD Tier-2 jails need real-OS substrate a
   # hosted runner lacks, so those platforms' build/run-jail containment is
   # verified out-of-band (release checklist) rather than as a CI status context;
   # macos-arm64 (sandbox-exec / Seatbelt) in admission-sandbox.yml is the
   # required macOS containment proof.
-  - context: "linux-x64-tier2 (bwrap+seccomp — the real Linux jail proof)"
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: Security
   - context: "linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)"
     disposition: nightly-gate
     producer: ci.yml

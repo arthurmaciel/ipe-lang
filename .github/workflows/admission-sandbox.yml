@@ -38,10 +38,12 @@
 # ─────────────────────────────────────────────────────────────────────────────
 name: Sandbox
 
-# Every jail proof runs in the tests phase (CONTRIBUTING.md "CI
-# phases"): once in the merge queue on the combined tree, and nightly. A pull
-# request runs only `admission-changes` and the three required legs' phase
-# verdicts, which pass vacuously there.
+# Phases (CONTRIBUTING.md "CI phases"): the three required legs' jail proofs
+# run in the tests phase — once in the merge queue on the combined tree, and
+# nightly — and each reports through its required phase verdict. The Windows
+# and FreeBSD proofs run in the post-merge phase (nightly and on dispatch),
+# because no required verdict aggregates them. A pull request runs only
+# `admission-changes` and the three phase verdicts, which pass vacuously there.
 on:
   pull_request:
   schedule:
@@ -49,9 +51,12 @@ on:
   merge_group:
   workflow_dispatch: {}
 
+# The event is part of the group, so a nightly run and a dispatch run on the
+# same ref never cancel each other; only a newer pull-request push supersedes
+# an older one.
 concurrency:
-  group: admission-sandbox-${{ github.ref }}
-  cancel-in-progress: true
+  group: admission-sandbox-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -277,7 +282,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     needs: [changes]
-    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.post_merge == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -372,7 +377,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
-    if: needs.changes.outputs.tests == 'true' && needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.post_merge == 'true' && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

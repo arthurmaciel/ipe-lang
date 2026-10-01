@@ -651,7 +651,7 @@ jobs:
         with:
           name: junit-test-run-${{ matrix.shard }}
           path: target/nextest/ci/junit.xml
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
   # Required aggregation gate for `test`: green only when every shard and the
@@ -908,7 +908,7 @@ jobs:
         with:
           name: junit-runtime-full-features
           path: target/nextest/ci/junit.xml
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
   # Required context for `runtime-full-features-run`: the phase verdict (see the header).
@@ -1177,22 +1177,23 @@ jobs:
         with:
           name: junit-e2e-${{ matrix.shard }}
           path: target/nextest/ci/junit.xml
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
   # Stable aggregation gate for the sharded SEAL. The `e2e` matrix expands to one
   # shard-named job per partition, so no single shard name is a durable
   # required-check target and a `fail-fast: false` shard failure is easy to miss.
-  # This job is the phase verdict over every shard — one stable context name
-  # (`e2e-all`) branch protection can require so a SEAL regression blocks a
-  # landing.
+  # This job is the phase verdict over every shard and over the other
+  # end-to-end proofs of the tests phase (`seal-modset-vendored`,
+  # `linux-x64-tier2`, `browser-e2e`) — one stable context name (`e2e-all`)
+  # branch protection can require, so a red in any of them blocks a landing.
   # A bare, stable `name` so the required-check context is exactly `e2e-all`
   # (branch protection matches the check name literally; a parenthetical would
   # make the required-context string brittle).
   e2e-all:
     name: e2e-all
     runs-on: ubuntu-latest
-    needs: [changes, e2e, test-prep]
+    needs: [changes, e2e, test-prep, seal-modset-vendored, linux-x64-tier2, browser-e2e]
     if: always()
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1206,6 +1207,9 @@ jobs:
             changes=${{ needs.changes.result }}
             e2e=${{ needs.e2e.result }}
             test-prep=${{ needs.test-prep.result }}
+            seal-modset-vendored=${{ needs.seal-modset-vendored.result }}
+            linux-x64-tier2=${{ needs.linux-x64-tier2.result }}
+            browser-e2e=${{ needs.browser-e2e.result }}
           phase: tests
           tier: ${{ needs.changes.outputs.tests }}
           scope: ${{ needs.changes.outputs.code }}
@@ -1264,7 +1268,7 @@ jobs:
   # vendored manifest (e.g. `"jwt"` absent from `default = [...]`) silently
   # compiles out `#[cfg(feature = "jwt")]`-gated items and causes E0425 at cargo
   # build — a SEAL breach invisible to the dep-model gate. This job makes that
-  # class of break visible and blocking.
+  # class of break visible and blocking: `e2e-all` aggregates it.
   #
   # Tests phase for every code change. The break class
   # is a vendored-manifest feature-flag drift, but a canon/types/lower acceptance
@@ -1306,8 +1310,8 @@ jobs:
   # has. That asymmetry is a blind spot against
   # the "a platform not run is never admitted" invariant (ADR 0046 refuse-to-
   # certify): a change that silently stopped exercising the linux-x64 jail would
-  # not redden a platform-named check. This dedicated job closes it,
-  # and is fail-closed by design:
+  # not redden a platform-named check. This dedicated job closes it, reports
+  # through `e2e-all`, and is fail-closed by design:
   #
   #   1. It asserts the jail primitives (bwrap + python3 for the seccomp filter)
   #      are present and REFUSES to certify (exits non-zero) if either is absent —
@@ -1804,7 +1808,7 @@ jobs:
   #      Locate → "Copy location" → "Paste" → model renders the same coords
   #      on the "clipboard:" line (write+read round-trip).
   #
-  # Tests phase (like `e2e`).
+  # Tests phase (like `e2e`); `e2e-all` aggregates it.
   # The `browser-e2e` job is the ONLY gate that proves the Ipe.Browser.*
   # port-glue JS actually drives the browser APIs end-to-end — the Rust
   # build-only test in live_e2e.rs (`geo_clipboard_browser_build_only`) proves
