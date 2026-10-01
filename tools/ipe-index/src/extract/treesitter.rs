@@ -241,16 +241,19 @@ fn is_cfg_test(item: Node, src: &str) -> bool {
     false
 }
 
+/// An external URL in a doc comment with its 1-indexed source line.
+type DocLink = (String, i64);
+
 /// Leading doc-comment info for an item: the first line's purpose text (for the
 /// unit's `purpose` column) plus every external URL (`https?://…`) in the whole
 /// comment block with its 1-indexed source line (for the `links` table). The
 /// comment walk mirrors the old `doc_purpose` (adjacent comments/attributes,
 /// stops at the first gap). `///` and `/** */` markers are stripped for the
 /// purpose line; URLs are scanned from the raw comment text.
-fn doc_scan(item: Node, src: &str) -> Result<(Option<String>, Vec<(String, i64)>)> {
+fn doc_scan(item: Node, src: &str) -> Result<(Option<String>, Vec<DocLink>)> {
     let re_url = RE_URL.get()?;
     let mut top: Option<String> = None;
-    let mut links: Vec<(String, i64)> = Vec::new();
+    let mut links: Vec<DocLink> = Vec::new();
     let mut next_byte = item.start_byte();
     let mut prev = item.prev_sibling();
     while let Some(p) = prev {
