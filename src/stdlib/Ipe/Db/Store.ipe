@@ -2305,6 +2305,8 @@ hasColumn columns name =
 
 -- | `allOn conn store` — read every row from an external connection and decode
 -- each through the store's codec. The external counterpart to `all`.
+-- Unlike `all`, a SQL `NULL` cell reaches the codec as the empty string on
+-- this path, so a `Maybe String` field reads `NULL` as `Just ""`.
 allOn : Connection mode -> Store a -> Task Error (List a)
 allOn conn store =
     case store of
@@ -2322,6 +2324,8 @@ allOn conn store =
 -- | `findWhereOn conn store cond` — read the rows matching `cond` from an
 -- external connection and decode each through the store's codec. The external
 -- counterpart to `findWhere`; the same audited `SqlFragment` barrier applies.
+-- Unlike `findWhere`, a SQL `NULL` cell reaches the codec as the empty string on
+-- this path, so a `Maybe String` field reads `NULL` as `Just ""`.
 findWhereOn : Connection mode -> Store a -> SqlFragment -> Task Error (List a)
 findWhereOn conn store cond =
     case store of
@@ -2341,6 +2345,8 @@ findWhereOn conn store cond =
 -- store's codec. The external counterpart to `get`; keys on the store's
 -- validated `pk`, binds the value as a parameter, and fails closed for a store
 -- with no primary key.
+-- Unlike `get`, a SQL `NULL` cell reaches the codec as the empty string on
+-- this path, so a `Maybe String` field reads `NULL` as `Just ""`.
 getOn : Connection mode -> Store a -> SqlValue -> Task Error (Maybe a)
 getOn conn store keyValue =
     case store of
@@ -2411,19 +2417,10 @@ cellsDecoder =
                 [ Config.string
                 , Config.map String.fromInt Config.int
                 , Config.map String.fromFloat Config.float
-                , Config.map boolCellText Config.bool
+                , Config.map String.fromBool Config.bool
                 ]
             )
         )
-
-
-boolCellText : Bool -> String
-boolCellText b =
-    if b then
-        "true"
-
-    else
-        "false"
 
 
 -- Lift an untyped `Row` to `RowCells`, every cell present. The external
@@ -3531,7 +3528,9 @@ setJoinOrder alias view col ascending joined =
 -- both aliases, every projected column) is re-validated at the runtime boundary,
 -- and every filter value is a bound parameter. A poisoned join (a filter naming
 -- an unknown column) fails closed with the typed `Err`; a row that does not
--- decode to its side's type is a typed `Err`.
+-- decode to its side's type is a typed `Err`. Unlike the single-store reads, a
+-- SQL `NULL` cell reaches each side's codec as the empty string, so a
+-- `Maybe String` field reads `NULL` as `Just ""`.
 --
 -- Example:
 --
@@ -3583,7 +3582,8 @@ joinToList conn joined =
 
 
 -- | `joinToMaybe conn joined` — run the join and decode the FIRST matched pair,
--- or `Nothing`.
+-- or `Nothing`. As with `joinToList`, a SQL `NULL` cell reaches each side's
+-- codec as the empty string, so a `Maybe String` field reads `NULL` as `Just ""`.
 --
 -- Example:
 --

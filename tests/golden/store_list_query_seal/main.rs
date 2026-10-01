@@ -459,12 +459,12 @@ fn main() {
 #[path = "ipe_mods/ipe_mod_ipe_codec.rs"]
 mod ipe_mod_ipe_codec;
 pub(crate) use ipe_mod_ipe_codec::*;
-#[path = "ipe_mods/ipe_mod_ipe_db_store.rs"]
-mod ipe_mod_ipe_db_store;
-pub(crate) use ipe_mod_ipe_db_store::*;
 #[path = "ipe_mods/ipe_mod_ipe_db_codec.rs"]
 mod ipe_mod_ipe_db_codec;
 pub(crate) use ipe_mod_ipe_db_codec::*;
+#[path = "ipe_mods/ipe_mod_ipe_db_store.rs"]
+mod ipe_mod_ipe_db_store;
+pub(crate) use ipe_mod_ipe_db_store::*;
 #[path = "ipe_mods/ipe_mod_main.rs"]
 mod ipe_mod_main;
 pub(crate) use ipe_mod_main::*;

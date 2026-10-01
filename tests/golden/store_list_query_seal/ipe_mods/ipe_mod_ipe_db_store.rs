@@ -308,7 +308,7 @@ pub(crate) fn user_ipe_db_store_row_codec(
                 let __ipe_fn: ::std::sync::Arc<
                     dyn Fn(Rec_) -> Decoder<HashMap<String, String>> + Send + Sync + 'static,
                 > = ::std::sync::Arc::new(move |arg_13: Rec_| -> Decoder<HashMap<String, String>> {
-                    config_dict(json_decode_string::<IpeError>())
+                    config_dict(decode_map(({ let cap_0 = "".to_string(); { let __ipe_fn: Box<dyn Fn(IpeMaybe<String>) -> String + Send + Sync + 'static> = Box::new(move |eta_0: IpeMaybe<String>| -> String { maybe_with_default(cap_0.clone(), eta_0) }); __ipe_fn } }), config_nullable(json_decode_string::<IpeError>())))
                 });
                 __ipe_fn
             },
@@ -317,7 +317,10 @@ pub(crate) fn user_ipe_db_store_row_codec(
                     let __ipe_fn: Box<
                         dyn Fn(String) -> (String, IpeCodecColType) + Send + Sync + 'static,
                     > = Box::new(move |name: String| -> (String, IpeCodecColType) {
-                        (name, IpeCodecColType::CText)
+                        (
+                            name,
+                            IpeCodecColType::CNull(Box::new(IpeCodecColType::CText)),
+                        )
                     });
                     __ipe_fn
                 },
@@ -386,13 +389,17 @@ pub(crate) fn user_ipe_db_store_all<T1: 'static + Send + Sync + Clone>(
     store: IpeDbStoreStore<T1>,
 ) -> IpeTask<Vec<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    match store {
+    match store.clone() {
         IpeDbStoreStore::Store(r) => match crate::user_ipe_db_store_key_decl_fault((r.clone()).pk.clone())
         {
             IpeMaybe::Just(e) => task_fail(e),
             IpeMaybe::Nothing => task_and_then(
-                db_find_where(conn.clone(), (r.clone()).table.clone(), crate::user_ipe_db_store_always_true()),
-                Box::new(move |rows: Vec<HashMap<String, String>>| -> IpeTask<Vec<T1>> {
+                crate::user_ipe_db_store_read_cells(
+                    conn,
+                    store,
+                    crate::user_ipe_db_store_always_true(),
+                ),
+                Box::new(move |rows: Vec<HashMap<String, IpeMaybe<String>>>| -> IpeTask<Vec<T1>> {
                     crate::user_ipe_db_store_decode_rows((r.clone()).codec.clone(), rows)
                 }),
             ),
@@ -406,9 +413,23 @@ pub(crate) fn user_ipe_db_store_always_true() -> ipe_runtime::db::SqlFragment {
         sql_param(MainSqlValue::SqlInt(1i64)),
     )
 }
+pub(crate) fn user_ipe_db_store_read_cells<T1: 'static + Send + Clone>(
+    conn: Db,
+    store: IpeDbStoreStore<T1>,
+    cond: ipe_runtime::db::SqlFragment,
+) -> IpeTask<Vec<HashMap<String, IpeMaybe<String>>>> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match store {
+        IpeDbStoreStore::Store(r) => db_find_where_masked(conn.clone(), (r.clone()).table.clone(), list_map_consume({ let __ipe_fn: Box<dyn Fn(IpeDbStoreColumn) -> ipe_runtime::db::SqlFragment + Send + Sync + 'static> = Box::new(move |col: IpeDbStoreColumn| -> ipe_runtime::db::SqlFragment { sql_column(crate::user_ipe_db_store_column_name(col)) }); __ipe_fn }, (r).currentColumns.clone()), cond, crate::user_ipe_db_store_cells_decoder()),
+    }
+}
+pub(crate) fn user_ipe_db_store_cells_decoder() -> Decoder<HashMap<String, IpeMaybe<String>>> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    config_dict(config_nullable(decode_one_of(vec![json_decode_string::<IpeError>(), decode_map({ let __ipe_fn: Box<dyn Fn(i64) -> String + Send + Sync + 'static> = Box::new(string_from_int); __ipe_fn }, json_decode_int::<IpeError>()), decode_map({ let __ipe_fn: Box<dyn Fn(f64) -> String + Send + Sync + 'static> = Box::new(string_from_float); __ipe_fn }, json_decode_float::<IpeError>()), decode_map({ let __ipe_fn: Box<dyn Fn(bool) -> String + Send + Sync + 'static> = Box::new(string_from_bool); __ipe_fn }, json_decode_bool::<IpeError>())])))
+}
 pub(crate) fn user_ipe_db_store_decode_rows<T1: 'static + Send + Sync + Clone>(
     codec: IpeCodecCodec<T1>,
-    rows: Vec<HashMap<String, String>>,
+    rows: Vec<HashMap<String, IpeMaybe<String>>>,
 ) -> IpeTask<Vec<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match (rows).as_slice() {

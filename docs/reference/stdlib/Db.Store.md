@@ -792,6 +792,8 @@ allOn : Connection mode -> Store a -> Task Error (List a)
 
 `allOn conn store` — read every row from an external connection and decode
 each through the store's codec. The external counterpart to `all`.
+Unlike `all`, a SQL `NULL` cell reaches the codec as the empty string on
+this path, so a `Maybe String` field reads `NULL` as `Just ""`.
 
 ## `getOn`
 
@@ -804,6 +806,8 @@ getOn : Connection mode -> Store a -> SqlValue -> Task Error (Maybe a)
 store's codec. The external counterpart to `get`; keys on the store's
 validated `pk`, binds the value as a parameter, and fails closed for a store
 with no primary key.
+Unlike `get`, a SQL `NULL` cell reaches the codec as the empty string on
+this path, so a `Maybe String` field reads `NULL` as `Just ""`.
 
 ## `findWhereOn`
 
@@ -814,6 +818,8 @@ findWhereOn : Connection mode -> Store a -> SqlFragment -> Task Error (List a)
 `findWhereOn conn store cond` — read the rows matching `cond` from an
 external connection and decode each through the store's codec. The external
 counterpart to `findWhere`; the same audited `SqlFragment` barrier applies.
+Unlike `findWhere`, a SQL `NULL` cell reaches the codec as the empty string on
+this path, so a `Maybe String` field reads `NULL` as `Just ""`.
 
 ## `update`
 
@@ -1776,7 +1782,9 @@ a1.keyB [AND filters]`) through `Db.findJoin` (or `Db.findJoinOrdered` when
 both aliases, every projected column) is re-validated at the runtime boundary,
 and every filter value is a bound parameter. A poisoned join (a filter naming
 an unknown column) fails closed with the typed `Err`; a row that does not
-decode to its side's type is a typed `Err`.
+decode to its side's type is a typed `Err`. Unlike the single-store reads, a
+SQL `NULL` cell reaches each side's codec as the empty string, so a
+`Maybe String` field reads `NULL` as `Just ""`.
 
 Example:
 
@@ -1791,7 +1799,8 @@ joinToMaybe : Db -> Joined a b -> Task Error (Maybe ( a, b ))
 ```
 
 `joinToMaybe conn joined` — run the join and decode the FIRST matched pair,
-or `Nothing`.
+or `Nothing`. As with `joinToList`, a SQL `NULL` cell reaches each side's
+codec as the empty string, so a `Maybe String` field reads `NULL` as `Just ""`.
 
 Example:
 

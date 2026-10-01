@@ -349,12 +349,14 @@ fn db_store_to_maybe() {
 }
 
 /// `Ipe.Db.Store` nullable round-trip over a codec store on `sqlite::memory:`: a
-/// record holding a `Maybe String` and a `Maybe Int` reads SQL `NULL` back as
-/// `Nothing` through every codec-decoded read terminal (`get`, `all`, `findBy`,
-/// `findWhere`, query `toList`), while `Just ""`, `Just 0`, and `Just "NULL"`
-/// read back unchanged — `NULL` and the empty string never collapse, and no text
-/// value is an in-band `NULL` marker. An ascending query on the nullable int
-/// orders the `NULL` row first.
+/// record holding a `Maybe String`, `Maybe Int`, `Maybe Float`, and `Maybe Bool`
+/// reads SQL `NULL` back as `Nothing` through every codec-decoded read terminal
+/// (`get`, `all`, `findBy`, `findWhere`, query `toList`), while `Just ""`,
+/// `Just 0`, `Just 3.0`, `Just False`, and `Just "NULL"` read back unchanged —
+/// `NULL` and the empty string never collapse, and no text value is an in-band
+/// `NULL` marker. A query on the nullable int orders the `NULL` row first
+/// ascending and last descending; a codec whose field is a plain `String`
+/// refuses the `NULL` row with a typed `Err`.
 ///
 /// Sanctioned divergence: Ipê emits Rust+sqlx; `Ipe.Db.Store` is an Ipê-only
 /// addition with no prior counterpart; oracle is Ipê's own output.
