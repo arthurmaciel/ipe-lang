@@ -114,7 +114,7 @@ fn implicit_set_page_returns_model_and_no_cmd() {
 /// `IPE_E2E` tier: the app whose `Navigate` arm returns a `Cmd.perform` entry Cmd must cargo-build.
 #[test]
 fn on_navigate_entry_cmd_app_cargo_builds() {
-    if ipe_env::var("IPE_E2E").is_err() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     // A PRIVATE dir this test alone owns, so a compile-only sibling cannot
