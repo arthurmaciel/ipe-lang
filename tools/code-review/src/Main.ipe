@@ -620,7 +620,7 @@ historyCard row =
             , Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (safeText (nameOf row))
             , Ui.el
                 [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
-                (Ui.text (Index.shortHash row.bodyHash))
+                (safeText (Index.shortHash row.bodyHash))
             , Ui.el [ Ui.width Ui.fill ] Ui.none
             , Ui.el
                 [ Font.size 12, Font.color (Ui.rgb 150 150 165) ]

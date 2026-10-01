@@ -158,10 +158,28 @@ parseRow stored =
                 row (Just reason)
 
             Err e ->
-                Config.fail ("stored refusal: " ++ Error.message e)
+                Config.fail (storedReasonRefusal stored e)
 
     else
         row Nothing
+
+
+-- A stored refusal whose reason breaks the bound fails every read of the
+-- table, so the message names the row (its uid is database text, rendered)
+-- and the one fix.
+storedReasonRefusal : StoredRow -> Error -> String
+storedReasonRefusal stored e =
+    SafeText.toString
+        (SafeText.concat
+            [ SafeText.literal "the stored refusal of unit "
+            , SafeText.quoted stored.uid
+            , SafeText.literal " at hash "
+            , SafeText.quoted stored.bodyHash
+            , SafeText.literal " has an invalid reason ("
+            , SafeText.render (Error.message e)
+            , SafeText.literal "); shorten that row's reason in the review database, or delete the row to review the unit again"
+            ]
+        )
 
 
 -- The typed store for the review table. `fromCodec` validates every column

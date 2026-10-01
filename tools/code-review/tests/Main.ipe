@@ -113,6 +113,11 @@ refuse text =
     Task.fromResult (Result.map Refused (LibDb.parseReason text))
 
 
+shortHashShown : String -> String
+shortHashShown stored =
+    SafeText.toString (Index.shortHash stored)
+
+
 reasonShown : LibDb.Reason -> String
 reasonShown reason =
     SafeText.toString (LibDb.reasonText reason)
@@ -137,7 +142,7 @@ reasonBounded db =
     in
     do
         Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString "long-uid", SqlString "hL", SqlString "refuse", SqlString (atBound ++ "x"), SqlInt 0 ]
-        storedRefused <- LibDb.findDecision db "long-uid" "hL" |> Task.map (\_ -> False) |> Task.onError (\e -> Task.succeed (String.contains "at most" (Error.toString e)))
+        storedRefused <- LibDb.findDecision db "long-uid" "hL" |> Task.map (\_ -> False) |> Task.onError (\e -> Task.succeed (String.contains "at most" (Error.toString e) && String.contains "unit \"long-uid\" at hash \"hL\"" (Error.toString e)))
         Db.exec db "DELETE FROM review WHERE uid = ?" [ SqlString "long-uid" ]
         Task.succeed
             (rejected ""
@@ -213,12 +218,21 @@ allChecks db =
         , Task.succeed ( "db file paths escape url specials", filePathsEncodeUrlSpecials )
         , Task.succeed
             ( "history shows the digest, not the scheme"
-            , Index.shortHash "sha256:0123456789abcdef"
+            , shortHashShown "sha256:0123456789abcdef"
                 == "01234567"
-                && Index.shortHash "deadbeefcafe"
+                && shortHashShown "deadbeefcafe"
                 == "deadbeef"
-                && Index.shortHash "sha256:"
+                && shortHashShown "sha256:"
                 == ""
+            )
+        , Task.succeed
+            -- A review row's hash is database text: a bidi override in it
+            -- shows as an escape on the History page.
+            ( "history hash renders hazards"
+            , shortHashShown ("sha256:" ++ codeText 8238 ++ "ab" ++ codeText 27 ++ "c")
+                == "\\u{202e}ab\\u{1b}c"
+                && shortHashShown ("dead" ++ codeText 8294 ++ "beef")
+                == "dead\\u{2066}bee"
             )
         , Task.succeed
             ( "numberedLines counts from line_start"

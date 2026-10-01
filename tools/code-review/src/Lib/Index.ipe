@@ -559,16 +559,22 @@ storedHash attested =
             stored
 
 
--- The first 8 digits of a stored hash, for display: an attestation shows
--- its digest without the scheme prefix, any other value its leading text.
-shortHash : String -> String
+-- The first 8 characters of a stored hash, rendered for display: an
+-- attestation shows its digest without the scheme prefix, any other value
+-- its leading text. The stored text is database text, so it is rendered.
+shortHash : String -> SafeText
 shortHash stored =
-    case parseAttested stored of
-        Sha256 attested ->
-            String.slice 0 8 (String.dropLeft (String.length attestScheme) attested)
+    SafeText.renderForeign (String.slice 0 8 (hashDigits (parseAttested stored)))
+
+
+hashDigits : AttestedHash -> String
+hashDigits attested =
+    case attested of
+        Sha256 stored ->
+            String.dropLeft (String.length attestScheme) stored
 
         UnknownScheme other ->
-            String.slice 0 8 other
+            other
 
 
 -- Source text proved equal to its attestation. Opaque: built only by
