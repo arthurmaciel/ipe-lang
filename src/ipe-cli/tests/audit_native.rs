@@ -606,12 +606,12 @@ mod real_jail {
         // Skip (not fail) if this environment cannot compile the crate under the
         // jail (no toolchain reachable inside bwrap): a BuildFailed here is an
         // environment gap, never a false pass. A real clean IS the certification.
-        match verdict {
-            Ok(()) => { /* the first genuine certification */ }
-            Err(r) if r.message.contains("failed to build") => {
-                eprintln!("audit_native e2e: skipping — cargo unavailable inside jail: {r}");
-            }
-            Err(r) => panic!("a confined clean build must certify, got: {r}"),
+        if let Err(r) = verdict {
+            assert!(
+                r.message.contains("failed to build"),
+                "a confined clean build must certify, got: {r}"
+            );
+            eprintln!("audit_native e2e: skipping — cargo unavailable inside jail: {r}");
         }
     }
 
@@ -911,17 +911,20 @@ mod real_jail {
         assert_probe_crate_compiles(&out, &base.join("probe-target"));
 
         match verdict {
-            Ok(Tier2Outcome::Certified { platform }) => {
+            Ok(outcome) => {
                 assert_eq!(
-                    platform, CERTIFIED_PLATFORM,
-                    "certify names this host's wired jail"
+                    outcome,
+                    Tier2Outcome::Certified {
+                        platform: CERTIFIED_PLATFORM
+                    },
+                    "a native-bearing package certifies on this host's wired jail, \
+                     never skips Tier-2"
                 );
                 eprintln!(
-                    "audit_native e2e: native package CERTIFIED on {platform} \
+                    "audit_native e2e: native package CERTIFIED on {CERTIFIED_PLATFORM} \
                      (reachable native certification)"
                 );
             }
-            Ok(other) => panic!("a native-bearing package must not skip Tier-2: {other:?}"),
             Err(e) => {
                 let msg = e.to_string();
                 // The probe crate compiled outside the jail (asserted above), so a

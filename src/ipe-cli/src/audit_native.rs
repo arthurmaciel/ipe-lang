@@ -2188,8 +2188,23 @@ const TIER2_PROBE_WINDOWS: &str = include_str!(concat!(
     "/../../tests/fixtures/admission/untrusted-build.ps1"
 ));
 
-// The POSIX jail passes the wrapper source as one argv string, so an embedded
-// fixture past the cap would be refused by the kernel at every native audit.
+/// Maximum bytes of an embedded Tier-2 wrapper source.
+///
+/// The POSIX jail passes the source as one argv string, and Linux refuses a
+/// single argument past 128 KiB; 64 KiB stays under that with room for growth.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+const PROBE_WRAPPER_INLINE_ARG_CAP: usize = 64 * 1024;
+
+// An embedded fixture past the cap would be refused by the kernel at every
+// native audit, so the build refuses it first.
 // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if an embedded Tier-2 wrapper outgrows the inline argv cap [ledger #boundary]
 #[cfg(any(
     all(
@@ -2201,8 +2216,8 @@ const TIER2_PROBE_WINDOWS: &str = include_str!(concat!(
     target_os = "windows"
 ))]
 const _: () = assert!(
-    TIER2_PROBE_POSIX.len() as u64 <= crate::io_bounded::PROBE_WRAPPER_READ_CAP
-        && TIER2_PROBE_WINDOWS.len() as u64 <= crate::io_bounded::PROBE_WRAPPER_READ_CAP
+    TIER2_PROBE_POSIX.len() <= PROBE_WRAPPER_INLINE_ARG_CAP
+        && TIER2_PROBE_WINDOWS.len() <= PROBE_WRAPPER_INLINE_ARG_CAP
 );
 
 /// The exit-owning probe wrapper's source: the bytes compiled into this binary.
@@ -2212,6 +2227,15 @@ const _: () = assert!(
 /// the wrapper never lives there between runs: POSIX passes the source inline
 /// (`sh -c`), Windows stages it per run under a fresh name no earlier run could
 /// plant.
+///
+/// Stable rustdoc does not check a `compile_fail` error code, so the refusals
+/// below are paired with a control that compiles the same path: each refusal
+/// can only fail on the missing `read` or the private `source` field.
+///
+/// ```
+/// let source: &'static str = ipe::audit_native::TrustedWrapper::embedded().source();
+/// assert!(!source.is_empty());
+/// ```
 ///
 /// ```compile_fail,E0599
 /// let _ = ipe::audit_native::TrustedWrapper::read(std::path::Path::new("w.sh"));
@@ -2895,8 +2919,11 @@ mod tests {
         } else {
             &posix
         };
+        // Pins the field the `compile_fail,E0451` doctest names: `source`, a
+        // `&'static str` no runtime read can produce.
+        let field: &'static str = TrustedWrapper::embedded().source;
         assert_eq!(
-            TrustedWrapper::embedded().source(),
+            field,
             native.as_str(),
             "the wrapper Tier-2 runs is the platform-native compiled-in fixture"
         );
