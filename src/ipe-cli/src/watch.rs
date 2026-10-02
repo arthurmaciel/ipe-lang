@@ -3059,7 +3059,7 @@ const NO_INCREMENTAL_ENV: &str = "IPE_WATCH_NO_INCREMENTAL";
 /// Behaviour-identical either way — incremental changes codegen partitioning, not
 /// program semantics (enforced by the clean-vs-incremental parity gate) — and
 /// scoped to the watch child: `ipe build` (release / clean / CI) never calls this.
-enum BuildAccel {
+pub(crate) enum BuildAccel {
     /// Explicit opt-out ([`NO_INCREMENTAL_ENV`]): leave the machine's build
     /// configuration untouched for the emitted-app rebuild.
     MachineDefault,
@@ -3138,7 +3138,7 @@ fn choose_build_accel(out_dir: &Path, override_dir: Option<&Path>, opt_out: bool
 
 /// Map a [`BuildAccel`] onto a watch child's `cargo build` environment. Pure: the
 /// only inputs are the chosen strategy and the command.
-fn apply_build_accel_env(cmd: &mut Command, accel: &BuildAccel) {
+pub(crate) fn apply_build_accel_env(cmd: &mut Command, accel: &BuildAccel) {
     match accel {
         BuildAccel::MachineDefault => {}
         BuildAccel::ColdSccache(sccache) => {
@@ -3194,84 +3194,71 @@ fn spawn_cargo_build(
     evt_tx: mpsc::Sender<OrchestratorEvent>,
     quiet: bool,
 ) -> std::io::Result<Arc<std::sync::Mutex<CargoChild>>> {
-    let mut cmd = Command::new(cargo_path);
-    cmd.arg("build")
-        .arg("--message-format=json")
-        .current_dir(out_dir)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    // An explicit override pins the build's target dir; without one cargo honours
-    // the inherited `CARGO_TARGET_DIR` (or its `<out_dir>/target` default).
-    if let Some(target) = target_dir {
-        cmd.env("CARGO_TARGET_DIR", target);
-    }
     let accel = choose_build_accel(out_dir, target_dir, env_flag_on(NO_INCREMENTAL_ENV));
-    apply_build_accel_env(&mut cmd, &accel);
-    if quiet {
-        cmd.arg("-q");
-    } else {
-        // Force colour + the progress bar through the pipe when our stderr is a terminal.
-        crate::force_cargo_terminal_ui(&mut cmd);
-    }
+    let build = crate::cargo_step::WatchBuild {
+        cargo: cargo_path,
+        crate_dir: out_dir,
+        target_dir,
+        accel: &accel,
+        verbosity: crate::cargo_step::Verbosity::of_quiet(quiet),
+    };
     // Anchor the cargo phase at spawn — the waiter thread reports the elapsed
     // time back through `CargoDone` for `IPE_WATCH_TIMING`.
     let cargo_started = Instant::now();
-    let mut child = cmd.spawn()?;
-
-    // Take the pipes now, before the `Child` moves behind the shared lock —
-    // reading them on their own threads (rather than after exit) avoids the
-    // classic `Command`-pipe deadlock where a full OS pipe buffer blocks the
-    // child before it can exit.
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
+    // The pipes come off the child before it moves behind the shared lock.
+    let (child, pipes) = build.spawn()?;
     let shared = Arc::new(std::sync::Mutex::new(CargoChild {
         child,
         superseded: false,
     }));
     let shared_for_waiter = Arc::clone(&shared);
 
-    let stdout_reader = thread::spawn(move || read_all(stdout));
-    // Relay stderr live so the user sees cargo's progress bar and compiler
-    // messages as they arrive, while still capturing the full text for the
-    // failure diagnostic (CargoOutcome::Red carries it).
-    let stderr_reader = thread::spawn(move || relay_and_capture_stderr(stderr));
-
     thread::spawn(move || {
-        let status = loop {
-            match shared_for_waiter.lock() {
-                // A poisoned lock means the orchestrator thread panicked while
-                // holding it; the exit status can no longer be observed, so
-                // stop polling rather than spin forever.
-                Err(_) => break None,
-                Ok(mut guard) => {
-                    let superseded = guard.superseded;
-                    let polled = guard.child.try_wait();
-                    drop(guard);
-                    match polled {
-                        Ok(Some(status)) => break Some((status, superseded)),
-                        Ok(None) => {}
-                        // A persistent `try_wait` error can never resolve by
-                        // retrying, so stop rather than poll forever.
-                        Err(_) => break None,
+        // Both pipes drain on threads scoped to this waiter while it polls, so
+        // the drains end with the build and are joined before the event goes out.
+        let drained = pipes.drain_while(|| {
+            loop {
+                match shared_for_waiter.lock() {
+                    // A poisoned lock means the orchestrator thread panicked while
+                    // holding it; the exit status can no longer be observed, so
+                    // stop polling rather than spin forever.
+                    Err(_) => break None,
+                    Ok(mut guard) => {
+                        let superseded = guard.superseded;
+                        let polled = guard.child.try_wait();
+                        drop(guard);
+                        match polled {
+                            Ok(Some(status)) => break Some((status, superseded)),
+                            Ok(None) => {}
+                            // A persistent `try_wait` error can never resolve by
+                            // retrying, so stop rather than poll forever.
+                            Err(_) => break None,
+                        }
                     }
                 }
+                thread::sleep(Duration::from_millis(30));
             }
-            thread::sleep(Duration::from_millis(30));
-        };
-        let out_buf = stdout_reader.join().unwrap_or_default();
-        let err_buf = stderr_reader.join().unwrap_or_default();
-        let outcome = match status {
-            None => CargoOutcome::Red("cargo build: could not observe exit status".to_owned()),
-            Some((status, _)) if status.success() => find_executable_path(&out_buf).map_or_else(
-                || {
-                    CargoOutcome::Red(
-                        "cargo build succeeded but produced no executable artifact".to_owned(),
-                    )
-                },
-                CargoOutcome::Green,
-            ),
-            Some((_, true)) => CargoOutcome::Killed,
-            Some((_, false)) => CargoOutcome::Red(err_buf),
+        });
+        let out_buf = drained.stdout.text;
+        let err_buf = drained.stderr.text;
+        let outcome = match (drained.waited, drained.stdout.error) {
+            (None, _) => CargoOutcome::Red("cargo build: could not observe exit status".to_owned()),
+            // A refused artifact stream (past its ceiling, not UTF-8, or a read
+            // error) is never searched for an executable.
+            (Some((status, _)), Some(e)) if status.success() => {
+                CargoOutcome::Red(format!("cargo build: {e}"))
+            }
+            (Some((status, _)), None) if status.success() => find_executable_path(&out_buf)
+                .map_or_else(
+                    || {
+                        CargoOutcome::Red(
+                            "cargo build succeeded but produced no executable artifact".to_owned(),
+                        )
+                    },
+                    CargoOutcome::Green,
+                ),
+            (Some((_, true)), _) => CargoOutcome::Killed,
+            (Some((_, false)), _) => CargoOutcome::Red(err_buf),
         };
         let _ = evt_tx.send(OrchestratorEvent::CargoDone {
             generation,
@@ -3281,48 +3268,6 @@ fn spawn_cargo_build(
     });
 
     Ok(shared)
-}
-
-/// Drain an optional pipe to a `String`, best-effort (a read failure yields
-/// whatever was read so far — never a panic, never lost build output on a
-/// transient short read).
-fn read_all(pipe: Option<impl std::io::Read>) -> String {
-    let mut buf = String::new();
-    if let Some(mut s) = pipe {
-        let _ = s.read_to_string(&mut buf);
-    }
-    buf
-}
-
-/// Relay `cargo`'s stderr live to our own stderr (so the user sees the progress
-/// bar and compiler messages as they arrive) and simultaneously accumulate the
-/// full text for the failure diagnostic. Uses the same chunk boundary as
-/// [`crate::read_progress_chunk`] so carriage-return progress-bar frames flow
-/// through without buffering until the next newline.
-fn relay_and_capture_stderr(pipe: Option<impl std::io::Read>) -> String {
-    use std::io::BufReader;
-    let mut captured = String::new();
-    let Some(reader) = pipe else { return captured };
-    let mut reader = BufReader::new(reader);
-    let mut chunk = String::new();
-    loop {
-        chunk.clear();
-        match crate::read_progress_chunk(&mut reader, &mut chunk) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                // Indented one shared column off the edge (see
-                // `screen::indent_relay_chunk`, the same routine `commands.rs`
-                // uses for `ipe build`'s identical relay) — `captured` keeps
-                // the raw, unindented chunk for the failure diagnostic.
-                crate::screen::emit_machine(
-                    crate::screen::Stream::Stderr,
-                    &crate::screen::indent_relay_chunk(&chunk),
-                );
-                captured.push_str(&chunk);
-            }
-        }
-    }
-    captured
 }
 
 /// Parse `cargo build --message-format=json`'s stdout for the produced

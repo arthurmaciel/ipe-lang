@@ -34,6 +34,12 @@ impl CargoBin {
     pub fn path(&self) -> &Path {
         &self.0
     }
+
+    /// A stand-in `cargo` at `path`, for a test driving a stub.
+    #[cfg(test)]
+    pub(crate) const fn stub(path: PathBuf) -> Self {
+        Self(path)
+    }
 }
 
 /// What a command was trying to do when it needed the toolchain.
