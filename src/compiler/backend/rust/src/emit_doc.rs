@@ -286,8 +286,14 @@ pub fn build_doc(
         // statement block that ALWAYS breaks (it holds the bindings): each binding
         // and the body on their own `HardLine`. Each binding is an [`Doc::Assign`]
         // (its `p: T = arg` may RHS-break when wide); the body is built recursively.
+        // Taken exactly when the string emitter inlines: a saturated or curried
+        // apply (`args.len() >= params.len()`). An under-applied lambda is boxed and
+        // called there, so it takes the general application arm below.
         Expr::Apply { func, args }
-            if matches!(func.as_ref(), Expr::Lambda { .. }) && !args.is_empty() =>
+            if matches!(
+                func.as_ref(),
+                Expr::Lambda { params, .. } if !args.is_empty() && args.len() >= params.len()
+            ) =>
         {
             let Expr::Lambda {
                 params,
@@ -323,14 +329,14 @@ pub fn build_doc(
         }
 
         // A general function-value application `({f})(a0, a1, …)`. Structured ONLY
-        // for the non-lambda, non-empty-arg tail: the immediately-applied-lambda
-        // `func` is a `Lambda` case is handled by the arm above; a zero-arg apply
+        // for the non-empty-arg tail: an inlined `Lambda` apply and every
+        // `OnceLambda` apply are handled by the arms above, so a `Lambda` here is an
+        // under-applied one the string emitter boxes and calls; a zero-arg apply
         // (`({f})()`) has no positional list, so it stays a leaf. The remaining tail
         // is exactly `({f})(` + a delimited argument list; `f` is built recursively
         // so a structured func operand rides inside its parens.
         Expr::Apply { func, args }
-            if !matches!(func.as_ref(), Expr::Lambda { .. } | Expr::OnceLambda { .. })
-                && !args.is_empty() =>
+            if !matches!(func.as_ref(), Expr::OnceLambda { .. }) && !args.is_empty() =>
         {
             let func_doc = build_doc(ctx, func, indent, child, generics)?;
             let docs = build_args(ctx, args, indent, child, generics)?;
@@ -2776,6 +2782,32 @@ mod tests {
                     "a once closure must render as its `Lambda` twin"
                 );
             }
+        });
+    }
+
+    /// An under-applied lambda is boxed and called by the string emitter, never
+    /// inlined: the Doc builder must produce the same leaves, not a `let` block
+    /// that binds only the supplied prefix and leaves the rest unbound.
+    #[test]
+    fn under_applied_lambda_doc_matches_string_emitter() {
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::Apply {
+                func: Box::new(Expr::Lambda {
+                    params: vec![(sym(&fx, 3), IrType::Int), (sym(&fx, 4), IrType::Int)],
+                    ret: IrType::Int,
+                    body: Box::new(binop(BinOp::Add, var(&fx, 3), var(&fx, 4))),
+                }),
+                args: vec![Expr::Int(1)],
+            };
+            let want = emit_expr_at(ctx, &expr, 0, 0, scope).expect("string emitter");
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("doc builder");
+            assert_eq!(
+                doc.normalized_leaves(),
+                whitespace_normalize(&want),
+                "SEAL mismatch for an under-applied lambda"
+            );
         });
     }
 

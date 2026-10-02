@@ -1348,13 +1348,13 @@ pub enum Feature {
     ///
     /// A partial or over-application passed as a function value is rebuilt as a
     /// closure over its supplied arguments. When one of those arguments reads a
-    /// function, `Task` or `Decoder` value bound through a destructure, the
-    /// closure moves that value on its first call, so it may run only once; it
-    /// is refused wherever the receiving position may call it again (a
-    /// `List.map` mapper, a stored or returned function, a user-function
-    /// argument). The span is the moved value's use. Bind the function with a
-    /// plain `let`, or write an explicit lambda that builds the `Task` or
-    /// `Decoder` inside its body. [IPE-L0126]
+    /// `Task` or `Decoder` value, or a function bound by a pattern, the closure
+    /// moves that value on its first call, so it may run only once; it is
+    /// refused wherever the receiving position may call it again (a `List.map`
+    /// mapper, a stored or returned function, a user-function argument). The
+    /// span is the moved value's use. Take the function as its own parameter or
+    /// bind it with a plain `let`, or write an explicit lambda that builds the
+    /// `Task` or `Decoder` inside its body. [IPE-L0126]
     RebuiltClosureMovesCapture,
 }
 

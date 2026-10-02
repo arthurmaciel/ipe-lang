@@ -111,7 +111,13 @@ fn capture_moved_through_inner_lambdas_is_refused() {
     assert_refused_at_capture("eta_once_nested", "h y)");
 }
 
-/// Admitted once positions and the plain-`let` rewrite pass ipe.
+/// A partial of a user function that moves a `Task` parameter.
+#[test]
+fn task_capture_partial_is_refused_at_the_capture() {
+    assert_refused_at_capture("eta_once_task_capture", "t) ns");
+}
+
+/// Admitted once positions and the own-parameter rewrite pass ipe.
 #[test]
 fn admitted_once_positions_pass_ipe() {
     let fixture = "eta_once_admitted";
@@ -149,10 +155,10 @@ fn admitted_once_positions_build_and_run() {
         "{fixture} must build and exit 0 (no E0507/E0525); stdout: {:?}",
         outcome.stdout
     );
-    // piped (inc, 4) = 5; continued (inc, 4) = inc 40 = 41; viaLet maps inc.
+    // piped (inc, 4) = 5; continued (succeed 1) = 1 + 40 = 41; viaParam maps inc.
     assert!(
-        outcome.stdout.contains("once=5,41 let=2,3"),
-        "must print the once and let line; got: {:?}",
+        outcome.stdout.contains("once=5,41 param=2,3"),
+        "must print the once and param line; got: {:?}",
         outcome.stdout
     );
 }

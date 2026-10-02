@@ -2450,9 +2450,10 @@ const fn feature_label(f: Feature) -> &'static str {
         Feature::RebuiltClosureMovesCapture => {
             "this value is moved into a closure that this call builds and may \
              call more than once; a function, `Task` or `Decoder` value cannot \
-             be copied into each call. Bind the function with a plain `let` so \
-             it is shared, or write an explicit lambda that builds the `Task` or \
-             `Decoder` inside its body [feature: rebuilt-closure-moves-capture]"
+             be copied into each call. Take the function as its own parameter or \
+             bind it with a plain `let` so it is shared, or write an explicit \
+             lambda that builds the `Task` or `Decoder` inside its body \
+             [feature: rebuilt-closure-moves-capture]"
         }
     }
 }

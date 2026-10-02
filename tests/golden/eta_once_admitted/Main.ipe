@@ -4,40 +4,37 @@ import Ipe.Io as Io
 import Ipe.List as List
 import Ipe.String
 import Ipe.Task as Task
-import Ipe.Tuple as Tuple
 
 
--- Accepted: each rebuilt closure below moves the destructure-bound `h` but is
--- called at most once, or `h` is shared through a plain `let`.
+-- Accepted: each rebuilt closure below moves a value it cannot copy but is
+-- called at most once, or the function it reads is shared as a parameter.
 inc : Int -> Task Error Int
 inc n =
     Task.succeed (n + 1)
 
 
-applyTask : (Int -> Task Error Int) -> Int -> Task Error Int
-applyTask g n =
-    g (n * 10)
+combine : Task Error Int -> Int -> Task Error Int
+combine t n =
+    t |> Task.map (\m -> m + n)
 
 
--- A pipe into `Task.andThen`: the continuation runs once.
+-- A pipe into `Task.andThen` over a destructure-bound `h`: the continuation
+-- runs once.
 piped : ( Int -> Task Error Int, Int ) -> Task Error Int
 piped ( h, seed ) =
     Task.succeed seed |> Task.andThen (\x -> h x)
 
 
--- `Task.andThen`'s continuation is a partial that moves `h`: it runs once.
-continued : ( Int -> Task Error Int, Int ) -> Task Error Int
-continued ( h, seed ) =
-    Task.andThen (applyTask h) (Task.succeed seed)
+-- `Task.andThen`'s continuation is a partial that moves the `Task` `t`: it
+-- runs once.
+continued : Task Error Int -> Task Error Int
+continued t =
+    Task.andThen (combine t) (Task.succeed 40)
 
 
--- The IPE-L0126 advice: bind the function with a plain `let` so it is shared.
-viaLet : ( Int -> Task Error Int, Int ) -> List (Task Error Int) -> List (Task Error Int)
-viaLet pair ts =
-    let
-        h =
-            Tuple.first pair
-    in
+-- The IPE-L0126 advice: take the function as its own parameter so it is shared.
+viaParam : (Int -> Task Error Int) -> List (Task Error Int) -> List (Task Error Int)
+viaParam h ts =
     List.map (Task.andThen (\x -> h x)) ts
 
 
@@ -46,10 +43,10 @@ main =
     piped ( inc, 4 )
         |> Task.andThen
             (\a ->
-                continued ( inc, 4 )
+                continued (Task.succeed 1)
                     |> Task.andThen
                         (\b ->
-                            Task.sequence (viaLet ( inc, 0 ) [ Task.succeed 1, Task.succeed 2 ])
+                            Task.sequence (viaParam inc [ Task.succeed 1, Task.succeed 2 ])
                                 |> Task.andThen
                                     (\xs ->
                                         Io.println
@@ -57,7 +54,7 @@ main =
                                                 ++ String.fromInt a
                                                 ++ ","
                                                 ++ String.fromInt b
-                                                ++ " let="
+                                                ++ " param="
                                                 ++ String.join "," (List.map String.fromInt xs)
                                             )
                                     )
