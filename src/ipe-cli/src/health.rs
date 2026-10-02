@@ -612,12 +612,29 @@ fn check_runtime() -> Check {
 /// A fast linker (`mold` preferred, then `lld`, then `ld.gold`).
 ///
 /// The check order:
+/// 0. The host's link driver is MSVC → not applicable, nothing to do.
 /// 1. Already configured in `~/.cargo/config.toml` → `Ok`, nothing to do.
 /// 2. A linker is on PATH AND passes a link probe → offer the `rustflags` fix.
 /// 3. A linker is on PATH but fails the probe → report found-but-rejected
 ///    (neutral; never offer a fix that would break the user's builds).
 /// 4. Nothing found → suggest installation.
 fn check_linker() -> Check {
+    // 0. MSVC links through `link.exe`, which has no `-fuse-ld=` concept.
+    //    Probing a PATH linker, or writing the `rustflags` edit, would offer a
+    //    fix the host linker silently ignores. The axis does not apply here.
+    if matches!(host_link_driver(), Some(LinkDriver::Msvc)) {
+        return Check {
+            group: Group::Linker,
+            id: "linker",
+            status: Status::Ok,
+            detail: "fast-linker selection does not apply: the MSVC link driver (link.exe) \
+                     ignores -fuse-ld="
+                .to_owned(),
+            suggestion: None,
+            fix: None,
+        };
+    }
+
     // 1. Already configured: the `rustflags` key for the host target is present
     //    in `~/.cargo/config.toml` and contains a `-fuse-ld=` flag.
     if linker_already_configured() {
@@ -758,6 +775,41 @@ fn probe_linker(name: &str) -> LinkerProbeResult {
     let result = run_link_probe(name);
     write_probe_cache(name, cache_key.as_deref(), &result);
     result
+}
+
+/// The compiler's link driver — decides whether `-fuse-ld=<name>` has any
+/// effect on the host.
+enum LinkDriver {
+    /// `link.exe` (every `*-pc-windows-msvc` host) — ignores `-fuse-ld=`.
+    Msvc,
+    /// A `cc`-family front end (gnu/musl/mingw/Unix hosts) — honours it.
+    CcDriver,
+}
+
+/// Classify a `rustc -vV` host triple into its [`LinkDriver`].
+///
+/// Pure and host-independent — the triple string alone decides the driver, so
+/// this is testable on any CI host without ever spawning `rustc`.
+fn link_driver_for_host_triple(host: &str) -> LinkDriver {
+    if host.ends_with("-msvc") {
+        LinkDriver::Msvc
+    } else {
+        LinkDriver::CcDriver
+    }
+}
+
+/// The running toolchain's link driver, parsed from the `host:` line of
+/// `rustc -vV`. `None` when `rustc` is not on PATH or its output does not
+/// parse — the fast-linker probe then runs exactly as it did before this
+/// check existed.
+fn host_link_driver() -> Option<LinkDriver> {
+    let out = Command::new("rustc").arg("-vV").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(out.stdout).ok()?;
+    let host = text.lines().find_map(|l| l.strip_prefix("host: "))?;
+    Some(link_driver_for_host_triple(host))
 }
 
 /// The `rustc -vV` release line, used as the cache invalidation key. `None`
@@ -2101,13 +2153,41 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_env = "msvc"))]
     fn probe_rejected_linker_offers_no_fix() {
         // Simulate a probe rejection: a linker name that no toolchain has.
+        // `check_linker` never reaches this probe on MSVC (the driver check
+        // above short-circuits first), so the probe itself is exercised only
+        // where it is actually reachable in production.
         let result = run_link_probe("__ipe_test_nonexistent_linker__");
         assert!(
             matches!(result, LinkerProbeResult::Rejected),
             "a nonexistent linker must be rejected by the probe"
         );
+    }
+
+    #[test]
+    fn an_msvc_host_offers_no_fuse_ld_fix() {
+        assert!(matches!(
+            link_driver_for_host_triple("x86_64-pc-windows-msvc"),
+            LinkDriver::Msvc
+        ));
+        assert!(matches!(
+            link_driver_for_host_triple("aarch64-pc-windows-msvc"),
+            LinkDriver::Msvc
+        ));
+        assert!(matches!(
+            link_driver_for_host_triple("x86_64-pc-windows-gnu"),
+            LinkDriver::CcDriver
+        ));
+        assert!(matches!(
+            link_driver_for_host_triple("x86_64-unknown-linux-gnu"),
+            LinkDriver::CcDriver
+        ));
+        assert!(matches!(
+            link_driver_for_host_triple("aarch64-apple-darwin"),
+            LinkDriver::CcDriver
+        ));
     }
 
     #[test]

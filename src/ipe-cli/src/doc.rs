@@ -384,15 +384,25 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
                 it.next();
                 Sub::Lookup(key)
             }
-            // A module-path positional (uppercase, no `-` or symbol pattern) is a
-            // module API query.
+            // A module-path positional is a module API query only when every
+            // dot-separated segment satisfies the module-name grammar. A host
+            // path never does: `/`, `\` and `:` are not grammar characters, so
+            // a Windows drive path (`D:\pkg`) or a separator path can never be
+            // read as a module on any platform.
+            Some(first) if !first.starts_with('-') && is_module_name(first) => {
+                let name = (*first).to_owned();
+                it.next();
+                Sub::Query(name)
+            }
+            // An uppercase-leading positional that fails the module grammar is
+            // a host path, never a module query. Leave it unconsumed so the
+            // flag scan below (`parse_doc_flags`) picks it up as the `generate`
+            // project path.
             Some(first)
                 if !first.starts_with('-')
                     && first.chars().next().is_some_and(|c| c.is_ascii_uppercase()) =>
             {
-                let name = (*first).to_owned();
-                it.next();
-                Sub::Query(name)
+                Sub::Generate
             }
             // A lowercase bare word is a content-index lookup key only when no
             // generate-specific flags (`--out`, `--write-format`) appear in the
@@ -581,6 +591,22 @@ fn is_symbol_key(s: &str) -> bool {
     s.rsplit_once('.')
         .and_then(|(_, member)| member.chars().next())
         .is_some_and(|c| c.is_ascii_lowercase())
+}
+
+/// Return `true` when every dot-separated segment of `s` is a valid module
+/// name segment: an ASCII-uppercase first letter, then only ASCII
+/// alphanumerics or `_`.
+///
+/// No separator (`/`, `\`), drive colon (`:`) or other punctuation is a
+/// grammar character, so a host path can never satisfy this grammar on any
+/// platform — the parse stays pure and host-independent.
+fn is_module_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.split('.').all(|segment| {
+            let mut chars = segment.chars();
+            chars.next().is_some_and(|c| c.is_ascii_uppercase())
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
 }
 
 /// Build the `ipe_docs` index, wiring in the CLI command registry.
@@ -5275,6 +5301,17 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn module_name_grammar_refuses_host_path_spellings() {
+        assert!(is_module_name("Ipe.List"));
+        assert!(is_module_name("List"));
+        assert!(!is_module_name("D:\\pkg"));
+        assert!(!is_module_name("Users/alice/pkg"));
+        assert!(!is_module_name("\\\\?\\D:\\pkg"));
+        assert!(!is_module_name(""));
+        assert!(!is_module_name("Ipe."));
+    }
+
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| (*x).to_owned()).collect()
     }
@@ -5453,6 +5490,51 @@ mod tests {
             DocMode::Query {
                 module: "Ipe.Http".to_owned(),
                 format: OutputFormat::Json,
+            }
+        );
+    }
+
+    #[test]
+    fn a_module_name_is_still_a_query() {
+        // The grammar tightening must not regress a legitimate module query.
+        let m = parse_doc(&s(&["Ipe.List"])).expect("module name positional");
+        assert_eq!(
+            m,
+            DocMode::Query {
+                module: "Ipe.List".to_owned(),
+                format: OutputFormat::Human,
+            }
+        );
+    }
+
+    #[test]
+    fn a_drive_path_positional_selects_generate() {
+        // Without the grammar check, the uppercase drive letter alone used to
+        // route this to `Sub::Query("D:\\pkg")`.
+        let m = parse_doc(&s(&["D:\\pkg"])).expect("drive path positional");
+        assert_eq!(
+            m,
+            DocMode::Generate {
+                path: PathBuf::from("D:\\pkg"),
+                out: PathBuf::from("doc"),
+                write_format: WriteFormat::All,
+            }
+        );
+    }
+
+    #[test]
+    fn a_separator_path_is_never_a_module_query() {
+        let m = parse_doc(&s(&["Users/alice/pkg"])).expect("separator path positional");
+        assert!(
+            !matches!(m, DocMode::Query { .. }),
+            "a separator positional must never be a module query: {m:?}"
+        );
+        assert_eq!(
+            m,
+            DocMode::Generate {
+                path: PathBuf::from("Users/alice/pkg"),
+                out: PathBuf::from("doc"),
+                write_format: WriteFormat::All,
             }
         );
     }
