@@ -1,0 +1,139 @@
+module LinksTests exposing (checks)
+
+import Ipe.ByteSize as ByteSize
+import Ipe.Char as Char
+import Ipe.Crypto as Crypto
+import Ipe.Db as Db
+import Ipe.Db.Decode
+import Ipe.Db.Sql as Sql
+import Ipe.Dict as Dict
+import Ipe.Error as Error
+import Ipe.File as File
+import Ipe.Io as Io
+import Ipe.Json.Decode as Decode
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.Set as Set
+import Ipe.Path as Path
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+import Ipe.Time.Timestamp as Timestamp
+import Lib.Db as LibDb exposing (Decision(..), HistoryCursor(..))
+import Lib.Format as Format
+import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
+import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
+import Lib.Keys as Keys exposing (KeyAction(..))
+import Lib.Links as Links exposing (Link(..))
+import Lib.Queue as Queue exposing (HistoryState(..), QueueState(..), UnitPageState(..))
+import Lib.RepoPath as RepoPath exposing (PathError(..), Root, RootMap)
+import Lib.SafeText as SafeText
+import Lib.Settings as Settings
+
+import TestSupport exposing
+    ( tableExists
+    , countReviewRows
+    , expectErr
+    , refuse
+    , seedIndex
+    , writeFileText
+    , fixtureLibRs
+    , fixtureMainIpe
+    , viewA
+    , viewB
+    , viewTag
+    , shownTextOf
+    , unitViewTag
+    , execIndex
+    , execIndexUnchecked
+    , Scratch
+    , scratchAt
+    , indexSchemaStatements
+    , execIndexSchema
+    , seedIndexDb
+    , insertUnitRows
+    , setIndexEnv
+    , loadFirstPage
+    , checkUnits
+    , listSecond
+    , isUnitA
+    , isUnitB
+    , cleanupIndex
+    , removeFileIfAny
+    , codeText
+    , noHazard
+    , rendered
+    , renderedForeign
+    , describeText
+    , refusedFor
+    , openReviewAt
+    , openReadOnlyAt
+    , countDrainRows
+    , vectorsPath
+    , ipeIndexTestFile
+    , repoFile
+    , probeMessage
+    , probeNames
+    , maybeContains
+    )
+
+
+
+
+-- ── internal/external linking ───────────────────────────────────────────
+--
+-- Identifier tokens in a unit's source resolve against the index's qualified
+-- names (internal) or http(s) URLs (external); the unit's own name never
+-- links to itself and punctuation is stripped from tokens.
+linksResolve : Bool
+linksResolve =
+    let
+        units =
+            [ ( "Lib.answer", "u-a" )
+            , ( "Lib.answer2", "u-b" )
+            , ( "Main.main", "u-m" )
+            ]
+
+        got =
+            Links.resolve
+                "Lib.answer"
+                units
+                "use Lib.answer();\nLib.answer2 helper https://docs.rs/serde\nMain.main() Main.main"
+
+        want =
+            [ Links.Internal (SafeText.renderForeign "Lib.answer2") "u-b"
+            , Links.External "https://docs.rs/serde"
+            , Links.Internal (SafeText.renderForeign "Main.main") "u-m"
+            ]
+    in
+    List.map Links.linkKey got
+        == List.map Links.linkKey want
+        && List.map (\l -> SafeText.toString (Links.label l)) got
+        == [ "→ Lib.answer2", "↗ https://docs.rs/serde", "→ Main.main" ]
+
+
+
+linksSubstring : Bool
+linksSubstring =
+    let
+        noSelf =
+            List.isEmpty (Links.resolve "Main" [ ( "Main", "u-x" ) ] "Main.main()")
+
+        urlPunct =
+            Links.resolve "" [] "(https://a.io/b,)"
+                == [ Links.External "https://a.io/b" ]
+
+        firstWins =
+            List.map Links.linkKey (Links.resolve "" [ ( "A", "u-a" ), ( "B", "u-b" ) ] "A B A https://x.io B")
+                == [ "i:u-a", "i:u-b", "e:https://x.io" ]
+    in
+    noSelf && urlPunct && firstWins
+
+
+checks : Db -> Task.Task Error (List ( String, Bool ))
+checks _ =
+    Task.succeed
+        [ ( "links resolve internal and external", linksResolve )
+        , ( "link tokens: no self-links, urls strip punctuation, first occurrence wins", linksSubstring )
+        ]
