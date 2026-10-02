@@ -48,7 +48,8 @@ to `.ipe-index/index.db` (gitignored).
 
 ## Auto-update on every commit
 
-- `.git/hooks/post-commit`: `ipe-index index` (bg, quiet, no-build).
+- `.git/hooks/post-commit`: `tools/scripts/ipe-index update` (quiet; the
+  wrapper rebuilds a stale binary first).
 
 Hooks are local (`.git/hooks`, not committed). Re-install after a fresh clone.
 

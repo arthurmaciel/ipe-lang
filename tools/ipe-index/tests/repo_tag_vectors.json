@@ -1,0 +1,11 @@
+[
+  { "name": "plain", "raw": "ipe", "refusal": null },
+  { "name": "dashed", "raw": "ipe-std", "refusal": null },
+  { "name": "dotted", "raw": "v1.2", "refusal": null },
+  { "name": "empty", "raw": "", "refusal": "Empty" },
+  { "name": "slash", "raw": "a/b", "refusal": "Slash" },
+  { "name": "leading_slash", "raw": "/a", "refusal": "Slash" },
+  { "name": "colon", "raw": "a:b", "refusal": "Colon" },
+  { "name": "trailing_colon", "raw": "a:", "refusal": "Colon" },
+  { "name": "slash_and_colon", "raw": "a/b:c", "refusal": "Slash" }
+]

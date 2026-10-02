@@ -19,7 +19,10 @@
 --   * `codecFromRow` builds an in-memory `Value` object from the row's cells,
 --     one field per declared column parsed into the JSON scalar the decoder
 --     expects, then runs the codec's OWN `Decoder` on that `Value` via
---     `Json.Decode.decodeValue`. Schema drift (a missing column, a cell that is
+--     `Json.Decode.decodeValue`. A row cell is `Maybe String`: `Nothing` is SQL
+--     `NULL`, kept apart from the empty string, so a nullable column reads back
+--     `Nothing` only for `NULL` and `Just ""` only for an empty value. Schema
+--     drift (a missing column, a `NULL` in a non-nullable column, a cell that is
 --     not the declared shape) surfaces as a typed `Err`, never a wrong value.
 --
 -- Fail-closed throughout. A codec whose `Shape` is not an `SRecord` cannot name
@@ -277,16 +280,18 @@ bindScalar value colType =
 -- ─── Decode direction: codec + row → value ─────────────────────────
 
 
--- | Rebuild a value from a database row through its codec. Each column declared
--- by the codec's `Shape` is parsed from its row cell into the JSON scalar the
--- decoder expects, assembled into ONE in-memory `Value` object, and the codec's
--- OWN `Decoder` is run on that `Value`. No second decoder is written — the same
+-- | Rebuild a value from a database row through its codec. The row maps each
+-- column name to its cell, `Nothing` for SQL `NULL`. Each column declared by the
+-- codec's `Shape` is parsed from its row cell into the JSON scalar the decoder
+-- expects, assembled into ONE in-memory `Value` object, and the codec's OWN
+-- `Decoder` is run on that `Value`. No second decoder is written — the same
 -- decoder that reads the wire form reads the row.
 --
--- Fail-closed: a codec whose shape is not an `SRecord`, a required column
--- missing from the row, or a cell that does not parse to its declared shape is a
--- typed `Err`. Schema drift surfaces as an error, never a wrong value.
-codecFromRow : Codec a -> Dict String String -> Result Error a
+-- Fail-closed: a codec whose shape is not an `SRecord`, a declared column
+-- missing from the row, a `NULL` cell in a non-nullable column, or a cell that
+-- does not parse to its declared shape is a typed `Err`. Schema drift surfaces
+-- as an error, never a wrong value.
+codecFromRow : Codec a -> Dict String (Maybe String) -> Result Error a
 codecFromRow codec row =
     case codec of
         Codec r ->
@@ -308,7 +313,7 @@ codecFromRow codec row =
 
 -- | Assemble the row's cells into a JSON `Value` object, one field per declared
 -- column parsed into the JSON node its `ColType` implies.
-valueFromRow : Dict String String -> List ( String, ColType ) -> Result Error Value
+valueFromRow : Dict String (Maybe String) -> List ( String, ColType ) -> Result Error Value
 valueFromRow row columns =
     case fieldsFromRow row columns of
         Ok fields ->
@@ -318,13 +323,13 @@ valueFromRow row columns =
             Err e
 
 
-fieldsFromRow : Dict String String -> List ( String, ColType ) -> Result Error (List ( String, Value ))
+fieldsFromRow : Dict String (Maybe String) -> List ( String, ColType ) -> Result Error (List ( String, Value ))
 fieldsFromRow row columns =
     List.foldr (\col acc -> consField row col acc) (Ok []) columns
 
 
 consField :
-    Dict String String
+    Dict String (Maybe String)
     -> ( String, ColType )
     -> Result Error (List ( String, Value ))
     -> Result Error (List ( String, Value ))
@@ -336,12 +341,36 @@ consField row col acc =
         Ok rest ->
             case col of
                 ( name, colType ) ->
-                    case cellToValue name colType (Dict.get name row) of
+                    case cellToValue name colType (lookupCell name row) of
                         Ok node ->
                             Ok (( name, node ) :: rest)
 
                         Err e ->
                             Err e
+
+
+-- One column's cell as the row holds it: the column is absent from the row, its
+-- cell is SQL `NULL`, or its cell holds text (possibly empty). The three cases
+-- are distinct, so `NULL` and the empty string can never be confused.
+type Cell
+    = CellAbsent
+    | CellNull
+    | CellText String
+
+
+lookupCell : String -> Dict String (Maybe String) -> Cell
+lookupCell name row =
+    case Dict.get name row of
+        Nothing ->
+            CellAbsent
+
+        Just maybeText ->
+            case maybeText of
+                Nothing ->
+                    CellNull
+
+                Just text ->
+                    CellText text
 
 
 -- | Parse one row cell into the JSON node its `ColType` implies:
@@ -354,59 +383,63 @@ consField row col acc =
 --   * `CDecimal` → the cell validated as an exact decimal, kept as a JSON string
 --   * `CMoney`   → the cell kept verbatim as a JSON string ("AMOUNT ISO_CODE")
 --   * `CBlob`    → the cell parsed as JSON TEXT back into its node
---   * `CNull inner` → JSON null when the cell is absent/`NULL`, else parse as
---     `inner`
+--   * `CNull inner` → JSON null when the cell is SQL `NULL`, else parse as
+--     `inner` (an empty or `"NULL"` text cell is text, never `NULL`)
 --
--- A cell that does not parse to its declared shape is a typed `Err`.
-cellToValue : String -> ColType -> Maybe String -> Result Error Value
-cellToValue name colType maybeCell =
+-- An absent column, a `NULL` cell in a non-nullable column, or a cell that does
+-- not parse to its declared shape is a typed `Err`.
+cellToValue : String -> ColType -> Cell -> Result Error Value
+cellToValue name colType cell =
     case colType of
         CNull inner ->
-            case maybeCell of
-                Nothing ->
+            case cell of
+                CellNull ->
                     Ok Encode.null
 
-                Just cell ->
-                    if isSqlNull cell then
-                        Ok Encode.null
+                CellAbsent ->
+                    Err (missingColumnError name)
 
-                    else
-                        cellToValue name inner (Just cell)
+                CellText _ ->
+                    cellToValue name inner cell
 
         CText ->
-            requirePresent name maybeCell (scalarCellToValue name colType)
+            requireText name cell (scalarCellToValue name colType)
 
         CInt ->
-            requirePresent name maybeCell (scalarCellToValue name colType)
+            requireText name cell (scalarCellToValue name colType)
 
         CReal ->
-            requirePresent name maybeCell (scalarCellToValue name colType)
+            requireText name cell (scalarCellToValue name colType)
 
         CBool ->
-            requirePresent name maybeCell (scalarCellToValue name colType)
+            requireText name cell (scalarCellToValue name colType)
 
         CTime ->
-            requirePresent name maybeCell (scalarCellToValue name colType)
+            requireText name cell (scalarCellToValue name colType)
 
         CDecimal ->
-            requirePresent name maybeCell (scalarCellToValue name colType)
+            requireText name cell (scalarCellToValue name colType)
 
         CMoney ->
-            requirePresent name maybeCell (scalarCellToValue name colType)
+            requireText name cell (scalarCellToValue name colType)
 
         CBlob ->
-            requirePresent name maybeCell (scalarCellToValue name colType)
+            requireText name cell (scalarCellToValue name colType)
 
 
--- | A non-nullable column MUST have a present cell; an absent one is a typed
--- missing-column `Err`. Threads the present cell into the parser.
-requirePresent : String -> Maybe String -> (String -> Result Error Value) -> Result Error Value
-requirePresent name maybeCell parse =
-    case maybeCell of
-        Just cell ->
-            parse cell
+-- | A non-nullable column MUST hold a text cell: an absent column is a typed
+-- missing-column `Err`, and a `NULL` cell a typed null-in-required-column `Err`.
+-- Threads the text into the parser.
+requireText : String -> Cell -> (String -> Result Error Value) -> Result Error Value
+requireText name cell parse =
+    case cell of
+        CellText text ->
+            parse text
 
-        Nothing ->
+        CellNull ->
+            Err (nullCellError name)
+
+        CellAbsent ->
             Err (missingColumnError name)
 
 
@@ -466,12 +499,6 @@ scalarCellToValue name colType cell =
             scalarCellToValue name inner cell
 
 
--- | `"NULL"` (any case) is the store's sentinel for an absent value.
-isSqlNull : String -> Bool
-isSqlNull cell =
-    String.toUpper cell == "NULL"
-
-
 boolFromCell : String -> Maybe Bool
 boolFromCell cell =
     case cell of
@@ -506,6 +533,12 @@ missingColumnError : String -> Error
 missingColumnError name =
     Error.invalidInput
         (String.concat [ "Ipe.Db.Codec: row is missing the required column \"", name, "\"" ])
+
+
+nullCellError : String -> Error
+nullCellError name =
+    Error.invalidInput
+        (String.concat [ "Ipe.Db.Codec: column \"", name, "\" is NULL but its field is not a Maybe" ])
 
 
 badCellError : String -> ColType -> String -> Error

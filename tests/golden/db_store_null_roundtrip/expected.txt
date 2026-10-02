@@ -1,0 +1,9 @@
+get-null:n1 reason=Nothing score=Nothing ratio=Nothing flag=Nothing
+get-empty:n2 reason=Just "" score=Just 0 ratio=Just 3 flag=Just false
+get-null-text:n3 reason=Just "NULL" score=Just 7 ratio=Just 1.2345675e+06 flag=Just true
+all:n1 reason=Nothing score=Nothing ratio=Nothing flag=Nothing|n2 reason=Just "" score=Just 0 ratio=Just 3 flag=Just false|n3 reason=Just "NULL" score=Just 7 ratio=Just 1.2345675e+06 flag=Just true
+find-by:n1 reason=Nothing score=Nothing ratio=Nothing flag=Nothing
+find-where:n1 reason=Nothing score=Nothing ratio=Nothing flag=Nothing
+query-order:n1,n2,n3
+query-desc:n3,n2,n1
+strict-null:Err InvalidInput: Ipe.Db.Codec: column "reason" is NULL but its field is not a Maybe

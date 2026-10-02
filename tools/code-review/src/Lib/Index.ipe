@@ -1,39 +1,44 @@
-module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), PendingRow, ShownSource, SourceView(..), StaleReason(..), Unit, attest, attestedHash, attestedUid, countPending, dbBytes, drainUnit, loadPendingPage, loadUnitByUid, nameFor, openRead, pageSize, qualifiedUids, reverify, shortHash, shownHash, shownText, storedHash, viewText)
+module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), PendingRow, ProgressRow, ShownSource, SourceView(..), StaleReason(..), Unit, attest, attestedHash, attestedUid, countPending, dbBytes, drainPair, drainUnit, loadPendingPage, loadProgress, loadUnitByUid, nameFor, openRead, pageSize, probe, qualifiedUids, rebuildReviewed, reverify, shortHash, shownHash, shownText, storedHash, viewText)
 
 import Ipe.ByteSize as ByteSize exposing (ByteSize)
+import Ipe.Crypto as Crypto
 import Ipe.Db
 import Ipe.Db.Decode
 import Ipe.Db.Sql as Sql
-import Ipe.Crypto as Crypto
 import Ipe.Db.Store as Store exposing (Store)
 import Ipe.Error as Error
 import Ipe.File as File
 import Ipe.List as List
+import Ipe.Maybe as Maybe
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Task as Task
+import Lib.Highlight as Highlight
 import Lib.RepoPath as RepoPath exposing (RootMap)
-import Lib.SafeText as SafeText
-import Lib.Settings as Settings
+import Lib.SafeText as SafeText exposing (SafeText)
+import Lib.Settings as Settings exposing (IndexSettings)
 
 
--- One queued ipe-index unit plus its verified source view. `path` is the
--- `tag:relative` form ipe-index stores; `attested` is the stored body hash,
--- parsed once; `view` is the unit's lines from disk, shown only when they
--- re-hash to `attested`.
+-- One queued ipe-index unit plus its verified source view. Every text column
+-- a page shows (`path`, the `tag:relative` form ipe-index stores; `name`;
+-- `qualified`; `kind`; `facing`; `purpose`) is `SafeText`, rendered once
+-- here, so no index text can reach a page raw; `lang` is `kind` parsed for
+-- highlighting. `attested` is the stored body hash, parsed once; `view` is
+-- the unit's lines from disk, shown only when they re-hash to `attested`.
 type alias Unit =
     { uid : String
     , change : String
     , oldHash : Maybe String
     , newHash : Maybe String
-    , path : String
-    , name : String
-    , qualified : String
-    , kind : String
+    , path : SafeText
+    , name : SafeText
+    , qualified : SafeText
+    , kind : SafeText
+    , lang : Highlight.Lang
     , lineStart : Int
     , lineEnd : Int
-    , facing : String
-    , purpose : Maybe String
+    , facing : SafeText
+    , purpose : Maybe SafeText
     , attested : AttestedHash
     , updatedSha : String
     , view : SourceView
@@ -203,6 +208,85 @@ partBDecoder =
         |> Db.Decode.required "updated_sha" (Db.Decode.string "updated_sha")
 
 
+-- The startup check of `IPE_INDEX_DB`: the index is opened read-only and
+-- every column a queue page and the progress count read is selected, so a
+-- missing file, a file that is not an ipe-index database, or one missing a
+-- table or column (an index built before the `reviewed` table) stops the
+-- server before it listens, naming the variable and the file.
+probe : IndexSettings -> Task.Task Error ()
+probe settings =
+    (do
+        conn <- Db.open "sqlite" (Settings.indexReadUrl settings.db)
+        Db.queryDecode conn (pendingColumns ++ pendingFrom ++ " LIMIT 0") [] pendingRowDecoder
+        Db.queryDecode conn "SELECT uid, body_hash FROM reviewed LIMIT 0" [] reviewedPairDecoder
+        Task.succeed ()
+    )
+        |> Task.mapError (Settings.openFailure "IPE_INDEX_DB" (SafeText.literal "build it from the repo root with `tools/scripts/ipe-index index`, or point IPE_INDEX_DB at an existing index") settings.db)
+
+
+reviewedPairDecoder : Db.Decode.Decoder ( String, String )
+reviewedPairDecoder =
+    Db.Decode.succeed (\uid hash -> ( uid, hash ))
+        |> Db.Decode.required "uid" (Db.Decode.string "uid")
+        |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
+
+
+-- Review progress over the whole index, as one aggregate row: `reviewed`
+-- counts the units whose current (uid, body_hash) pair is in the `reviewed`
+-- copy, `total` the units reviewed or still queued, and `mirrored` the
+-- copy's own rows, which the caller compares with the review database.
+type alias ProgressRow =
+    { reviewed : Int
+    , total : Int
+    , mirrored : Int
+    }
+
+
+-- The one test of "this unit is decided": its uid and its current body hash,
+-- compared column by column against the `reviewed` copy, never as one
+-- concatenated key.
+decidedPredicate : String
+decidedPredicate =
+    "EXISTS (SELECT 1 FROM reviewed r WHERE r.uid = u.uid AND r.body_hash = u.body_hash)"
+
+
+progressSql : String
+progressSql =
+    String.concat
+        [ "SELECT (SELECT COUNT(*) FROM units u WHERE "
+        , decidedPredicate
+        , ") AS reviewed, (SELECT COUNT(*) FROM units u WHERE "
+        , decidedPredicate
+        , " OR EXISTS (SELECT 1 FROM change_queue q WHERE q.uid = u.uid AND "
+        , pendingChange
+        , ")) AS total, (SELECT COUNT(*) FROM reviewed) AS mirrored"
+        ]
+
+
+progressDecoder : Db.Decode.Decoder ProgressRow
+progressDecoder =
+    Db.Decode.succeed (\reviewed total mirrored -> { reviewed = reviewed, total = total, mirrored = mirrored })
+        |> Db.Decode.required "reviewed" (Db.Decode.int "reviewed")
+        |> Db.Decode.required "total" (Db.Decode.int "total")
+        |> Db.Decode.required "mirrored" (Db.Decode.int "mirrored")
+
+
+-- The progress row, counted by SQLite over the index; one row is decoded
+-- whatever the index's size. A query that yields anything but one row is a
+-- failed read, never a zero.
+loadProgress : Task.Task Error ProgressRow
+loadProgress =
+    do
+        conn <- openRead
+        rows <- Db.queryDecode conn progressSql [] progressDecoder
+        case rows of
+            [ row ] ->
+                Task.succeed row
+
+            _ ->
+                Task.fail (Error.unexpected "the review progress query did not return exactly one row")
+
+
 -- The index database opened read-only, for listing.
 openRead : Task.Task Error Db.Db
 openRead =
@@ -241,7 +325,13 @@ type alias PendingRow =
 -- counts exactly the rows a page can return.
 pendingFrom : String
 pendingFrom =
-    " FROM change_queue q JOIN units u ON u.uid = q.uid WHERE q.change IN ('new','modified')"
+    " FROM change_queue q JOIN units u ON u.uid = q.uid WHERE " ++ pendingChange
+
+
+-- The queue rows still to review; `deleted` rows are never listed.
+pendingChange : String
+pendingChange =
+    "q.change IN ('new','modified')"
 
 
 pendingColumns : String
@@ -344,19 +434,50 @@ singleInt what rows =
 
 
 -- The review app consumes and clears explicitly: after a unit is decided,
--- its change_queue row is deleted so it stops appearing in queue pages. Only
--- the row queued for the attested hash is deleted: a re-index that re-queued
--- the unit under new content keeps its row, so that change is still reviewed.
+-- `drainPair` runs in one index transaction, so the pair enters the
+-- `reviewed` copy and the unit's change_queue row leaves together, or
+-- neither does. Returns the count of queue rows deleted.
 drainUnit : Attested -> Task.Task Error Int
 drainUnit attested =
     do
         settings <- Settings.indexSettings
         conn <- Db.open "sqlite" (Settings.indexWriteUrl settings.db)
+        Db.withTransaction conn (\tx -> drainPair tx (attestedUid attested) (attestedHash attested))
+
+
+-- One decided pair drained on `conn`, the one step both a drain and a
+-- rebuild run: the pair is added to `reviewed` (a pair already there is
+-- kept, so the first review wins and a re-drain is a no-op), then the
+-- change_queue row queued for that hash is deleted. Only the row queued for
+-- the decided hash is deleted: a re-index that re-queued the unit under new
+-- content keeps its row, so that change is still reviewed. Returns the count
+-- of queue rows deleted. Atomic only inside a transaction the caller opens.
+drainPair : Db.Db -> String -> String -> Task.Task Error Int
+drainPair conn uid hash =
+    do
+        Db.exec conn "INSERT OR IGNORE INTO reviewed (uid, body_hash) VALUES (?, ?)" [ SqlString uid, SqlString hash ]
         Db.deleteWhere conn
             "change_queue"
             (Sql.and
-                (Sql.eq (Sql.column "uid") (Sql.param (SqlString (attestedUid attested))))
-                (Sql.eq (Sql.column "new_hash") (Sql.param (SqlString (attestedHash attested))))
+                (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
+                (Sql.eq (Sql.column "new_hash") (Sql.param (SqlString hash)))
+            )
+
+
+-- The `reviewed` copy rebuilt in one index transaction: every row is
+-- deleted, then `refill` re-adds the decided pairs through `drainPair` on the
+-- transaction's connection it is given. A failed refill rolls the whole
+-- rebuild back, leaving the copy as it was.
+rebuildReviewed : (Db.Db -> Task.Task Error a) -> Task.Task Error a
+rebuildReviewed refill =
+    do
+        settings <- Settings.indexSettings
+        conn <- Db.open "sqlite" (Settings.indexWriteUrl settings.db)
+        Db.withTransaction conn
+            (\tx ->
+                do
+                    Db.exec tx "DELETE FROM reviewed" []
+                    refill tx
             )
 
 
@@ -374,11 +495,11 @@ unitsStore =
         |> Result.map Store.public
 
 
--- The unit's qualified name from the units table, if the unit still exists
--- (a decided unit whose source was deleted leaves a review row but no name).
--- The `uid` value is bound as a parameter by `Store.findBy`, never
--- interpolated into SQL text.
-nameFor : Db.Db -> String -> Task.Task Error (Maybe String)
+-- The unit's qualified name from the units table, rendered for display, if
+-- the unit still exists (a decided unit whose source was deleted leaves a
+-- review row but no name). The `uid` value is bound as a parameter by
+-- `Store.findBy`, never interpolated into SQL text.
+nameFor : Db.Db -> String -> Task.Task Error (Maybe SafeText)
 nameFor conn uid =
     case unitsStore of
         Err e ->
@@ -389,7 +510,7 @@ nameFor conn uid =
                 rows <- Store.findBy conn store "uid" (SqlString uid)
                 case List.head rows of
                     Just row ->
-                        Task.succeed (Result.toMaybe (Store.readText "qualified" row))
+                        Task.succeed (Maybe.map SafeText.renderForeign (Result.toMaybe (Store.readText "qualified" row)))
 
                     Nothing ->
                         Task.succeed Nothing
@@ -455,21 +576,23 @@ sourceCeiling =
     ByteSize.mib 16
 
 
--- The single decode point from a raw row: the stored hash is parsed here.
+-- The single decode point from a raw row: the stored hash is parsed here,
+-- and every displayed text column is rendered into `SafeText`.
 withView : SourceView -> RowUnit -> Unit
 withView view row =
     { uid = row.uid
     , change = row.change
     , oldHash = row.oldHash
     , newHash = row.newHash
-    , path = row.path
-    , name = row.name
-    , qualified = row.qualified
-    , kind = row.kind
+    , path = SafeText.renderForeign row.path
+    , name = SafeText.renderForeign row.name
+    , qualified = SafeText.renderForeign row.qualified
+    , kind = SafeText.renderForeign row.kind
+    , lang = Highlight.langFor row.kind
     , lineStart = row.lineStart
     , lineEnd = row.lineEnd
-    , facing = row.facing
-    , purpose = row.purpose
+    , facing = SafeText.renderForeign row.facing
+    , purpose = Maybe.map SafeText.renderForeign row.purpose
     , attested = parseAttested row.bodyHash
     , updatedSha = row.updatedSha
     , view = view
@@ -504,16 +627,22 @@ storedHash attested =
             stored
 
 
--- The first 8 digits of a stored hash, for display: an attestation shows
--- its digest without the scheme prefix, any other value its leading text.
-shortHash : String -> String
+-- The first 8 characters of a stored hash, rendered for display: an
+-- attestation shows its digest without the scheme prefix, any other value
+-- its leading text. The stored text is database text, so it is rendered.
+shortHash : String -> SafeText
 shortHash stored =
-    case parseAttested stored of
-        Sha256 attested ->
-            String.slice 0 8 (String.dropLeft (String.length attestScheme) attested)
+    SafeText.renderForeign (String.slice 0 8 (hashDigits (parseAttested stored)))
+
+
+hashDigits : AttestedHash -> String
+hashDigits attested =
+    case attested of
+        Sha256 stored ->
+            String.dropLeft (String.length attestScheme) stored
 
         UnknownScheme other ->
-            String.slice 0 8 other
+            other
 
 
 -- Source text proved equal to its attestation. Opaque: built only by

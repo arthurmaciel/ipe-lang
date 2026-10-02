@@ -11,6 +11,8 @@ import Ipe.File as File
 import Ipe.Io as Io
 import Ipe.Json.Decode as Decode
 import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.Set as Set
 import Ipe.Path as Path
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
@@ -77,7 +79,7 @@ duplicateInsertIsNoop db =
     LibDb.insertDecision db "dup-uid" "h1" Approved
         |> Task.andThen
             (\_ ->
-                LibDb.insertDecision db "dup-uid" "h1" (Refused "changed")
+                refuse "changed" |> Task.andThen (LibDb.insertDecision db "dup-uid" "h1")
             )
         |> Task.andThen (\_ -> countReviewRows db "dup-uid" "h1")
         |> Task.andThen
@@ -104,21 +106,57 @@ isApproved m =
                     False
 
 
-refuseWithoutReasonRejected : Db -> Task.Task Error Bool
-refuseWithoutReasonRejected db =
-    LibDb.insertDecision db "bad-uid" "h2" (Refused "")
-        |> expectErr
-        |> Task.andThen
-            (\emptyRejected ->
-                LibDb.insertDecision db "bad-uid" "h3" (Refused "   ")
-                    |> expectErr
-                    |> Task.andThen
-                        (\blankRejected ->
-                            Task.map2
-                                (\n2 n3 -> emptyRejected && blankRejected && n2 == 0 && n3 == 0)
-                                (countReviewRows db "bad-uid" "h2")
-                                (countReviewRows db "bad-uid" "h3")
-                        )
+-- A refusal decision exists only with a parsed reason; a reason the test
+-- expects to be valid that `parseReason` refuses fails the run.
+refuse : String -> Task.Task Error Decision
+refuse text =
+    Task.fromResult (Result.map Refused (LibDb.parseReason text))
+
+
+shortHashShown : String -> String
+shortHashShown stored =
+    SafeText.toString (Index.shortHash stored)
+
+
+reasonShown : LibDb.Reason -> String
+reasonShown reason =
+    SafeText.toString (LibDb.reasonText reason)
+
+
+-- `parseReason` is the only way to a refusal: blank and over-long reasons
+-- have no `Reason`, the bound itself is accepted, and a stored row whose
+-- reason breaks the bound fails to decode rather than reaching a page.
+reasonBounded : Db -> Task.Task Error Bool
+reasonBounded db =
+    let
+        atBound =
+            String.repeat LibDb.reasonMaxChars "x"
+
+        rejected raw =
+            case LibDb.parseReason raw of
+                Ok _ ->
+                    False
+
+                Err e ->
+                    Error.kind e == Error.kind (Error.invalidInput "")
+    in
+    do
+        Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString "long-uid", SqlString "hL", SqlString "refuse", SqlString (atBound ++ "x"), SqlInt 0 ]
+        storedRefused <- LibDb.findDecision db "long-uid" "hL" |> Task.map (\_ -> False) |> Task.onError (\e -> Task.succeed (String.contains "at most" (Error.toString e) && String.contains "unit \"long-uid\" at hash \"hL\"" (Error.toString e)))
+        Db.exec db "DELETE FROM review WHERE uid = ?" [ SqlString "long-uid" ]
+        Task.succeed
+            (rejected ""
+                && rejected "   "
+                && rejected (atBound ++ "x")
+                && rejected (atBound ++ atBound)
+                && (case LibDb.parseReason atBound of
+                        Ok r ->
+                            String.length (reasonShown r) == LibDb.reasonMaxChars
+
+                        Err _ ->
+                            False
+                   )
+                && storedRefused
             )
 
 
@@ -147,13 +185,13 @@ matchRefused d =
             False
 
         Refused reason ->
-            reason == "too big"
+            reasonShown reason == "too big"
 
 
 decisionRoundtrip : Db -> Task.Task Error Bool
 decisionRoundtrip db =
     LibDb.insertDecision db "rt-uid" "h3" Approved
-        |> Task.andThen (\_ -> LibDb.insertDecision db "rt-uid" "h4" (Refused "too big"))
+        |> Task.andThen (\_ -> refuse "too big" |> Task.andThen (LibDb.insertDecision db "rt-uid" "h4"))
         |> Task.andThen
             (\_ ->
                 Task.map2 checkPair
@@ -168,7 +206,7 @@ allChecks db =
         [ Task.map (\ok -> ( "0001+0002 create tables", ok )) (bothTablesExist db)
         , Task.map (\ok -> ( "re-migrate idempotent", ok )) (idempotent db)
         , Task.map (\ok -> ( "duplicate (uid,body_hash) no-op", ok )) (duplicateInsertIsNoop db)
-        , Task.map (\ok -> ( "refuse without reason rejected", ok )) (refuseWithoutReasonRejected db)
+        , Task.map (\ok -> ( "refusal reason is non-blank and bounded", ok )) (reasonBounded db)
         , Task.map (\ok -> ( "decision roundtrip", ok )) (decisionRoundtrip db)
         , Task.succeed
             ( "formatReviewedAt renders UTC"
@@ -180,12 +218,21 @@ allChecks db =
         , Task.succeed ( "db file paths escape url specials", filePathsEncodeUrlSpecials )
         , Task.succeed
             ( "history shows the digest, not the scheme"
-            , Index.shortHash "sha256:0123456789abcdef"
+            , shortHashShown "sha256:0123456789abcdef"
                 == "01234567"
-                && Index.shortHash "deadbeefcafe"
+                && shortHashShown "deadbeefcafe"
                 == "deadbeef"
-                && Index.shortHash "sha256:"
+                && shortHashShown "sha256:"
                 == ""
+            )
+        , Task.succeed
+            -- A review row's hash is database text: a bidi override in it
+            -- shows as an escape on the History page.
+            ( "history hash renders hazards"
+            , shortHashShown ("sha256:" ++ codeText 8238 ++ "ab" ++ codeText 27 ++ "c")
+                == "\\u{202e}ab\\u{1b}c"
+                && shortHashShown ("dead" ++ codeText 8294 ++ "beef")
+                == "dead\\u{2066}bee"
             )
         , Task.succeed
             ( "numberedLines counts from line_start"
@@ -662,18 +709,22 @@ approveRefusedAfterReindex =
 -- R6: the unit's row is gone from the index after the page loaded.
 approveRefusedAfterUnitDeleted : Task.Task Error Bool
 approveRefusedAfterUnitDeleted =
-    decideAfter "ipe-index-decide-deleted"
-        noChange
-        (\at -> execIndex at.indexDb "DELETE FROM units WHERE uid = ?" [ SqlString "u-a" ])
-        (Refused "x")
+    refuse "x"
+        |> Task.andThen (decideAfter "ipe-index-decide-deleted" noChange deleteUnitA)
         |> Task.map (\o -> o.conflict && o.rows == 0)
+
+
+deleteUnitA : Scratch -> Task.Task Error ()
+deleteUnitA at =
+    execIndex at.indexDb "DELETE FROM units WHERE uid = ?" [ SqlString "u-a" ]
 
 
 -- R7: a unit loaded stale is refused by `decide` itself, for a refusal as
 -- well as an approval.
 staleRefuseAlsoRefused : Task.Task Error Bool
 staleRefuseAlsoRefused =
-    decideAfter "ipe-index-decide-stale" driftLib noChange (Refused "x")
+    refuse "x"
+        |> Task.andThen (decideAfter "ipe-index-decide-stale" driftLib noChange)
         |> Task.map (\o -> o.conflict && o.rows == 0)
 
 
@@ -749,6 +800,12 @@ queueDdl =
     "CREATE TABLE change_queue (uid TEXT PRIMARY KEY, change TEXT NOT NULL, old_hash TEXT, new_hash TEXT, enqueued_sha TEXT NOT NULL, enqueued_at INTEGER NOT NULL)"
 
 
+-- The `reviewed` table exactly as ipe-index's `SCHEMA` creates it.
+reviewedDdl : String
+reviewedDdl =
+    "CREATE TABLE reviewed (uid TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY (uid, body_hash)) WITHOUT ROWID"
+
+
 seedIndexDb : String -> Task.Task Error ()
 seedIndexDb indexDb =
     Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
@@ -756,6 +813,7 @@ seedIndexDb indexDb =
             (\conn ->
                 Db.exec conn unitsDdl []
                     |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                    |> Task.andThen (\_ -> Db.exec conn reviewedDdl [])
                     |> Task.andThen (\_ -> insertUnitRows conn)
             )
         |> Task.map (\_ -> ())
@@ -885,21 +943,21 @@ isUnitA u =
         == Nothing
         && u.newHash
         == Nothing
-        && u.path
+        && SafeText.toString u.path
         == "ipe:src/Lib.rs"
-        && u.name
+        && SafeText.toString u.name
         == "answer"
-        && u.qualified
+        && SafeText.toString u.qualified
         == "Lib.answer"
-        && u.kind
+        && SafeText.toString u.kind
         == "fn"
         && u.lineStart
         == 3
         && u.lineEnd
         == 6
-        && u.facing
+        && SafeText.toString u.facing
         == "internal"
-        && u.purpose
+        && Maybe.map SafeText.toString u.purpose
         == Just "purpose-A"
         && Index.storedHash u.attested
         == Index.attest viewA
@@ -917,13 +975,13 @@ isUnitB u =
         == "modified"
         && u.newHash
         == Just (Index.attest viewB)
-        && u.path
+        && SafeText.toString u.path
         == "ipe:src/Main.ipe"
-        && u.kind
+        && SafeText.toString u.kind
         == "module"
-        && u.facing
+        && SafeText.toString u.facing
         == "user"
-        && u.purpose
+        && Maybe.map SafeText.toString u.purpose
         == Nothing
         && shownTextOf u.view
         == Just viewB
@@ -1118,6 +1176,7 @@ seedManyUnits indexDb n =
             (\conn ->
                 Db.exec conn unitsDdl []
                     |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                    |> Task.andThen (\_ -> Db.exec conn reviewedDdl [])
                     |> Task.andThen
                         (\_ ->
                             List.range 1 n
@@ -1471,12 +1530,49 @@ tagGrammarMatchesWriter =
                 , refusedAs "missing-tag" (RepoPath.resolve roots ":x")
                 -- split_tag "ipe:a:b" = (Some("ipe"), "a:b")
                 , resolvesTo (base ++ "/a:b") (RepoPath.resolve roots "ipe:a:b")
-                , tagRefused "a/b"
-                , tagRefused "a:b"
-                , tagRefused ""
-                , Result.map RepoPath.tagName (RepoPath.parseTag "ipe") == Ok "ipe"
                 ]
             )
+
+
+-- One row of ipe-index's tag vectors: a raw tag and the writer's refusal
+-- (`Empty`, `Slash`, `Colon`), or `Nothing` for a tag it accepts.
+type alias TagVector =
+    { name : String
+    , raw : String
+    , refusal : Maybe String
+    }
+
+
+-- `parseTag` accepts exactly the tags ipe-index's writer accepts, on every
+-- row of the shared vectors file, and keeps an accepted tag's text. Every
+-- writer refusal reads here as `MissingTag`. Red if the file is absent or
+-- short, or if the two grammars disagree on any row.
+tagGrammarMatchesVectors : Task.Task Error Bool
+tagGrammarMatchesVectors =
+    do
+        cwd <- System.cwd ()
+        path <- Task.fromResult (Path.fromString (ipeIndexTestFile cwd "repo_tag_vectors.json"))
+        text <- File.readFileLimit path (ByteSize.kib 64)
+        vectors <- Task.fromResult (Decode.decodeString (Decode.list tagVectorDecoder) text)
+        Task.succeed (List.length vectors >= 9 && List.all tagVectorHolds vectors)
+
+
+tagVectorDecoder : Decode.Decoder TagVector
+tagVectorDecoder =
+    Decode.map3 (\name raw refusal -> { name = name, raw = raw, refusal = refusal })
+        (Decode.field "name" Decode.string)
+        (Decode.field "raw" Decode.string)
+        (Decode.field "refusal" (Decode.nullable Decode.string))
+
+
+tagVectorHolds : TagVector -> Bool
+tagVectorHolds v =
+    case v.refusal of
+        Nothing ->
+            Result.map RepoPath.tagName (RepoPath.parseTag v.raw) == Ok v.raw
+
+        Just _ ->
+            tagRefused v.raw
 
 
 -- `parseTag` refuses `raw` as `MissingTag`.
@@ -2324,7 +2420,7 @@ historyRoundtrip =
                                 == 2
                                 && List.member ( "u-a", "approve" ) (List.map (\r -> ( r.uid, r.decision )) rows)
                                 && List.member ( "u-b", "refuse" ) (List.map (\r -> ( r.uid, r.decision )) rows)
-                                && List.member (Just "too big") (List.map (\r -> r.reason) rows)
+                                && List.member (Just "too big") (List.map (\r -> Maybe.map reasonShown r.reason) rows)
                         )
             )
         |> Task.andThen
@@ -2339,14 +2435,17 @@ historyRoundtrip =
 insertBoth : Db -> Task.Task Error Int
 insertBoth db =
     LibDb.insertDecision db "u-a" "hashA" Approved
-        |> Task.andThen (\_ -> LibDb.insertDecision db "u-b" "hashB" (Refused "too big"))
+        |> Task.andThen (\_ -> refuse "too big" |> Task.andThen (LibDb.insertDecision db "u-b" "hashB"))
 
 
 -- ── change re-enqueue ─────────────────────────────────────────────────────
 --
 -- A unit already decided on its current hash stays hidden; a unit decided on an
 -- OLDER hash resurfaced at the queue head, flagged with the previous decision;
--- never-seen units follow in their natural order.
+-- never-seen units follow in their natural order. The two decisions are
+-- written without a drain, so the load's progress check rebuilds the
+-- `reviewed` copy, which drains u-b's queue row: the queue counts the two
+-- shown units.
 changeReenqueue : Task.Task Error Bool
 changeReenqueue =
     let
@@ -2380,7 +2479,7 @@ changeReenqueue =
                     |> Task.andThen
                         (\db ->
                             LibDb.insertDecision db "u-a" "hashA" Approved
-                                |> Task.andThen (\_ -> LibDb.insertDecision db "u-b" "hashB" (Refused "too big"))
+                                |> Task.andThen (\_ -> refuse "too big" |> Task.andThen (LibDb.insertDecision db "u-b" "hashB"))
                                 |> Task.map (\_ -> db)
                         )
                     |> Task.andThen (\_ -> System.setenv "IPE_REVIEW_DB" reviewDb)
@@ -2393,7 +2492,7 @@ changeReenqueue =
                     && List.length r.units
                     == 2
                     && r.total
-                    == 3
+                    == 2
             )
         |> Task.andThen
             (\ok ->
@@ -2459,6 +2558,7 @@ seedB8Db indexDb =
             (\conn ->
                 Db.exec conn unitsDdl []
                     |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                    |> Task.andThen (\_ -> Db.exec conn reviewedDdl [])
                     |> Task.andThen (\_ -> insertB8Units conn)
             )
         |> Task.map (\_ -> ())
@@ -2555,12 +2655,15 @@ linksResolve =
                 "use Lib.answer();\nLib.answer2 helper https://docs.rs/serde\nMain.main() Main.main"
 
         want =
-            [ Links.Internal "Lib.answer2" "u-b"
+            [ Links.Internal (SafeText.renderForeign "Lib.answer2") "u-b"
             , Links.External "https://docs.rs/serde"
-            , Links.Internal "Main.main" "u-m"
+            , Links.Internal (SafeText.renderForeign "Main.main") "u-m"
             ]
     in
-    List.map Links.linkKey got == List.map Links.linkKey want
+    List.map Links.linkKey got
+        == List.map Links.linkKey want
+        && List.map (\l -> SafeText.toString (Links.label l)) got
+        == [ "→ Lib.answer2", "↗ https://docs.rs/serde", "→ Main.main" ]
 
 
 linksSubstring : Bool
@@ -2572,8 +2675,12 @@ linksSubstring =
         urlPunct =
             Links.resolve "" [] "(https://a.io/b,)"
                 == [ Links.External "https://a.io/b" ]
+
+        firstWins =
+            List.map Links.linkKey (Links.resolve "" [ ( "A", "u-a" ), ( "B", "u-b" ) ] "A B A https://x.io B")
+                == [ "i:u-a", "i:u-b", "e:https://x.io" ]
     in
-    noSelf && urlPunct
+    noSelf && urlPunct && firstWins
 
 
 -- The unit page's data path: a uid that exists loads with source and qualified
@@ -2609,7 +2716,7 @@ unitPageLoad =
                                     Index.qualifiedUids
                                         |> Task.map
                                             (\qs ->
-                                                unit.qualified
+                                                SafeText.toString unit.qualified
                                                     == "Lib.answer"
                                                     && shownTextOf unit.view
                                                     == Just viewA
@@ -2686,7 +2793,7 @@ queueStateTextsDistinct =
             Error.unexpected "boom"
 
         empty =
-            { units = [], total = 0, dbName = "index.db", dbBytes = 4096, next = Nothing }
+            { units = [], total = 0, dbName = SafeText.renderForeign "index.db", dbBytes = 4096, next = Nothing, progress = { reviewed = 0, total = 0 } }
 
         drained =
             { empty | total = 41000 }
@@ -2714,13 +2821,14 @@ sampleQueuedUnit =
         , change = "new"
         , oldHash = Nothing
         , newHash = Nothing
-        , path = "ipe:src/Main.ipe"
-        , kind = "module"
-        , name = "Main"
-        , qualified = "Main"
+        , path = SafeText.renderForeign "ipe:src/Main.ipe"
+        , kind = SafeText.renderForeign "module"
+        , lang = Highlight.Ipe
+        , name = SafeText.renderForeign "Main"
+        , qualified = SafeText.renderForeign "Main"
         , lineStart = 1
         , lineEnd = 1
-        , facing = "internal"
+        , facing = SafeText.renderForeign "internal"
         , purpose = Nothing
         , attested = Index.UnknownScheme "hash-sample"
         , updatedSha = "sha-sample"
@@ -2760,11 +2868,18 @@ viewHashVectors =
 -- the `tools/code-review` working directory without a `..` segment.
 vectorsPath : String -> String
 vectorsPath cwd =
+    ipeIndexTestFile cwd "view_hash_vectors.json"
+
+
+-- A file in `tools/ipe-index/tests`, reached from the `tools/code-review`
+-- working directory without a `..` segment.
+ipeIndexTestFile : String -> String -> String
+ipeIndexTestFile cwd name =
     let
         segments =
             String.split "/" cwd
     in
-    String.join "/" (List.take (List.length segments - 1) segments) ++ "/ipe-index/tests/view_hash_vectors.json"
+    String.join "/" (List.take (List.length segments - 1) segments) ++ "/ipe-index/tests/" ++ name
 
 
 vectorDecoder : Decode.Decoder HashVector
@@ -2806,6 +2921,698 @@ vectorHolds v =
 
         Err _ ->
             False
+
+
+-- ── text from the index never reaches a page raw ─────────────────────────
+--
+-- Every displayed index column is `SafeText` from the decode point on, and
+-- every source token is rendered by `Highlight.tokenText`. Red if
+-- `withView` stops rendering a column (the hazard survives) or `tokenText`
+-- returns the raw token.
+rlo : String
+rlo =
+    codeText 8238
+
+
+indexTextRendered : Task.Task Error Bool
+indexTextRendered =
+    let
+        at =
+            scratchAt "ipe-index-safe-text"
+    in
+    do
+        removeFileIfAny at.indexDb
+        seedIndex at.indexDb at.repo
+        execIndex at.indexDb
+            "UPDATE units SET name = ?, qualified = ?, kind = ?, facing = ?, purpose = ? WHERE uid = ?"
+            [ SqlString ("an" ++ rlo ++ "swer")
+            , SqlString ("Lib." ++ rlo ++ "answer")
+            , SqlString ("fn" ++ codeText 27)
+            , SqlString ("internal" ++ codeText 8294)
+            , SqlString ("purpose" ++ codeText 8207 ++ "A")
+            , SqlString "u-a"
+            ]
+        r <- loadFirstPage
+        cleanupIndex at.indexDb at.repo
+        Task.succeed
+            (case List.find (\u -> u.uid == "u-a") r.units of
+                Just u ->
+                    List.all safeShown [ u.name, u.qualified, u.kind, u.facing ]
+                        && (Maybe.map safeShown u.purpose == Just True)
+                        && SafeText.toString u.qualified
+                        == "Lib.\\u{202e}answer"
+
+                Nothing ->
+                    False
+            )
+
+
+-- Rendered text holds no hazard and spells at least one as an escape.
+safeShown : SafeText.SafeText -> Bool
+safeShown text =
+    let
+        shown =
+            SafeText.toString text
+    in
+    noHazard shown && String.contains "\\u{" shown
+
+
+-- A source line with bidi overrides, in every highlighter language, and a
+-- link label built from such a token, show each override as an escape.
+sourceTokensRendered : Bool
+sourceTokensRendered =
+    let
+        line =
+            "let ok = \"admin" ++ rlo ++ " " ++ codeText 8294 ++ "\"; // check" ++ codeText 8297 ++ " done"
+
+        shownIn lang =
+            String.concat (List.map (\tok -> SafeText.toString (Highlight.tokenText tok)) (Highlight.tokenize lang line))
+
+        label =
+            Links.resolve "" [ ( "Lib." ++ rlo ++ "x", "u-x" ) ] ("call Lib." ++ rlo ++ "x")
+                |> List.map (\l -> SafeText.toString (Links.label l))
+    in
+    List.all (\lang -> noHazard (shownIn lang) && String.contains "\\u{202e}" (shownIn lang) && String.contains "\\u{2066}" (shownIn lang))
+        [ Highlight.Rust, Highlight.Shell, Highlight.Ipe, Highlight.Unknown ]
+        && label
+        == [ "→ Lib.\\u{202e}x" ]
+
+
+-- ── required resources probed before listen ─────────────────────────────
+--
+-- A nonexistent index file, a database that is not an index, and an
+-- unwritable review location each fail their probe naming the variable and
+-- the file; a seeded index passes. Red if `probe` stops opening the database
+-- or stops naming the variable.
+probesNameTheirVariable : Task.Task Error Bool
+probesNameTheirVariable =
+    let
+        at =
+            scratchAt "ipe-index-probe"
+    in
+    do
+        removeFileIfAny at.indexDb
+        seedIndex at.indexDb at.repo
+        good <- probeMessage (Settings.indexSettings |> Task.andThen Index.probe)
+        missing <- missingIndexProbed at
+        notIndex <- foreignDbProbed at
+        review <- reviewProbed at
+        System.setenv "IPE_INDEX_DB" at.indexDb
+        cleanupIndex at.indexDb at.repo
+        Task.succeed (good == Nothing && missing && notIndex && review)
+
+
+probeMessage : Task.Task Error () -> Task.Task Error (Maybe String)
+probeMessage task =
+    task
+        |> Task.map (\_ -> Nothing)
+        |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
+
+
+-- The probe refusal starts with the variable, names the file, and is clean.
+probeNames : String -> String -> Maybe String -> Bool
+probeNames var file message =
+    case message of
+        Just m ->
+            String.startsWith (var ++ ": cannot open ") m && String.contains file m && noHazard m
+
+        Nothing ->
+            False
+
+
+-- A nonexistent index is refused with the build hint and is not created.
+missingIndexProbed : Scratch -> Task.Task Error Bool
+missingIndexProbed at =
+    let
+        missingDb =
+            at.repo ++ "/no-such-index.db"
+    in
+    do
+        removeFileIfAny missingDb
+        System.setenv "IPE_INDEX_DB" missingDb
+        message <- probeMessage (Settings.indexSettings |> Task.andThen Index.probe)
+        created <- Task.fromResult (Path.fromString missingDb) |> Task.andThen File.exists
+        Task.succeed (probeNames "IPE_INDEX_DB" missingDb message && maybeContains "ipe-index index" message && not created)
+
+
+-- A SQLite file with none of the index tables is refused.
+foreignDbProbed : Scratch -> Task.Task Error Bool
+foreignDbProbed at =
+    let
+        otherDb =
+            at.repo ++ "/not-an-index.db"
+    in
+    do
+        conn <- Db.open "sqlite" ("sqlite://" ++ otherDb ++ "?mode=rwc")
+        Db.exec conn "CREATE TABLE IF NOT EXISTS other (x INTEGER)" []
+        System.setenv "IPE_INDEX_DB" otherDb
+        message <- probeMessage (Settings.indexSettings |> Task.andThen Index.probe)
+        removeFileIfAny otherDb
+        Task.succeed (probeNames "IPE_INDEX_DB" otherDb message)
+
+
+-- A review location under a missing directory is refused with its own fix.
+reviewProbed : Scratch -> Task.Task Error Bool
+reviewProbed at =
+    let
+        badReview =
+            at.repo ++ "/no-such-dir/review.db"
+    in
+    do
+        System.setenv "IPE_REVIEW_DB" badReview
+        message <- probeMessage (Settings.reviewDb |> Task.andThen LibDb.probe)
+        Task.succeed (probeNames "IPE_REVIEW_DB" badReview message && not (maybeContains "ipe-index index" message))
+
+
+maybeContains : String -> Maybe String -> Bool
+maybeContains needle message =
+    case message of
+        Just m ->
+            String.contains needle m
+
+        Nothing ->
+            False
+
+
+-- Each `IPE_INDEX_DB` refusal states its problem and exactly one fix. Red if
+-- a problem that carries its own fix gets the generic one appended again.
+dbRefusalsStateOneFix : Task.Task Error Bool
+dbRefusalsStateOneFix =
+    do
+        cwd <- System.cwd ()
+        System.setenv "IPE_INDEX_ROOT" cwd
+        refusals <-
+            [ ""
+            , "postgres://localhost/index"
+            , "sqlite:index.db"
+            , "index.db?mode=rwc"
+            , "sqlite:///tmp/index.db?mode=rwc"
+            , "sqlite:///tmp/index%zz.db"
+            , "sqlite://"
+            , "sqlite:///tmp/index%00.db"
+            , "sqlite://rel.db"
+            , "sqlite:///"
+            ]
+                |> List.map settingsRefusal
+                |> Task.sequence
+        Task.succeed
+            (List.all
+                (\refusal ->
+                    case refusal of
+                        Just m ->
+                            List.length (String.split "; " m) == 2
+
+                        Nothing ->
+                            False
+                )
+                refusals
+            )
+
+
+-- ── review progress from the databases ──────────────────────────────────
+--
+-- Progress counts decided units over decided-or-queued ones, as one
+-- aggregate over the index's `reviewed` copy of the decided pairs, so a
+-- decision and its drain raise `reviewed` by one and leave `total` unchanged,
+-- and a fresh load (no session state) reads the same numbers. Red if progress
+-- goes back to a per-session counter or to the shrinking queue count.
+
+
+-- One bare unit row in a scratch index; its source is never shown.
+insertBareUnit : String -> String -> String -> Task.Task Error ()
+insertBareUnit indexDb uid hash =
+    execIndex indexDb
+        "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+        [ SqlString uid
+        , SqlString "ipe:src/Main.ipe"
+        , SqlString "module"
+        , SqlString uid
+        , SqlString uid
+        , SqlInt 1
+        , SqlInt 1
+        , SqlString "internal"
+        , SqlNull (SqlString "")
+        , SqlString hash
+        , SqlString ("sha-" ++ uid)
+        ]
+
+
+queueNew : String -> String -> String -> Int -> Task.Task Error ()
+queueNew indexDb uid hash at =
+    execIndex indexDb
+        "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+        [ SqlString uid, SqlString "new", SqlNull (SqlString ""), SqlString hash, SqlString ("sha-" ++ uid), SqlInt at ]
+
+
+mirrorPair : String -> String -> String -> Task.Task Error ()
+mirrorPair indexDb uid hash =
+    execIndex indexDb "INSERT INTO reviewed (uid, body_hash) VALUES (?, ?)" [ SqlString uid, SqlString hash ]
+
+
+-- A review row written straight into the review table, with no drain.
+insertReviewRow : Db -> String -> String -> Task.Task Error Int
+insertReviewRow db uid hash =
+    Db.exec db
+        "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)"
+        [ SqlString uid, SqlString hash, SqlString "approve", SqlNull (SqlString ""), SqlInt 0 ]
+
+
+-- The bridge fixture plus an empty review database at `at`, with the
+-- environment pointing at both.
+seedProgressScratch : Scratch -> Task.Task Error Db
+seedProgressScratch at =
+    do
+        removeFileIfAny at.indexDb
+        removeFileIfAny at.reviewDb
+        seedIndex at.indexDb at.repo
+        System.setenv "IPE_REVIEW_DB" at.reviewDb
+        LibDb.open
+
+
+cleanupProgressScratch : Scratch -> Task.Task Error ()
+cleanupProgressScratch at =
+    do
+        cleanupIndex at.indexDb at.repo
+        removeFileIfAny at.reviewDb
+        removeFileIfAny (at.reviewDb ++ "-wal")
+        removeFileIfAny (at.reviewDb ++ "-shm")
+
+
+-- Units a(ha, queued), b(hb, queued), c(hc), d(hd), a2(ha), ab(c); the copy
+-- and the review table both hold (a,ha), (c,hc), (x,hx) and (a,bc). Only a
+-- and c are decided, and b is queued, so 2 of 3. Red if the decided test
+-- concatenates uid and hash (unit ab/c would match pair a/bc) or matches on
+-- the hash or the uid alone (a2, the second a pair).
+progressCountsDecidedPairs : Task.Task Error Bool
+progressCountsDecidedPairs =
+    let
+        at =
+            scratchAt "ipe-index-progress-pairs"
+
+        pairs =
+            [ ( "a", "ha" ), ( "c", "hc" ), ( "x", "hx" ), ( "a", "bc" ) ]
+    in
+    do
+        db <- seedProgressScratch at
+        execIndex at.indexDb "DELETE FROM units" []
+        execIndex at.indexDb "DELETE FROM change_queue" []
+        [ ( "a", "ha" ), ( "b", "hb" ), ( "c", "hc" ), ( "d", "hd" ), ( "a2", "ha" ), ( "ab", "c" ) ]
+            |> List.map (\( uid, hash ) -> insertBareUnit at.indexDb uid hash)
+            |> Task.sequence
+        queueNew at.indexDb "a" "ha" 1
+        queueNew at.indexDb "b" "hb" 2
+        pairs
+            |> List.map (\( uid, hash ) -> mirrorPair at.indexDb uid hash |> Task.andThen (\_ -> insertReviewRow db uid hash))
+            |> Task.sequence
+        page <- Queue.loadPage Index.Start
+        cleanupProgressScratch at
+        Task.succeed (page.progress.reviewed == 2 && page.progress.total == 3)
+
+
+progressStableAcrossDrain : Task.Task Error Bool
+progressStableAcrossDrain =
+    let
+        at =
+            scratchAt "ipe-index-progress"
+    in
+    do
+        removeFileIfAny at.indexDb
+        removeFileIfAny at.reviewDb
+        seedIndex at.indexDb at.repo
+        execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
+        System.setenv "IPE_REVIEW_DB" at.reviewDb
+        before <- Queue.loadPage Index.Start
+        db <- LibDb.open
+        decided <-
+            case List.find (\q -> q.unit.uid == "u-a") before.units of
+                Just q ->
+                    Queue.decide db q.unit Approved
+                        |> Task.andThen (\( attested, _ ) -> Index.drainUnit attested)
+                        |> Task.map (\_ -> True)
+
+                Nothing ->
+                    Task.succeed False
+        after <- Queue.loadPage Index.Start
+        again <- Queue.loadPage Index.Start
+        cleanupIndex at.indexDb at.repo
+        removeFileIfAny at.reviewDb
+        Task.succeed
+            (decided
+                && after.progress.total
+                == before.progress.total
+                && after.progress.reviewed
+                == before.progress.reviewed
+                + 1
+                && after.total
+                == before.total
+                - 1
+                && again.progress.reviewed
+                == after.progress.reviewed
+                && again.progress.total
+                == after.progress.total
+            )
+
+
+-- Seeds the bridge fixture with u-a queued under its attested hash, then
+-- decides and drains u-a; the progress before and after, and the pair.
+type alias Drained =
+    { db : Db, before : Queue.Progress, after : Queue.Progress, attested : Index.Attested }
+
+
+decideAndDrainA : Scratch -> Task.Task Error Drained
+decideAndDrainA at =
+    do
+        db <- seedProgressScratch at
+        execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
+        before <- Queue.loadPage Index.Start
+        attested <- decideA db before
+        Index.drainUnit attested
+        after <- Queue.loadPage Index.Start
+        Task.succeed { db = db, before = before.progress, after = after.progress, attested = attested }
+
+
+decideA : Db -> Queue.QueuePage -> Task.Task Error Index.Attested
+decideA db page =
+    case List.find (\q -> q.unit.uid == "u-a") page.units of
+        Just q ->
+            Queue.decide db q.unit Approved |> Task.map (\( attested, _ ) -> attested)
+
+        Nothing ->
+            Task.fail (Error.conflict "fixture unit u-a not queued")
+
+
+currentProgressOf : Task.Task Error Queue.Progress
+currentProgressOf =
+    Queue.loadPage Index.Start |> Task.map (\page -> page.progress)
+
+
+-- A decided unit re-hashed and re-queued as `modified` is no longer reviewed
+-- but still counted, as a queued unit. Red if the decided test ignores the
+-- current body hash.
+rehashedUnitLeavesReviewed : Task.Task Error Bool
+rehashedUnitLeavesReviewed =
+    let
+        at =
+            scratchAt "ipe-index-progress-rehash"
+    in
+    do
+        d <- decideAndDrainA at
+        execIndex at.indexDb "UPDATE units SET body_hash = ? WHERE uid = ?" [ SqlString "h2", SqlString "u-a" ]
+        execIndex at.indexDb "INSERT INTO change_queue VALUES (?,?,?,?,?,?)" [ SqlString "u-a", SqlString "modified", SqlString (Index.attest viewA), SqlString "h2", SqlString "sha-h2", SqlInt 9 ]
+        now <- currentProgressOf
+        cleanupProgressScratch at
+        Task.succeed
+            (d.after.reviewed == d.before.reviewed + 1
+                && now.reviewed == d.after.reviewed - 1
+                && now.total == d.after.total
+            )
+
+
+-- A decided unit removed from the index leaves both counts, and returns to
+-- both when it is re-added with the same hash. Red if the copy is pruned
+-- with `units`.
+removedUnitReturnsReviewed : Task.Task Error Bool
+removedUnitReturnsReviewed =
+    let
+        at =
+            scratchAt "ipe-index-progress-removed"
+    in
+    do
+        d <- decideAndDrainA at
+        execIndex at.indexDb "CREATE TABLE units_kept AS SELECT * FROM units WHERE uid = 'u-a'" []
+        execIndex at.indexDb "DELETE FROM units WHERE uid = 'u-a'" []
+        gone <- currentProgressOf
+        execIndex at.indexDb "INSERT INTO units SELECT * FROM units_kept" []
+        back <- currentProgressOf
+        cleanupProgressScratch at
+        Task.succeed
+            (gone.reviewed == d.after.reviewed - 1
+                && gone.total == d.after.total - 1
+                && back == d.after
+            )
+
+
+-- A decision saved with no drain is counted on the next load, and its queue
+-- row leaves with the rebuild. Red without the count check (reviewed stays
+-- 0), or if the rebuild only copies pairs (the queue keeps the row).
+undrainedDecisionHealedOnLoad : Task.Task Error Bool
+undrainedDecisionHealedOnLoad =
+    let
+        at =
+            scratchAt "ipe-index-progress-undrained"
+    in
+    do
+        db <- seedProgressScratch at
+        execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
+        pendingBefore <- Index.countPending
+        insertReviewRow db "u-a" (Index.attest viewA)
+        page <- Queue.loadPage Index.Start
+        pendingAfter <- Index.countPending
+        cleanupProgressScratch at
+        Task.succeed
+            (page.progress.reviewed == 1
+                && pendingAfter == pendingBefore - 1
+                && page.total == pendingAfter
+            )
+
+
+-- A pair in the copy the review database lacks (a deleted review row) is
+-- dropped by the load's rebuild. Red if the rebuild only inserts.
+foreignMirrorRowDropped : Task.Task Error Bool
+foreignMirrorRowDropped =
+    let
+        at =
+            scratchAt "ipe-index-progress-foreign"
+    in
+    do
+        seedProgressScratch at
+        execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
+        mirrorPair at.indexDb "u-a" (Index.attest viewA)
+        seeded <- Index.loadProgress
+        page <- Queue.loadPage Index.Start
+        row <- Index.loadProgress
+        cleanupProgressScratch at
+        Task.succeed (seeded.reviewed == 1 && page.progress.reviewed == 0 && row.mirrored == 0)
+
+
+-- Deciding and draining one pair twice keeps one copy row and counts it
+-- once. Red with a plain `INSERT` (the second drain fails on the key).
+secondDecisionOfPairCountsOnce : Task.Task Error Bool
+secondDecisionOfPairCountsOnce =
+    let
+        at =
+            scratchAt "ipe-index-progress-twice"
+    in
+    do
+        d <- decideAndDrainA at
+        found <- Index.loadUnitByUid "u-a"
+        again <-
+            case found of
+                Just unit ->
+                    Queue.decide d.db unit Approved |> Task.map (\( attested, _ ) -> attested)
+
+                Nothing ->
+                    Task.fail (Error.conflict "fixture unit u-a not indexed")
+        drainedAgain <- Index.drainUnit again
+        redrained <- Index.drainUnit d.attested
+        now <- currentProgressOf
+        row <- Index.loadProgress
+        cleanupProgressScratch at
+        Task.succeed
+            (drainedAgain == 0
+                && redrained == 0
+                && now == d.after
+                && d.after.reviewed == d.before.reviewed + 1
+                && row.mirrored == 1
+            )
+
+
+-- With the `reviewed` table gone the drain fails and the queue row stays:
+-- the copy insert and the queue delete commit together or not at all. Red if
+-- the delete runs first outside the transaction.
+drainIsAtomic : Task.Task Error Bool
+drainIsAtomic =
+    let
+        at =
+            scratchAt "ipe-index-progress-atomic"
+    in
+    do
+        db <- seedProgressScratch at
+        execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
+        page <- Queue.loadPage Index.Start
+        attested <- decideA db page
+        pendingBefore <- Index.countPending
+        execIndex at.indexDb "DROP TABLE reviewed" []
+        refusal <-
+            Index.drainUnit attested
+                |> Task.map (\_ -> Nothing)
+                |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
+        pendingAfter <- Index.countPending
+        cleanupProgressScratch at
+        Task.succeed (maybeContains "database error" refusal && pendingAfter == pendingBefore)
+
+
+-- An index without the `reviewed` table stops startup naming
+-- `IPE_INDEX_DB` and the rebuild fix. Red if the probe stops reading it.
+probeRefusesIndexWithoutReviewed : Task.Task Error Bool
+probeRefusesIndexWithoutReviewed =
+    let
+        at =
+            scratchAt "ipe-index-probe-reviewed"
+    in
+    do
+        removeFileIfAny at.indexDb
+        seedIndex at.indexDb at.repo
+        execIndex at.indexDb "DROP TABLE reviewed" []
+        message <- probeMessage (Settings.indexSettings |> Task.andThen Index.probe)
+        cleanupIndex at.indexDb at.repo
+        Task.succeed (probeNames "IPE_INDEX_DB" at.indexDb message && maybeContains "ipe-index index" message)
+
+
+-- Two pages of decisions against a one-page ceiling refuse the rebuild and
+-- roll it back, keeping the copy's prior row; a two-page ceiling admits the
+-- same review database. Red if the ceiling is not checked, or if the refused
+-- rebuild commits its delete.
+resyncStopsAtCeiling : Task.Task Error Bool
+resyncStopsAtCeiling =
+    let
+        at =
+            scratchAt "ipe-index-progress-ceiling"
+
+        decisions =
+            LibDb.pairPageSize + 1
+    in
+    do
+        db <- seedProgressScratch at
+        List.range 1 decisions
+            |> List.map (\i -> insertReviewRow db ("p-" ++ String.fromInt i) "hp")
+            |> Task.sequence
+        mirrorPair at.indexDb "pre" "hp"
+        refusal <-
+            Queue.resyncReviewedWithin { pageSize = LibDb.pairPageSize, pageCeiling = 1 } db
+                |> Task.map (\_ -> Nothing)
+                |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
+        kept <- Index.loadProgress
+        conn <- Db.open "sqlite" ("sqlite://" ++ at.indexDb ++ "?mode=rw")
+        preRows <- Db.findWhere conn "reviewed" (Sql.eq (Sql.column "uid") (Sql.string "pre"))
+        copied <- Queue.resyncReviewedWithin { pageSize = LibDb.pairPageSize, pageCeiling = 2 } db
+        rebuilt <- Index.loadProgress
+        preAfter <- Db.findWhere conn "reviewed" (Sql.eq (Sql.column "uid") (Sql.string "pre"))
+        cleanupProgressScratch at
+        Task.succeed
+            (maybeContains ("more than " ++ String.fromInt LibDb.pairPageSize ++ " decisions") refusal
+                && kept.mirrored == 1
+                && List.length preRows == 1
+                && copied == decisions
+                && rebuilt.mirrored == decisions
+                && List.isEmpty preAfter
+            )
+
+
+-- A rebuild at the production page ceiling, one pair per page, so the walk
+-- nests as deep as a rebuild may: exactly `resyncPageCeiling` decisions are
+-- copied, and one more is refused with the ceiling text, never a recursion
+-- trip. Red if the ceiling sits past the depth the runtime's stack carries.
+resyncAtDeepestCeiling : Task.Task Error Bool
+resyncAtDeepestCeiling =
+    let
+        at =
+            scratchAt "ipe-index-progress-deepest"
+
+        bound =
+            { pageSize = 1, pageCeiling = Queue.resyncPageCeiling }
+
+        seed from to db =
+            List.range from to
+                |> List.map (\i -> insertReviewRow db ("d-" ++ String.fromInt i) "hd")
+                |> Task.sequence
+    in
+    do
+        db <- seedProgressScratch at
+        seed 1 Queue.resyncPageCeiling db
+        copied <- Queue.resyncReviewedWithin bound db
+        seed (Queue.resyncPageCeiling + 1) (Queue.resyncPageCeiling + 1) db
+        refusal <-
+            Queue.resyncReviewedWithin bound db
+                |> Task.map (\_ -> Nothing)
+                |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
+        kept <- Index.loadProgress
+        cleanupProgressScratch at
+        Task.succeed
+            (copied == Queue.resyncPageCeiling
+                && maybeContains (String.fromInt Queue.resyncPageCeiling ++ "-page ceiling") refusal
+                && kept.mirrored == Queue.resyncPageCeiling
+            )
+
+
+-- A bound below one pair per page or one page is refused before the copy is
+-- touched. Red if a zero page size reads an empty page as a finished rebuild.
+resyncRefusesEmptyBound : Task.Task Error Bool
+resyncRefusesEmptyBound =
+    let
+        at =
+            scratchAt "ipe-index-progress-empty-bound"
+
+        attempt bound db =
+            Queue.resyncReviewedWithin bound db
+                |> Task.map (\_ -> False)
+                |> Task.onError (\_ -> Task.succeed True)
+    in
+    do
+        db <- seedProgressScratch at
+        insertReviewRow db "e-1" "he"
+        mirrorPair at.indexDb "pre" "hp"
+        zeroSize <- attempt { pageSize = 0, pageCeiling = 1 } db
+        zeroPages <- attempt { pageSize = 1, pageCeiling = 0 } db
+        kept <- Index.loadProgress
+        cleanupProgressScratch at
+        Task.succeed (zeroSize && zeroPages && kept.mirrored == 1)
+
+
+-- A stored refusal whose reason no longer parses still counts as decided,
+-- and the load succeeds. Red if progress reads decisions through the
+-- full-row decode.
+progressIgnoresUndecodableReason : Task.Task Error Bool
+progressIgnoresUndecodableReason =
+    let
+        at =
+            scratchAt "ipe-index-progress-bad-reason"
+    in
+    do
+        db <- seedProgressScratch at
+        Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString "u-del", SqlString "hashC", SqlString "refuse", SqlString (String.repeat (LibDb.reasonMaxChars + 1) "x"), SqlInt 0 ]
+        result <-
+            Queue.loadPage Index.Start
+                |> Task.map (\page -> Just page.progress.reviewed)
+                |> Task.onError (\_ -> Task.succeed Nothing)
+        cleanupProgressScratch at
+        Task.succeed (result == Just 1)
+
+
+-- Display escaping, startup probes, refusal fixes and progress. Last in the
+-- run: the probe case leaves `IPE_REVIEW_DB` at an unwritable location.
+displayAndStartupChecks : Task.Task Error (List ( String, Bool ))
+displayAndStartupChecks =
+    Task.sequence
+        [ Task.map (\ok -> ( "index text is rendered at the decode point", ok )) indexTextRendered
+        , Task.succeed ( "source tokens and link labels render bidi visibly", sourceTokensRendered )
+        , Task.map (\ok -> ( "each db refusal states one fix", ok )) dbRefusalsStateOneFix
+        , Task.map (\ok -> ( "progress counts decided pairs over decided-or-queued units", ok )) progressCountsDecidedPairs
+        , Task.map (\ok -> ( "progress total holds while the queue drains", ok )) progressStableAcrossDrain
+        , Task.map (\ok -> ( "a re-hashed unit leaves reviewed and stays counted", ok )) rehashedUnitLeavesReviewed
+        , Task.map (\ok -> ( "a removed unit leaves progress and returns when re-added", ok )) removedUnitReturnsReviewed
+        , Task.map (\ok -> ( "an undrained decision is counted and drained on load", ok )) undrainedDecisionHealedOnLoad
+        , Task.map (\ok -> ( "a copy row the review db lacks is dropped on load", ok )) foreignMirrorRowDropped
+        , Task.map (\ok -> ( "a pair decided and drained twice counts once", ok )) secondDecisionOfPairCountsOnce
+        , Task.map (\ok -> ( "a failed drain keeps the queue row", ok )) drainIsAtomic
+        , Task.map (\ok -> ( "an index without the reviewed table fails the probe", ok )) probeRefusesIndexWithoutReviewed
+        , Task.map (\ok -> ( "a progress rebuild stops at its page ceiling and rolls back", ok )) resyncStopsAtCeiling
+        , Task.map (\ok -> ( "a progress rebuild at the deepest allowed page count copies, one past it is refused", ok )) resyncAtDeepestCeiling
+        , Task.map (\ok -> ( "a progress rebuild refuses a bound below one pair or one page", ok )) resyncRefusesEmptyBound
+        , Task.map (\ok -> ( "progress counts a refusal whose reason no longer parses", ok )) progressIgnoresUndecodableReason
+        , Task.map (\ok -> ( "startup probes name the variable and the file", ok )) probesNameTheirVariable
+        , Task.map (\ok -> ( "tag grammar matches the shared ipe-index tag vectors", ok )) tagGrammarMatchesVectors
+        ]
 
 
 report : List ( String, Bool ) -> String
@@ -2956,6 +3763,20 @@ main =
                 oversizedSourceRefused
                     |> Task.map (\ok -> results ++ [ ( "source file past the read ceiling refused", ok ) ])
             )
+        |> Task.andThen laterChecks
+        |> Task.andThen
+            (\results ->
+                removeDbFile dbPath
+                    |> Task.map (\_ -> results)
+            )
+        |> Task.andThen finish
+
+
+-- The second half of the run, kept out of `main` so neither chain nests past
+-- the backend's expression-depth limit.
+laterChecks : List ( String, Bool ) -> Task.Task Error (List ( String, Bool ))
+laterChecks results =
+    Task.succeed results
         |> Task.andThen
             (\results ->
                 drainFlow
@@ -3001,7 +3822,7 @@ main =
                 Task.succeed
                     (results
                         ++ [ ( "links resolve internal and external", linksResolve )
-                        , ( "link tokens: no self-links, urls strip punctuation", linksSubstring )
+                        , ( "link tokens: no self-links, urls strip punctuation, first occurrence wins", linksSubstring )
                         ]
                     )
             )
@@ -3067,14 +3888,8 @@ main =
         |> Task.andThen
             (\results ->
                 viewHashVectors
-                    |> Task.map (\ok -> results ++ [ ( "view and attestation match the shared ipe-index vectors", ok ) ])
+                    |> Task.andThen (\ok -> Task.map (\more -> results ++ (( "view and attestation match the shared ipe-index vectors", ok ) :: more)) displayAndStartupChecks)
             )
-        |> Task.andThen
-            (\results ->
-                removeDbFile dbPath
-                    |> Task.map (\_ -> results)
-            )
-        |> Task.andThen finish
 
 
 removeDbFile : String -> Task.Task Error ()

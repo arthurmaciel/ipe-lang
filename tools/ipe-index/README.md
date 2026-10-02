@@ -18,13 +18,14 @@ tools/scripts/ipe-index locate Lowerer # where is `Lowerer` defined / impl'd?
 tools/scripts/ipe-index wakeup         # one-screen digest of the whole index
 ```
 
-`tools/scripts/ipe-index` is a thin wrapper that builds (out-of-tree, first run
-only) and execs the compiled binary — see the wrapper's own header for the
+`tools/scripts/ipe-index` is a thin wrapper that runs `cargo build --release`
+(out-of-tree; a no-op when the binary is current, a rebuild after any change to
+the tool) and execs the compiled binary — see the wrapper's own header for the
 target-dir resolution order. Anywhere the docs say `ipe-index`, run
 `tools/scripts/ipe-index` (or the resolved binary directly).
 
-The index auto-refreshes after **every commit** (git `post-commit` hook) — you
-rarely run `index`/`update` by hand.
+With a local git `post-commit` hook (see below) the index refreshes after
+every commit, so you rarely run `index`/`update` by hand.
 
 ---
 
@@ -35,29 +36,25 @@ recent stable Rust (`rustup update`).
 
 `ipe-index` is a standalone crate — its own `target/`, detached from the compiler
 workspace, and never built in-tree (never under `tools/ipe-index/target`). You
-don't have to build it by hand: the `tools/scripts/ipe-index` wrapper builds it
-out-of-tree on first run and execs the release binary. To build it explicitly,
-match the wrapper's target dir:
-
-```bash
-CARGO_TARGET_DIR=/mnt/ipe-scratch/warm-targets/ipe-index \
-    cargo build --release --manifest-path tools/ipe-index/Cargo.toml
-```
+don't have to build it by hand: the `tools/scripts/ipe-index` wrapper lets
+cargo bring the out-of-tree release binary up to date on every run, then execs
+it.
 
 Nothing installs to your `PATH`: invoke the wrapper `tools/scripts/ipe-index`
 (which finds the repo root, resolves the target dir, and execs the binary) or
 run the resolved binary directly.
 
-**Auto-refresh (recommended):** a local git `post-commit` hook runs
-`ipe-index index` after each commit so the index never drifts. Hooks live in
-`.git/hooks/` and are not tracked, so after a fresh clone seed the index once:
+**Auto-refresh (recommended):** a local git `post-commit` hook keeps the index
+from drifting. Hooks live in `.git/hooks/` and are not tracked, so after a
+fresh clone seed the index once:
 
 ```bash
 tools/scripts/ipe-index index      # builds the binary + indexes the repo
 ```
 
 To keep it fresh automatically, add a `.git/hooks/post-commit` that runs
-`tools/scripts/ipe-index index` (and make it executable).
+`tools/scripts/ipe-index update` (and make it executable). Run it through the
+wrapper, so the hook never executes a binary older than the tool's source.
 
 ---
 
@@ -154,19 +151,38 @@ ipe-index pipeline   # module counts per compiler stage (parse/canon/type/build/
 ### Rebuilding
 
 ```bash
-ipe-index index      # full rebuild from scratch, ~1-2 s
+ipe-index index      # full rebuild: re-extracts every tracked file
 ipe-index update     # incremental: git-diff last_sha..HEAD, re-extract only
                      #   changed files. Falls back to a full index when the DB
-                     #   is absent. Zero drift vs `index`.
+                     #   is absent, of an older schema, or has no sha for a repo.
 ```
 
-Both are wired into the `post-commit` hook, so the index stays fresh
-automatically.
+A full rebuild re-extracts the whole repo, so it takes tens of seconds on this
+repo; `update` re-extracts only what changed since the last run. Both run in
+one transaction: a failed run leaves the previous index and queue in place.
 
 ### The change queue (what the code-review app consumes)
 
-Each `update` records per-unit `new`/`modified`/`deleted` events in a
-`change_queue` table — the review backlog the sibling `code-review` app reads.
+`index` and `update` record per-unit `new`/`modified`/`deleted` events in a
+`change_queue` table — the review backlog the sibling `code-review` app reads,
+and drains one row at a time as a unit is decided.
+
+The queue has one transition rule (`diff::reconcile`): every run diffs the
+units it rebuilt against the units the queue was last reconciled with. A full
+`index` is a rebuild of the tables, never of the queue — a unit whose body is
+unchanged keeps its row, or stays drained. Only the first `index` of an empty
+database queues every unit as `new`.
+
+A `file` unit covers its whole file, but its change key is the residual: the
+lines no other unit of the file covers (imports, attributes, top-level glue).
+An edit inside a function queues that function alone; an edit to a top-level
+line queues the file. A pending file row still follows the file's current body
+hash, so it stays drainable after a child edit.
+
+A `reviewed` table holds the code-review app's decided `(uid, body_hash)`
+pairs, so the app counts review progress with one SQL aggregate. The app is
+its sole writer; `index` keeps the table across a rebuild, as it keeps the
+queue.
 
 ```bash
 ipe-index pending                 # queued unit changes as JSON lines
@@ -198,13 +214,15 @@ never write. `<old>` for `rename-path` is the untagged repo-relative path
 
 - `--db <path>` — index location (default `.ipe-index/index.db`, gitignored).
 - `--repo <tag:path>` — repeatable; override the indexed repo set. Default is
-  `ipe:.`.
+  `ipe:.`. A tag is non-empty and holds no `/` and no `:` (the tags a stored
+  `tag:path` reads back as; pinned by `tests/repo_tag_vectors.json`), and each
+  tag is given once.
 
 ---
 
 ## How auto-update works
 
-- `.git/hooks/post-commit` → `ipe-index index` (background, quiet).
+- `.git/hooks/post-commit` → `tools/scripts/ipe-index update` (quiet).
 
 Hooks are local (`.git/hooks/`, not committed). After a fresh clone, re-run
 `tools/scripts/ipe-index index` once (or reinstall the hook) to seed the index. See
