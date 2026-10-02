@@ -22114,7 +22114,7 @@ impl<'a> Lowerer<'a> {
         // left intact, so ordinary currying (`m |> Maybe.andThen f`) lowers
         // exactly as before.
         if let canon::Expr_::Call(inner_callee, inner_args) = &callee.value
-            && self.spine_needs_saturated_call(inner_callee, args)
+            && self.spine_needs_saturated_call(callee, args)
         {
             let mut merged = inner_args.clone();
             merged.extend_from_slice(args);
@@ -22130,9 +22130,11 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Whether a curried call spine applied to `outer` must be lowered as one saturated call.
+    /// Whether the curried call spine `callee` applied to `outer` must be lowered as one saturated call.
     ///
-    /// True when the head kernel is an accessor-intercept placeholder
+    /// `callee` is the whole inner spine (`Call(Call(k, a), b)` for
+    /// `k a b outer`), so the slot `outer[j]` fills is the argument count of
+    /// every spine level plus `j`. True when the head kernel is an accessor-intercept placeholder
     /// (`Store.mask`, `Store.eq`, …) or a capture-cloned handler kernel
     /// (`Stream.stream`), whose saturated-call gate must observe every
     /// argument; and when an argument of `outer` is a stored function read
@@ -23533,6 +23535,19 @@ impl<'a> Lowerer<'a> {
                     site,
                     call_span,
                 )?;
+                // The same conversion for a direct function parameter of a
+                // top-level user def, on the same site budget.
+                let site = match &callee.value {
+                    canon::Expr_::VarTopLevel { module, name } => self.demote_shared_fn_read_args(
+                        module,
+                        *name,
+                        args,
+                        &mut lowered_args,
+                        site,
+                        call_span,
+                    )?,
+                    _ => site,
+                };
                 match args.len().cmp(&arity) {
                     std::cmp::Ordering::Equal => {
                         // pin a polymorphic kernel's genuinely-free result
@@ -23556,23 +23571,6 @@ impl<'a> Lowerer<'a> {
                         // whose function VALUE argument is stored on the `Arc`
                         // carrier (see method doc).
                         self.promote_dict_ctor_value_carrier(&resolved, args, &mut lowered_args)?;
-                        // READ frontier (the dual of the fill promoters above): a
-                        // function READ out of a storage carrier (`Arc<dyn Fn>`)
-                        // and passed into a DIRECT higher-order parameter — a
-                        // monomorphized `Fn`/generic slot the `Arc` does not
-                        // satisfy — is eta-demoted onto the `Box` carrier. Scoped
-                        // to a top-level user def's declared arrow params (the
-                        // generic-`Fn` slot class); a kernel's fn param that STORES
-                        // its argument stays on `Arc` (the fill promoters above own
-                        // those), so only the top-level arm demotes.
-                        if let canon::Expr_::VarTopLevel { module, name } = &callee.value {
-                            self.demote_shared_fn_read_args(
-                                module,
-                                *name,
-                                args,
-                                &mut lowered_args,
-                            )?;
-                        }
                         // Type-directed `onSubmit` handler classification. The
                         // decision (decode-the-form vs dispatch-a-fixed-value)
                         // is a property of the handler's SOLVED type — an arrow
@@ -23865,10 +23863,13 @@ impl<'a> Lowerer<'a> {
         name: Symbol,
         canon_args: &[canon::Expr],
         lowered_args: &mut [Expr],
-    ) -> DResult<()> {
+        site: EtaDemand,
+        span: Span,
+    ) -> DResult<EtaDemand> {
         let Some(declared) = self.types.env.get(&(module.to_vec(), name)) else {
-            return Ok(());
+            return Ok(site);
         };
+        let mut site = site;
         let mut cur = declared;
         for (offset, slot) in lowered_args.iter_mut().enumerate() {
             let Ty::Fun(param_tpl, rest) = cur else {
@@ -23879,18 +23880,22 @@ impl<'a> Lowerer<'a> {
             // is a fill slot the promoters own — never demoted.
             let direct_fn_slot = matches!(param_tpl.as_ref(), Ty::Fun(_, _) | Ty::Var(_));
             if direct_fn_slot
+                && !is_direct_closure(slot)
                 && let Some((params, ret)) = self.shared_fn_read_carrier(slot).or_else(|| {
                     canon_args
                         .get(offset)
                         .and_then(|a| self.canon_record_read_carrier(a))
                 })
             {
+                site = site
+                    .charge(params.len())
+                    .ok_or_else(|| unsupported(span, Feature::EtaSiteLimit))?;
                 let read = std::mem::replace(slot, Expr::Unit);
                 *slot = self.demote_shared_fn_read(read, &params, &ret)?;
             }
             cur = rest.as_ref();
         }
-        Ok(())
+        Ok(site)
     }
 
     /// Convert every stored function read passed to a direct function slot of a kernel.
@@ -24124,11 +24129,38 @@ impl<'a> Lowerer<'a> {
         scrutinee: Option<&Expr>,
         pat: &canon::Pattern,
     ) {
-        let lowered_shared = scrutinee.is_some_and(|s| self.shared_fn_read_carrier(s).is_some());
+        let lowered = scrutinee.and_then(|s| self.shared_fn_read_carrier(s));
         let builtin_payload =
-            lowered_shared || self.scrutinee_projects_collection_fn(canon_scrutinee);
-        let here = lowered_shared || self.canon_stored_fn_carrier(canon_scrutinee).is_some();
-        self.register_stored_fn_binders(pat, here, builtin_payload);
+            lowered.is_some() || self.scrutinee_projects_collection_fn(canon_scrutinee);
+        let value = lowered.or_else(|| self.canon_stored_fn_carrier(canon_scrutinee));
+        self.register_stored_fn_root(pat, value, builtin_payload);
+    }
+
+    /// Register the binders of a root pattern bound to a value whose stored carrier is `value`.
+    ///
+    /// A root name (`let g = f.sum`, a `case` arm binding the whole
+    /// scrutinee) aliases the value, so it takes the value's carrier
+    /// directly: the solver records no type at a root binder's span, so
+    /// [`Self::register_stored_fn_binder`] cannot recover one there. Every
+    /// other pattern registers through [`Self::register_stored_fn_binders`].
+    fn register_stored_fn_root(
+        &self,
+        pat: &canon::Pattern,
+        value: Option<(Vec<IrType>, IrType)>,
+        builtin_payload: bool,
+    ) {
+        match (&pat.value, value) {
+            (canon::Pattern_::PVar(sym), Some(arrow)) => {
+                self.shared_fn_reads.borrow_mut().insert(*sym, arrow);
+            }
+            (canon::Pattern_::PAlias(inner, name), Some(arrow)) => {
+                self.shared_fn_reads
+                    .borrow_mut()
+                    .insert(name.value, arrow.clone());
+                self.register_stored_fn_root(inner, Some(arrow), builtin_payload);
+            }
+            (_, value) => self.register_stored_fn_binders(pat, value.is_some(), builtin_payload),
+        }
     }
 
     /// Run `f` with the binders of `roots` registered as stored function reads.
@@ -24162,8 +24194,8 @@ impl<'a> Lowerer<'a> {
     ) -> T {
         let saved = self.shared_fn_reads.borrow().clone();
         for binding in bindings {
-            let here = self.canon_stored_fn_carrier(&binding.body).is_some();
-            self.register_stored_fn_binders(&binding.pat, here, false);
+            let value = self.canon_stored_fn_carrier(&binding.body);
+            self.register_stored_fn_root(&binding.pat, value, false);
         }
         let out = f();
         *self.shared_fn_reads.borrow_mut() = saved;
@@ -30458,10 +30490,15 @@ impl<'a> Lowerer<'a> {
                 // Decoder-typed component is the identical E0382 gap.
                 let binder = self.lower_binder_pat(&first.pat, scrut)?;
                 // The destructured names have no carrier promotion: they shadow
-                // any outer promotable name over the arm body.
+                // any outer promotable name over the arm body. A component read
+                // out of storage is registered for the arm body like any arm's.
+                let shared_before = self.shared_fn_reads.borrow().clone();
+                self.register_stored_fn_arm_binders(scrut, Some(&scrutinee), &first.pat);
                 let body = self.with_binders(&shadowing_binder_scope(&first.pat), || {
                     self.lower_expr(&first.body)
-                })?;
+                });
+                *self.shared_fn_reads.borrow_mut() = shared_before;
+                let body = body?;
                 // Scope = the single arm body — where the destructured
                 // components are read (see pass in the thunk builder).
                 return self.build_destructure_or_decoder_thunk(

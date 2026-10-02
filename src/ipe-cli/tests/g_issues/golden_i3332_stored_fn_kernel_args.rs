@@ -107,7 +107,7 @@ fn stored_fn_reaches_every_result_kernel() {
 fn stored_fn_reaches_every_dict_kernel() {
     accept_and_run(
         "stored_fn_kernel_dict",
-        "5 5 106 60 6 6 5 60 7 6 3 44 60 6 1",
+        "5 5 106 60 6 6 5 60 7 6 7 106 106 3 44 60 6 1",
     );
 }
 

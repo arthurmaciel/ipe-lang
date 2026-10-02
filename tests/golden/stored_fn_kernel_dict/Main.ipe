@@ -8,7 +8,8 @@ import Ipe.String as String
 -- Function values read out of storage, passed to every function-taking `Dict`
 -- kernel: a record field, a constructor payload, a tuple component, a
 -- destructured record field, a single-use `let` alias, and an `if` over fields,
--- applied directly, partially, and through a pipe.
+-- applied directly, partially, and through a pipe, as a kernel argument and
+-- as a top-level function's argument.
 
 
 type alias Fns =
@@ -69,7 +70,24 @@ applied f =
     , total (table |> Dict.map f.scale)
     , total (table |> Dict.update "z" f.bump)
     , String.fromInt (table |> Dict.foldl f.sum 0)
+    , total ((f.bump |> Dict.update "z") table)
+    , total (bumpAll f.bump |> (\h -> h table))
+    , viaPartial f
     ]
+
+
+bumpAll : (Maybe Int -> Maybe Int) -> Dict String Int -> Dict String Int
+bumpAll bump d =
+    Dict.update "a" bump d
+
+
+viaPartial : Fns -> String
+viaPartial f =
+    let
+        h =
+            bumpAll f.bump
+    in
+    total (h table)
 
 
 fromPayload : Holder -> String
