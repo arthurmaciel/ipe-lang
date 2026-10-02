@@ -1342,6 +1342,76 @@ pub(crate) fn apply_mount_ops(
     ops.iter().try_for_each(mount)
 }
 
+/// What a directory on a mount target's path inside the jail view guarantees
+/// about the names it holds.
+#[cfg(any(target_os = "freebsd", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViewDirTrust {
+    /// Root-owned and writable by no group or other user: only root can rename
+    /// or replace its entries.
+    RootOnly,
+    /// Another user can rename its entries, so a name below it can be swapped
+    /// for a symlink while the root-run launcher mounts on it.
+    Writable,
+    /// Absent from the view.
+    Missing,
+    /// Not a directory, or it cannot be inspected.
+    Unusable,
+}
+
+/// The shallowest directory strictly between `root` and `target` whose entries
+/// a user other than root can rename, judged by `trust`.
+///
+/// The launcher runs as root and names every mount target by path through the
+/// jail view, which passes host changes through. `Some(dir)` means a fresh
+/// tmpfs must cover `dir` before `target` is created and mounted on, so no
+/// other user can redirect the mount; `None` means every present directory on
+/// the path is root-only (a missing one ends the walk: what lies below it does
+/// not exist in the view and is created afresh).
+///
+/// # Errors
+///
+/// [`RunJailDefect::MountFailed`] when `target` does not lie strictly inside
+/// `root`, or a directory on the path is [`ViewDirTrust::Unusable`].
+#[cfg(any(target_os = "freebsd", test))]
+pub(crate) fn untrusted_mount_ancestor(
+    root: &Path,
+    target: &Path,
+    mut trust: impl FnMut(&Path) -> ViewDirTrust,
+) -> Result<Option<PathBuf>, RunJailDefect> {
+    let outside = || RunJailDefect::MountFailed {
+        target: target.to_path_buf(),
+        detail: format!(
+            "mount target is not inside the jail root {}",
+            root.display()
+        ),
+    };
+    let relative = target.strip_prefix(root).map_err(|_| outside())?;
+    let mut components: Vec<std::path::Component<'_>> = relative.components().collect();
+    if components.pop().is_none() {
+        return Err(outside());
+    }
+    let mut dir = root.to_path_buf();
+    for component in components {
+        dir.push(component);
+        match trust(&dir) {
+            ViewDirTrust::RootOnly => {}
+            ViewDirTrust::Writable => return Ok(Some(dir)),
+            ViewDirTrust::Missing => return Ok(None),
+            ViewDirTrust::Unusable => {
+                return Err(RunJailDefect::MountFailed {
+                    target: target.to_path_buf(),
+                    detail: format!(
+                        "{} on the mount target's path is not a usable directory",
+                        dir.display()
+                    ),
+                });
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// The FreeBSD returning build-jail arm: establish a scratch-rooted `jail(2)`
 /// (via the `jail(8)` CLI) lowering the profile's axes, scrub the env in the
 /// launcher, run the payload confined, wait, and decode the exit into a
@@ -1349,7 +1419,7 @@ pub(crate) fn apply_mount_ops(
 #[cfg(target_os = "freebsd")]
 mod freebsd_jail {
     use super::{
-        FreebsdMountOp, JailOutcome, SafeMountPath, apply_mount_ops, find_in_path,
+        FreebsdMountOp, JailOutcome, SafeMountPath, ViewDirTrust, apply_mount_ops, find_in_path,
         freebsd_mount_ops, macos_scrubbed_env, under_root,
     };
     use crate::JailMounts;
@@ -1446,7 +1516,7 @@ mod freebsd_jail {
         // outlive the run — a persistent host mutation from a confined build is a
         // trust-boundary violation. Record the original owner and restore it on drop
         // regardless of outcome, so the user's tree ownership is left untouched.
-        let _tree_owner_guard = if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
+        let tree_owner_guard = if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
             match RestoredOwnership::chown_to_jail_user(working_tree.as_path()) {
                 Ok(guard) => Some(guard),
                 Err(defect) => return JailOutcome::Unavailable { defect },
@@ -1482,7 +1552,7 @@ mod freebsd_jail {
         drop(jail_root);
         // Restore the working tree's original ownership only AFTER the mounts are
         // torn down, so the user's real tree is left exactly as it was found.
-        drop(_tree_owner_guard);
+        drop(tree_owner_guard);
         outcome
     }
 
@@ -1745,6 +1815,19 @@ mod freebsd_jail {
         }
     }
 
+    /// How far the directory `dir` of the jail view can be trusted to keep its
+    /// entries: root-owned and writable by no group or other user, or not.
+    fn view_dir_trust(dir: &Path) -> ViewDirTrust {
+        use std::os::unix::fs::MetadataExt as _;
+        match std::fs::symlink_metadata(dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => ViewDirTrust::Missing,
+            Err(_) => ViewDirTrust::Unusable,
+            Ok(meta) if !meta.file_type().is_dir() => ViewDirTrust::Unusable,
+            Ok(meta) if meta.uid() == 0 && meta.mode() & 0o022 == 0 => ViewDirTrust::RootOnly,
+            Ok(_) => ViewDirTrust::Writable,
+        }
+    }
+
     /// The read-only jail root, built from one [`JailMounts`] value.
     ///
     /// A fresh directory over which the whole host `/` is nullfs-mounted
@@ -1772,10 +1855,12 @@ mod freebsd_jail {
         proc_mask_source: PathBuf,
         /// Every mounted target, in mount order; unmounted in reverse on drop.
         mounted: Vec<PathBuf>,
-        /// In-root parent stubs a fresh tmpfs has been layered over, so a missing
-        /// mountpoint leaf can be created (the read-only host view is `EROFS`).
-        /// Deduplicated: two targets sharing a parent are provisioned by a single
-        /// tmpfs. Each is also recorded in `mounted` so it is unmounted on drop.
+        /// In-root directories a fresh tmpfs has been layered over, so a mountpoint
+        /// can be created on a filesystem only this jail reaches (the read-only
+        /// host view is `EROFS`, and a user-writable directory in it lets that user
+        /// swap names). Deduplicated: two targets below one directory are
+        /// provisioned by a single tmpfs. Each is also recorded in `mounted` so it
+        /// is unmounted on drop.
         tmpfs_parents: Vec<PathBuf>,
     }
 
@@ -1882,12 +1967,7 @@ mod freebsd_jail {
             //    that most closely contains it, the working tree only when the
             //    filesystem axis is granted. A step that cannot mount refuses the
             //    whole jail, so no bind ever runs over an unmasked home.
-            let working = if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
-                WorkingTree::ReadWrite
-            } else {
-                WorkingTree::Unbound
-            };
-            let binds = jail_binds(mounts, working);
+            let binds = jail_binds(mounts, WorkingTree::granted_by(&profile.filesystem));
             let ops = freebsd_mount_ops(&mount.root, &mount_plan(mounts.homes(), &binds))?;
             apply_mount_ops(&ops, |op| {
                 mount.mount_op(&mount_nullfs_bin, &mount_devfs_bin, op)
@@ -1923,30 +2003,45 @@ mod freebsd_jail {
             Ok(())
         }
 
-        /// Make `target` an existing directory that resolves to itself.
+        /// Make `target` an existing directory that resolves to itself, named
+        /// only through directories no user but root can rename entries in.
         ///
         /// A `mount_nullfs` or `tmpfs` target must ALREADY exist — the tools never
         /// create their mountpoint. The read-only nullfs of `/` supplies the
         /// directories of the ROOT filesystem only; it does not cross into
         /// filesystems mounted under it (a tmpfs `/tmp`, a separate `/home`), and it
-        /// cannot be `mkdir`'d into (`EROFS`). A target already present is used as
-        /// is; one on a tmpfs this jail mounted is created there; otherwise a fresh
-        /// tmpfs is layered over its parent to hold the leaf — the FreeBSD
-        /// counterpart of bwrap materialising its mount targets inside the
-        /// namespace.
+        /// cannot be `mkdir`'d into (`EROFS`). The view passes host changes through,
+        /// so a directory on the target's path that another user can write lets
+        /// that user swap the next name for a symlink between this check and the
+        /// root-run mount. The shallowest such directory is covered by a fresh
+        /// tmpfs first ([`super::untrusted_mount_ancestor`]), so the target is
+        /// created on a filesystem only this jail can reach. A target whose path is
+        /// root-only and present is used as is; one on a tmpfs this jail mounted is
+        /// created there; otherwise a fresh tmpfs is layered over its parent to hold
+        /// the leaf — the FreeBSD counterpart of bwrap materialising its mount
+        /// targets inside the namespace.
         ///
         /// # Errors
         ///
-        /// [`RunJailDefect::MountFailed`] when the leaf cannot be provisioned, or
-        /// when the target resolves anywhere but itself (a symlink in the
-        /// read-only view would carry the mount outside the planned path).
+        /// [`RunJailDefect::MountFailed`] when a directory on the path is not a
+        /// directory or cannot be inspected, when the leaf cannot be provisioned, or
+        /// when the target resolves anywhere but itself.
         fn ensure_mountpoint(
             &mut self,
             mount_bin: &Path,
             target: &Path,
         ) -> Result<(), RunJailDefect> {
-            if !target.is_dir() && std::fs::create_dir_all(target).is_err() {
-                self.provision_rw_mountpoint(mount_bin, target)?;
+            match super::untrusted_mount_ancestor(&self.root, target, view_dir_trust)? {
+                Some(anchor) => self.provision_tmpfs_over(mount_bin, &anchor, target)?,
+                None => {
+                    if !target.is_dir() && std::fs::create_dir_all(target).is_err() {
+                        let parent = target.parent().ok_or_else(|| RunJailDefect::MountFailed {
+                            target: target.to_path_buf(),
+                            detail: "mount target has no parent to provision".to_owned(),
+                        })?;
+                        self.provision_tmpfs_over(mount_bin, parent, target)?;
+                    }
+                }
             }
             let resolved =
                 std::fs::canonicalize(target).map_err(|e| RunJailDefect::MountFailed {
@@ -1966,52 +2061,44 @@ mod freebsd_jail {
             }
         }
 
-        /// Create the missing mountpoint `target` on a fresh tmpfs over its parent.
+        /// Create the mountpoint `target` on a fresh tmpfs over `dir`, one of its
+        /// ancestors inside the jail root.
         ///
-        /// `target` is `<root>/<abs>`; its parent is an empty stub directory of the
-        /// read-only view, where the leaf cannot be `mkdir`'d. A FRESH root-owned
-        /// tmpfs is layered over the parent (once per distinct parent), then the
-        /// leaf is created on it.
+        /// A FRESH root-owned tmpfs is layered over `dir` (once per distinct
+        /// directory), then the missing path down to `target` is created on it.
         ///
         /// # Errors
         ///
-        /// [`RunJailDefect::MountFailed`] when the target has no parent, when the
-        /// parent is the jail root itself or holds an earlier mount (a tmpfs there
-        /// would hide it), when the tmpfs mount fails, or when the leaf cannot be
-        /// created — fail-closed: the payload never runs against a half-built root.
-        fn provision_rw_mountpoint(
+        /// [`RunJailDefect::MountFailed`] when `dir` is the jail root, is or holds
+        /// an earlier mount (a tmpfs there would hide it), when the tmpfs mount
+        /// fails, or when the leaf cannot be created — fail-closed: the payload
+        /// never runs against a half-built root.
+        fn provision_tmpfs_over(
             &mut self,
             mount_bin: &Path,
+            dir: &Path,
             target: &Path,
         ) -> Result<(), RunJailDefect> {
-            let parent = target.parent().ok_or_else(|| RunJailDefect::MountFailed {
-                target: target.to_path_buf(),
-                detail: "mount target has no parent to provision".to_owned(),
-            })?;
-            // A single tmpfs per distinct parent: mounting a second over the same
-            // stub would mask the first, hiding the leaf already created on it.
-            if !self.tmpfs_parents.iter().any(|p| p == parent) {
-                if parent == self.root {
+            // A single tmpfs per distinct directory: mounting a second over the
+            // same stub would mask the first, hiding the leaf already created on it.
+            if !self.tmpfs_parents.iter().any(|p| p == dir) {
+                if dir == self.root {
                     return Err(RunJailDefect::MountFailed {
                         target: target.to_path_buf(),
                         detail: "provisioning this mountpoint would hide the jail root".to_owned(),
                     });
                 }
-                if self
-                    .mounted
-                    .iter()
-                    .any(|earlier| earlier != parent && earlier.starts_with(parent))
-                {
+                if self.mounted.iter().any(|earlier| earlier.starts_with(dir)) {
                     return Err(RunJailDefect::MountFailed {
                         target: target.to_path_buf(),
                         detail: "provisioning this mountpoint would hide an earlier mount"
                             .to_owned(),
                     });
                 }
-                mount_tmpfs(mount_bin, parent)?;
-                self.tmpfs_parents.push(parent.to_path_buf());
+                mount_tmpfs(mount_bin, dir)?;
+                self.tmpfs_parents.push(dir.to_path_buf());
                 // Unmounted in reverse mount order on drop with the rest.
-                self.mounted.push(parent.to_path_buf());
+                self.mounted.push(dir.to_path_buf());
             }
             std::fs::create_dir_all(target).map_err(|e| RunJailDefect::MountFailed {
                 target: target.to_path_buf(),
@@ -2080,6 +2167,8 @@ mod freebsd_jail {
         parent: &std::path::Path,
         prefix: &str,
     ) -> Result<PathBuf, RunJailDefect> {
+        use std::os::unix::fs::MetadataExt as _;
+
         // Ensure the private parent exists. `create_dir_all` is safe here: the
         // parent (`~/.cache/ipe/jail/`) is user-owned and not itself a
         // security boundary — it is the LEAF that must be exclusive.
@@ -2102,7 +2191,12 @@ mod freebsd_jail {
                     target: parent.to_path_buf(),
                     detail: format!("could not read /dev/urandom for random dir suffix: {e}"),
                 })?;
-            buf.iter().map(|b| format!("{b:02x}")).collect::<String>()
+            buf.iter().fold(String::with_capacity(32), |mut hex, b| {
+                use std::fmt::Write as _;
+                // Writing into a `String` cannot fail.
+                let _ = write!(hex, "{b:02x}");
+                hex
+            })
         };
 
         let leaf = parent.join(format!("{prefix}-{random_suffix}"));
@@ -2142,7 +2236,6 @@ mod freebsd_jail {
                         .to_owned(),
                 });
             }
-            use std::os::unix::fs::MetadataExt as _;
             if meta.uid() != current_uid {
                 return Err(RunJailDefect::MountFailed {
                     target: ancestor.to_path_buf(),
@@ -3505,7 +3598,7 @@ mod tests {
         let plan = mount_plan(fixture.mounts.homes(), &binds);
         assert_eq!(plan_bind_after_covered_mask(&plan), None, "{plan:?}");
         let rendered = freebsd_mount_ops(root, &plan);
-        assert!(matches!(rendered, Ok(_)), "{rendered:?}");
+        assert!(rendered.is_ok(), "{rendered:?}");
         let Ok(ops) = rendered else {
             return;
         };
@@ -3559,7 +3652,7 @@ mod tests {
         let root = Path::new("/jailroot");
         let binds = jail_binds(&fixture.mounts, WorkingTree::Unbound);
         let rendered = freebsd_mount_ops(root, &mount_plan(fixture.mounts.homes(), &binds));
-        assert!(matches!(rendered, Ok(_)), "{rendered:?}");
+        assert!(rendered.is_ok(), "{rendered:?}");
         let Ok(ops) = rendered else {
             return;
         };
@@ -3577,7 +3670,7 @@ mod tests {
         let root = Path::new("/jailroot");
         let binds = jail_binds(&fixture.mounts, WorkingTree::ReadWrite);
         let rendered = freebsd_mount_ops(root, &mount_plan(fixture.mounts.homes(), &binds));
-        assert!(matches!(rendered, Ok(_)), "{rendered:?}");
+        assert!(rendered.is_ok(), "{rendered:?}");
         let Ok(ops) = rendered else {
             return;
         };
@@ -3619,7 +3712,7 @@ mod tests {
         let root = Path::new("/jailroot");
         let binds = jail_binds(&fixture.mounts, WorkingTree::ReadWrite);
         let rendered = freebsd_mount_ops(root, &mount_plan(fixture.mounts.homes(), &binds));
-        assert!(matches!(rendered, Ok(_)), "{rendered:?}");
+        assert!(rendered.is_ok(), "{rendered:?}");
         let Ok(ops) = rendered else {
             return;
         };
@@ -3631,6 +3724,80 @@ mod tests {
         assert!(matches!(result, Ok(())), "{result:?}");
         let planned: Vec<PathBuf> = ops.iter().map(|op| op.target().to_path_buf()).collect();
         assert_eq!(attempted, planned);
+    }
+
+    #[test]
+    fn a_mount_target_below_a_user_writable_dir_is_provisioned_over_it() {
+        let root = Path::new("/jailroot");
+        let target = Path::new("/jailroot/srv/u/proj/tree");
+        let trust = |dir: &Path| match dir.to_str() {
+            Some("/jailroot/srv") => ViewDirTrust::RootOnly,
+            Some(_) => ViewDirTrust::Writable,
+            None => ViewDirTrust::Unusable,
+        };
+        let anchor = untrusted_mount_ancestor(root, target, trust);
+        assert_eq!(anchor, Ok(Some(PathBuf::from("/jailroot/srv/u"))));
+    }
+
+    #[test]
+    fn a_root_only_mount_path_needs_no_provisioning() {
+        let root = Path::new("/jailroot");
+        let mut seen: Vec<PathBuf> = Vec::new();
+        let anchor =
+            untrusted_mount_ancestor(root, Path::new("/jailroot/usr/home/u/.cargo"), |dir| {
+                seen.push(dir.to_path_buf());
+                ViewDirTrust::RootOnly
+            });
+        assert_eq!(anchor, Ok(None));
+        assert_eq!(
+            seen,
+            [
+                "/jailroot/usr",
+                "/jailroot/usr/home",
+                "/jailroot/usr/home/u"
+            ]
+            .map(PathBuf::from)
+            .to_vec(),
+            "every directory strictly between the root and the target is judged"
+        );
+    }
+
+    #[test]
+    fn a_missing_dir_ends_the_mount_path_walk() {
+        let anchor = untrusted_mount_ancestor(
+            Path::new("/jailroot"),
+            Path::new("/jailroot/a/b/c"),
+            |dir| {
+                if dir == Path::new("/jailroot/a") {
+                    ViewDirTrust::Missing
+                } else {
+                    ViewDirTrust::Writable
+                }
+            },
+        );
+        assert_eq!(anchor, Ok(None));
+    }
+
+    #[test]
+    fn a_mount_path_through_a_non_directory_or_outside_the_root_refuses() {
+        let unusable =
+            untrusted_mount_ancestor(Path::new("/jailroot"), Path::new("/jailroot/a/b"), |_| {
+                ViewDirTrust::Unusable
+            });
+        assert!(
+            matches!(unusable, Err(RunJailDefect::MountFailed { .. })),
+            "{unusable:?}"
+        );
+        for target in ["/elsewhere/a", "/jailroot"] {
+            let outside =
+                untrusted_mount_ancestor(Path::new("/jailroot"), Path::new(target), |_| {
+                    ViewDirTrust::RootOnly
+                });
+            assert!(
+                matches!(outside, Err(RunJailDefect::MountFailed { .. })),
+                "{target}: {outside:?}"
+            );
+        }
     }
 
     #[test]

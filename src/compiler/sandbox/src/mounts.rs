@@ -371,7 +371,6 @@ pub fn mount_plan<'a>(homes: &HomeMasks, binds: &[Bind<'a>]) -> Vec<MountStep<'a
 }
 
 /// Whether a jail binds its working tree.
-#[cfg(any(target_os = "freebsd", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkingTree {
     /// Not bound: the jail sees only what the masks leave of it, read-only.
@@ -380,11 +379,22 @@ pub enum WorkingTree {
     ReadWrite,
 }
 
+impl WorkingTree {
+    /// The working-tree bind the filesystem axis `scope` grants.
+    #[must_use]
+    pub const fn granted_by(scope: &crate::run_jail::FilesystemScope) -> Self {
+        match scope {
+            crate::run_jail::FilesystemScope::Isolated => Self::Unbound,
+            crate::run_jail::FilesystemScope::WorkingTreeReadWrite => Self::ReadWrite,
+        }
+    }
+}
+
 /// The bind set a jail over `mounts` exposes through its masks.
 ///
 /// The read-only binds, the scratch read-write, and the working tree
-/// read-write only when `working_tree` is [`WorkingTree::ReadWrite`].
-#[cfg(any(target_os = "freebsd", test))]
+/// read-write only when `working_tree` is [`WorkingTree::ReadWrite`]. Every
+/// jail built from a [`crate::JailMounts`] binds exactly this set.
 #[must_use]
 pub fn jail_binds(mounts: &crate::JailMounts, working_tree: WorkingTree) -> Vec<Bind<'_>> {
     let mut binds: Vec<Bind<'_>> = mounts.read_only().iter().map(Bind::ReadOnly).collect();

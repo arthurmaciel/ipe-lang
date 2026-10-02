@@ -333,23 +333,14 @@ pub fn run_jail_argv_with_delivery<'fd>(
     // emitted app binary commonly lives under `$HOME` (e.g. a
     // `CARGO_TARGET_DIR` in `~/.cache`); the caller binds the app FILE itself,
     // never its parent directory.
-    let mut binds: Vec<crate::mounts::Bind<'_>> = mounts
-        .read_only()
-        .iter()
-        .map(crate::mounts::Bind::ReadOnly)
-        .collect();
-    binds.push(crate::mounts::Bind::ReadWrite(scoped_tmp));
-    let working_tree_rw = profile.filesystem == FilesystemScope::WorkingTreeReadWrite;
-    if working_tree_rw {
-        binds.push(crate::mounts::Bind::ReadWrite(working_tree));
-    }
+    let working = crate::mounts::WorkingTree::granted_by(&profile.filesystem);
+    let binds = crate::mounts::jail_binds(mounts, working);
     crate::mounts::push_mounts(&mut argv, mounts.homes(), &binds);
     argv.push("--chdir".into());
     argv.push(
-        if working_tree_rw {
-            working_tree
-        } else {
-            scoped_tmp
+        match working {
+            crate::mounts::WorkingTree::ReadWrite => working_tree,
+            crate::mounts::WorkingTree::Unbound => scoped_tmp,
         }
         .as_path()
         .into(),
@@ -713,6 +704,8 @@ const CONFINED_AXES: &[Capability] = &[];
     any(target_arch = "x86_64", target_arch = "aarch64")
 )))]
 #[must_use]
+// Kept a plain `fn` (not `const fn`) so its signature matches the Linux arm.
+#[allow(clippy::missing_const_for_fn)]
 pub fn netns_jail_available(_bwrap: &std::path::Path) -> bool {
     false
 }
@@ -770,10 +763,11 @@ pub fn exec_in_run_jail(
     })
 }
 
-/// Embedded-app holder on platforms without the sealed-fd / exclusive-scratch
-/// delivery path (Windows and unsupported targets). Embed mode is a Unix
-/// deploy feature; this arm keeps the wrapper compiling everywhere and refuses
-/// at run time rather than running unconfined.
+/// Embedded-app holder on platforms without the sealed-fd delivery path.
+///
+/// Windows and unsupported targets lack the sealed-fd / exclusive-scratch
+/// delivery. Embed mode is a Unix deploy feature; this arm keeps the wrapper
+/// compiling everywhere and refuses at run time rather than running unconfined.
 #[cfg(not(any(
     all(
         target_os = "linux",
@@ -782,7 +776,7 @@ pub fn exec_in_run_jail(
     target_os = "macos"
 )))]
 pub struct SealedApp {
-    _bytes: Vec<u8>,
+    bytes: Vec<u8>,
 }
 
 #[cfg(not(any(
@@ -799,7 +793,7 @@ impl SealedApp {
     ///
     /// Never; returns `Result` for arm-parity with the Linux variant.
     pub fn read_sealed_bytes(&self) -> Result<Vec<u8>, RunJailDefect> {
-        Ok(self._bytes.clone())
+        Ok(self.bytes.clone())
     }
 }
 
@@ -817,7 +811,7 @@ impl SealedApp {
 )))]
 pub fn write_sealed_app_memfd(bytes: &[u8]) -> Result<SealedApp, RunJailDefect> {
     Ok(SealedApp {
-        _bytes: bytes.to_vec(),
+        bytes: bytes.to_vec(),
     })
 }
 
@@ -1410,6 +1404,82 @@ mod tests {
             "working tree not bound rw: {joined}"
         );
         assert!(joined.contains("--chdir /work/tree"), "{joined}");
+    }
+
+    #[test]
+    fn run_jail_mounts_are_the_shared_jail_plan() {
+        // The run jail renders exactly the bind set `jail_binds` derives from
+        // its `JailMounts`, through the one mount plan, for every filesystem
+        // scope: a bind added to or dropped from one jail alone breaks this.
+        let base_dir = crate::test_dir::TestDir::new("run-jail-plan").expect("test dir");
+        let user_home = base_dir.path().join("user");
+        let tree = user_home.join("project");
+        let bin = user_home.join("tools").join("bin");
+        for dir in [&tree, &bin] {
+            std::fs::create_dir_all(dir).expect("fixture dir");
+        }
+        let canonical = |path: &Path| CanonicalPath::resolve(path).expect("fixture path");
+        let no_env = |_: &str| None;
+        for (filesystem, working) in [
+            (
+                FilesystemScope::Isolated,
+                crate::mounts::WorkingTree::Unbound,
+            ),
+            (
+                FilesystemScope::WorkingTreeReadWrite,
+                crate::mounts::WorkingTree::ReadWrite,
+            ),
+        ] {
+            assert_eq!(crate::mounts::WorkingTree::granted_by(&filesystem), working);
+            let profile = SandboxProfile {
+                filesystem,
+                ..SandboxProfile::maximally_isolated()
+            };
+            let mounts = mounts_of(
+                CanonicalPath::assumed("/work/tmp-1"),
+                canonical(&tree),
+                vec![canonical(&bin)],
+                HomeMasks::resolve(Some(&user_home), None).expect("homes"),
+            );
+            let argv: Vec<OsString> = run_jail_argv(
+                &tools(),
+                &profile,
+                &mounts,
+                None,
+                &no_env,
+                &[OsString::from("app")],
+            )
+            .args()
+            .to_vec();
+            let mut expected: Vec<OsString> =
+                ["--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev"]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect();
+            crate::mounts::push_mounts(
+                &mut expected,
+                mounts.homes(),
+                &crate::mounts::jail_binds(&mounts, working),
+            );
+            expected.push("--chdir".into());
+            expected.push(
+                match working {
+                    crate::mounts::WorkingTree::ReadWrite => mounts.working_tree(),
+                    crate::mounts::WorkingTree::Unbound => mounts.scoped_tmp(),
+                }
+                .as_path()
+                .into(),
+            );
+            let start = argv
+                .windows(3)
+                .position(|w| w == ["--ro-bind", "/", "/"])
+                .expect("the read-only root is bound");
+            assert_eq!(
+                argv.get(start..start + expected.len()),
+                Some(expected.as_slice()),
+                "{argv:?}"
+            );
+        }
     }
 
     #[test]
