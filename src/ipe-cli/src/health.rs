@@ -798,18 +798,33 @@ fn link_driver_for_host_triple(host: &str) -> LinkDriver {
     }
 }
 
-/// The running toolchain's link driver, parsed from the `host:` line of
-/// `rustc -vV`. `None` when `rustc` is not on PATH or its output does not
-/// parse — the fast-linker probe then runs exactly as it did before this
-/// check existed.
-fn host_link_driver() -> Option<LinkDriver> {
+/// Parse the `host:` line out of `rustc -vV`'s raw output text.
+///
+/// Pure: no subprocess, no environment lookup — just the line scan. The one
+/// parser both [`host_link_driver`] and [`host_target_triple`] read through,
+/// so "the host triple" has exactly one source wherever `rustc -vV`'s text is
+/// available, instead of two call sites each re-deriving it their own way.
+fn host_triple_from_rustc_vv(text: &str) -> Option<&str> {
+    text.lines().find_map(|l| l.strip_prefix("host: "))
+}
+
+/// Ask the running toolchain for its host triple via `rustc -vV`. `None` when
+/// `rustc` is not on `PATH`, exits non-zero, or its output does not carry a
+/// parseable `host:` line.
+fn rustc_host_triple() -> Option<String> {
     let out = Command::new("rustc").arg("-vV").output().ok()?;
     if !out.status.success() {
         return None;
     }
     let text = String::from_utf8(out.stdout).ok()?;
-    let host = text.lines().find_map(|l| l.strip_prefix("host: "))?;
-    Some(link_driver_for_host_triple(host))
+    host_triple_from_rustc_vv(&text).map(str::to_owned)
+}
+
+/// The running toolchain's link driver, derived from its host triple. `None`
+/// when the triple cannot be determined — the fast-linker probe then runs
+/// exactly as it did before this check existed.
+fn host_link_driver() -> Option<LinkDriver> {
+    rustc_host_triple().map(|host| link_driver_for_host_triple(&host))
 }
 
 /// The `rustc -vV` release line, used as the cache invalidation key. `None`
@@ -1176,11 +1191,32 @@ const LOW_DISK_FLOOR: u64 = 5 * 1024 * 1024 * 1024;
 // ---- small probes ---------------------------------------------------------
 
 /// The host target triple as `rustc` names it, for a per-target `rustflags`
-/// key. Built from the compile-time `cfg` facts so it needs no `rustc` spawn.
-const fn host_target_triple() -> &'static str {
-    // A minimal mapping of the common host arch/OS pairs. An unmapped host
-    // falls back to a generic key that still parses (the linker edit is a
-    // convenience, not a correctness requirement).
+/// key.
+///
+/// Reads the real triple from `rustc -vV`'s `host:` line — through
+/// [`rustc_host_triple`], the same reader [`host_link_driver`] uses — so
+/// there is exactly one source for "the host triple" on this host, not a
+/// static per-arch/OS table that drifts from whatever `rustc` actually
+/// targets (a cross-compiled or multi-target toolchain's host is not always
+/// the triple a `cfg` guess would produce). Falls back to the compile-time
+/// [`cfg_host_triple_fallback`] when `rustc` is unreachable, and only then to
+/// the generic `"host"` key on an unmapped platform — the linker edit is a
+/// convenience, not a correctness requirement, so a best-effort key is still
+/// useful when the real triple cannot be read. Cached for the process's
+/// lifetime: the host triple cannot change between two calls in one run.
+fn host_target_triple() -> &'static str {
+    static TRIPLE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TRIPLE
+        .get_or_init(|| {
+            rustc_host_triple().unwrap_or_else(|| cfg_host_triple_fallback().to_owned())
+        })
+        .as_str()
+}
+
+/// A compile-time per-arch/OS guess at the host triple, used only when
+/// `rustc -vV` cannot be read. An unmapped host falls back to the generic
+/// `"host"` key, which still parses as a TOML table key.
+const fn cfg_host_triple_fallback() -> &'static str {
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
     {
         "x86_64-unknown-linux-gnu"
@@ -2188,6 +2224,22 @@ mod tests {
             link_driver_for_host_triple("aarch64-apple-darwin"),
             LinkDriver::CcDriver
         ));
+    }
+
+    #[test]
+    fn host_triple_parser_reads_msvc_line_and_refuses_missing() {
+        let vv = "rustc 1.80.0 (abcdef 2024-01-01)\n\
+                  binary: rustc\n\
+                  host: x86_64-pc-windows-msvc\n\
+                  release: 1.80.0\n";
+        assert_eq!(
+            host_triple_from_rustc_vv(vv),
+            Some("x86_64-pc-windows-msvc")
+        );
+        // No `host:` line at all — the parser refuses rather than guessing.
+        let no_host = "rustc 1.80.0 (abcdef 2024-01-01)\nrelease: 1.80.0\n";
+        assert_eq!(host_triple_from_rustc_vv(no_host), None);
+        assert_eq!(host_triple_from_rustc_vv(""), None);
     }
 
     #[test]

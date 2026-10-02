@@ -408,9 +408,14 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
             // generate-specific flags (`--out`, `--write-format`) appear in the
             // remaining arguments — those flags are unambiguous signals that the
             // word is a project path for the `generate` subcommand.
+            //
+            // A positional carrying host-path syntax (`/`, `\`, `:`) is never a
+            // lookup key regardless of case — `src/x` and `d:\pkg` fall through
+            // to the generate arm below exactly like their uppercase cousins.
             Some(first)
                 if !first.starts_with('-')
                     && !first.is_empty()
+                    && !has_host_path_syntax(first)
                     && !rest.iter().any(|a| a == "--out" || a == "--write-format") =>
             {
                 let key = (*first).to_owned();
@@ -607,6 +612,18 @@ fn is_module_name(s: &str) -> bool {
             chars.next().is_some_and(|c| c.is_ascii_uppercase())
                 && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
         })
+}
+
+/// Return `true` when `s` carries a host-path syntax character — a separator
+/// (`/`, `\`) or a drive colon (`:`).
+///
+/// None of these is a grammar character in a module name or a content-index
+/// key, on any platform; a positional that contains one is always a host
+/// path, whatever its case. Checked independently of [`is_module_name`] so
+/// the exclusion also covers the lowercase content-index arm, which has no
+/// case restriction to lean on.
+fn has_host_path_syntax(s: &str) -> bool {
+    s.contains(['/', '\\', ':'])
 }
 
 /// Build the `ipe_docs` index, wiring in the CLI command registry.
@@ -5533,6 +5550,52 @@ mod tests {
             m,
             DocMode::Generate {
                 path: PathBuf::from("Users/alice/pkg"),
+                out: PathBuf::from("doc"),
+                write_format: WriteFormat::All,
+            }
+        );
+    }
+
+    #[test]
+    fn host_path_syntax_detection_covers_separators_and_drive_colon() {
+        assert!(has_host_path_syntax("src/x"));
+        assert!(has_host_path_syntax("d:\\pkg"));
+        assert!(has_host_path_syntax("D:\\pkg"));
+        assert!(!has_host_path_syntax("list"));
+        assert!(!has_host_path_syntax("Ipe.List"));
+    }
+
+    #[test]
+    fn a_lowercase_drive_path_is_never_a_lookup_key() {
+        // A lowercase drive letter must not read as a content-index lookup
+        // key either — host-path syntax rules out `Sub::Lookup` whatever the
+        // case, the same way it rules out `Sub::Query` for uppercase paths.
+        let m = parse_doc(&s(&["d:\\pkg"])).expect("lowercase drive path positional");
+        assert!(
+            !matches!(m, DocMode::Lookup { .. }),
+            "a drive-colon positional must never be a lookup key: {m:?}"
+        );
+        assert_eq!(
+            m,
+            DocMode::Generate {
+                path: PathBuf::from("d:\\pkg"),
+                out: PathBuf::from("doc"),
+                write_format: WriteFormat::All,
+            }
+        );
+    }
+
+    #[test]
+    fn a_lowercase_separator_path_is_never_a_lookup_key() {
+        let m = parse_doc(&s(&["src/x"])).expect("lowercase separator path positional");
+        assert!(
+            !matches!(m, DocMode::Lookup { .. }),
+            "a separator positional must never be a lookup key: {m:?}"
+        );
+        assert_eq!(
+            m,
+            DocMode::Generate {
+                path: PathBuf::from("src/x"),
                 out: PathBuf::from("doc"),
                 write_format: WriteFormat::All,
             }
