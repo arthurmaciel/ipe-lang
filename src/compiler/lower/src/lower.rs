@@ -21849,8 +21849,11 @@ impl<'a> Lowerer<'a> {
         // the kernel is reified point-free and rejected, IPE-L0146), or a
         // capture-cloned handler kernel (`Stream.stream ct <| h` / `h |>
         // Stream.stream ct`; the handler-capture gate reads the handler argument
-        // of the saturated call, else the partial is refused, IPE-L0152). The
-        // collapsed spine is exactly the direct saturated call the programmer
+        // of the saturated call, else the partial is refused, IPE-L0152), or a
+        // kernel with a bare-`impl Fn` slot (`r.step |> Task.loop n s` / `Task.loop
+        // n s <| f`; the stored-fn demotion of `demote_shared_fn_kernel_args`
+        // runs on the saturated call only, else the `Arc<dyn Fn>` reaches the
+        // `impl Fn` slot, E0277). The collapsed spine is exactly the direct saturated call the programmer
         // could have written. Restricted to those heads on purpose: a GENERAL
         // flatten reshapes the call tree the downstream multi-use / last-use
         // ownership pass reads to decide moves vs clones, mis-placing a move where
@@ -21877,7 +21880,9 @@ impl<'a> Lowerer<'a> {
     /// Whether a (possibly curried) call spine's head kernel must be lowered as one saturated call.
     ///
     /// True for an accessor-intercept placeholder (`Store.mask`, `Store.eq`, …)
-    /// and a capture-cloned handler kernel (`Stream.stream`). Gates the
+    /// a capture-cloned handler kernel (`Stream.stream`), and a kernel with a
+    /// demoted bare-`impl Fn` slot (`KernelFn::shared_fn_kernel_arg`:
+    /// `Json.encodeList`, `Task.loop`). Gates the
     /// spine-flatten in [`Self::lower_call`] to exactly the kernels whose
     /// saturated-call gate must observe every argument — never a general
     /// currying reshape (which would disturb the ownership/last-use pass).
@@ -21891,6 +21896,7 @@ impl<'a> Lowerer<'a> {
             Ok(Callee::Kernel(k))
                 if k.is_accessor_intercept_placeholder()
                     || k.capture_cloned_handler_arg().is_some()
+                    || k.shared_fn_kernel_arg().is_some()
         )
     }
 
@@ -23637,17 +23643,19 @@ impl<'a> Lowerer<'a> {
         canon_args: &[canon::Expr],
         lowered_args: &mut [Expr],
     ) -> DResult<()> {
-        // The set of (kernel, arg index) whose Rust parameter is a bare `impl Fn`
-        // that rejects an `Arc<dyn Fn>` — the element encoder of `json_enc_list`
-        // and the step of `task_loop`. `json_enc_object` takes
+        // The (kernel, arg index) whose Rust parameter is a bare `impl Fn` that
+        // rejects an `Arc<dyn Fn>` is `KernelFn::shared_fn_kernel_arg` — the one
+        // table the spine flatten in `lower_call` also reads, so a piped call
+        // (`f |> Task.loop n s`) reaches this demotion saturated. `json_enc_object` takes
         // `Vec<(String, Value)>` (no fn param), so it is not here; the
         // decoder-side factories store their `Fn` on the runtime `Decoder`'s own
         // boxed carrier, not a bare `impl Fn`, so they are owned by their carrier
         // path, not this demotion.
-        let fn_arg_index = match resolved {
-            Callee::Kernel(KernelFn::JsonEncList) => 0,
-            Callee::Kernel(KernelFn::TaskLoop) => 2,
-            _ => return Ok(()),
+        let Callee::Kernel(kernel) = resolved else {
+            return Ok(());
+        };
+        let Some(fn_arg_index) = kernel.shared_fn_kernel_arg() else {
+            return Ok(());
         };
         let Some(slot) = lowered_args.get_mut(fn_arg_index) else {
             return Ok(());

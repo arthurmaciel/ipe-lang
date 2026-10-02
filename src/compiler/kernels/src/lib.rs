@@ -1208,6 +1208,28 @@ const _: () = assert!(
     "a kernel's sync_obliged_scheme_vars names a variable its scheme_shape does not carry at an aligned position",
 );
 
+/// Whether every [`StdlibKernel::shared_fn_kernel_arg`] index of `kernels` is below its kernel's arity.
+#[must_use]
+pub const fn shared_fn_kernel_args_fit_arity(kernels: &[StdlibKernel]) -> bool {
+    let mut rest = kernels;
+    while let Some((kernel, tail)) = rest.split_first() {
+        if let Some(index) = kernel.shared_fn_kernel_arg()
+            && index >= kernel.decl().arity as usize
+        {
+            return false;
+        }
+        rest = tail;
+    }
+    true
+}
+
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if a demoted bare-`impl Fn` kernel slot names an argument past its kernel's arity, which would leave a stored `Arc<dyn Fn>` undemoted (E0277) [ledger #boundary]
+#[allow(clippy::assertions_on_constants)] // the constant IS the tripwire
+const _: () = assert!(
+    shared_fn_kernel_args_fit_arity(StdlibKernel::ALL),
+    "a kernel's shared_fn_kernel_arg index is not below its arity",
+);
+
 /// Whether `shape`'s final result, past every arrow, is an app carrier (a `Program` or the opaque `WebApp` leaf).
 #[must_use]
 pub const fn shape_yields_app(shape: &TyShape) -> bool {
@@ -15766,6 +15788,25 @@ impl StdlibKernel {
         }
     }
 
+    /// The argument index of a bare `impl Fn` parameter that rejects a stored `Arc<dyn Fn>`.
+    ///
+    /// `json_enc_list`'s element encoder and `task_loop`'s step are bare
+    /// `impl Fn` slots: a function read out of a storage carrier (a record
+    /// field, a `case`-bound payload — each an `Arc<dyn Fn>`) does not
+    /// `impl Fn`, so the lowerer eta-demotes it onto the `Box` carrier at this
+    /// index. The lowerer also flattens a curried spine headed by such a kernel
+    /// (`f |> Task.loop n s`, `Task.loop n s <| f`) into the saturated call
+    /// before the arity split, so the demotion sees every argument. The index
+    /// is checked against the kernel's arity at build time.
+    #[must_use]
+    pub const fn shared_fn_kernel_arg(self) -> Option<usize> {
+        match self {
+            Self::JsonEncList => Some(0),
+            Self::TaskLoop => Some(2),
+            _ => None,
+        }
+    }
+
     /// `true` when this variant belongs to the `Ipe.Web` subsystem — the
     /// `Ipe.Web` app-entry kernels plus the Task-shaped `PubSub.publish` /
     /// `publishNoEcho`, all of which are `class = Web` and whose symbols live in
@@ -17544,6 +17585,9 @@ mod tests {
         // Its emit arm carries the `Step` bridge, so a point-free reference is
         // eta-expanded rather than boxed as a bare runtime function.
         assert!(StdlibKernel::TaskLoop.requires_saturated_emit());
+        // Its step is a bare `impl Fn` slot a stored `Arc<dyn Fn>` read is
+        // demoted at, directly and through a pipe.
+        assert_eq!(StdlibKernel::TaskLoop.shared_fn_kernel_arg(), Some(2));
     }
 
     /// Verifies that no two non-internal variants in [`StdlibKernel::ALL`] share

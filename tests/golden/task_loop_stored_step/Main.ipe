@@ -7,7 +7,7 @@ import Ipe.Io as Io
 
 
 -- A step function read out of storage: a record field and a user-ADT payload
--- bound by `case`, each passed straight to `Task.loop`.
+-- bound by `case`, each passed to `Task.loop` directly and through a pipe.
 
 
 type alias Runner =
@@ -39,9 +39,25 @@ fromPayload holder =
             Task.loop 5 0 f
 
 
+pipedFromRecord : Runner -> Task Error Int
+pipedFromRecord runner =
+    runner.step |> Task.loop 5 0
+
+
+pipedFromPayload : Holder -> Task Error Int
+pipedFromPayload holder =
+    case holder of
+        Holder f ->
+            Task.loop 5 0 <| f
+
+
 main =
     do
         a <- fromRecord { step = countUp }
         _ <- Io.println (String.fromInt a)
         b <- fromPayload (Holder countUp)
-        Io.println (String.fromInt b)
+        _ <- Io.println (String.fromInt b)
+        c <- pipedFromRecord { step = countUp }
+        _ <- Io.println (String.fromInt c)
+        d <- pipedFromPayload (Holder countUp)
+        Io.println (String.fromInt d)

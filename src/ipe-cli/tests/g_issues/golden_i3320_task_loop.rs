@@ -7,7 +7,7 @@
 //! | `task_loop_no_step_value` | a step that always fails, its `Step` result type never fixed | refused by `ipe`, IPE-L0102 |
 //! | `task_loop_nonclone_capture` | a step capturing a `Task` parameter | refused by `ipe`, IPE-L0126 |
 //! | `task_loop_shapes` | top-level fn, capturing lambda, partial `Task.loop 5`, `case` on `Step` | builds and runs |
-//! | `task_loop_stored_step` | a step read from a record field and from a `case`-bound ADT payload | builds and runs |
+//! | `task_loop_stored_step` | a step read from a record field and from a `case`-bound ADT payload, applied directly and piped | builds and runs |
 //! | `task_loop_fn_state` | a loop state that is a function | refused by `ipe`, IPE-L0114 |
 //! | `task_loop_parser_clash` | qualified `Parser.Done` beside `Task.Done` | builds and runs |
 //! | inline sources | a `String` ceiling; a step that is not a `Step`; two unqualified `Step(..)` imports; a point-free loop at a function state | typed type / name / lowering errors |
@@ -23,7 +23,7 @@
 use std::path::{Path, PathBuf};
 
 use ipe::CliError;
-use ipe_diagnostics::{Code, Family};
+use ipe_diagnostics::{Code, Diagnostic, Family, Feature, LowerError};
 
 use crate::support::repo_root;
 
@@ -120,6 +120,41 @@ fn write_single(name: &str, source: &str) -> Option<PathBuf> {
     Some(entry)
 }
 
+/// Assert `ipe` refuses `entry` through the function-loop-state gate itself.
+///
+/// IPE-L0114 is shared with other unsupported-lowering refusals (a function
+/// constructor payload among them), so the code alone does not pin the gate;
+/// the `Feature` does.
+#[track_caller]
+fn assert_refused_as_function_state(name: &str, entry: &Path) {
+    let out = out_dir(name);
+    let runtime = e2e_support::require_runtime().into_path_buf();
+    let built = ipe::build(entry, &out, &runtime);
+    let got = match &built {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        got,
+        Some(ipe_diagnostics::IPE_L0114),
+        "{name}: a function loop state must fail closed at ipe time with IPE-L0114, got {built:?}"
+    );
+    assert!(
+        matches!(
+            &built,
+            Err(CliError::Pipeline { diag, .. })
+                if matches!(
+                    diag.as_ref(),
+                    Diagnostic::Lower {
+                        msg: LowerError::Unsupported(Feature::TaskLoopFunctionState),
+                        ..
+                    }
+                )
+        ),
+        "{name}: the refusal must come from the Task.loop function-state gate, got {built:?}"
+    );
+}
+
 #[test]
 fn task_loop_runs_far_past_the_recursion_guard_and_reports_its_ceiling() {
     accept_and_run(
@@ -188,10 +223,11 @@ fn a_step_capturing_a_task_is_refused_at_ipe_time() {
 }
 
 /// A step read out of a record field and out of a `case`-bound user-ADT payload
-/// is a stored function; both reach `Task.loop`'s step slot and run.
+/// is a stored function; each reaches `Task.loop`'s step slot, applied directly
+/// and piped (`r.step |> Task.loop 5 0`, `Task.loop 5 0 <| f`), and runs.
 #[test]
 fn a_stored_step_from_a_record_field_or_adt_payload_builds_and_runs() {
-    accept_and_run("task_loop_stored_step", "2\n2");
+    accept_and_run("task_loop_stored_step", "2\n2\n2\n2");
 }
 
 /// A loop state that is a function would sit on two carriers at once (the
@@ -200,15 +236,7 @@ fn a_stored_step_from_a_record_field_or_adt_payload_builds_and_runs() {
 fn a_function_typed_loop_state_is_refused_at_ipe_time() {
     let name = "task_loop_fn_state";
     let entry = fixture_entry(&repo_root(), name);
-    let Some(code) = refusal_code(name, &entry) else {
-        return;
-    };
-    assert_eq!(
-        code,
-        ipe_diagnostics::IPE_L0114,
-        "{name}: expected IPE-L0114, got {}",
-        code.as_str()
-    );
+    assert_refused_as_function_state(name, &entry);
 }
 
 #[test]
@@ -297,15 +325,7 @@ main =
 fn a_point_free_loop_at_a_function_state_is_refused_at_ipe_time() {
     let name = "task_loop_point_free_fn_state";
     let entry = crate::support::expect_scratch_entry(name, write_single(name, POINT_FREE_FN_STATE));
-    let Some(code) = refusal_code(name, &entry) else {
-        return;
-    };
-    assert_eq!(
-        code,
-        ipe_diagnostics::IPE_L0114,
-        "{name}: expected IPE-L0114, got {}",
-        code.as_str()
-    );
+    assert_refused_as_function_state(name, &entry);
 }
 
 #[test]

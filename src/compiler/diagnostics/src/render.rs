@@ -2439,11 +2439,12 @@ const fn feature_label(f: Feature) -> &'static str {
              [feature: non-clone-value-reuse]"
         }
         Feature::TaskLoopFunctionState => {
-            "a `Task.loop` state that holds a function is not supported yet — the \
+            "a `Task.loop` state whose type contains a function type (`Int -> Int`, \
+             a tuple or record with a function component, or a type applied to a \
+             function type such as `Maybe (Int -> Int)`) is not supported yet — the \
              state is both the `init` argument and the `Continue` constructor's \
              payload, and a function cannot take one representation in both; keep \
-             the state plain data (a number, a record of values, a custom type \
-             without function fields) and call the function from the step instead \
+             the state plain data and call the function from the step instead \
              [feature: task-loop-function-state]"
         }
         Feature::StreamHandlerCapture => {
