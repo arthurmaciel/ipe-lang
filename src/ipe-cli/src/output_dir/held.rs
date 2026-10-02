@@ -181,7 +181,15 @@ fn act_err(path: &Path, error: io::Error) -> CliError {
 fn refused(path: &Path, refusal: OpenRefusal) -> CliError {
     match refusal {
         OpenRefusal::InUse => OutputRefusal::InUse(path.to_path_buf()).into(),
-        refusal => act_err(path, refusal.into_io()),
+        OpenRefusal::Absent
+        | OpenRefusal::Link
+        | OpenRefusal::NotRegular(_)
+        | OpenRefusal::Denied
+        | OpenRefusal::TooLarge(_)
+        | OpenRefusal::TooManyEntries(_)
+        | OpenRefusal::BadName
+        | OpenRefusal::NotUtf8
+        | OpenRefusal::Io(_) => act_err(path, refusal.into_io()),
     }
 }
 
@@ -1210,5 +1218,35 @@ mod tests {
         );
         drop(other);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An in-use refusal stays in use on every platform; every other refusal is an I/O error of its kind.
+    #[test]
+    fn every_open_refusal_maps_to_its_cli_error() {
+        let path = Path::new("held/entry");
+        let in_use = refused(path, OpenRefusal::InUse);
+        assert!(
+            matches!(&in_use, CliError::OutputRefused(OutputRefusal::InUse(p)) if p == path),
+            "an in-use entry is refused as in use, got {in_use:?}"
+        );
+        let cap = ByteCap::new(4).expect("non-zero cap");
+        let entries = ipe_fs_open::EntryCap::new(4).expect("non-zero cap");
+        for refusal in [
+            OpenRefusal::Absent,
+            OpenRefusal::Link,
+            OpenRefusal::NotRegular(FileKind::Fifo),
+            OpenRefusal::Denied,
+            OpenRefusal::TooLarge(cap),
+            OpenRefusal::TooManyEntries(entries),
+            OpenRefusal::BadName,
+            OpenRefusal::NotUtf8,
+            OpenRefusal::Io(io::ErrorKind::Interrupted),
+        ] {
+            let error = refused(path, refusal);
+            assert!(
+                matches!(&error, CliError::Io { source, .. } if source.kind() == refusal.kind()),
+                "{refusal:?} is an I/O error of its kind, got {error:?}"
+            );
+        }
     }
 }

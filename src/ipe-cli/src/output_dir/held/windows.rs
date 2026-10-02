@@ -87,11 +87,20 @@ pub fn is_in_use(error: &io::Error) -> bool {
 /// The [`io::Error`] a refused re-proof of a held directory stands for.
 ///
 /// A held directory that became a reparse point answers the raw reparse
-/// refusal ([`is_reparse_refusal`]), so callers classify it as before.
+/// refusal ([`is_reparse_refusal`]) and one held elsewhere the raw sharing
+/// violation ([`is_in_use`]), so callers classify both as before.
 fn reproof_error(refusal: OpenRefusal) -> io::Error {
     match refusal {
         OpenRefusal::Link => reparse_point(),
-        refusal => refusal.into_io(),
+        OpenRefusal::InUse => io::Error::from_raw_os_error(ERROR_SHARING_VIOLATION),
+        OpenRefusal::Absent
+        | OpenRefusal::NotRegular(_)
+        | OpenRefusal::Denied
+        | OpenRefusal::TooLarge(_)
+        | OpenRefusal::TooManyEntries(_)
+        | OpenRefusal::BadName
+        | OpenRefusal::NotUtf8
+        | OpenRefusal::Io(_) => refusal.into_io(),
     }
 }
 

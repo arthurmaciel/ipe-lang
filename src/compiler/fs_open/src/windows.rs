@@ -214,18 +214,18 @@ impl Dir {
     /// Open the entry `name` to read, never through a reparse point.
     ///
     /// A denied open is classified by an attribute-only open of `name`: a
-    /// directory or a reparse point answers access denied to a file open.
+    /// directory or a reparse point answers access denied to a file open. A
+    /// sharing or lock violation is decided by its code first, so a file
+    /// another program holds open stays in use whatever kind it reports.
     pub fn open_regular(&self, name: &EntryName) -> Result<File, OpenRefusal> {
         match self.open_at(name, &read_options()) {
             Ok(file) => Ok(file),
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-                Err(match self.kind_of(name)? {
-                    None => OpenRefusal::Absent,
-                    Some(FileKind::Symlink) => OpenRefusal::Link,
-                    Some(FileKind::Regular) => OpenRefusal::Denied,
-                    Some(kind) => OpenRefusal::NotRegular(kind),
-                })
-            }
+            Err(e) if refusal_of(&e) == OpenRefusal::Denied => Err(match self.kind_of(name)? {
+                None => OpenRefusal::Absent,
+                Some(FileKind::Symlink) => OpenRefusal::Link,
+                Some(FileKind::Regular) => OpenRefusal::Denied,
+                Some(kind) => OpenRefusal::NotRegular(kind),
+            }),
             Err(e) => Err(refusal_of(&e)),
         }
     }
