@@ -2734,6 +2734,8 @@ Ipe.System -- process environment + args + termination
 | `sequence` | `sequence tasks` — run a list of tasks one after another, collecting their |
 | `parallel` | `parallel tasks` — run a list of tasks concurrently, collecting their results |
 | `lazy` | `lazy makeTask` — defer building a task until it is run, by wrapping it in a |
+| `Step` | What one step of a `loop` returns: `Continue state` runs the step again from |
+| `loop` | `loop ceiling init step` — run `step` from `init`, feeding each `Continue` |
 | `BackoffStrategy` | The four backoff strategies available to `RetryPolicy`. |
 | `RetryPolicy` | Retry configuration for `retryWith`, built with the `linearBackoff` / |
 | `linearBackoff` | `linearBackoff maxAttempts delay` — a constant-delay policy that retries on |

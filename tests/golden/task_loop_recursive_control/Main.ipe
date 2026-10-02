@@ -1,0 +1,26 @@
+module Main exposing (main)
+
+import Ipe.Task as Task
+import Ipe.Error exposing (Error)
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- The same 150,000-step counter as `task_loop`, written as a function that calls
+-- itself inside `andThen`. Each step nests one more future, so the stack grows
+-- with the count and the runtime's recursion guard trips: the process exits
+-- nonzero with a classified `RecursionLimit` line instead of finishing. This is
+-- the shape `Task.loop` replaces.
+countUp : Int -> Int -> Task Error Int
+countUp target n =
+    if n >= target then
+        Task.succeed n
+
+    else
+        Task.succeed (n + 1)
+            |> Task.andThen (countUp target)
+
+
+main =
+    countUp 150000 0
+        |> Task.andThen (\n -> Io.println (String.fromInt n))

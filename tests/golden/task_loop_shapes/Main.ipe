@@ -1,0 +1,63 @@
+module Main exposing (main)
+
+import Ipe.Task as Task exposing (Step(..))
+import Ipe.Error exposing (Error)
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- Every way a step reaches `Task.loop`: a top-level function, a lambda that
+-- captures a `String`, `Task.loop` partially applied and passed as a value, and
+-- user code matching a `Step` with `case`.
+
+
+-- A top-level step function: count down to 1.
+countDown : Int -> Task Error (Step Int Int)
+countDown n =
+    if n <= 1 then
+        Task.succeed (Done n)
+
+    else
+        Task.succeed (Continue (n - 1))
+
+
+-- A lambda step that captures `name`.
+label : String -> Task Error String
+label name =
+    Task.loop 4
+        0
+        (\n ->
+            if n >= 2 then
+                Task.succeed (Done (name ++ String.fromInt n))
+
+            else
+                Task.succeed (Continue (n + 1))
+        )
+
+
+-- Receives a partially applied `Task.loop`.
+runWith : (Int -> (Int -> Task Error (Step Int Int)) -> Task Error Int) -> Task Error Int
+runWith runner =
+    runner 3 countDown
+
+
+describe : Step Int Int -> String
+describe step =
+    case step of
+        Continue n ->
+            "continue " ++ String.fromInt n
+
+        Done n ->
+            "done " ++ String.fromInt n
+
+
+main =
+    do
+        counted <- Task.loop 10 9 countDown
+        _ <- Io.println (String.fromInt counted)
+        labelled <- label "loop"
+        _ <- Io.println labelled
+        partial <- runWith (Task.loop 5)
+        _ <- Io.println (String.fromInt partial)
+        _ <- Io.println (describe (Continue 1))
+        Io.println (describe (Done 2))
