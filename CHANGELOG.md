@@ -10,6 +10,58 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.4.0](https://github.com/ipe-lang/compiler/compare/ipe-v0.3.5...ipe-v0.4.0) (2026-10-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **stdlib:** Store app reads keep SQL NULL apart from empty text ([#3315](https://github.com/ipe-lang/compiler/issues/3315))
+* Http.parseQuery now returns Result Error (Dict String String); a malformed escape, invalid UTF-8, an over-cap component or more than 1024 pairs is an Err instead of a lossy Dict.
+
+### Features
+
+* **code-review:** show and decide units only on re-attested source bytes ([#3288](https://github.com/ipe-lang/compiler/issues/3288)) ([8d44deb](https://github.com/ipe-lang/compiler/commit/8d44deb5f9573f55f7c35d4e21111db6023ae10b))
+* **store:** upsert with a conflict target derived from the declared key ([#3339](https://github.com/ipe-lang/compiler/issues/3339)) ([1876b0e](https://github.com/ipe-lang/compiler/commit/1876b0e06c7cec574a8d10bde3bc6d58848cada2))
+* **task:** Task.loop repeats a step under a ceiling at constant stack depth ([#3340](https://github.com/ipe-lang/compiler/issues/3340)) ([d1fa6d0](https://github.com/ipe-lang/compiler/commit/d1fa6d0d5650f367fe18bfb3358c772a547c220e))
+
+
+### Bug Fixes
+
+* canonical loose-file analysis paths and code-review text/path hardening ([#3281](https://github.com/ipe-lang/compiler/issues/3281)) ([7436051](https://github.com/ipe-lang/compiler/commit/7436051755b8172a105d0ea5a8cdee0a60d07583))
+* **canon:** resolve a type alias once, in its defining module's scope ([#3310](https://github.com/ipe-lang/compiler/issues/3310)) ([b2cbf43](https://github.com/ipe-lang/compiler/commit/b2cbf43f966fd2d4d72310dd68d88cd9a3f498fc))
+* CI expression handling, Windows fixture cost, nightly-green producers, code-review rendering and history paging ([#3355](https://github.com/ipe-lang/compiler/issues/3355)) ([197978e](https://github.com/ipe-lang/compiler/commit/197978ed9b9126e4cd2cd9fb7f07e574f83ed454))
+* **ci:** nightly-green selects the newest nightly across independent listings ([#3293](https://github.com/ipe-lang/compiler/issues/3293)) ([4d111ca](https://github.com/ipe-lang/compiler/commit/4d111ca3a7886948028d494543a9fa5fe1290da3))
+* **cli:** compare st_mode through rustix's RawMode on every platform ([#3253](https://github.com/ipe-lang/compiler/issues/3253)) ([336615e](https://github.com/ipe-lang/compiler/commit/336615efc4f305b5b37eb5ee55a9146f1bf06b66))
+* **cli:** route every remote ingest through one declared budget ([#3289](https://github.com/ipe-lang/compiler/issues/3289)) ([c9c2978](https://github.com/ipe-lang/compiler/commit/c9c29787393a7686c511739e12f76d7301edb4ee))
+* **cli:** type-check the named file with build-identical import roots ([#3256](https://github.com/ipe-lang/compiler/issues/3256)) ([743e807](https://github.com/ipe-lang/compiler/commit/743e807a8e994ced3924faa88752811f554f3ee8))
+* **code-review:** bounded queue load; progress from one aggregate row ([#3316](https://github.com/ipe-lang/compiler/issues/3316)) ([2f58ce4](https://github.com/ipe-lang/compiler/commit/2f58ce4c997afd6c93ec5309463b1570c97bd1aa))
+* **code-review:** bounded queue pages and stored paths joined through Path.under ([#3264](https://github.com/ipe-lang/compiler/issues/3264)) ([2c19eff](https://github.com/ipe-lang/compiler/commit/2c19eff1ecf152be90b69281848182e978ed1237))
+* **code-review:** safe display text, startup probes, queue reconciled across index rebuilds ([#3306](https://github.com/ipe-lang/compiler/issues/3306)) ([87a175c](https://github.com/ipe-lang/compiler/commit/87a175ca0f7f193a15b2fc06a2476ebff79aa922))
+* **emit:** every emitted Rust string literal escapes through Rust's Debug grammar ([#3345](https://github.com/ipe-lang/compiler/issues/3345)) ([e7c83c6](https://github.com/ipe-lang/compiler/commit/e7c83c6ee8cb095985e3edea9cabae7666cc7aa1))
+* **fmt:** print the written form, keep every comment, refuse meaning changes ([#3317](https://github.com/ipe-lang/compiler/issues/3317)) ([aff09af](https://github.com/ipe-lang/compiler/commit/aff09af860b35981cf86982089fe25704b310ac1))
+* **fmt:** render each call/lambda subtree once, not once per enclosing level ([#3336](https://github.com/ipe-lang/compiler/issues/3336)) ([b5a4cf1](https://github.com/ipe-lang/compiler/commit/b5a4cf1e7acc3b59368d8e92e42c4e063537bfb5))
+* install temp-base refusals, doc-key resolver, typed GitHub HTTP status ([#3249](https://github.com/ipe-lang/compiler/issues/3249)) ([b7d92a3](https://github.com/ipe-lang/compiler/commit/b7d92a3b3732f17f1771b93eb48df924ed7d751c))
+* JSON escaper for ipe diff, child descriptor floor, one cargo step ([#3361](https://github.com/ipe-lang/compiler/issues/3361)) ([dba8c11](https://github.com/ipe-lang/compiler/commit/dba8c11ece3c58c49a58e64ab4dce296457c5937))
+* **lower:** an eta closure that moves a non-Clone capture is a once closure ([#3353](https://github.com/ipe-lang/compiler/issues/3353)) ([a57a7cc](https://github.com/ipe-lang/compiler/commit/a57a7cc0363eae54b9fd55fc8d057fd6441204bb))
+* one escaper per sink for runtime HTML, terminal lines and Markdown cells ([#3350](https://github.com/ipe-lang/compiler/issues/3350)) ([4f9abcc](https://github.com/ipe-lang/compiler/commit/4f9abcc37fd5820bb68b53ecc086616295536312))
+* one literal escape table, one CSS identifier constructor, code-review rebuild on Task.loop ([#3346](https://github.com/ipe-lang/compiler/issues/3346)) ([b110d97](https://github.com/ipe-lang/compiler/commit/b110d97b4f9dfb1b170a0b9bfd80f93c9fedc3b2))
+* parent-death thread, path literal, e2e binary resolution, wasm32 test gate, strict decoding ([#3285](https://github.com/ipe-lang/compiler/issues/3285)) ([e071a81](https://github.com/ipe-lang/compiler/commit/e071a81a6eee2c7ddf3aa59447b9d1f59522190d))
+* **runtime:** a read ceiling is a value, never a zero-means-default switch ([#3252](https://github.com/ipe-lang/compiler/issues/3252)) ([9826967](https://github.com/ipe-lang/compiler/commit/9826967b674b145e6a76b9a15e2fbb3a0679d8aa))
+* **runtime:** hand a guard's resource out by moving it, never by forgetting the guard ([#3298](https://github.com/ipe-lang/compiler/issues/3298)) ([442f1fb](https://github.com/ipe-lang/compiler/commit/442f1fb7e238c5e1e74fb702ace01c1030c960ea))
+* **runtime:** one log-hazard set, the compiler's terminal set, for every runtime sanitiser ([#3323](https://github.com/ipe-lang/compiler/issues/3323)) ([48524e4](https://github.com/ipe-lang/compiler/commit/48524e4fe34c210ad728b4236dd5e8e7ee4075b0))
+* **runtime:** one typed cell reader for app and external Db rows ([#3324](https://github.com/ipe-lang/compiler/issues/3324)) ([e226bdf](https://github.com/ipe-lang/compiler/commit/e226bdfa6020c5c86217ad3e0f042b2fb498879d)), closes [#3314](https://github.com/ipe-lang/compiler/issues/3314)
+* **runtime:** open dev surfaces only for a dev-intent binary on loopback ([#3297](https://github.com/ipe-lang/compiler/issues/3297)) ([464bd29](https://github.com/ipe-lang/compiler/commit/464bd29702e09a17bf7ccb16e182d6c382198db0))
+* **runtime:** operator listen port vars split from supervisor relocation ([#3307](https://github.com/ipe-lang/compiler/issues/3307)) ([bdfa46d](https://github.com/ipe-lang/compiler/commit/bdfa46daa90dafef60faa4ad704ce7510fb349fa))
+* **runtime:** seal every runtime path under the host regime ([#3291](https://github.com/ipe-lang/compiler/issues/3291)) ([0b3e359](https://github.com/ipe-lang/compiler/commit/0b3e3599541a46913c99c6beeef9a979f37e36ee))
+* **scratch:** private scratch root and leaf-only output-dir claim ([#3234](https://github.com/ipe-lang/compiler/issues/3234)) ([89005e9](https://github.com/ipe-lang/compiler/commit/89005e9f7f159c1a4ab22f2116902228624cceff))
+* **stdlib:** Store app reads keep SQL NULL apart from empty text ([#3315](https://github.com/ipe-lang/compiler/issues/3315)) ([3603f67](https://github.com/ipe-lang/compiler/commit/3603f6736821c5f98589112b3e8f8cd888bc9bbb))
+* **store:** insertAs and updateAs hold the policy's write predicates on the stored row ([#3347](https://github.com/ipe-lang/compiler/issues/3347)) ([7509412](https://github.com/ipe-lang/compiler/commit/7509412cc610f271dcaf646695f0546beb279008))
+* **tools:** seed code-review's fake index DB from ipe-index's real schema ([#3335](https://github.com/ipe-lang/compiler/issues/3335)) ([069d590](https://github.com/ipe-lang/compiler/commit/069d59006f0bb76056f2f29d27e23e80b2ffca0e))
+* Tui terminal preflight, linker spans, fmt round-trip, rev shadow warning ([#3255](https://github.com/ipe-lang/compiler/issues/3255)) ([13a742f](https://github.com/ipe-lang/compiler/commit/13a742fe0f1b90e4776c98e0f3e0e66ca693e89f))
+* **ui:** unbroken height chain and main-axis fillPortion ([#3282](https://github.com/ipe-lang/compiler/issues/3282)) ([7560a2e](https://github.com/ipe-lang/compiler/commit/7560a2ea57bb43ba13e918e9e46e35adba3500c4))
+* **web:** canonical path per routed page; refuse unreachable, ambiguous and unrouted tables ([#3308](https://github.com/ipe-lang/compiler/issues/3308)) ([cc3cfa0](https://github.com/ipe-lang/compiler/commit/cc3cfa0e6c77b4757bd4c0c1f9b056d8c185ba18))
+* **web:** route entry runs its Cmd; canonical entered paths and commit-time dedupe ([#3286](https://github.com/ipe-lang/compiler/issues/3286)) ([1c336d4](https://github.com/ipe-lang/compiler/commit/1c336d4fc4f6ab7a0df040e89a88b1708799cf88))
+
 ## [0.3.5](https://github.com/ipe-lang/compiler/compare/ipe-v0.3.4...ipe-v0.3.5) (2026-09-30)
 
 
