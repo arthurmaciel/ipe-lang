@@ -465,7 +465,7 @@ mod registry_phase_c_tests {
             K::CharIsAlphaNum,
             K::CharIsHexDigit,
             K::CharIsOctDigit,
-            // Error (18 — Ipe.Error real `Error ErrorKind ErrorInfo` ADT:
+            // Error (19 — Ipe.Error real `Error ErrorKind ErrorInfo` ADT:
             // constructors, modifiers, render, classification, inspectors)
             K::ErrorUnexpected,
             K::ErrorInvalidInput,
@@ -475,6 +475,7 @@ mod registry_phase_c_tests {
             K::ErrorDecode,
             K::ErrorConflict,
             K::ErrorUnavailable,
+            K::ErrorLimitExceeded,
             K::ErrorTimeout,
             K::ErrorNotFound,
             K::ErrorPermissionDenied,
@@ -2358,5 +2359,38 @@ mod zonk_sharing_tests {
             return Err("the two shared slots must read back as equal sub-types".to_owned());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod error_kind_ctor_scheme_agreement {
+    use super::super::{Builtins, Ty};
+    use ipe_canon::builtins::BUILTIN_UNIONS;
+    use ipe_intern::Interner;
+
+    /// Every `ErrorKind` constructor scheme names a canon `ErrorKind`
+    /// constructor, in canon's order: a kind added to one list and not the
+    /// other fails here.
+    #[test]
+    fn error_kind_ctor_schemes_match_canon_in_order() {
+        let mut interner = Interner::new();
+        let builtins = Builtins::new(&mut interner).expect("Builtins::new must not fail in tests");
+        let schemed: Vec<String> = builtins
+            .ctor_schemes()
+            .into_iter()
+            .filter(|(_, scheme)| {
+                scheme.arg_tys.is_empty()
+                    && matches!(&scheme.result, Ty::Con { module, name, args }
+                        if module.is_empty() && *name == builtins.errorkind && args.is_empty())
+            })
+            .filter_map(|(ctor, _)| interner.resolve(ctor).map(str::to_owned))
+            .collect();
+        let canon: Vec<String> = BUILTIN_UNIONS
+            .iter()
+            .filter(|u| u.type_name == "ErrorKind")
+            .flat_map(|u| u.ctors.iter().map(|(name, _, _)| (*name).to_owned()))
+            .collect();
+        assert!(!canon.is_empty(), "canon registers ErrorKind");
+        assert_eq!(schemed, canon);
     }
 }
