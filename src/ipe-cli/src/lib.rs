@@ -21,6 +21,7 @@ pub mod audit;
 pub mod audit_native;
 pub mod build_plan;
 mod cache;
+mod cargo_step;
 pub mod clean;
 pub mod cli_args;
 pub mod cli_docs;

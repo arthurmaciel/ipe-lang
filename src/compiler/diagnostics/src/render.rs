@@ -1108,24 +1108,11 @@ pub fn render_json(d: &Diagnostic, file: &str, source: &str) -> String {
     )
 }
 
-/// Escape a string for JSON: `\\`, `"`, and ASCII control characters.
+/// A JSON string literal of `s`, escaped by the display escaper [`crate::json::string_body`].
 fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                // Other ASCII control characters — encode as \uXXXX.
-                let _ = core::fmt::write(&mut out, format_args!("\\u{:04X}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
+    crate::json::string_body_into(s, &mut out);
     out.push('"');
     out
 }
@@ -3430,6 +3417,29 @@ mod tests {
         assert!(
             trimmed.starts_with('{') && trimmed.ends_with('}'),
             "escaped JSON must still be a valid object shape: {json:?}"
+        );
+    }
+
+    /// A bidi override or C1 control in a diagnostic's text reaches the JSON record escaped.
+    #[test]
+    fn render_json_escapes_terminal_hazards() {
+        let diag = Diagnostic::CompilerBug {
+            where_: "lower",
+            detail: "a\u{202e}b\u{9b}c".into(),
+        };
+        let json = render_json(&diag, "src/Main.ipe", "");
+        assert!(
+            !json.contains('\u{202e}'),
+            "U+202E reached the record raw: {json:?}"
+        );
+        assert!(
+            !json.contains('\u{9b}'),
+            "U+009B reached the record raw: {json:?}"
+        );
+        let record: serde_json::Value = serde_json::from_str(json.trim()).expect("valid JSON");
+        assert!(
+            record.to_string().contains("a\u{202e}b\u{9b}c"),
+            "the decoded record keeps the detail text: {json:?}"
         );
     }
 
