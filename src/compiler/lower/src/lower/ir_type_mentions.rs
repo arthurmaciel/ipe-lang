@@ -381,9 +381,9 @@ pub(super) fn expr_type_mentions(expr: &Expr, pred: &impl Fn(&IrType) -> bool) -
     let here = match expr {
         Expr::List { elem, .. } => pred(elem),
         Expr::Access { field_ty, .. } => pred(field_ty),
-        Expr::Lambda { params, ret, .. } | Expr::SharedLambda { params, ret, .. } => {
-            params.iter().any(|(_, t)| pred(t)) || pred(ret)
-        }
+        Expr::Lambda { params, ret, .. }
+        | Expr::SharedLambda { params, ret, .. }
+        | Expr::OnceLambda { params, ret, .. } => params.iter().any(|(_, t)| pred(t)) || pred(ret),
         Expr::FuncValue { ty, .. } => pred(ty),
         Expr::TailLoop { params, .. } => params.iter().any(|(_, t)| pred(t)),
         Expr::Record { ty, .. } => matches!(ty, Some(t) if pred(t)),
@@ -456,6 +456,7 @@ pub(super) fn expr_type_mentions(expr: &Expr, pred: &impl Fn(&IrType) -> bool) -
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. }
         | Expr::TailLoop { body, .. } => expr_type_mentions(body, pred),
         Expr::Apply { func, args } => {
             expr_type_mentions(func, pred) || args.iter().any(|a| expr_type_mentions(a, pred))
@@ -578,7 +579,9 @@ pub(super) fn collect_body_record_shapes(
     match expr {
         Expr::List { elem, .. } => consider(elem),
         Expr::Access { field_ty, .. } => consider(field_ty),
-        Expr::Lambda { params, ret, .. } | Expr::SharedLambda { params, ret, .. } => {
+        Expr::Lambda { params, ret, .. }
+        | Expr::SharedLambda { params, ret, .. }
+        | Expr::OnceLambda { params, ret, .. } => {
             for (_, t) in params {
                 consider(t);
             }
@@ -677,6 +680,7 @@ pub(super) fn collect_body_record_shapes(
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. }
         | Expr::TailLoop { body, .. } => collect_body_record_shapes(body, out, seen),
         Expr::Apply { func, args } => {
             collect_body_record_shapes(func, out, seen);

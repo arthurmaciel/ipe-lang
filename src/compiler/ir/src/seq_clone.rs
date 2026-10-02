@@ -231,6 +231,24 @@ fn rewrite(expr: Expr, target: Symbol, eager: bool, payloads: &EnumPayloadTable)
                 body: new_body,
             }
         }
+        Expr::OnceLambda {
+            params,
+            ret,
+            body,
+            capture,
+        } => {
+            let new_body = if params.iter().any(|(s, _)| *s == target) {
+                body
+            } else {
+                Box::new(rewrite(*body, target, false, payloads))
+            };
+            Expr::OnceLambda {
+                params,
+                ret,
+                body: new_body,
+                capture,
+            }
+        }
         Expr::Apply { func, args } => Expr::Apply {
             func: Box::new(match *func {
                 Expr::Var(s) => Expr::Var(s),
@@ -358,6 +376,7 @@ pub fn seq_rewrite_clones_symbol(sym: Symbol, expr: &Expr, payloads: &EnumPayloa
         Expr::Update { record, fields } => walk(record) || fields.iter().any(|(_, e)| walk(e)),
         Expr::Lambda { params, body, .. }
         | Expr::SharedLambda { params, body, .. }
+        | Expr::OnceLambda { params, body, .. }
         | Expr::TailLoop { params, body } => !params.iter().any(|(s, _)| *s == sym) && walk(body),
         Expr::Apply { func, args } => walk(func) || args.iter().any(walk),
     }

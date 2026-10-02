@@ -3047,6 +3047,24 @@ pub enum Expr {
         ret: IrType,
         body: Box<Self>,
     },
+    /// A synthesised closure whose body moves a non-`Clone` capture, so it is
+    /// `FnOnce` only.
+    ///
+    /// Produced only by the lowerer's eta builders, when a supplied argument
+    /// they re-evaluate per call moves a function, `Task` or `Decoder` local
+    /// out of the closure environment. Every walker treats it as a
+    /// [`Self::Lambda`] plus `capture`. It is legal only at a position
+    /// [`crate::once_closure::admits_once`] admits (a position that calls the
+    /// closure at most once): the lowerer refuses it everywhere else, and the
+    /// backend emits it exactly as a `Lambda` at an admitted position and
+    /// refuses it as a compiler bug at any other.
+    OnceLambda {
+        params: Vec<(Symbol, IrType)>,
+        ret: IrType,
+        body: Box<Self>,
+        /// The first capture the body moves.
+        capture: crate::once_closure::MovedCapture,
+    },
     /// Application of an arbitrary expression value to arguments, `func(args)`.
     ///
     /// Distinct from [`Expr::Call`], which targets a known [`Callee`] (a direct

@@ -83,7 +83,7 @@ pub fn fn_binder_used_as_value(sym: Symbol, body: &Expr) -> bool {
         // A lambda that references `sym` at all captures it BY VALUE into its
         // closure environment — a value use. (Even a direct call `sym x` inside
         // the lambda body first moves `sym` into the environment.)
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } | Expr::OnceLambda { body, .. } => {
             expr_refs_symbol(sym, body)
         }
         Expr::Let { name, value, body } => {
@@ -161,7 +161,9 @@ pub fn fn_binder_used_as_value(sym: Symbol, body: &Expr) -> bool {
 pub fn expr_refs_symbol(sym: Symbol, expr: &Expr) -> bool {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => *s == sym,
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => expr_refs_symbol(sym, body),
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. } => expr_refs_symbol(sym, body),
         Expr::Let { name, value, body } => {
             expr_refs_symbol(sym, value) || (*name != sym && expr_refs_symbol(sym, body))
         }

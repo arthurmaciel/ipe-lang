@@ -1,0 +1,20 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Task as Task
+
+
+-- Refused (IPE-L0126): the destructure-bound `h` is read two closures deep
+-- inside the continuation of the partial `Task.andThen (..)`. Building those
+-- inner closures still moves `h` out of the rebuilt closure, and `List.map`
+-- may call that closure more than once.
+run : ( Int -> Int, Int ) -> List (Task Error Int) -> List (Task Error (List Int))
+run ( h, _ ) ts =
+    List.map (Task.andThen (\x -> Task.succeed (List.map (\y -> h y) [ x ]))) ts
+
+
+main : Task Error ()
+main =
+    Task.sequence (run ( \n -> n + 1, 0 ) [ Task.succeed 1 ])
+        |> Task.andThen (\_ -> Io.println "unreachable")

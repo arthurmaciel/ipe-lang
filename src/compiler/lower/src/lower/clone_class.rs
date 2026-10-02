@@ -11,6 +11,7 @@
 //! Entry point from [`super::Lowerer`]: [`super::Lowerer::clone_env`] builds the
 //! [`CloneEnv`] context; the rewrite fns are called with it.
 
+use std::cell::Cell;
 use std::collections::BTreeSet;
 
 use ipe_diagnostics::{DResult, Feature, Span};
@@ -477,6 +478,77 @@ fn pat_binds_any_in_either(pat: &Pat, a: &BTreeSet<Symbol>, b: &BTreeSet<Symbol>
     }
 }
 
+/// What [`rewrite_captured_clones`] does with a moved non-`Clone` capture.
+pub(super) enum NonCloneCapture {
+    /// A source lambda: refuse the capture with IPE-L0126.
+    Refuse,
+    /// An eta-built closure: record the first moved capture and keep walking,
+    /// so the builder can make the closure an [`Expr::OnceLambda`].
+    Record(Cell<Option<Symbol>>),
+}
+
+/// The context one [`rewrite_captured_clones`] walk shares across its recursion.
+pub(super) struct CaptureWalk {
+    /// The closure's span, for a `Refuse` diagnostic.
+    pub(super) span: Span,
+    /// What a moved non-`Clone` capture does.
+    pub(super) policy: NonCloneCapture,
+}
+
+impl CaptureWalk {
+    /// A walk that refuses a moved non-`Clone` capture at `span`.
+    pub(super) const fn refusing(span: Span) -> Self {
+        Self {
+            span,
+            policy: NonCloneCapture::Refuse,
+        }
+    }
+
+    /// A walk that records the first moved non-`Clone` capture.
+    pub(super) const fn recording(span: Span) -> Self {
+        Self {
+            span,
+            policy: NonCloneCapture::Record(Cell::new(None)),
+        }
+    }
+
+    /// The first capture a recording walk saw moved, if any.
+    pub(super) const fn first_moved(&self) -> Option<Symbol> {
+        match &self.policy {
+            NonCloneCapture::Refuse => None,
+            NonCloneCapture::Record(slot) => slot.get(),
+        }
+    }
+
+    /// Account for a move of the non-`Clone` capture `sym` out of the closure.
+    fn moved(&self, sym: Symbol) -> DResult<()> {
+        match &self.policy {
+            NonCloneCapture::Refuse => Err(super::unsupported(self.span, Feature::NonCloneCapture)),
+            NonCloneCapture::Record(slot) => {
+                if slot.get().is_none() {
+                    slot.set(Some(sym));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Does the walk drop the non-`Clone` set at the closure-literal argument `arg`?
+    ///
+    /// A source lambda's own pass already judged a closure literal passed as
+    /// an argument, so a refusing walk does not re-examine it. A recording walk
+    /// keeps the set: building that inner `move` closure still moves the
+    /// capture out of the outer one, so the outer closure is `FnOnce` either way.
+    const fn clears_at(&self, arg: &Expr) -> bool {
+        match self.policy {
+            NonCloneCapture::Refuse => {
+                matches!(arg, Expr::Lambda { .. } | Expr::OnceLambda { .. })
+            }
+            NonCloneCapture::Record(_) => false,
+        }
+    }
+}
+
 /// Rewrite a lowered IR expression — the body of a `move` closure — to make
 /// the closure `Fn` (not `FnOnce`) by inserting `.clone()` calls on captures
 /// that are not `Copy`:
@@ -501,7 +573,7 @@ fn pat_binds_any_in_either(pat: &Pat, a: &BTreeSet<Symbol>, b: &BTreeSet<Symbol>
 pub(super) fn rewrite_captured_clones(
     clone_set: &BTreeSet<Symbol>,
     noncl_set: &BTreeSet<Symbol>,
-    lambda_span: Span,
+    walk: &CaptureWalk,
     expr: Expr,
     depth: u32,
 ) -> DResult<Expr> {
@@ -513,7 +585,8 @@ pub(super) fn rewrite_captured_clones(
             if clone_set.contains(&s) {
                 Ok(Expr::CloneVar(s))
             } else if noncl_set.contains(&s) {
-                Err(super::unsupported(lambda_span, Feature::NonCloneCapture))
+                walk.moved(s)?;
+                Ok(Expr::Var(s))
             } else {
                 Ok(Expr::Var(s))
             }
@@ -552,7 +625,7 @@ pub(super) fn rewrite_captured_clones(
         Expr::Apply { func, args } => {
             let new_func = Box::new(match *func {
                 Expr::Var(s) if noncl_set.contains(&s) && depth == 0 => Expr::Var(s),
-                other => rewrite_captured_clones(clone_set, noncl_set, lambda_span, other, depth)?,
+                other => rewrite_captured_clones(clone_set, noncl_set, walk, other, depth)?,
             });
             let new_args = args
                 .into_iter()
@@ -563,11 +636,11 @@ pub(super) fn rewrite_captured_clones(
                     // so forwarding a NonClone value in arg position (e.g.
                     // `applyTwice f x` where `f` is non-callee) still fires
                     // L0126 as expected.
-                    if matches!(&a, Expr::Lambda { .. }) {
+                    if walk.clears_at(&a) {
                         let empty = BTreeSet::new();
-                        rewrite_captured_clones(clone_set, &empty, lambda_span, a, depth)
+                        rewrite_captured_clones(clone_set, &empty, walk, a, depth)
                     } else {
-                        rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth)
+                        rewrite_captured_clones(clone_set, noncl_set, walk, a, depth)
                     }
                 })
                 .collect::<DResult<Vec<_>>>()?;
@@ -579,27 +652,15 @@ pub(super) fn rewrite_captured_clones(
         Expr::BinOp { op, lhs, rhs } => Ok(Expr::BinOp {
             op,
             lhs: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *lhs,
-                depth,
+                clone_set, noncl_set, walk, *lhs, depth,
             )?),
             rhs: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *rhs,
-                depth,
+                clone_set, noncl_set, walk, *rhs, depth,
             )?),
         }),
         Expr::Let { name, value, body } => {
             let new_value = Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *value,
-                depth,
+                clone_set, noncl_set, walk, *value, depth,
             )?);
             if clone_set.contains(&name) || noncl_set.contains(&name) {
                 let inner_clone: BTreeSet<Symbol> =
@@ -612,7 +673,7 @@ pub(super) fn rewrite_captured_clones(
                     body: Box::new(rewrite_captured_clones(
                         &inner_clone,
                         &inner_noncl,
-                        lambda_span,
+                        walk,
                         *body,
                         depth,
                     )?),
@@ -622,11 +683,7 @@ pub(super) fn rewrite_captured_clones(
                     name,
                     value: new_value,
                     body: Box::new(rewrite_captured_clones(
-                        clone_set,
-                        noncl_set,
-                        lambda_span,
-                        *body,
-                        depth,
+                        clone_set, noncl_set, walk, *body, depth,
                     )?),
                 })
             }
@@ -637,11 +694,7 @@ pub(super) fn rewrite_captured_clones(
             body,
         } => {
             let new_value = Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *value,
-                depth,
+                clone_set, noncl_set, walk, *value, depth,
             )?);
             if pat_binds_any_in_either(&binder, clone_set, noncl_set) {
                 let inner_clone: BTreeSet<Symbol> = clone_set
@@ -660,7 +713,7 @@ pub(super) fn rewrite_captured_clones(
                     body: Box::new(rewrite_captured_clones(
                         &inner_clone,
                         &inner_noncl,
-                        lambda_span,
+                        walk,
                         *body,
                         depth,
                     )?),
@@ -670,11 +723,7 @@ pub(super) fn rewrite_captured_clones(
                     binder,
                     value: new_value,
                     body: Box::new(rewrite_captured_clones(
-                        clone_set,
-                        noncl_set,
-                        lambda_span,
-                        *body,
-                        depth,
+                        clone_set, noncl_set, walk, *body, depth,
                     )?),
                 })
             }
@@ -712,10 +761,40 @@ pub(super) fn rewrite_captured_clones(
                 body: Box::new(rewrite_captured_clones(
                     &inner_clone,
                     &inner_noncl,
-                    lambda_span,
+                    walk,
                     *body,
                     depth + 1,
                 )?),
+            })
+        }
+        Expr::OnceLambda {
+            params,
+            ret,
+            body,
+            capture,
+        } => {
+            let param_names: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
+            let inner_clone: BTreeSet<Symbol> = clone_set
+                .iter()
+                .copied()
+                .filter(|s| !param_names.contains(s))
+                .collect();
+            let inner_noncl: BTreeSet<Symbol> = noncl_set
+                .iter()
+                .copied()
+                .filter(|s| !param_names.contains(s))
+                .collect();
+            Ok(Expr::OnceLambda {
+                params,
+                ret,
+                body: Box::new(rewrite_captured_clones(
+                    &inner_clone,
+                    &inner_noncl,
+                    walk,
+                    *body,
+                    depth + 1,
+                )?),
+                capture,
             })
         }
         // `Expr::SharedLambda` is produced by `lower_let` strictly
@@ -742,16 +821,14 @@ pub(super) fn rewrite_captured_clones(
                 body: Box::new(rewrite_captured_clones(
                     &inner_clone,
                     &inner_noncl,
-                    lambda_span,
+                    walk,
                     *body,
                     depth + 1,
                 )?),
             })
         }
         Expr::Match(m) => Ok(Expr::Match(m.try_map_bodies(
-            |scrutinee| {
-                rewrite_captured_clones(clone_set, noncl_set, lambda_span, scrutinee, depth)
-            },
+            |scrutinee| rewrite_captured_clones(clone_set, noncl_set, walk, scrutinee, depth),
             |pat, body, guard| {
                 let new_body = if pat_binds_any_in_either(pat, clone_set, noncl_set) {
                     let inner_clone: BTreeSet<Symbol> = clone_set
@@ -764,34 +841,22 @@ pub(super) fn rewrite_captured_clones(
                         .copied()
                         .filter(|&s| !super::pat_binds_symbol(pat, s))
                         .collect();
-                    rewrite_captured_clones(&inner_clone, &inner_noncl, lambda_span, body, depth)?
+                    rewrite_captured_clones(&inner_clone, &inner_noncl, walk, body, depth)?
                 } else {
-                    rewrite_captured_clones(clone_set, noncl_set, lambda_span, body, depth)?
+                    rewrite_captured_clones(clone_set, noncl_set, walk, body, depth)?
                 };
                 Ok((new_body, guard))
             },
         )?)),
         Expr::If { cond, then_, else_ } => Ok(Expr::If {
             cond: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *cond,
-                depth,
+                clone_set, noncl_set, walk, *cond, depth,
             )?),
             then_: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *then_,
-                depth,
+                clone_set, noncl_set, walk, *then_, depth,
             )?),
             else_: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *else_,
-                depth,
+                clone_set, noncl_set, walk, *else_, depth,
             )?),
         }),
         // Call: kernel / top-level function application.
@@ -815,11 +880,11 @@ pub(super) fn rewrite_captured_clones(
             args: args
                 .into_iter()
                 .map(|a| {
-                    if matches!(&a, Expr::Lambda { .. }) {
+                    if walk.clears_at(&a) {
                         let empty = BTreeSet::new();
-                        rewrite_captured_clones(clone_set, &empty, lambda_span, a, depth)
+                        rewrite_captured_clones(clone_set, &empty, walk, a, depth)
                     } else {
-                        rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth)
+                        rewrite_captured_clones(clone_set, noncl_set, walk, a, depth)
                     }
                 })
                 .collect::<DResult<Vec<_>>>()?,
@@ -829,49 +894,33 @@ pub(super) fn rewrite_captured_clones(
         Expr::Tuple(items) => Ok(Expr::Tuple(
             items
                 .into_iter()
-                .map(|e| rewrite_captured_clones(clone_set, noncl_set, lambda_span, e, depth))
+                .map(|e| rewrite_captured_clones(clone_set, noncl_set, walk, e, depth))
                 .collect::<DResult<Vec<_>>>()?,
         )),
         Expr::List { elem, items } => Ok(Expr::List {
             elem,
             items: items
                 .into_iter()
-                .map(|e| rewrite_captured_clones(clone_set, noncl_set, lambda_span, e, depth))
+                .map(|e| rewrite_captured_clones(clone_set, noncl_set, walk, e, depth))
                 .collect::<DResult<Vec<_>>>()?,
         }),
         Expr::Cons { head, tail } => Ok(Expr::Cons {
             head: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *head,
-                depth,
+                clone_set, noncl_set, walk, *head, depth,
             )?),
             tail: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *tail,
-                depth,
+                clone_set, noncl_set, walk, *tail, depth,
             )?),
         }),
         Expr::ListIndexClone { list, index } => Ok(Expr::ListIndexClone {
             list: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *list,
-                depth,
+                clone_set, noncl_set, walk, *list, depth,
             )?),
             index,
         }),
         Expr::ListLenCheck { list, len, exact } => Ok(Expr::ListLenCheck {
             list: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *list,
-                depth,
+                clone_set, noncl_set, walk, *list, depth,
             )?),
             len,
             exact,
@@ -880,8 +929,7 @@ pub(super) fn rewrite_captured_clones(
             fields: fields
                 .into_iter()
                 .map(|(sym, e)| {
-                    rewrite_captured_clones(clone_set, noncl_set, lambda_span, e, depth)
-                        .map(|e| (sym, e))
+                    rewrite_captured_clones(clone_set, noncl_set, walk, e, depth).map(|e| (sym, e))
                 })
                 .collect::<DResult<Vec<_>>>()?,
             ty,
@@ -892,45 +940,28 @@ pub(super) fn rewrite_captured_clones(
             field_ty,
         } => Ok(Expr::Access {
             record: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *record,
-                depth,
+                clone_set, noncl_set, walk, *record, depth,
             )?),
             field,
             field_ty,
         }),
         Expr::Update { record, fields } => Ok(Expr::Update {
             record: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *record,
-                depth,
+                clone_set, noncl_set, walk, *record, depth,
             )?),
             fields: fields
                 .into_iter()
                 .map(|(sym, e)| {
-                    rewrite_captured_clones(clone_set, noncl_set, lambda_span, e, depth)
-                        .map(|e| (sym, e))
+                    rewrite_captured_clones(clone_set, noncl_set, walk, e, depth).map(|e| (sym, e))
                 })
                 .collect::<DResult<Vec<_>>>()?,
         }),
         Expr::TaskSeq { effect, rest } => Ok(Expr::TaskSeq {
             effect: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *effect,
-                depth,
+                clone_set, noncl_set, walk, *effect, depth,
             )?),
             rest: Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *rest,
-                depth,
+                clone_set, noncl_set, walk, *rest, depth,
             )?),
         }),
         Expr::Ctor {
@@ -944,7 +975,7 @@ pub(super) fn rewrite_captured_clones(
             variant,
             args: args
                 .into_iter()
-                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth))
+                .map(|a| rewrite_captured_clones(clone_set, noncl_set, walk, a, depth))
                 .collect::<DResult<Vec<_>>>()?,
         }),
         // TailLoop/TailRecur are produced by a post-lower TCO pass that runs
@@ -968,7 +999,7 @@ pub(super) fn rewrite_captured_clones(
                 body: Box::new(rewrite_captured_clones(
                     &inner_clone,
                     &inner_noncl,
-                    lambda_span,
+                    walk,
                     *body,
                     depth,
                 )?),
@@ -977,7 +1008,7 @@ pub(super) fn rewrite_captured_clones(
         Expr::TailRecur { args } => Ok(Expr::TailRecur {
             args: args
                 .into_iter()
-                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth))
+                .map(|a| rewrite_captured_clones(clone_set, noncl_set, walk, a, depth))
                 .collect::<DResult<Vec<_>>>()?,
         }),
     }
@@ -1158,6 +1189,45 @@ pub(super) fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: 
                 }
             } else {
                 Expr::SharedLambda { params, ret, body }
+            }
+        }
+        Expr::OnceLambda {
+            params,
+            ret,
+            body,
+            capture,
+        } => {
+            if super::lambda_body_refs_sym(sym, &body) {
+                // same nested-capture descent as the `Lambda` arm above.
+                let body = Box::new(force_shared_capture_clones(sym, *body));
+                if *remaining > 1 {
+                    *remaining -= 1;
+                    Expr::Let {
+                        name: sym,
+                        value: Box::new(Expr::CloneVar(sym)),
+                        body: Box::new(Expr::OnceLambda {
+                            params,
+                            ret,
+                            body,
+                            capture,
+                        }),
+                    }
+                } else {
+                    *remaining -= 1;
+                    Expr::OnceLambda {
+                        params,
+                        ret,
+                        body,
+                        capture,
+                    }
+                }
+            } else {
+                Expr::OnceLambda {
+                    params,
+                    ret,
+                    body,
+                    capture,
+                }
             }
         }
         // Non-`sym` Var / CloneVar and all atomic leaves — pass through.

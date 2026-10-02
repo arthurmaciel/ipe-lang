@@ -1,0 +1,25 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.String
+import Ipe.Task as Task
+
+
+combine : Task Error Int -> Int -> Task Error Int
+combine t n =
+    t |> Task.map (\m -> m + n)
+
+
+-- Refused (IPE-L0126): the partial `combine t` is rebuilt as a closure that
+-- moves the `Task` parameter `t`, and `List.map` may call that closure more
+-- than once.
+run : Task Error Int -> List Int -> List (Task Error Int)
+run t ns =
+    List.map (combine t) ns
+
+
+main : Task Error ()
+main =
+    Task.sequence (run (Task.succeed 1) [ 1, 2 ])
+        |> Task.andThen (\xs -> Io.println (String.join "," (List.map String.fromInt xs)))

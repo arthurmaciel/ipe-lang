@@ -269,6 +269,12 @@ fn walk_expr(
             ret: _,
             body,
         }
+        | Expr::OnceLambda {
+            params: _,
+            ret: _,
+            body,
+            ..
+        }
         | Expr::TailLoop { params: _, body } => {
             walk_expr(body, direct_calls, types);
         }

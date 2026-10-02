@@ -58,9 +58,11 @@ use crate::doc::{ChainOperand, Doc};
 use crate::emit_expr::{
     call_has_kernel_special_case, callee_name, clone_targets_in_expr, combine_guards,
     emit_arm_head, emit_binding_stmts, emit_expr_at, emit_match_scrutinee, free_vars,
-    inlined_let_body, record_struct_name, swapped_container_clone_rewrite, wants_arc_ctor,
+    inlined_let_body, once_closure_bug, record_struct_name, swapped_container_clone_rewrite,
+    wants_arc_ctor,
 };
 use crate::emit_types::{GenericScope, render_type};
+use ipe_ir::once_closure::{ClosureParts, ClosureSite, admitted_once_parts};
 
 /// The infix spelling of a chain-eligible operator (never `Append` / `IntDiv`
 /// / `Int{Add,Sub,Mul}` / `Add`/`Sub`/`Mul`, which are all call-shaped).
@@ -274,14 +276,24 @@ pub fn build_doc(
         Expr::SharedLambda { params, ret, body } => {
             build_lambda(ctx, params, ret, body, indent, child, generics, true)
         }
+        // A once closure is built only by the admitted positions below (an
+        // immediate application, `Task.andThen`'s continuation); mirrors
+        // [`crate::emit_expr::emit_expr_at`]'s refusal everywhere else.
+        Expr::OnceLambda { .. } => Err(once_closure_bug("ipe_backend_rust::emit_doc::build_doc")),
 
         // An immediately-applied lambda `({ let p0: T0 = a0; … body })`. The string
         // emitter inlines the lambda's params as `let` bindings then the body — a
         // statement block that ALWAYS breaks (it holds the bindings): each binding
         // and the body on their own `HardLine`. Each binding is an [`Doc::Assign`]
         // (its `p: T = arg` may RHS-break when wide); the body is built recursively.
+        // Taken exactly when the string emitter inlines: a saturated or curried
+        // apply (`args.len() >= params.len()`). An under-applied lambda is boxed and
+        // called there, so it takes the general application arm below.
         Expr::Apply { func, args }
-            if matches!(func.as_ref(), Expr::Lambda { .. }) && !args.is_empty() =>
+            if matches!(
+                func.as_ref(),
+                Expr::Lambda { params, .. } if !args.is_empty() && args.len() >= params.len()
+            ) =>
         {
             let Expr::Lambda {
                 params,
@@ -295,15 +307,36 @@ pub fn build_doc(
             };
             build_applied_lambda(ctx, params, args, lam_body, indent, child, generics)
         }
+        // An immediately-applied once closure: the same block as a `Lambda`,
+        // only where the shared once verdict admits the application (mirrors
+        // [`crate::emit_expr::emit_apply`]).
+        Expr::Apply { func, args } if matches!(func.as_ref(), Expr::OnceLambda { .. }) => {
+            let arity = if let Expr::OnceLambda { params, .. } = func.as_ref() {
+                params.len()
+            } else {
+                0
+            };
+            let site = ClosureSite::ImmediateApply {
+                arity,
+                args: args.len(),
+            };
+            let Some((params, _, lam_body)) = admitted_once_parts(func, &site) else {
+                return Err(once_closure_bug(
+                    "ipe_backend_rust::emit_doc::build_doc(Apply)",
+                ));
+            };
+            build_applied_lambda(ctx, params, args, lam_body, indent, child, generics)
+        }
 
         // A general function-value application `({f})(a0, a1, …)`. Structured ONLY
-        // for the non-lambda, non-empty-arg tail: the immediately-applied-lambda
-        // `func` is a `Lambda` case is handled by the arm above; a zero-arg apply
+        // for the non-empty-arg tail: an inlined `Lambda` apply and every
+        // `OnceLambda` apply are handled by the arms above, so a `Lambda` here is an
+        // under-applied one the string emitter boxes and calls; a zero-arg apply
         // (`({f})()`) has no positional list, so it stays a leaf. The remaining tail
         // is exactly `({f})(` + a delimited argument list; `f` is built recursively
         // so a structured func operand rides inside its parens.
         Expr::Apply { func, args }
-            if !matches!(func.as_ref(), Expr::Lambda { .. }) && !args.is_empty() =>
+            if !matches!(func.as_ref(), Expr::OnceLambda { .. }) && !args.is_empty() =>
         {
             let func_doc = build_doc(ctx, func, indent, child, generics)?;
             let docs = build_args(ctx, args, indent, child, generics)?;
@@ -1094,7 +1127,7 @@ fn build_call_args_task_and_then(
 ) -> DResult<Vec<Doc>> {
     if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
         && let [cont, effect] = args
-        && let Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } = cont
+        && let Some((params, ret, body)) = and_then_cont(cont)
     {
         let closure = build_closure(ctx, params, ret, body, indent, child, generics)?;
         let cont_doc = Doc::concat(vec![Doc::text("Box::new("), closure, Doc::text(")")]);
@@ -1102,6 +1135,22 @@ fn build_call_args_task_and_then(
         return Ok(vec![cont_doc, effect_doc]);
     }
     build_call_args_with_impl_fn(ctx, callee, args, indent, child, generics)
+}
+
+/// The parts of `Task.andThen`'s continuation when it is built unboxed: a
+/// closure literal, or a once closure the shared once verdict admits there.
+fn and_then_cont(cont: &Expr) -> Option<ClosureParts<'_>> {
+    if let Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } = cont {
+        Some((params.as_slice(), ret, body.as_ref()))
+    } else {
+        admitted_once_parts(
+            cont,
+            &ClosureSite::KernelArg {
+                kernel: &KernelFn::TaskAndThen,
+                index: 0,
+            },
+        )
+    }
 }
 
 /// Build a positional argument list, passing a lambda-literal argument UNBOXED
@@ -2054,6 +2103,9 @@ mod tests {
         Module, OnFormKind, Pat, Program, TypeDef, Variant,
     };
 
+    use ipe_diagnostics::Diagnostic;
+    use ipe_ir::once_closure::MovedCapture;
+
     use super::build_doc;
     use crate::doc::{ChainOperand, Doc, whitespace_normalize};
     use crate::emit_expr::emit_expr_at;
@@ -2657,6 +2709,140 @@ mod tests {
                     "\nSEAL mismatch for {expr:?}\n  doc leaves : {}\n  emit string: {}",
                     doc.normalized_leaves(),
                     whitespace_normalize(&string),
+                );
+            }
+        });
+    }
+
+    /// A closure over `x` as a `Lambda`, or as an `OnceLambda` moving `a`.
+    fn closure(fx: &Fixture, once: bool) -> Expr {
+        let params = vec![(sym(fx, 3), IrType::Int)];
+        let body = Box::new(binop(BinOp::Add, var(fx, 3), var(fx, 0)));
+        if once {
+            Expr::OnceLambda {
+                params,
+                ret: IrType::Int,
+                body,
+                capture: MovedCapture {
+                    name: sym(fx, 0),
+                    lo: 0,
+                    hi: 1,
+                },
+            }
+        } else {
+            Expr::Lambda {
+                params,
+                ret: IrType::Int,
+                body,
+            }
+        }
+    }
+
+    fn kernel_call(kernel: KernelFn, args: Vec<Expr>) -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(kernel),
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    /// The positions `once_closure::admits_once` admits, holding `closure(fx, once)`.
+    fn admitted_once_sites(fx: &Fixture, once: bool) -> Vec<Expr> {
+        vec![
+            Expr::Apply {
+                func: Box::new(closure(fx, once)),
+                args: vec![Expr::Int(1)],
+            },
+            kernel_call(KernelFn::TaskAndThen, vec![closure(fx, once), var(fx, 1)]),
+        ]
+    }
+
+    #[test]
+    fn once_lambda_emits_like_lambda_at_admitted_sites() {
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let lambdas = admitted_once_sites(&fx, false);
+            let onces = admitted_once_sites(&fx, true);
+            for (lambda, once) in lambdas.iter().zip(&onces) {
+                let want = emit_expr_at(ctx, lambda, 0, 0, scope).expect("lambda emits");
+                let got = emit_expr_at(ctx, once, 0, 0, scope).expect("once closure emits");
+                assert_eq!(got, want, "a once closure must emit as its `Lambda` twin");
+                let doc = build_doc(ctx, once, 0, 0, scope).expect("once closure builds");
+                assert_eq!(
+                    doc.normalized_leaves(),
+                    whitespace_normalize(&got),
+                    "SEAL mismatch for {once:?}"
+                );
+                let lambda_doc = build_doc(ctx, lambda, 0, 0, scope).expect("lambda builds");
+                assert_eq!(
+                    render(&doc, RenderConfig::default()),
+                    render(&lambda_doc, RenderConfig::default()),
+                    "a once closure must render as its `Lambda` twin"
+                );
+            }
+        });
+    }
+
+    /// An under-applied lambda is boxed and called by the string emitter, never
+    /// inlined: the Doc builder must produce the same leaves, not a `let` block
+    /// that binds only the supplied prefix and leaves the rest unbound.
+    #[test]
+    fn under_applied_lambda_doc_matches_string_emitter() {
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let expr = Expr::Apply {
+                func: Box::new(Expr::Lambda {
+                    params: vec![(sym(&fx, 3), IrType::Int), (sym(&fx, 4), IrType::Int)],
+                    ret: IrType::Int,
+                    body: Box::new(binop(BinOp::Add, var(&fx, 3), var(&fx, 4))),
+                }),
+                args: vec![Expr::Int(1)],
+            };
+            let want = emit_expr_at(ctx, &expr, 0, 0, scope).expect("string emitter");
+            let doc = build_doc(ctx, &expr, 0, 0, scope).expect("doc builder");
+            assert_eq!(
+                doc.normalized_leaves(),
+                whitespace_normalize(&want),
+                "SEAL mismatch for an under-applied lambda"
+            );
+        });
+    }
+
+    #[test]
+    fn once_lambda_elsewhere_is_a_compiler_bug() {
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let refused = [
+                closure(&fx, true),
+                Expr::Apply {
+                    func: Box::new(closure(&fx, true)),
+                    args: vec![],
+                },
+                Expr::Apply {
+                    func: Box::new(closure(&fx, true)),
+                    args: vec![Expr::Int(1), Expr::Int(2)],
+                },
+                kernel_call(KernelFn::ListMap, vec![closure(&fx, true), var(&fx, 1)]),
+                kernel_call(KernelFn::TaskAndThen, vec![var(&fx, 1), closure(&fx, true)]),
+            ];
+            for expr in &refused {
+                assert!(
+                    matches!(
+                        emit_expr_at(ctx, expr, 0, 0, scope),
+                        Err(Diagnostic::CompilerBug { .. })
+                    ),
+                    "emit_expr_at must refuse {expr:?}"
+                );
+                assert!(
+                    matches!(
+                        build_doc(ctx, expr, 0, 0, scope),
+                        Err(Diagnostic::CompilerBug { .. })
+                    ),
+                    "build_doc must refuse {expr:?}"
                 );
             }
         });

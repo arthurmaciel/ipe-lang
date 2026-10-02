@@ -8,9 +8,10 @@ use super::{
     emit_process_run_with_call, emit_record, emit_server_call, emit_shared_lambda,
     emit_task_loop_call, emit_task_retry_call, emit_tea_call, emit_ui_call, emit_ui_template,
     emit_update, float_literal, free_vars, indent_of, inlined_let_body, ir_type_is_definitely_copy,
-    op_str, render_type, rust_str_lit, swapped_container_clone_rewrite,
+    once_closure_bug, op_str, render_type, rust_str_lit, swapped_container_clone_rewrite,
 };
 use crate::EmitCtx;
+use ipe_ir::once_closure::{ClosureSite, admitted_once_parts};
 
 /// Depth-tracked recursion behind [`emit_expr`]. `depth` is the IR-nesting level
 /// of `expr` (0 at the function body); it gates the bounded-emit guard and is
@@ -553,11 +554,22 @@ pub fn emit_expr_at(
                 // absence of the explicit annotation is what keeps rustc's
                 // type-checking linear in the number of chained `Task.andThen`
                 // calls (the annotation form causes super-linear work at depth).
-                let rendered = if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
+                // A once closure takes the same unboxed path where the shared
+                // once verdict admits this argument slot.
+                let and_then_cont = if let Callee::Kernel(kernel @ KernelFn::TaskAndThen) = callee
                     && i == 0
-                    && let Expr::Lambda { params, ret, body }
-                    | Expr::SharedLambda { params, ret, body } = arg
                 {
+                    if let Expr::Lambda { params, ret, body }
+                    | Expr::SharedLambda { params, ret, body } = arg
+                    {
+                        Some((params.as_slice(), ret, body.as_ref()))
+                    } else {
+                        admitted_once_parts(arg, &ClosureSite::KernelArg { kernel, index: i })
+                    }
+                } else {
+                    None
+                };
+                let rendered = if let Some((params, ret, body)) = and_then_cont {
                     let inner =
                         emit_lambda_unboxed(ctx, params, ret, body, indent, child, generics)?;
                     // Splice the already-built child into a pre-sized buffer rather
@@ -703,6 +715,11 @@ pub fn emit_expr_at(
         Expr::SharedLambda { params, ret, body } => {
             emit_shared_lambda(ctx, params, ret, body, indent, depth, generics)
         }
+        // Defence in depth behind the lowering once check: a once closure is
+        // emitted only at the positions `once_closure::admits_once` admits,
+        // which handle it before reaching here. Boxing it as `dyn Fn` would
+        // cargo-fail, so any other position is a compiler bug.
+        Expr::OnceLambda { .. } => Err(once_closure_bug("ipe_backend_rust::emit_expr_at")),
         Expr::Apply { func, args } => emit_apply(ctx, func, args, indent, depth, generics),
         Expr::FuncValue { callee, ty } => emit_func_value(ctx, callee, ty, generics),
         Expr::Match(m) => emit_match(ctx, m, indent, depth, generics),

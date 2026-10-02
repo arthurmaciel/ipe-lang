@@ -1,0 +1,23 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.String
+import Ipe.Task as Task
+
+
+-- Refused (IPE-L0126): the partial of the local function `apply` is rebuilt as
+-- a closure whose inlined argument `\y -> h y` moves the destructure-bound `h`,
+-- and `List.map` may call that closure more than once.
+run : ( Int -> Int, Int ) -> List Int -> List Int
+run ( h, _ ) xs =
+    let
+        apply =
+            \g n -> g n
+    in
+    List.map (apply (\y -> h y)) xs
+
+
+main : Task Error ()
+main =
+    Io.println (String.join "," (List.map String.fromInt (run ( \n -> n + 1, 0 ) [ 1, 2 ])))

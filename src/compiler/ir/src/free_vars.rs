@@ -213,6 +213,7 @@ pub fn collect_free_vars(expr: &Expr, out: &mut BTreeSet<Symbol>) {
         }
         Expr::Lambda { params, body, .. }
         | Expr::SharedLambda { params, body, .. }
+        | Expr::OnceLambda { params, body, .. }
         | Expr::TailLoop { params, body } => {
             let mut body_free = BTreeSet::new();
             collect_free_vars(body, &mut body_free);

@@ -16,6 +16,7 @@ pub mod free_vars;
 mod held;
 mod ir;
 pub mod let_inline;
+pub mod once_closure;
 mod pairing;
 mod pretty;
 pub mod record_shapes;
