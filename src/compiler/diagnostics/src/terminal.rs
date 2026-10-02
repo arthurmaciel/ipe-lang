@@ -185,7 +185,7 @@ impl TerminalLine {
 
     /// Whether the sanitised line holds no characters.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 }
