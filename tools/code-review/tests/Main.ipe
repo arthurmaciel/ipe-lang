@@ -561,6 +561,22 @@ execIndex indexDb sql params =
         Task.succeed ()
 
 
+-- Like `execIndex`, with the schema's CHECK constraints off on the one
+-- connection the transaction holds: a tampered or foreign index can hold a `kind` or `facing` the
+-- real schema refuses, and the decode point must still render it safely.
+execIndexUnchecked : String -> String -> List SqlValue -> Task.Task Error ()
+execIndexUnchecked indexDb sql params =
+    do
+        conn <- Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rw")
+        Db.withTransaction conn
+            (\tx ->
+                do
+                    Db.exec tx "PRAGMA ignore_check_constraints = ON" []
+                    Db.exec tx sql params
+                    Task.succeed ()
+            )
+
+
 -- ── source attestation ──────────────────────────────────────────────────
 --
 -- A unit's source is shown only when its lines re-hash to the stored
@@ -790,20 +806,30 @@ oneMissingFileIsolated =
             )
 
 
-unitsDdl : String
-unitsDdl =
-    "CREATE TABLE units (uid TEXT PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, qualified TEXT NOT NULL, line_start INTEGER NOT NULL, line_end INTEGER NOT NULL, facing TEXT NOT NULL, purpose TEXT, body_hash TEXT NOT NULL, updated_sha TEXT NOT NULL)"
+-- The real index schema, read verbatim from ipe-index's own fixture
+-- (`tools/ipe-index/tests/schema.sql`): a Rust test in that crate
+-- (`schema_fixture_matches_the_real_schema`) asserts the fixture byte-equal
+-- to the `SCHEMA` const `Store::open` runs. Seeding from a hand copy would
+-- let these tests pass against a schema the real index never creates.
+indexSchemaStatements : String -> Task.Task Error (List String)
+indexSchemaStatements cwd =
+    Task.fromResult (Path.fromString (ipeIndexTestFile cwd "schema.sql"))
+        |> Task.andThen (\path -> File.readFileLimit path (ByteSize.kib 16))
+        |> Task.map
+            (\text ->
+                String.split ";" text
+                    |> List.map String.trim
+                    |> List.filter (\s -> s /= "")
+            )
 
 
-queueDdl : String
-queueDdl =
-    "CREATE TABLE change_queue (uid TEXT PRIMARY KEY, change TEXT NOT NULL, old_hash TEXT, new_hash TEXT, enqueued_sha TEXT NOT NULL, enqueued_at INTEGER NOT NULL)"
-
-
--- The `reviewed` table exactly as ipe-index's `SCHEMA` creates it.
-reviewedDdl : String
-reviewedDdl =
-    "CREATE TABLE reviewed (uid TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY (uid, body_hash)) WITHOUT ROWID"
+-- Runs every statement of the real schema, in file order, on one connection.
+execIndexSchema : Db -> List String -> Task.Task Error ()
+execIndexSchema conn statements =
+    List.foldl
+        (\stmt acc -> Task.andThen (\_ -> Task.map (\_ -> ()) (Db.exec conn stmt [])) acc)
+        (Task.succeed ())
+        statements
 
 
 seedIndexDb : String -> Task.Task Error ()
@@ -811,9 +837,9 @@ seedIndexDb indexDb =
     Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
         |> Task.andThen
             (\conn ->
-                Db.exec conn unitsDdl []
-                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
-                    |> Task.andThen (\_ -> Db.exec conn reviewedDdl [])
+                System.cwd ()
+                    |> Task.andThen indexSchemaStatements
+                    |> Task.andThen (execIndexSchema conn)
                     |> Task.andThen (\_ -> insertUnitRows conn)
             )
         |> Task.map (\_ -> ())
@@ -822,7 +848,7 @@ seedIndexDb indexDb =
 insertUnitRows : Db -> Task.Task Error Int
 insertUnitRows conn =
     Db.exec conn
-        "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+        "INSERT INTO units (uid, path, kind, name, qualified, line_start, line_end, facing, purpose, body_hash, updated_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
         [ SqlString "u-a"
         , SqlString "ipe:src/Lib.rs"
         , SqlString "fn"
@@ -838,7 +864,7 @@ insertUnitRows conn =
         |> Task.andThen
             (\_ ->
                 Db.exec conn
-                    "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                    "INSERT INTO units (uid, path, kind, name, qualified, line_start, line_end, facing, purpose, body_hash, updated_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
                     [ SqlString "u-b"
                     , SqlString "ipe:src/Main.ipe"
                     , SqlString "module"
@@ -855,7 +881,7 @@ insertUnitRows conn =
         |> Task.andThen
             (\_ ->
                 Db.exec conn
-                    "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                    "INSERT INTO units (uid, path, kind, name, qualified, line_start, line_end, facing, purpose, body_hash, updated_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
                     [ SqlString "u-del"
                     , SqlString "ipe:src/Gone.ipe"
                     , SqlString "module"
@@ -1174,9 +1200,9 @@ seedManyUnits indexDb n =
     Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
         |> Task.andThen
             (\conn ->
-                Db.exec conn unitsDdl []
-                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
-                    |> Task.andThen (\_ -> Db.exec conn reviewedDdl [])
+                System.cwd ()
+                    |> Task.andThen indexSchemaStatements
+                    |> Task.andThen (execIndexSchema conn)
                     |> Task.andThen
                         (\_ ->
                             List.range 1 n
@@ -1209,7 +1235,7 @@ seedOneUnit conn i =
             "sha-" ++ String.fromInt i
     in
     Db.exec conn
-        "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+        "INSERT INTO units (uid, path, kind, name, qualified, line_start, line_end, facing, purpose, body_hash, updated_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
         [ SqlString uid
         , SqlString "ipe:src/Main.ipe"
         , SqlString "module"
@@ -1266,12 +1292,13 @@ seedTraversalDb base =
     Db.open "sqlite" ("sqlite://" ++ base ++ "/index.db?mode=rwc")
         |> Task.andThen
             (\conn ->
-                Db.exec conn unitsDdl []
-                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                System.cwd ()
+                    |> Task.andThen indexSchemaStatements
+                    |> Task.andThen (execIndexSchema conn)
                     |> Task.andThen
                         (\_ ->
                             Db.exec conn
-                                "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                                "INSERT INTO units (uid, path, kind, name, qualified, line_start, line_end, facing, purpose, body_hash, updated_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
                                 [ SqlString "u-esc"
                                 , SqlString "ipe:a/../../escape"
                                 , SqlString "fn"
@@ -2556,9 +2583,9 @@ seedB8Db indexDb =
     Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
         |> Task.andThen
             (\conn ->
-                Db.exec conn unitsDdl []
-                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
-                    |> Task.andThen (\_ -> Db.exec conn reviewedDdl [])
+                System.cwd ()
+                    |> Task.andThen indexSchemaStatements
+                    |> Task.andThen (execIndexSchema conn)
                     |> Task.andThen (\_ -> insertB8Units conn)
             )
         |> Task.map (\_ -> ())
@@ -2567,7 +2594,7 @@ seedB8Db indexDb =
 insertB8Units : Db -> Task.Task Error Int
 insertB8Units conn =
     Db.exec conn
-        "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+        "INSERT INTO units (uid, path, kind, name, qualified, line_start, line_end, facing, purpose, body_hash, updated_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
         [ SqlString "u-a"
         , SqlString "ipe:src/A.ipe"
         , SqlString "module"
@@ -2583,7 +2610,7 @@ insertB8Units conn =
         |> Task.andThen
             (\_ ->
                 Db.exec conn
-                    "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                    "INSERT INTO units (uid, path, kind, name, qualified, line_start, line_end, facing, purpose, body_hash, updated_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
                     [ SqlString "u-b"
                     , SqlString "ipe:src/B.ipe"
                     , SqlString "module"
@@ -2600,7 +2627,7 @@ insertB8Units conn =
         |> Task.andThen
             (\_ ->
                 Db.exec conn
-                    "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                    "INSERT INTO units (uid, path, kind, name, qualified, line_start, line_end, facing, purpose, body_hash, updated_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
                     [ SqlString "u-c"
                     , SqlString "ipe:src/C.ipe"
                     , SqlString "module"
@@ -2943,7 +2970,7 @@ indexTextRendered =
     do
         removeFileIfAny at.indexDb
         seedIndex at.indexDb at.repo
-        execIndex at.indexDb
+        execIndexUnchecked at.indexDb
             "UPDATE units SET name = ?, qualified = ?, kind = ?, facing = ?, purpose = ? WHERE uid = ?"
             [ SqlString ("an" ++ rlo ++ "swer")
             , SqlString ("Lib." ++ rlo ++ "answer")
@@ -3142,7 +3169,7 @@ dbRefusalsStateOneFix =
 insertBareUnit : String -> String -> String -> Task.Task Error ()
 insertBareUnit indexDb uid hash =
     execIndex indexDb
-        "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+        "INSERT INTO units (uid, path, kind, name, qualified, line_start, line_end, facing, purpose, body_hash, updated_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
         [ SqlString uid
         , SqlString "ipe:src/Main.ipe"
         , SqlString "module"

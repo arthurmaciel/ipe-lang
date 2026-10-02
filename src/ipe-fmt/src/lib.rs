@@ -414,6 +414,36 @@ pub(crate) fn format_source_unchecked(src: &str) -> Result<String, FmtError> {
     Ok(Printer::new(&interner, &input, Some(src)).module(&module))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A work counter for render calls, used by tests only.
+    ///
+    /// Counts [`Printer::expr`] / [`Printer::expr_atom`] calls since the
+    /// last [`reset_render_call_count`] — standing in for wall-clock time,
+    /// so a bounded-work regression test cannot flake on a slow or loaded
+    /// machine. Every node is rendered through one of those two entry
+    /// points, so this count is the total number of node renders: linear
+    /// growth in input size is the class-closing property (`PRINCIPLES.md`,
+    /// "bounded by construction"), and an exponential regression shows up
+    /// here as an exponential count, not merely a slow wall clock.
+    static RENDER_CALLS: Cell<u64> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+fn count_render_call() {
+    RENDER_CALLS.with(|c| c.set(c.get() + 1));
+}
+
+#[cfg(test)]
+fn reset_render_call_count() {
+    RENDER_CALLS.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+fn render_call_count() -> u64 {
+    RENDER_CALLS.with(Cell::get)
+}
+
 /// Compare two modules parsed with (possibly different) interners for
 /// structural equivalence, resolving symbols to their strings so that a
 /// different interning ORDER between the two parses does not read as a
@@ -1527,6 +1557,8 @@ impl<'a> Printer<'a> {
     /// The comments anchored at the expression's first token print above it,
     /// each on its own line at `indent`.
     fn expr(&self, e: &Expr, indent: usize) -> String {
+        #[cfg(test)]
+        count_render_call();
         let (comments, body) = self.claim(e.span.lo as usize, Self::closer_of(e), || {
             self.expr_shape(e, indent)
         });
@@ -1762,6 +1794,8 @@ impl<'a> Printer<'a> {
     ///
     /// Leading comments print above the parentheses, not inside them.
     fn expr_atom(&self, e: &Expr, indent: usize) -> String {
+        #[cfg(test)]
+        count_render_call();
         let (comments, body) = self.claim(e.span.lo as usize, Self::closer_of(e), || {
             self.atom_shape(e, indent)
         });
@@ -1805,7 +1839,13 @@ impl<'a> Printer<'a> {
     ) -> String {
         let head_s = self.expr_atom(head, indent);
         // Single-line application when the whole thing fits, nothing broke, and
-        // the source kept it on one line (elm-format's modal rule).
+        // the source kept it on one line (elm-format's modal rule). Each
+        // argument is rendered here exactly ONCE: the multiline branch below
+        // reuses these strings rather than re-rendering, so a right-nested
+        // application chain (a `do` block's desugared `Task.andThen` binds,
+        // one level per statement) costs one render per node, not one render
+        // per node per enclosing level — the latter is exponential in nesting
+        // depth, since each enclosing level's trial re-walks every level below.
         let arg_one_strs: Vec<String> =
             args.iter().map(|a| self.expr_atom(a, indent + 1)).collect();
         let one = format!("{head_s} {}", arg_one_strs.join(" "));
@@ -1842,35 +1882,36 @@ impl<'a> Printer<'a> {
         };
         let first_is_block =
             |a: &Expr| matches!(&a.value, Expr_::MultilineStr { raw, .. } if raw.contains('\n'));
-        let later_block = |tail: &[Expr]| {
-            tail.iter()
-                .any(|a| has_layout_newline(&self.expr_atom(a, indent + 1)))
-        };
-        let (mut out, rest): (String, &[Expr]) = match args.split_first() {
-            Some((first, tail))
-                if self.joins_on_head_line(first, indent + 1)
-                    && head_line_fits(&head_s, first, indent)
-                    && (is_simple_ref(first) || first_is_block(first) || later_block(tail)) =>
-            {
-                let first_s = self.expr_atom(first, indent + 1);
-                (format!("{head_s} {first_s}"), tail)
-            }
-            _ => (head_s, args),
-        };
-        for a in rest {
+        let later_block = |tail_strs: &[String]| tail_strs.iter().any(|s| has_layout_newline(s));
+        let (mut out, rest_strs): (String, &[String]) =
+            match (args.split_first(), arg_one_strs.split_first()) {
+                (Some((first, _)), Some((first_str, tail_strs)))
+                    if Self::joins_on_head_line(first, first_str)
+                        && head_line_fits(&head_s, first, indent)
+                        && (is_simple_ref(first)
+                            || first_is_block(first)
+                            || later_block(tail_strs)) =>
+                {
+                    (format!("{head_s} {first_str}"), tail_strs)
+                }
+                _ => (head_s, arg_one_strs.as_slice()),
+            };
+        for s in rest_strs {
             out.push('\n');
             out.push_str(&inner);
-            out.push_str(&self.expr_atom(a, indent + 1));
+            out.push_str(s);
         }
         out
     }
 
-    /// Whether argument `a` may share the function's line in a broken
-    /// application (elm-format's `FAJoinFirst`): a name, qualified name,
-    /// literal, unit, or empty collection — anything that renders on a single
-    /// line AND is not itself a block form (non-empty list / record / tuple /
-    /// update / parenthesised compound).
-    fn joins_on_head_line(&self, a: &Expr, indent: usize) -> bool {
+    /// Whether argument `a`, already rendered as `rendered` (the same string
+    /// `call`'s one-line pass computed — passed in rather than re-rendered
+    /// here, so this check costs no extra tree walk), may share the
+    /// function's line in a broken application (elm-format's `FAJoinFirst`):
+    /// a name, qualified name, literal, unit, or empty collection — anything
+    /// that renders on a single line AND is not itself a block form
+    /// (non-empty list / record / tuple / update / parenthesised compound).
+    fn joins_on_head_line(a: &Expr, rendered: &str) -> bool {
         // A triple-quoted string hugs the function line only when it opens with
         // visible content on its first physical line (`interpolate """head\n…"""`).
         // One that opens with a newline (`"""\n…`) — or any string literal that is
@@ -1885,7 +1926,6 @@ impl<'a> Printer<'a> {
                 None => false,
             };
         }
-        let rendered = self.expr_atom(a, indent);
         if rendered.contains('\n') {
             return false;
         }
@@ -2034,15 +2074,30 @@ impl<'a> Printer<'a> {
         // a body that breaks across lines inline: the printed lambda is then
         // multi-line, so the block form is the one a second pass would pick.
         // Any other body stays inline after the arrow.
+        //
+        // Rendered exactly ONCE, at the block indent, and reused for both the
+        // inline and the block candidate: a result with no embedded newline
+        // reads identically at any indent (padding is only ever inserted
+        // after a newline), so that one string serves either placement.
+        // Trying an inline render at this indent, rejecting it, and
+        // re-rendering at the block indent — as elm-format's own two-pass
+        // check would — costs one render per node per ENCLOSING level; for a
+        // right-nested lambda chain (a `do` block's desugared binds, one
+        // level per statement) that is exponential in the number of
+        // statements. Budgeting the fits-inline check at the block indent
+        // (one narrower than the inline placement actually occupies) is
+        // conservative-only: a narrower width budget can only ever wrap a
+        // body the wider one would have kept on one line, never the reverse,
+        // so this can pick block form a body would have fit on the arrow's
+        // line, but never the other way around.
         let block_body = matches!(body.value, Expr_::Let(..) | Expr_::Case(..) | Expr_::If(..))
             || !self.anchored(body.span.lo as usize).is_empty();
-        let inline = (!block_body && !self.was_multiline(span))
-            .then(|| self.expr(body, indent))
-            .filter(|s| !has_layout_newline(s));
-        inline.map_or_else(
-            || format!("{head}\n{}{}", pad(indent + 1), self.expr(body, indent + 1)),
-            |body_s| format!("{head} {body_s}"),
-        )
+        let body_s = self.expr(body, indent + 1);
+        if !block_body && !self.was_multiline(span) && !has_layout_newline(&body_s) {
+            format!("{head} {body_s}")
+        } else {
+            format!("{head}\n{}{body_s}", pad(indent + 1))
+        }
     }
 
     fn case(&self, scrut: &Expr, arms: &[(Pattern, Expr)], indent: usize) -> String {
@@ -3060,6 +3115,70 @@ mod tests {
         assert!(
             out.contains("{- note -}"),
             "block comment before `do` keyword was dropped:\n{out}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #3201: do-notation render cost stays linear in statement count
+    // -----------------------------------------------------------------------
+
+    /// A `do` block with `n` heterogeneous bind statements — the desugared
+    /// shape (nested `Task.andThen (\x -> REST) task`) that triggers
+    /// #3201 when the one-vs-block layout decision re-renders a subtree on
+    /// every enclosing level instead of once. The statement shapes cycle
+    /// through a plain bind, a pipe-chain-with-lambdas bind, a bare
+    /// qualified-name bind, a single-call bind, and a nested-call bind, so
+    /// the fixture exercises the same heterogeneity as the reported file
+    /// rather than one repetitive shape.
+    fn pathological_do_block(n: usize) -> String {
+        let mut out = String::from("    do\n");
+        for i in 0..n {
+            let line = match i % 5 {
+                0 => format!("        v{i} <- Task.succeed {i}\n"),
+                1 => format!(
+                    "        v{i} <- Queue.resyncReviewedWithin {{ pageSize = 5, pageCeiling = {i} }} \"db\"\n            |> Task.map (\\_ -> Nothing)\n            |> Task.onError (\\e -> Task.succeed (Just (Error.toString e)))\n"
+                ),
+                2 => format!("        v{i} <- Index.loadProgress\n"),
+                3 => format!("        v{i} <- Db.open \"sqlite\" \"sqlite://z\"\n"),
+                _ => format!(
+                    "        v{i} <- Db.findWhere \"conn\" \"reviewed\" (Sql.eq (Sql.column \"uid\") (Sql.string \"pre\"))\n"
+                ),
+            };
+            out.push_str(&line);
+        }
+        let _ = writeln!(out, "        Task.succeed v{}", n - 1);
+        out
+    }
+
+    /// The render-call work counter grows linearly, not exponentially, as
+    /// the statement count grows — the class-closing property for #3201.
+    ///
+    /// `call`/`lambda` used to re-render an already-rendered argument/body to
+    /// decide one-line-vs-block layout, and that re-render happened at every
+    /// enclosing level of the desugared bind chain, compounding
+    /// multiplicatively with nesting depth. Quadrupling the statement count
+    /// (6 to 24) should roughly quadruple the render-call count; a regression
+    /// back to the old behaviour blows this past any generous linear bound
+    /// (and, in practice, times out long before the assertion runs). Measured
+    /// via a work counter, never wall time, so the test cannot flake on a
+    /// loaded machine.
+    #[test]
+    fn do_notation_render_cost_is_linear_in_statement_count() {
+        let small = do_module(&pathological_do_block(6));
+        let big = do_module(&pathological_do_block(24));
+
+        reset_render_call_count();
+        format_source(&small).expect("small pathological do block formats");
+        let small_calls = render_call_count();
+
+        reset_render_call_count();
+        format_source(&big).expect("big pathological do block formats");
+        let big_calls = render_call_count();
+
+        assert!(
+            big_calls <= small_calls * 20,
+            "render-call count grew super-linearly with statement count: \
+             {small_calls} calls at 6 statements, {big_calls} calls at 24 statements"
         );
     }
 
