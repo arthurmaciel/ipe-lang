@@ -137,8 +137,10 @@ fn every_repo_ipe_file_is_a_meaning_preserving_fixed_point() {
     }
 
     skipped.sort();
-    let mut expected_skips: Vec<String> =
-        KNOWN_PARSE_REFUSALS.iter().map(|s| s.to_string()).collect();
+    let mut expected_skips: Vec<String> = KNOWN_PARSE_REFUSALS
+        .iter()
+        .map(ToString::to_string)
+        .collect();
     expected_skips.sort();
     assert_eq!(
         skipped, expected_skips,
