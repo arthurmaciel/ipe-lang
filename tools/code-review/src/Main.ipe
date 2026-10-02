@@ -46,14 +46,18 @@ type alias Model =
     , refuseError : Maybe Error
     , decisionError : Maybe Error
     , history : Queue.HistoryState
+    , historyLoads : Int
     , unitPage : Queue.UnitPageState
     , selected : Int
     }
 
 
+-- The session's first model. It loads nothing: the route entry that follows
+-- `init` on every new session (`onNavigate`) loads the page's data, so the
+-- route table is the one place a URL maps to a page.
 init : Web.WebReq -> ( Model, Cmd Msg )
-init req =
-    ( { page = pageFor req.path
+init _req =
+    ( { page = QueuePage
       , queueState = Loading
       , queueCursor = Index.Start
       , refusingUid = Nothing
@@ -61,38 +65,67 @@ init req =
       , refuseError = Nothing
       , decisionError = Nothing
       , history = HistoryLoading
+      , historyLoads = 0
       , unitPage = UnitLoading
       , selected = 0
       }
-    , Cmd.batch
-        [ Cmd.perform (Queue.loadPage Index.Start) PendingLoaded
-        , pageCmd req.path
-        ]
+    , Cmd.none
     )
 
 
-pageFor : String -> Page
-pageFor path =
-    if path == "/history" then
-        HistoryPage
+-- A page entered, with the Cmd that loads its data: the one entry path, run
+-- on every URL entry (first request, reload, link, back and forward,
+-- reconnect) through `onNavigate`, and by the header buttons. The queue page
+-- reloads the queue; any other page loads the queue too while it is not
+-- loaded, since the header shows its progress on every page.
+enterPage : Page -> Model -> ( Model, Cmd Msg )
+enterPage page model =
+    let
+        entered =
+            { model | page = page }
+    in
+    case page of
+        QueuePage ->
+            ( entered, loadQueue model )
 
-    else if String.startsWith "/unit/" path then
-        UnitPage (String.dropLeft 6 path)
+        HistoryPage ->
+            loadHistory HistoryStart entered
 
-    else
-        QueuePage
+        UnitPage uid ->
+            ( { entered | unitPage = UnitLoading }
+            , Cmd.batch [ queueIfUnloaded model, Cmd.perform (Queue.loadUnitView uid) (UnitViewLoaded uid) ]
+            )
 
 
-pageCmd : String -> Cmd Msg
-pageCmd path =
-    if path == "/history" then
-        Cmd.perform (Queue.loadHistoryPage HistoryStart) HistoryPageLoaded
+loadQueue : Model -> Cmd Msg
+loadQueue model =
+    Cmd.perform (Queue.loadPage model.queueCursor) PendingLoaded
 
-    else if String.startsWith "/unit/" path then
-        Cmd.perform (Queue.loadUnitView (String.dropLeft 6 path)) UnitViewLoaded
 
-    else
-        Cmd.none
+queueIfUnloaded : Model -> Cmd Msg
+queueIfUnloaded model =
+    case model.queueState of
+        Loaded _ ->
+            Cmd.none
+
+        Loading ->
+            loadQueue model
+
+        Failed _ ->
+            loadQueue model
+
+
+-- One History page loaded from `cursor`. Each load is numbered, and only the
+-- latest load's result is shown, so a slower earlier page never replaces it.
+loadHistory : LibDb.HistoryCursor -> Model -> ( Model, Cmd Msg )
+loadHistory cursor model =
+    let
+        load =
+            model.historyLoads + 1
+    in
+    ( { model | history = HistoryLoading, historyLoads = load }
+    , Cmd.batch [ queueIfUnloaded model, Cmd.perform (Queue.loadHistoryPage cursor) (HistoryPageLoaded load) ]
+    )
 
 
 type Msg
@@ -104,11 +137,12 @@ type Msg
     | RefuseCancel
     | RefuseSubmit String
     | DecisionSaved String (Result Error ( Index.Attested, Int ))
+    | Navigated Page
     | ShowQueue
     | ShowHistory
-    | HistoryPageLoaded (Result Error Queue.HistoryPage)
+    | HistoryPageLoaded Int (Result Error Queue.HistoryPage)
     | HistoryNext LibDb.HistoryCursor
-    | UnitViewLoaded (Result Error (Maybe ( Index.Unit, List Links.Link )))
+    | UnitViewLoaded String (Result Error (Maybe ( Index.Unit, List Links.Link )))
     | KeyDown String
     | SelectUnit Int
 
@@ -151,20 +185,31 @@ update msg model =
                 Err e ->
                     ( { model | decisionError = Just e }, Cmd.none )
 
+        Navigated page ->
+            enterPage page model
+
         ShowQueue ->
-            ( { model | page = QueuePage }, Cmd.none )
+            enterPage QueuePage model
 
         ShowHistory ->
-            ( { model | page = HistoryPage, history = HistoryLoading }, Cmd.perform (Queue.loadHistoryPage HistoryStart) HistoryPageLoaded )
+            enterPage HistoryPage model
 
-        HistoryPageLoaded result ->
-            ( { model | history = Queue.historyStateFromResult result }, Cmd.none )
+        HistoryPageLoaded load result ->
+            if load == model.historyLoads then
+                ( { model | history = Queue.historyStateFromResult result }, Cmd.none )
+
+            else
+                ( model, Cmd.none )
 
         HistoryNext cursor ->
-            ( { model | history = HistoryLoading }, Cmd.perform (Queue.loadHistoryPage cursor) HistoryPageLoaded )
+            loadHistory cursor model
 
-        UnitViewLoaded result ->
-            ( { model | unitPage = Queue.unitPageFromResult result }, Cmd.none )
+        UnitViewLoaded uid result ->
+            if model.page == UnitPage uid then
+                ( { model | unitPage = Queue.unitPageFromResult result }, Cmd.none )
+
+            else
+                ( model, Cmd.none )
 
         KeyDown key ->
             keyActionMsg (Keys.keyAction (model.refusingUid /= Nothing) (List.length (queueList model)) model.selected key) model
@@ -1073,6 +1118,7 @@ reviewApp =
         , subscriptions = subscriptions
         , routes = [ Web.route "/" QueuePage, Web.route "/history" HistoryPage, Web.route "/unit/:uid" UnitPage ]
         , notFound = QueuePage
+        , onNavigate = Navigated
         }
 
 
