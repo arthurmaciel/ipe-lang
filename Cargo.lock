@@ -3063,6 +3063,7 @@ name = "ipe-ffi-inspector"
 version = "0.2.0"
 dependencies = [
  "ipe-test-temp",
+ "ipe_diagnostics",
  "ipe_env",
  "ipe_sandbox",
  "serde",
@@ -3094,6 +3095,7 @@ dependencies = [
  "hmac 0.12.1",
  "icu_casemap",
  "icu_locale_core",
+ "ipe_diagnostics",
  "ipe_kernels",
  "js-sys",
  "jsonwebtoken 9.3.1",
