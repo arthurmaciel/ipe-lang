@@ -6901,8 +6901,10 @@ mod tests {
         .await
     }
 
-    /// Only a check returning `1` keeps the row; `0`, `NULL` and a value that
-    /// does not decode as a boolean or integer (`'yes'`) each roll it back.
+    /// Only a check returning `1` keeps the row; `0`, `NULL`, any other integer
+    /// (`2`, `-1`: a SQLite `bool` decode would read them as `true`), a real,
+    /// and a value that does not decode as a boolean or integer (`'yes'`) each
+    /// roll it back.
     #[tokio::test]
     async fn checked_insert_keeps_only_an_admitted_row() {
         let db = fresh_db().await;
@@ -6910,6 +6912,9 @@ mod tests {
             ("kept", "1", 1i64),
             ("zero", "0", 0),
             ("null", "NULL", 0),
+            ("two", "2", 0),
+            ("minus", "-1", 0),
+            ("real", "1.0", 0),
             ("text", "'yes'", 0),
         ];
         for (title, check, want) in cases {
@@ -7056,6 +7061,45 @@ mod tests {
         );
         assert_eq!(
             count_title(&db, "plain").await,
+            1,
+            "the later plain insert committed"
+        );
+    }
+
+    /// A checked write whose statement fails inside a transaction rolls back
+    /// its own savepoint and reports the error; the transaction stays usable
+    /// and a later write in it commits.
+    #[tokio::test]
+    #[allow(clippy::expect_used)] // test: the recording transaction is solely owned once its scope ends
+    async fn checked_write_error_leaves_the_outer_transaction_usable() {
+        let db = fresh_db().await;
+        let rec = recording_txn(&db).await;
+        let (failed, plain) = with_recording_txn(&db, rec.clone(), async {
+            // `title` is `NOT NULL` and omitted: the insert itself fails.
+            let failed: IpeResult<String, i64> = db_insert_fields_checked(
+                db.clone(),
+                "todos".into(),
+                vec![("done".to_string(), Some(SqlParam::Int(1)))],
+                checked_frag("1", vec![]),
+            )
+            .await;
+            let plain: IpeResult<String, i64> = db_insert_fields(
+                db.clone(),
+                "todos".into(),
+                vec![("title".to_string(), Some(text("after")))],
+            )
+            .await;
+            (failed, plain)
+        })
+        .await;
+        assert!(matches!(failed, IpeResult::Err(_)), "failed: {failed:?}");
+        assert!(matches!(plain, IpeResult::Ok(_)), "plain: {plain:?}");
+        let tx = std::sync::Arc::try_unwrap(rec)
+            .expect("the scope released its clone")
+            .into_inner();
+        tx.commit().await.expect("commit the outer transaction");
+        assert_eq!(
+            count_title(&db, "after").await,
             1,
             "the later plain insert committed"
         );
@@ -9523,7 +9567,7 @@ mod tests {
 
     /// The load-bearing half of the immutable proof: if the immutable column were
     /// NOT dropped (left as a SetField, the pre-fix behaviour), the same update
-    /// WOULD overwrite it. Demonstrates that the `dropImmutableColumns` omission in
+    /// WOULD overwrite it. Demonstrates that the `dropColumns` omission in
     /// `updateAs` is exactly what prevents the change — not an accident of the
     /// runtime refusing it anyway.
     #[tokio::test]
