@@ -545,6 +545,29 @@ pub fn emit_machine_error(
 }
 
 impl CliError {
+    /// The manifest refusal for a program entry that [`parse_entry`] turned away.
+    ///
+    /// The entry and the refused segment are author text, so both render through
+    /// `{:?}` (escaped) and a control byte cannot reach the terminal raw.
+    ///
+    /// [`parse_entry`]: crate::project::parse_entry
+    #[must_use]
+    pub fn manifest_entry_refused(entry: &str, refusal: &crate::project::EntryRefusal) -> Self {
+        use crate::project::EntryRefusal;
+        let entry = format!("{entry:?}");
+        Self::Usage(match refusal {
+            EntryRefusal::Empty => text::msg::manifest_entry_no_module(&entry),
+            EntryRefusal::NotModuleSegment { segment } => {
+                text::msg::manifest_entry_segment_invalid(&entry, &format!("{segment:?}"))
+            }
+            EntryRefusal::EmptySegment
+            | EntryRefusal::DotSegment
+            | EntryRefusal::Backslash
+            | EntryRefusal::DrivePrefix
+            | EntryRefusal::Extension => text::msg::manifest_entry_invalid(&entry),
+        })
+    }
+
     /// The stable machine `kind` tag for this error — the fixed vocabulary word a
     /// `--json` consumer branches on, carried under `payload.kind` alongside the
     /// prose `message`.
