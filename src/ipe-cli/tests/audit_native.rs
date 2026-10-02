@@ -196,20 +196,6 @@ mod real_jail {
     /// serialize the jailed runs so parallel `--test-threads` cannot race.
     static JAIL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn fixture_path() -> PathBuf {
-        let base = super::support::manifest_dir().join("../../tests/fixtures/admission");
-        // The wrapper is platform-native: `.ps1` on Windows (the jail runs it via
-        // `powershell.exe -File`, no shell), `.sh` elsewhere.
-        #[cfg(target_os = "windows")]
-        {
-            base.join("untrusted-build.ps1")
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            base.join("untrusted-build.sh")
-        }
-    }
-
     /// Probe the host for the jail primitive, returning the [`RunJailTools`] the
     /// jail is built from (bwrap+prlimit on Linux; sandbox-exec on macOS, whose
     /// fields the jail ignores). `None` when the primitive is absent.
@@ -373,11 +359,10 @@ mod real_jail {
         fn new(tag: &str) -> Self {
             let scoped_tmp = fresh_scratch(&format!("{tag}-scratch"));
             let working_tree = fresh_scratch(&format!("{tag}-worktree"));
-            let wrapper = TrustedWrapper::read(&fixture_path()).expect("read the probe fixture");
             Self {
                 scoped_tmp,
                 working_tree,
-                wrapper,
+                wrapper: TrustedWrapper::embedded(),
             }
         }
 
@@ -922,8 +907,6 @@ mod real_jail {
             has_rust_deps: true,
             root: &pkg,
             emitted_dir: &out,
-            probe_fixture: super::support::manifest_dir()
-                .join("../../tests/fixtures/admission/untrusted-build.sh"),
         });
         assert_probe_crate_compiles(&out, &base.join("probe-target"));
 
@@ -993,8 +976,6 @@ mod real_jail {
             has_rust_deps: true,
             root: &pkg,
             emitted_dir: &out,
-            probe_fixture: super::support::manifest_dir()
-                .join("../../tests/fixtures/admission/untrusted-build.sh"),
         });
 
         // POSITIVE CONTROL: `native_tier2` above emitted the probe crate + generated
