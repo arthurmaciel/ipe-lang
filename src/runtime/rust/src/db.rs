@@ -3325,9 +3325,12 @@ pub fn sql_is_not_null(a: SqlFragment) -> SqlFragment {
     }
 }
 
-/// `Sql.like : SqlFragment -> String -> SqlFragment` — the pattern is always a
-/// bound param (never interpolated), so `%`/`_` wildcards in untrusted input
-/// stay data, never syntax.
+/// `Sql.like : SqlFragment -> String -> SqlFragment`.
+///
+/// The pattern is always a bound param (never interpolated), so it cannot
+/// inject SQL. It is still a `LIKE` pattern: a `%` or `_` in the bound value
+/// is a wildcard, so untrusted text passed here can widen the match. SQLite's
+/// `LIKE` also folds ASCII case; Postgres's does not.
 pub fn sql_like(a: SqlFragment, pattern: String) -> SqlFragment {
     let mut binds = a.binds;
     binds.push(SqlParam::Text(pattern));
