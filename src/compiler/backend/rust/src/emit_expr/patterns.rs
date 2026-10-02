@@ -15,9 +15,7 @@ use ipe_ir::free_vars::pat_has_str_guard_slot;
 /// emitted literal trips rustc's deny-by-default
 /// `text_direction_codepoint_in_literal` lint — an `ipe`-accepts-then-
 /// `cargo`-fails SEAL break — while a hand-picked `\`/`"`-only escaper lets
-/// it through. For the printable-ASCII JSON text this is used on, the bytes
-/// are identical to the old escaper (Debug escapes exactly `\` and `"`
-/// there). Total.
+/// it through. On printable ASCII, `Debug` escapes exactly `\` and `"`.
 pub fn rust_str_lit(s: &str) -> String {
     format!("{s:?}")
 }

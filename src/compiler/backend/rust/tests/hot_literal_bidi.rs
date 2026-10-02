@@ -1,22 +1,15 @@
-//! Regression for the hot-appearance baked-datum literal: the emitted Rust
-//! string literal wrapping a baked JSON datum must never carry a raw bidi /
-//! control character.
+//! The hot-appearance baked datum never reaches emitted Rust with a raw bidi
+//! or control character.
 //!
-//! [`crate::emit_expr::patterns::rust_str_lit`] (formerly `rust_string_literal`)
-//! wraps the baked `init`/`update`/`Sub` JSON datum ([`write_json_string`],
-//! which is spec-compliant JSON and so leaves any codepoint `>= 0x20` — a bidi
-//! override among them — raw) as a Rust string literal. The old hand-written
-//! escaper covered only `\` and `"`; a bidi override such as U+202E (RIGHT-TO-
-//! LEFT OVERRIDE) reached the emitted source raw, which trips rustc's
-//! deny-by-default `text_direction_codepoint_in_literal` lint — an
-//! `ipe`-accepts-then-`cargo`-fails SEAL break. The fix renders through Rust's
-//! own `Debug` grammar (`format!("{s:?}")`), which escapes every character the
-//! literal grammar cannot carry raw, bidi overrides included.
+//! `rust_str_lit` wraps the baked `init`/`update`/`Sub` JSON datum, which
+//! `write_json_string` leaves raw for every codepoint `>= 0x20`, as a Rust
+//! string literal through Rust's `Debug` grammar. A raw U+202E (RIGHT-TO-LEFT
+//! OVERRIDE) in that literal would trip rustc's deny-by-default
+//! `text_direction_codepoint_in_literal` lint after `ipe` accepted the program.
 //!
-//! Two sites build this baked literal — `emit_init_datum` (a data-describable
-//! `init`) and `emit_transition_arm` (a data-describable `update` arm) — both
-//! exercised here through the public [`RustBackend`] emit path (the functions
-//! themselves are crate-private).
+//! Two sites build this literal, `emit_init_datum` (a data-describable `init`)
+//! and `emit_transition_arm` (a data-describable `update` arm); both are
+//! exercised here through the public [`RustBackend`] emit path.
 
 mod seal_e2e;
 
