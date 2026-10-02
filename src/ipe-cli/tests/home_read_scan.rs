@@ -1949,10 +1949,9 @@ mod lexical {
 
     #[test]
     fn the_windows_jail_home_literals_sit_only_in_the_base_name_table() {
-        let text = match std::fs::read_to_string(workspace().join(WINDOWS_JAIL_FILE)) {
-            Ok(text) => text,
-            Err(err) => panic!("`{WINDOWS_JAIL_FILE}` is gone: {err}"),
-        };
+        let text = std::fs::read_to_string(workspace().join(WINDOWS_JAIL_FILE));
+        assert!(text.is_ok(), "`{WINDOWS_JAIL_FILE}` is gone");
+        let text = text.unwrap_or_default();
         let mut unexempt: Vec<String> = raw_home_reads(&text, &[], &[])
             .into_iter()
             .map(|hit| hit.what)
