@@ -2591,6 +2591,23 @@ mod tests {
         }
     }
 
+    /// The response cap a curl call site passes is the byte ceiling its surface stages under.
+    ///
+    /// Curl's `--max-filesize`, the scratch watcher and the read-back all hold
+    /// the same body to one ceiling.
+    #[test]
+    fn a_curl_response_cap_is_its_surfaces_staged_ceiling() {
+        for (budget, cap) in [
+            (GITHUB_API, super::JSON_RESPONSE_MAX_BYTES),
+            (super::INSTALLER, super::INSTALLER_MAX_BYTES),
+        ] {
+            assert!(
+                matches!(budget.staging(), Staging::Disk { bytes, .. } if bytes == cap),
+                "{budget:?}"
+            );
+        }
+    }
+
     /// A surface that stages nothing refuses its first staged byte.
     #[test]
     fn staging_nothing_refuses_one_staged_byte() {
