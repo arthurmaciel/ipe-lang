@@ -359,7 +359,8 @@ impl SupervisorState {
     /// overlap on purpose).
     ///
     /// `spawn` launches the child for a given `(path, internal_port)` and
-    /// returns it — the caller owns the env (it injects `IPE_WEB_PORT=internal_port`, the
+    /// returns it — the caller owns the env (it injects the listener relocation
+    /// var `IPE_INTERNAL_LISTEN_PORT=internal_port`, the
     /// session-store path, …). `cut_over` is invoked with the ready internal
     /// port EXACTLY ONCE, between "new binary ready" and "old binary drained".
     ///

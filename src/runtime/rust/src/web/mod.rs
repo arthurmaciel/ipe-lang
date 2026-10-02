@@ -4663,6 +4663,10 @@ mod handlers {
     }
 }
 
+/// The documented operator var naming `Ipe.Web`'s listen port.
+#[cfg(feature = "server")]
+const WEB_PORT_ENV: &str = "IPE_WEB_PORT";
+
 /// Shared server setup for `web_app` / `web_app_routed`: nested HTTP
 /// handlers (`page` / `sse_handler` / `event_handler`), router + bind/serve.
 /// The only per-entry difference (the `route_entry`) lives on `state`.
@@ -4756,12 +4760,14 @@ where
         Err(cause) => return IpeResult::Err(cause.to_string().into()),
     };
 
-    // IPE_WEB_PORT: default 8000. Resolved through the shared fail-closed
-    // helper (same precedence as `Ipe.Http.Server`'s `IPE_SERVER_PORT`): a
-    // malformed, out-of-range, or `0` value falls back to 8000, never a
-    // silently OS-chosen ephemeral port.
-    let port: i64 =
-        crate::system::resolve_listen_port(crate::system::read_env_var("IPE_WEB_PORT").ok(), 8000);
+    // Port precedence (shared with `Ipe.Http.Server`): the supervisor's
+    // relocation var > `IPE_WEB_PORT` (operator) > 8000. A malformed env layer
+    // falls through, never to `0`.
+    let resolved = crate::system::listen_port_from_env(
+        (WEB_PORT_ENV, crate::system::read_env_var(WEB_PORT_ENV).ok()),
+        8000,
+    );
+    let port = resolved.port;
     // Honour the same host-bind precedence as the Ipe.Http.Server path
     // (`IPE_HTTP_BIND` > `Host.bind` setting > loopback-unless-production), so
     // an explicit loopback setting is never overridden into all-interfaces.
@@ -4770,14 +4776,7 @@ where
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-            return IpeResult::Err(
-                format!(
-                    "port {port} is already in use — another application is bound to it.\n\
-                     Set a different port with the IPE_WEB_PORT environment variable, e.g.:\n\
-                     IPE_WEB_PORT=8123 ipe run"
-                )
-                .into(),
-            );
+            return IpeResult::Err(resolved.addr_in_use_message().into());
         }
         Err(e) => return IpeResult::Err(format!("Web.tea: bind {addr}: {e}").into()),
     };
@@ -8549,22 +8548,30 @@ fn utf8_prefix(bytes: &[u8]) -> &str {
     }
 }
 
-#[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(test, feature = "server", not(target_arch = "wasm32")))]
 mod bind_error_tests {
-    /// The port-taken error message must name `IPE_WEB_PORT` and use an 8xxx example port.
+    /// The port-taken refusal names `IPE_WEB_PORT` when the operator or the
+    /// default chose the port, and names no operator var when a supervisor did.
     #[test]
-    fn addr_in_use_message_contains_ipe_web_port_and_example_port() {
-        let port: i64 = 8000;
-        let msg = format!(
-            "port {port} is already in use — another application is bound to it.
-\
-             Set a different port with the IPE_WEB_PORT environment variable, e.g.:
-\
-             IPE_WEB_PORT=8123 ipe run"
+    fn addr_in_use_message_is_keyed_on_the_port_origin() {
+        let resolve = |relocation: Option<&str>, operator: Option<&str>| {
+            crate::system::resolve_listen_port(
+                relocation.map(str::to_owned),
+                (super::WEB_PORT_ENV, operator.map(str::to_owned)),
+                8000,
+            )
+        };
+        for r in [resolve(None, None), resolve(None, Some("9200"))] {
+            let msg = r.addr_in_use_message();
+            assert!(msg.contains("IPE_WEB_PORT=8123 ipe run"), "{msg}");
+        }
+        let relocated = resolve(Some("9100"), Some("9200"));
+        assert_eq!(relocated.port, 9100);
+        let msg = relocated.addr_in_use_message();
+        assert!(
+            !msg.contains("IPE_WEB_PORT") && !msg.contains("IPE_SERVER_PORT"),
+            "{msg}"
         );
-        assert!(msg.contains("IPE_WEB_PORT"), "message names the env var");
-        assert!(msg.contains("8123"), "example port is in the 8xxx range");
     }
 }
 
