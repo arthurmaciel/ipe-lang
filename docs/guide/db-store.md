@@ -16,7 +16,7 @@ Four ideas carry the whole security model.
 - **Classification is the only door, and it is closed by default.** `fromCodec`
   returns a `Draft a` — schema known, access intent unknown, no operation attached.
   `public` promotes it to a world-open `Store a` (read and written by `all` / `get`
-  / `insert` / …); `secured policy` promotes it to a `Secured a` (read and written
+  / `insert` / `upsert` / …); `secured policy` promotes it to a `Secured a` (read and written
   *only* through the authenticated `allAs` / `getAs` / `insertAs` / `updateAs` /
   `deleteAs` operations, each of which takes a `Principal`). A table nobody
   classified has no read or write function that will accept it — an unguarded table

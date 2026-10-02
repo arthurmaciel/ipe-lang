@@ -1,0 +1,20 @@
+module Main exposing (main)
+
+import Ipe.Task as Task exposing (Step(..))
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- A loop whose state is a function: `init` and every `Continue` payload are
+-- `Int -> Int` values.
+main =
+    Task.loop 3
+        (\x -> x + 1)
+        (\f ->
+            if f 0 >= 2 then
+                Task.succeed (Done (f 0))
+
+            else
+                Task.succeed (Continue (\x -> f x + 1))
+        )
+        |> Task.andThen (\n -> Io.println (String.fromInt n))

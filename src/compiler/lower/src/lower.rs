@@ -8510,68 +8510,47 @@ fn collect_func_edges(expr: &Expr, out: &mut BTreeSet<FuncId>) {
     }
 }
 
-/// Whether `expr` contains a `Http.withTimeout` kernel call anywhere in its
-/// tree. The kernel unwraps its typed `Duration` argument through the compiled
-/// `Ipe.Duration.toMillis` accessor at emit time, a synthesised call that
-/// leaves no `Callee::Func` edge; this predicate lets the dead-function prune
-/// root that accessor so the emitted crate does not reference an absent
-/// function. The traversal mirrors [`collect_func_edges`] arm-for-arm so a new
-/// `Expr` variant that could nest a call is a compile error here too, not a
-/// silent miss.
-fn body_uses_http_with_timeout(expr: &Expr) -> bool {
+/// Whether `expr` calls or references the kernel `kernel` anywhere in its tree.
+///
+/// A kernel whose emit arm synthesises a reference the IR does not carry reads
+/// this: `Http.withTimeout` unwraps its typed `Duration` through the compiled
+/// `Ipe.Duration.toMillis` accessor (a call with no `Callee::Func` edge, so the
+/// dead-function prune roots that accessor), and `Task.loop` bridges the
+/// emitted `Ipe.Task.Step` enum (so the dead-type prune keeps that enum). The
+/// traversal mirrors [`collect_func_edges`] arm-for-arm so a new `Expr` variant
+/// that could nest a call is a compile error here too, not a silent miss.
+fn body_uses_kernel(expr: &Expr, kernel: KernelFn) -> bool {
+    let recur = |e: &Expr| body_uses_kernel(e, kernel);
     match expr {
         Expr::Call { callee, args, .. } => {
-            matches!(callee, Callee::Kernel(KernelFn::HttpWithTimeout))
-                || args.iter().any(body_uses_http_with_timeout)
+            matches!(callee, Callee::Kernel(k) if *k == kernel) || args.iter().any(recur)
         }
         Expr::FuncValue { callee, .. } => {
-            matches!(callee, Callee::Kernel(KernelFn::HttpWithTimeout))
+            matches!(callee, Callee::Kernel(k) if *k == kernel)
         }
-        Expr::Apply { func, args } => {
-            body_uses_http_with_timeout(func) || args.iter().any(body_uses_http_with_timeout)
-        }
+        Expr::Apply { func, args } => recur(func) || args.iter().any(recur),
         Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
-            body_uses_http_with_timeout(value) || body_uses_http_with_timeout(body)
+            recur(value) || recur(body)
         }
-        Expr::If { cond, then_, else_ } => {
-            body_uses_http_with_timeout(cond)
-                || body_uses_http_with_timeout(then_)
-                || body_uses_http_with_timeout(else_)
-        }
+        Expr::If { cond, then_, else_ } => recur(cond) || recur(then_) || recur(else_),
         Expr::Match(m) => {
-            body_uses_http_with_timeout(m.scrutinee())
-                || m.arms().iter().any(|arm| {
-                    arm.guard.as_ref().is_some_and(body_uses_http_with_timeout)
-                        || body_uses_http_with_timeout(&arm.body)
-                })
+            recur(m.scrutinee())
+                || m.arms()
+                    .iter()
+                    .any(|arm| arm.guard.as_ref().is_some_and(recur) || recur(&arm.body))
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
-        | Expr::TailLoop { body, .. } => body_uses_http_with_timeout(body),
-        Expr::Cons { head, tail } => {
-            body_uses_http_with_timeout(head) || body_uses_http_with_timeout(tail)
-        }
-        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            body_uses_http_with_timeout(list)
-        }
-        Expr::Tuple(elems) | Expr::List { items: elems, .. } => {
-            elems.iter().any(body_uses_http_with_timeout)
-        }
-        Expr::Record { fields, .. } => fields.iter().any(|(_, v)| body_uses_http_with_timeout(v)),
-        Expr::Access { record, .. } => body_uses_http_with_timeout(record),
-        Expr::Update { record, fields } => {
-            body_uses_http_with_timeout(record)
-                || fields.iter().any(|(_, v)| body_uses_http_with_timeout(v))
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            body_uses_http_with_timeout(lhs) || body_uses_http_with_timeout(rhs)
-        }
-        Expr::TaskSeq { effect, rest } => {
-            body_uses_http_with_timeout(effect) || body_uses_http_with_timeout(rest)
-        }
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
-            args.iter().any(body_uses_http_with_timeout)
-        }
+        | Expr::TailLoop { body, .. } => recur(body),
+        Expr::Cons { head, tail } => recur(head) || recur(tail),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => recur(list),
+        Expr::Tuple(elems) | Expr::List { items: elems, .. } => elems.iter().any(recur),
+        Expr::Record { fields, .. } => fields.iter().any(|(_, v)| recur(v)),
+        Expr::Access { record, .. } => recur(record),
+        Expr::Update { record, fields } => recur(record) || fields.iter().any(|(_, v)| recur(v)),
+        Expr::BinOp { lhs, rhs, .. } => recur(lhs) || recur(rhs),
+        Expr::TaskSeq { effect, rest } => recur(effect) || recur(rest),
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(recur),
         Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
@@ -8635,6 +8614,37 @@ fn reachable_from_seeds<'a>(
     reachable
 }
 
+/// The enums a kernel emit arm names without any IR type mention.
+///
+/// `Task.loop`'s emit arm bridges the compiled `Ipe.Task.Step` enum to the
+/// runtime's `LoopStep`, so that enum is kept whenever a surviving function
+/// uses the kernel, even when no `Step` value is built or matched (a step that
+/// always fails). Fail-closed toward over-keeping, like the prune it seeds.
+fn backend_named_enum_roots(
+    funcs: &[Func],
+    types_ir: &[TypeDef],
+    interner: &Interner,
+) -> Vec<(ModPath, Symbol)> {
+    if !funcs
+        .iter()
+        .any(|f| body_uses_kernel(&f.body, KernelFn::TaskLoop))
+    {
+        return Vec::new();
+    }
+    types_ir
+        .iter()
+        .filter_map(|TypeDef::Enum(e)| {
+            let is_task_step = interner.resolve(e.name) == Some("Step")
+                && matches!(
+                    e.home.0.as_slice(),
+                    [seg0, seg1] if interner.resolve(*seg0) == Some("Ipe")
+                        && interner.resolve(*seg1) == Some("Task")
+                );
+            is_task_step.then(|| (e.home.clone(), e.name))
+        })
+        .collect()
+}
+
 /// The functions the backend invokes without any IR call edge naming them.
 ///
 /// Two kinds, in function order: every wasm-hydration island projection
@@ -8665,7 +8675,9 @@ where
             )
     });
     if let Some(to_millis) = duration_to_millis
-        && funcs.clone().any(|f| body_uses_http_with_timeout(&f.body))
+        && funcs
+            .clone()
+            .any(|f| body_uses_kernel(&f.body, KernelFn::HttpWithTimeout))
     {
         roots.push(to_millis.id);
     }
@@ -8730,11 +8742,18 @@ fn collect_ir_type_refs(
 /// mention, and the synthetic (usage-injected) enums are appended AFTER this
 /// prune, so a kept declaration can never reference a dropped one — no
 /// exit-0-then-cargo-fail (E0412) can arise from an under-kept type.
-fn prune_dead_type_decls(funcs: &[Func], types_ir: &mut Vec<TypeDef>, records: &mut Vec<IrType>) {
+fn prune_dead_type_decls(
+    funcs: &[Func],
+    extra_enum_roots: &[(ModPath, Symbol)],
+    types_ir: &mut Vec<TypeDef>,
+    records: &mut Vec<IrType>,
+) {
     // Seed the reachable sets from every surviving function's type positions:
     // ret / params / row-generic fields / body — the same surface
-    // `func_type_mentions` scans, walked here to accumulate rather than test.
-    let mut reachable_enums: BTreeSet<(ModPath, Symbol)> = BTreeSet::new();
+    // `func_type_mentions` scans, walked here to accumulate rather than test —
+    // plus the enums a kernel emit arm names without an IR mention.
+    let mut reachable_enums: BTreeSet<(ModPath, Symbol)> =
+        extra_enum_roots.iter().cloned().collect();
     let mut reachable_records: std::collections::HashSet<IrType> = std::collections::HashSet::new();
     for f in funcs {
         collect_ir_type_refs(&f.ret, &mut reachable_enums, &mut reachable_records);
@@ -15017,7 +15036,8 @@ impl<'a> Lowerer<'a> {
         // a dropped type stops forcing its runtime feature and the injected
         // enums (appended below) can never reference a pruned declaration.
         if prune_dead {
-            prune_dead_type_decls(&funcs, &mut types_ir, &mut records);
+            let extra_enum_roots = backend_named_enum_roots(&funcs, &types_ir, self.interner);
+            prune_dead_type_decls(&funcs, &extra_enum_roots, &mut types_ir, &mut records);
         }
 
         // Every synthesized Prelude enum lives in (or aliases into) the Db
@@ -18558,6 +18578,41 @@ impl<'a> Lowerer<'a> {
         rewrite_captured_clones(&clone_set, &noncl_set, span, body, 0)
     }
 
+    /// T3 capture-clone rewrite for the body of a SYNTHETIC eta closure (a
+    /// partial or over-application rebuilt as `\eta… -> f(a0, …, eta…)`).
+    ///
+    /// The residual is a `move` closure boxed as `dyn Fn`, so its body runs once
+    /// per call. Every expression it re-evaluates per call — the callee value
+    /// and each supplied argument the eta builder did not hoist out of it (a
+    /// function-typed or `Copy`-typed argument slot) — reads the locals free in
+    /// its CANON source from the closure environment. A `CloneOk` read of such a
+    /// local must clone, exactly as in a source lambda, or the closure moves it
+    /// out of its `Fn` environment (E0507). `sources` are those canon
+    /// expressions; a local free in none of them is not a capture of this
+    /// closure and stays untouched.
+    ///
+    /// Only the `CloneOk` set is rewritten. A `NonClone` capture keeps the eta
+    /// builder's own forwarding discipline (a function value moved into an
+    /// `impl FnOnce` slot), so this pass adds `.clone()` reads and no
+    /// IPE-L0125/L0126 refusal; a capture whose type does not resolve refuses
+    /// exactly as it does for a source lambda.
+    fn clone_eta_body_captures(
+        &self,
+        sources: &[&canon::Expr],
+        span: Span,
+        body: Expr,
+    ) -> DResult<Expr> {
+        let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
+        for source in sources {
+            for (sym, binder_ty) in self.captured_locals(&[], source)? {
+                if classify_capture_clone(self.clone_env(), binder_ty.classified()) == Some(true) {
+                    clone_set.insert(sym);
+                }
+            }
+        }
+        rewrite_captured_clones(&clone_set, &BTreeSet::new(), span, body, 0)
+    }
+
     /// Run `f` with `poly` installed as the enclosing def's generic type-variable map.
     ///
     /// The previous map is restored once `f` returns, whatever path `f` exits
@@ -21275,6 +21330,7 @@ impl<'a> Lowerer<'a> {
                     let arity = self.callee_arity(&callee)?;
                     return self.eta_expand_partial(
                         e,
+                        &[],
                         callee,
                         Vec::new(),
                         arity,
@@ -21507,6 +21563,41 @@ impl<'a> Lowerer<'a> {
             return Err(unsupported(callee.span, Feature::HofCallbackFunctionResult));
         }
         Ok(())
+    }
+
+    /// Refuse a `Task.loop` whose state type `s` embeds a function.
+    ///
+    /// The state is the direct `init` argument (a function there is on the
+    /// `Box<dyn Fn>` carrier) and the `Continue` payload of the `Step` enum (a
+    /// function there is on the storage `Arc<dyn Fn>` carrier), and the runtime
+    /// loop threads ONE state type through both, so a function-embedding state
+    /// is `ipe`-accept-then-`cargo`-fail (E0308). Read from the kernel
+    /// reference's own solved type at the single callee funnel, so a saturated
+    /// call, a partial `Task.loop n`, and a point-free `Task.loop` are all
+    /// checked. An unreadable instance is refused (fail closed).
+    fn reject_task_loop_function_state(
+        &self,
+        resolved: &Callee,
+        callee: &canon::Expr,
+    ) -> DResult<()> {
+        let Callee::Kernel(kernel) = resolved else {
+            return Ok(());
+        };
+        let Some(state_var) = kernel.plain_data_scheme_var() else {
+            return Ok(());
+        };
+        let (Some(shape), Some(solved)) = (kernel.scheme_shape(), self.region_ty(callee.span))
+        else {
+            return Err(unsupported(callee.span, Feature::TaskLoopFunctionState));
+        };
+        let heads = SchemeHeads {
+            builtins: &self.builtins.kernel_types,
+            interner: self.interner,
+        };
+        match scheme_var_instance(shape, solved, state_var, heads) {
+            Some(state) if !ty_contains_fun(state) => Ok(()),
+            Some(_) | None => Err(unsupported(callee.span, Feature::TaskLoopFunctionState)),
+        }
     }
 
     /// Lower the `Web.tea` cfg record literal, intentionally omitting the
@@ -21792,8 +21883,11 @@ impl<'a> Lowerer<'a> {
         // the kernel is reified point-free and rejected, IPE-L0146), or a
         // capture-cloned handler kernel (`Stream.stream ct <| h` / `h |>
         // Stream.stream ct`; the handler-capture gate reads the handler argument
-        // of the saturated call, else the partial is refused, IPE-L0152). The
-        // collapsed spine is exactly the direct saturated call the programmer
+        // of the saturated call, else the partial is refused, IPE-L0152), or a
+        // kernel with a bare-`impl Fn` slot (`r.step |> Task.loop n s` / `Task.loop
+        // n s <| f`; the stored-fn demotion of `demote_shared_fn_kernel_args`
+        // runs on the saturated call only, else the `Arc<dyn Fn>` reaches the
+        // `impl Fn` slot, E0277). The collapsed spine is exactly the direct saturated call the programmer
         // could have written. Restricted to those heads on purpose: a GENERAL
         // flatten reshapes the call tree the downstream multi-use / last-use
         // ownership pass reads to decide moves vs clones, mis-placing a move where
@@ -21820,7 +21914,9 @@ impl<'a> Lowerer<'a> {
     /// Whether a (possibly curried) call spine's head kernel must be lowered as one saturated call.
     ///
     /// True for an accessor-intercept placeholder (`Store.mask`, `Store.eq`, …)
-    /// and a capture-cloned handler kernel (`Stream.stream`). Gates the
+    /// a capture-cloned handler kernel (`Stream.stream`), and a kernel with a
+    /// demoted bare-`impl Fn` slot (`KernelFn::shared_fn_kernel_arg`:
+    /// `Json.encodeList`, `Task.loop`). Gates the
     /// spine-flatten in [`Self::lower_call`] to exactly the kernels whose
     /// saturated-call gate must observe every argument — never a general
     /// currying reshape (which would disturb the ownership/last-use pass).
@@ -21834,6 +21930,7 @@ impl<'a> Lowerer<'a> {
             Ok(Callee::Kernel(k))
                 if k.is_accessor_intercept_placeholder()
                     || k.capture_cloned_handler_arg().is_some()
+                    || k.shared_fn_kernel_arg().is_some()
         )
     }
 
@@ -23146,6 +23243,7 @@ impl<'a> Lowerer<'a> {
                     // `eta_expand_partial` for named-function partial application.
                     self.eta_expand_partial_ctor(
                         callee,
+                        args,
                         ctor_home,
                         *type_name,
                         *name,
@@ -23265,6 +23363,7 @@ impl<'a> Lowerer<'a> {
                     }
                     std::cmp::Ordering::Less => self.eta_expand_partial(
                         callee,
+                        args,
                         resolved,
                         lowered_args,
                         arity,
@@ -23272,7 +23371,7 @@ impl<'a> Lowerer<'a> {
                         call_span,
                     ),
                     std::cmp::Ordering::Greater => {
-                        self.saturate_over(callee, resolved, lowered_args, arity, call_span)
+                        self.saturate_over(callee, args, resolved, lowered_args, arity, call_span)
                     }
                 }
             }
@@ -23306,7 +23405,13 @@ impl<'a> Lowerer<'a> {
                     && arity != 0
                     && args.len() < arity
                 {
-                    return self.eta_expand_value_partial(callee, lowered_args, arity, call_span);
+                    return self.eta_expand_value_partial(
+                        callee,
+                        args,
+                        lowered_args,
+                        arity,
+                        call_span,
+                    );
                 }
                 Ok(Expr::Apply {
                     func: Box::new(self.lower_expr(callee)?),
@@ -23560,9 +23665,11 @@ impl<'a> Lowerer<'a> {
     /// Demote a `SharedFun`-carried argument that flows into a KERNEL parameter
     /// wanting a bare `impl Fn` onto the `Box<dyn Fn>` carrier that `impl Fn`
     /// accepts. `json_enc_list(f: impl Fn(A) -> Value, items)`'s element encoder
-    /// (argument 0) is such a slot: a `Codec a`'s stored encoder read
-    /// (`r.enc`, an `Arc<dyn Fn>`) does not `impl Fn`, so passing it directly is
-    /// `ipe`-accept-then-`cargo`-fail (E0277). The eta-demotion
+    /// (argument 0) and `task_loop(ceiling, init, step: impl Fn(S) -> …, …)`'s
+    /// step (argument 2) are such slots: a stored fn read (`r.enc`, `cfg.step`,
+    /// a `case`-bound user-ADT payload — each an `Arc<dyn Fn>`) does not
+    /// `impl Fn`, so passing it directly is `ipe`-accept-then-`cargo`-fail
+    /// (E0277). The eta-demotion
     /// ([`Self::demote_shared_fn_read`]) wraps the shared read in a fresh
     /// `Box<dyn Fn>` (`move |eta_0, …| (read)(eta_0, …)`), which the `impl Fn`
     /// bound accepts, mirroring the top-level-def read-frontier discipline.
@@ -23578,15 +23685,19 @@ impl<'a> Lowerer<'a> {
         canon_args: &[canon::Expr],
         lowered_args: &mut [Expr],
     ) -> DResult<()> {
-        // The set of (kernel, arg index) whose Rust parameter is a bare `impl Fn`
-        // that rejects an `Arc<dyn Fn>` — the element encoder of `json_enc_list`.
-        // `json_enc_object` takes `Vec<(String, Value)>` (no fn param), so it is
-        // not here; the decoder-side factories store their `Fn` on the runtime
-        // `Decoder`'s own boxed carrier, not a bare `impl Fn`, so they are owned
-        // by their carrier path, not this demotion.
-        let fn_arg_index = match resolved {
-            Callee::Kernel(KernelFn::JsonEncList) => 0,
-            _ => return Ok(()),
+        // The (kernel, arg index) whose Rust parameter is a bare `impl Fn` that
+        // rejects an `Arc<dyn Fn>` is `KernelFn::shared_fn_kernel_arg` — the one
+        // table the spine flatten in `lower_call` also reads, so a piped call
+        // (`f |> Task.loop n s`) reaches this demotion saturated. `json_enc_object` takes
+        // `Vec<(String, Value)>` (no fn param), so it is not here; the
+        // decoder-side factories store their `Fn` on the runtime `Decoder`'s own
+        // boxed carrier, not a bare `impl Fn`, so they are owned by their carrier
+        // path, not this demotion.
+        let Callee::Kernel(kernel) = resolved else {
+            return Ok(());
+        };
+        let Some(fn_arg_index) = kernel.shared_fn_kernel_arg() else {
+            return Ok(());
         };
         let Some(slot) = lowered_args.get_mut(fn_arg_index) else {
             return Ok(());
@@ -23913,9 +24024,11 @@ impl<'a> Lowerer<'a> {
     /// missing region type, or an arrow shorter than `arity`, is unreachable for
     /// well-typed input and surfaces as a [`Diagnostic::CompilerBug`], not a
     /// silent default.
+    #[allow(clippy::too_many_arguments)] // the canon call (callee + args) plus its lowered form and site
     fn eta_expand_partial(
         &self,
         callee: &canon::Expr,
+        canon_args: &[canon::Expr],
         resolved: Callee,
         lowered_args: Vec<Expr>,
         arity: usize,
@@ -24091,6 +24204,8 @@ impl<'a> Lowerer<'a> {
             // saturated) — this residual call carries no form-handler verdict.
             on_form: OnFormKind::NotForm,
         };
+        let sources: Vec<&canon::Expr> = canon_args.iter().collect();
+        let body = self.clone_eta_body_captures(&sources, call_span, body)?;
         let lambda = Expr::Lambda {
             params,
             ret,
@@ -24150,6 +24265,7 @@ impl<'a> Lowerer<'a> {
     fn eta_expand_value_partial(
         &self,
         callee: &canon::Expr,
+        canon_args: &[canon::Expr],
         lowered_args: Vec<Expr>,
         arity: usize,
         call_span: Span,
@@ -24252,6 +24368,8 @@ impl<'a> Lowerer<'a> {
             func: Box::new(self.lower_expr(callee)?),
             args: call_args,
         };
+        let sources: Vec<&canon::Expr> = std::iter::once(callee).chain(canon_args).collect();
+        let body = self.clone_eta_body_captures(&sources, call_span, body)?;
         let lambda = Expr::Lambda {
             params,
             ret,
@@ -24296,6 +24414,7 @@ impl<'a> Lowerer<'a> {
     fn eta_expand_partial_ctor(
         &self,
         callee: &canon::Expr,
+        canon_args: &[canon::Expr],
         ctor_home: ModPath,
         type_name: Symbol,
         name: Symbol,
@@ -24379,6 +24498,8 @@ impl<'a> Lowerer<'a> {
             variant: name,
             args: call_args,
         };
+        let sources: Vec<&canon::Expr> = canon_args.iter().collect();
+        let body = self.clone_eta_body_captures(&sources, call_span, body)?;
         let lambda = Expr::Lambda {
             params,
             ret,
@@ -24510,6 +24631,7 @@ impl<'a> Lowerer<'a> {
     fn saturate_over(
         &self,
         callee: &canon::Expr,
+        canon_args: &[canon::Expr],
         resolved: Callee,
         lowered_args: Vec<Expr>,
         arity: usize,
@@ -24529,6 +24651,7 @@ impl<'a> Lowerer<'a> {
                 // params. `eta_expand_over_partial` builds exactly that.
                 return self.eta_expand_over_partial(
                     callee,
+                    canon_args,
                     resolved,
                     lowered_args,
                     arity,
@@ -24574,12 +24697,15 @@ impl<'a> Lowerer<'a> {
     ///
     /// The residual params/ret come from the callee's solved region type, peeled
     /// past the `arity + surplus` positions already supplied. The T4 clone
-    /// discipline for the surplus args mirrors the other eta paths; the captured
-    /// `Call(f, head)` value is a `Box<dyn Fn>` moved in and called via `&self`,
-    /// so the residual is `Fn`.
+    /// discipline for the surplus args mirrors the other eta paths. The direct
+    /// `Call(f, head)` sits in the residual's body and is re-evaluated on every
+    /// call, so its `head` captures go through the same body-wide capture-clone
+    /// rewrite as the surplus args.
+    #[allow(clippy::too_many_arguments)] // the canon call (callee + args) plus its lowered form and arities
     fn eta_expand_over_partial(
         &self,
         callee: &canon::Expr,
+        canon_args: &[canon::Expr],
         resolved: Callee,
         lowered_args: Vec<Expr>,
         arity: usize,
@@ -24678,6 +24804,8 @@ impl<'a> Lowerer<'a> {
             }),
             args: apply_args,
         };
+        let sources: Vec<&canon::Expr> = canon_args.iter().collect();
+        let body = self.clone_eta_body_captures(&sources, call_span, body)?;
         let lambda = Expr::Lambda {
             params,
             ret,
@@ -25521,6 +25649,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListMap2
                 // `Task.map2 : (a -> b -> r) -> Task e a -> Task e b -> Task e r`
                 | KernelFn::TaskMap2
+                // `Task.loop : Int -> s -> (s -> Task Error (Step s a)) -> Task Error a`
+                | KernelFn::TaskLoop
                 // `Config.map2` — arity 3
                 | KernelFn::ConfigMap2
                 // `Store.eqBy` / `Store.neqBy` / `Store.gtBy` / `Store.gteBy` /
@@ -26618,6 +26748,7 @@ impl<'a> Lowerer<'a> {
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         let resolved = self.lower_callee_resolve(callee)?;
         self.reject_hof_callback_function_result(&resolved, callee)?;
+        self.reject_task_loop_function_state(&resolved, callee)?;
         self.reject_input_sub_outside_its_surface(&resolved, callee.span)?;
         match &resolved {
             Callee::Kernel(kernel) => {
@@ -27558,6 +27689,7 @@ impl<'a> Lowerer<'a> {
                     ("Task", "run") => Ok(Callee::Kernel(KernelFn::TaskRun)),
                     ("Task", "perform") => Ok(Callee::Kernel(KernelFn::TaskPerform)),
                     ("Task", "lazy") => Ok(Callee::Kernel(KernelFn::TaskLazy)),
+                    ("Task", "loop") => Ok(Callee::Kernel(KernelFn::TaskLoop)),
                     // ── Task retry surface ──────────────────────────────
                     ("Task", "retryWith") => Ok(Callee::Kernel(KernelFn::TaskRetryWith)),
                     ("Task", "linearBackoff") => Ok(Callee::Kernel(KernelFn::TaskLinearBackoff)),
@@ -31792,12 +31924,13 @@ mod tests {
 
             // No region is recorded here, so the gated funnel must refuse every
             // higher-order kernel (no solved type proves its callback results
-            // non-functional) and pass every other kernel through unchanged.
+            // non-functional) and every plain-data-state kernel (no solved type
+            // proves its state function-free), and pass every other kernel
+            // through unchanged.
             let gated = lowerer.lower_callee(&node).ok();
-            let expected = sk
-                .hof_result_vars()
-                .is_empty()
-                .then_some(Callee::Kernel(sk));
+            let expected = (sk.hof_result_vars().is_empty()
+                && sk.plain_data_scheme_var().is_none())
+            .then_some(Callee::Kernel(sk));
             assert_eq!(
                 gated, expected,
                 "lower_callee on KernelFn::{sk:?} with no solved type returned {gated:?}",
