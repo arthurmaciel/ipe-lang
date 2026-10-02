@@ -14,10 +14,10 @@ effect happens. `Error` is a typed, matchable value, never a bare `String`.
 The combinators fall into families: construction (`succeed`, `fail`),
 transformation (`map`, `map2`..`map5`, `andThen`), the error channel
 (`mapError`, `onError`), `Result` bridges (`fromResult`, `andThenResult`),
-concurrency (`sequence`, `parallel`), deferral (`lazy`), and a retry policy
-(`RetryPolicy` with `linearBackoff` / `exponentialBackoff` and the `with*`
-refinements, applied by `retryWith`). Two or more chained `andThen` steps read
-best as a `do` block.
+concurrency (`sequence`, `parallel`), deferral (`lazy`), iteration (`loop`,
+`Step`), and a retry policy (`RetryPolicy` with `linearBackoff` /
+`exponentialBackoff` and the `with*` refinements, applied by `retryWith`). Two
+or more chained `andThen` steps read best as a `do` block.
 
 The Task guide walks the mental model and a worked example; this module is the
 per-symbol reference.
@@ -238,6 +238,31 @@ definition, or to avoid constructing a task that a branch may never take.
 
 ```ipe
 lazy (\_ -> succeed 1) --> Task Error Int
+```
+
+## `Step`
+
+What one step of a `loop` returns: `Continue state` runs the step again from
+the new state, `Done result` ends the loop with that result.
+
+## `loop`
+
+```ipe
+loop : Int -> s -> (s -> Task Error (Step s a)) -> Task Error a
+```
+
+`loop ceiling init step` — run `step` from `init`, feeding each `Continue`
+state back in, until a step returns `Done`. The ceiling is the most times `step`
+may run: a loop that reaches `Done` on its N-th step succeeds with a ceiling of N
+and fails with an `InvalidInput` error after N-1 steps under a ceiling of N-1. A
+ceiling below 1 fails before any step runs, and a failing step ends the loop with
+that step's error unchanged. The loop runs at constant stack depth however many
+steps it takes, so repeat a step with `loop` rather than with a function that
+calls itself inside `andThen`.
+
+```ipe
+loop 10 0 (\n -> if n >= 3 then succeed (Done n) else succeed (Continue (n + 1))) --> Task Error Int
+loop 2 0 (\n -> if n >= 3 then succeed (Done n) else succeed (Continue (n + 1))) --> Task Error Int
 ```
 
 ## `BackoffStrategy`
