@@ -1005,6 +1005,7 @@ sourceBlock unit =
         , Background.color (Ui.rgb 12 12 18)
         , Border.rounded 4
         , Ui.padding 12
+        , Ui.style "direction" "ltr"
         ]
         (Ui.column
             [ Ui.width Ui.fill, Ui.spacing 2 ]
@@ -1058,10 +1059,12 @@ numberedLine lang ( n, line ) =
 tokenEl : Highlight.Token -> Ui.Element Msg
 tokenEl tok =
     Ui.el
-        [ Font.family Font.monospace
-        , Font.size 12
-        , Font.color (tokenColor tok)
-        ]
+        ([ Font.family Font.monospace
+         , Font.size 12
+         , Font.color (tokenColor tok)
+         ]
+            ++ List.map (\( k, v ) -> Ui.style k v) Highlight.sourceTokenStyle
+        )
         (safeText (Highlight.tokenText tok))
 
 
