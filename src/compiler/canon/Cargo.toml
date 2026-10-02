@@ -11,5 +11,9 @@ ipe_syntax = { path = "../syntax" }
 ipe_kernels = { path = "../kernels" }
 ipe_parse = { path = "../parse" }
 
+[dev-dependencies]
+# `tests/error_kind_agreement.rs` reads the runtime `IpeErrorKind` syntax tree.
+syn = { version = "3", default-features = false, features = ["full", "parsing"] }
+
 [lints]
 workspace = true
