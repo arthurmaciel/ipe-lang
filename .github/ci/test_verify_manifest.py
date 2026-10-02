@@ -1180,7 +1180,8 @@ class TestPinnedInputsAndEnvFileWrites(unittest.TestCase):
             "  - name: B\n    run: echo x >> \"${GITHUB_STEP_SUMMARY}\"\n"
             "  - name: C\n    run: echo x >> $GITHUB_STEP_SUMMARY\n"
             "  - name: D\n    shell: pwsh\n    run: '\"a=b\" | Out-File -FilePath $env:GITHUB_OUTPUT -Append'\n"
-            "  - name: E\n    run: cd \"${{ github.workspace }}\" && echo \"${{ env.CI_JOB_BIN_NAME }}\"\n"
+            "  - name: E\n    env:\n      WORKSPACE: ${{ github.workspace }}\n      BIN: ${{ env.CI_JOB_BIN_NAME }}\n"
+            "    run: cd \"$WORKSPACE\" && echo \"$BIN\"\n"
             "  - name: F\n    if: github.actor != 'github-actions' && github.event_name != 'env'\n    run: x\n"
             "  - name: G\n    run: ls \"$GITHUB_WORKSPACE\" \"${GITHUB_WORKSPACE}/x\"\n"
         )
@@ -1505,9 +1506,86 @@ class TestTypedExpressionAndShellReads(unittest.TestCase):
         ):
             self.run_refused(run, "splices")
 
-    def test_expression_after_a_plain_word_passes(self) -> None:
-        self.run_accepted("cp target/release/ipe${{ matrix.ext }} dist/")
-        self.run_accepted("cargo nextest run --partition count:${{ matrix.shard }}/4")
+    def test_expression_after_a_plain_word_is_refused(self) -> None:
+        self.run_refused("cp target/release/ipe${{ matrix.ext }} dist/", "splices", "env:")
+        self.run_refused("cargo nextest run --partition count:${{ matrix.shard }}/4", "splices", "env:")
+
+    # ---- no `${{ }}` in any shell-text position ---------------------------
+
+    _CONTEXTS = (
+        "github.event.issue.title",
+        "github.event.pull_request.head.ref",
+        "github.head_ref",
+        "github.event.comment.body",
+        "inputs.tag",
+        "needs.a.outputs.b",
+        "steps.s.outputs.o",
+        "matrix.x",
+        "github.repository",
+        "runner.temp",
+    )
+
+    def test_every_context_in_a_workflow_run_is_refused(self) -> None:
+        for ctx in self._CONTEXTS:
+            self.run_refused(f'echo "${{{{ {ctx} }}}}"', "splices", "shell text")
+
+    def test_every_context_in_a_composite_run_is_refused(self) -> None:
+        for ctx in self._CONTEXTS:
+            with self.subTest(ctx=ctx):
+                self.fx.composite(
+                    "spl",
+                    "name: spl\ndescription: d\nruns:\n  using: composite\n  steps:\n"
+                    f"    - name: S\n      shell: bash\n      run: echo \"${{{{ {ctx} }}}}\"\n",
+                )
+                self.assertRefused("run:", "splices", "shell text")
+
+    def test_expression_in_a_github_script_is_refused(self) -> None:
+        for uses in ("actions/github-script", "Actions/GitHub-Script"):
+            with self.subTest(uses=uses):
+                self.fx.workflow(
+                    "ci.yml",
+                    _ci(
+                        f"steps:\n  - name: P\n    uses: {uses}@{_PINNED_SHA}\n    with:\n"
+                        "      script: |\n        core.info(`${{ github.event.issue.title }}`)\n"
+                    ),
+                )
+                self.assertRefused("with.script", "splices", "shell text")
+
+    def test_eval_in_run_is_refused(self) -> None:
+        for run in ('eval "$X"', 'e""val "$X"', 'true && eval "$X"'):
+            self.run_refused(run, "`eval`")
+
+    def test_value_through_env_passes(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            _ci(
+                "steps:\n  - name: P\n    env:\n      TAG: \"${{ github.event.inputs.tag }}\"\n"
+                "    run: gh release upload \"$TAG\"\n"
+            ),
+        )
+        self.assertEqual(self.fx.errors(), [])
+        self.fx.workflow(
+            "ci.yml",
+            _ci(
+                "steps:\n  - name: P\n    shell: pwsh\n    env:\n      TAG: \"${{ inputs.tag }}\"\n"
+                "    run: Write-Output $env:TAG\n"
+            ),
+        )
+        self.assertEqual(self.fx.errors(), [])
+
+    def test_expression_outside_shell_text_passes(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            _ci(
+                "runs-on: ${{ matrix.os }}\nsteps:\n"
+                "  - name: ${{ matrix.x }}\n    if: ${{ github.event_name == 'push' }}\n"
+                "    env:\n      X: ${{ github.head_ref }}\n    run: echo \"$X\"\n"
+                f"  - uses: some/action@{_PINNED_SHA}\n    with:\n      ref: ${{{{ github.head_ref }}}}\n"
+                f"  - uses: actions/github-script@{_PINNED_SHA}\n    env:\n      T: ${{{{ github.event.issue.title }}}}\n"
+                "    with:\n      script: core.info(process.env.T)\n"
+            ).replace("    runs-on: ubuntu-latest\n", "", 1),
+        )
+        self.assertEqual(self.fx.errors(), [])
 
     # ---- defence in depth: shadowing, protected tree, installers --------
 

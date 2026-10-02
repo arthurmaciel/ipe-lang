@@ -485,13 +485,9 @@ RUNNER_APPEND_ONLY_TARGET_RE = re.compile(
 # is refused too.
 GITHUB_NAMED_CONTEXTS = frozenset({"github", "env"})
 GITHUB_RUNNER_FILE_PROPS = frozenset({"env", "path", "state", "output", "step_summary"})
-# In a `run:`, an expression value is spliced into shell text the verifier
-# never sees. Next to it, a shell parameter-name prefix (`$`, `${`, `$NAME`,
-# `$env:NAME`, `%NAME`) or an identifier character after it would let the
-# value complete a variable name (`$GITHUB_${{ matrix.f }}`,
-# `$${{ inputs.f }}ENV`), so either neighbour is refused.
-SPLICE_NAME_PREFIX_RE = re.compile(r"(?:\$\{?(?:env:)?|%)[A-Za-z0-9_]*\Z", re.IGNORECASE)
-SPLICE_NAME_SUFFIX_RE = re.compile(r"[A-Za-z0-9_]")
+# The action whose `with.script` is JavaScript source the runner assembles
+# from `${{ }}` expansion before it runs, a shell-text position like `run:`.
+GITHUB_SCRIPT_REPO = "actions/github-script"
 # `GITHUB_WORKSPACE` roots the helper and requirements paths, so it may only be
 # read (`$GITHUB_WORKSPACE`, `${GITHUB_WORKSPACE}`, exact case), never assigned,
 # defaulted (`${GITHUB_WORKSPACE:=x}`), exported, or set as an env key.
@@ -3381,26 +3377,45 @@ def _runner_file_refusal(text: str, parsed: gha_expr.Template | gha_expr.Refusal
     return None
 
 
-def _refuse_expression_splice(
-    text: str, parsed: gha_expr.Template, loc: str, what: str, errors: list[str]
+class ShellTextPosition(enum.Enum):
+    """A step position whose text the runner expands `${{ }}` into before an
+    interpreter parses it: a `run:` (shell) or a `with.script` of
+    `actions/github-script` (JavaScript)."""
+
+    RUN = "run"
+    GITHUB_SCRIPT = "github-script"
+
+
+def _refuse_shell_expression(
+    text: str, parsed: gha_expr.Template, position: ShellTextPosition, loc: str, what: str,
+    errors: list[str],
 ) -> None:
-    """In a `run:`, every `${{ }}` is an opaque value spliced into shell text:
-    none may carry a string literal (author text the name scans never see
-    whole), and none may sit where its value would complete a shell variable
-    name (`SPLICE_NAME_PREFIX_RE`/`SPLICE_NAME_SUFFIX_RE`)."""
-    for e, (lo, hi) in zip(parsed.exprs, parsed.spans):
-        shown = text[lo:hi]
-        if any(isinstance(n, gha_expr.Literal) and n.is_string for n in gha_expr.walk(e)):
-            errors.append(
-                f"{loc} {what} splices {shown!r}, an expression holding a string literal, into "
-                "shell text — a literal there assembles text no name scan sees whole; pass the "
-                "value through `env:` instead; refused"
-            )
-        elif SPLICE_NAME_PREFIX_RE.search(text, 0, lo) or SPLICE_NAME_SUFFIX_RE.match(text, hi):
-            errors.append(
-                f"{loc} {what} splices {shown!r} next to a shell variable name — its value could "
-                "complete the name (`$GITHUB_${{ x }}`); separate it by a quote, space, or `/`; refused"
-            )
+    """Rule (j): no `${{ }}` in a shell-text position (`position`), whatever
+    context it reads. The value enters as an `env:` entry the script reads by
+    name, so no value, whoever controls it, becomes syntax."""
+    read = (
+        'and read it as "$NAME" (bash) or $env:NAME (pwsh)'
+        if position is ShellTextPosition.RUN
+        else "and read it as process.env.NAME"
+    )
+    for lo, hi in parsed.spans:
+        errors.append(
+            f"{loc} {what} splices {text[lo:hi]!r} into shell text — the runner expands "
+            f"`${{{{ }}}}` before the interpreter parses it; pass the value through the step's "
+            f"`env:` {read}; refused"
+        )
+
+
+def _refuse_eval(text: str, loc: str, what: str, errors: list[str]) -> None:
+    """Rule (j): no quote-removed word of `text` (here-document bodies
+    included) is `eval`, which re-parses an `env:` value as shell syntax."""
+    for part in _shell_texts(text):
+        for cmd in shell_lex.split_commands(part):
+            if "eval" in cmd.words:
+                errors.append(
+                    f"{loc} {what} runs {' '.join(cmd.words)!r}, which names the `eval` builtin — "
+                    "it re-parses a value as shell syntax; refused"
+                )
 
 
 def _refuse_runner_file_text(
@@ -3841,15 +3856,18 @@ def _audit_text(
     helper_ok: bool = False, bare_expression: bool = False, is_run: bool = False,
 ) -> None:
     """Rules (c), (f), (g) over one string scalar outside the composite; a
-    step's `run:` (`is_run`) is also shell text for the splice, shadowing,
-    and protected-tree rules."""
+    step's `run:` (`is_run`) is also shell text for rule (j) and the
+    shadowing and protected-tree rules."""
     parsed = _parsed_expressions(text, bare_expression)
     _refuse_wiring_text(text, loc, what, errors)
     _refuse_runner_file_text(text, parsed, loc, what, policy, helper_ok, errors)
     _refuse_unhashed_pip(text, loc, what, errors)
-    if not is_run or isinstance(parsed, gha_expr.Refusal):
+    if not is_run:
         return
-    _refuse_expression_splice(text, parsed, loc, what, errors)
+    _refuse_eval(text, loc, what, errors)
+    if isinstance(parsed, gha_expr.Refusal):
+        return
+    _refuse_shell_expression(text, parsed, ShellTextPosition.RUN, loc, what, errors)
     shell = text
     for lo, hi in reversed(parsed.spans):
         shell = shell[:lo] + "__GHA_EXPR__" + shell[hi:]
@@ -3991,7 +4009,7 @@ def _refuse_rust_cache_save(st: Step, loc: str, errors: list[str]) -> None:
 
 
 def _audit_step(st: Step, loc: str, policy: StepPolicy, errors: list[str]) -> None:
-    """Rules (a)/(b)/(c)/(e)/(f)/(g) for one step."""
+    """Rules (a)/(b)/(c)/(e)/(f)/(g)/(j) for one step."""
     _refuse_unpinned_uses(st, loc, errors)
     if _uses_repo(st, RUST_CACHE_REPO):
         _refuse_rust_cache_save(st, loc, errors)
@@ -4009,6 +4027,17 @@ def _audit_step(st: Step, loc: str, policy: StepPolicy, errors: list[str]) -> No
     if "with" in st.raw and not isinstance(st.raw["with"], dict):
         _refuse_shape(loc, "with:", "a mapping", st.raw["with"], errors)
     _audit_scalars(st.raw, loc, policy, errors, step=True)
+    with_ = st.raw.get("with")
+    if _uses_repo(st, GITHUB_SCRIPT_REPO) and isinstance(with_, dict):
+        script = with_.get("script")
+        if isinstance(script, str):
+            parsed = _parsed_expressions(script, bare_expression=False)
+            if isinstance(parsed, gha_expr.Template):
+                _refuse_shell_expression(
+                    script, parsed, ShellTextPosition.GITHUB_SCRIPT, loc, "with.script", errors
+                )
+        elif script is not None:
+            _refuse_shape(loc, "with.script:", "a string", script, errors)
 
 
 # The steps a job may run up to and including its last step naming
@@ -5027,7 +5056,16 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
           head-free workflow (`Workspace.NONE`, from `head_free`) no step
           or job `uses:` anything and nothing runs `git`, so no checkout
           exists; there only the job half of (i) is asked, the job read as
-          a verdict job (`ToolJob.parse`), and the write scan is not run.
+          a verdict job (`ToolJob.parse`), and the write scan is not run;
+      (j) any `${{ }}` in a shell-text position (`ShellTextPosition`): a
+          step's `run:` (workflow or local composite) and the `with.script`
+          of an `actions/github-script` step (case-folded, any ref). The
+          runner expands an expression before the interpreter parses the
+          text, so its value, whatever context it reads, would become
+          syntax; every value enters through `env:` and is read as
+          `"$NAME"` (bash), `$env:NAME` (pwsh), or `process.env.NAME`.
+          A quote-removed word `eval` in a `run:` (here-document bodies
+          included) is refused too: it re-parses an `env:` value as shell.
     Every local `uses: ./...` is resolved on disk from the repo root
     (`action.yml`, then `action.yaml`); an unresolvable, ambiguous, non-
     composite (node/docker), cyclic, or over-deep (> LOCAL_ACTION_DEPTH_LIMIT)
@@ -5051,15 +5089,17 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
       - a rustc replacement outside the named keys (a `PATH` entry shadowing
         `rustc`, a `rustup` toolchain override, a linker/runner setting);
       - run-time string assembly inside `run:` that builds a command-file
-        name or a command the text scan never sees whole: `eval`, a
+        name or a command the text scan never sees whole: a
         variable name concatenated from parts, `${!x}` indirection, a glob
         over the runner temp directory, a decoded payload piped to a shell;
       - what a step writes into GITHUB_OUTPUT (content, a multiline
-        delimiter) and how later `${{ steps.*.outputs.* }}` interpolation
-        uses it;
-      - an expression value that is itself shell text (`${{ inputs.f }}`
-        whose value is `$GITHUB_ENV`), and interpreter variables (`PYTHON*`)
-        that steer the canonical pip install;
+        delimiter) and how a later `${{ steps.*.outputs.* }}` in a
+        non-shell position (`with:`, `if:`) uses it;
+      - under (j), an `env:` value a script hands to a program that parses
+        its argument as code (`bash -c "$X"`, `sh -c`, `python -c`, a
+        template engine): legitimate tools take author-written `-c` text,
+        so the verifier cannot tell the two apart; and interpreter
+        variables (`PYTHON*`) that steer the canonical pip install;
       - shadowing a checked command by means other than a shell function or
         alias written in the same `run:` (a `PATH` entry, `BASH_ENV`, a
         sourced file);
