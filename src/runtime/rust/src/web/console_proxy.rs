@@ -168,7 +168,8 @@ pub(crate) fn spawn_console(
     // process-lifetime spawner thread (the signal is bound to the forking
     // thread), registered with this caller's tokio runtime. `kill_on_drop` in
     // `console_command` remains the graceful-path floor tokio adds on top, for
-    // a registered child only. No-op on non-Linux.
+    // a registered child only. The signal is Linux-only; on every Unix the
+    // child also inherits stdio and no other descriptor of this process.
     match crate::system::spawn_hardened_tokio(cmd) {
         Ok(child) => {
             if let Ok(mut g) = CHILD.lock() {

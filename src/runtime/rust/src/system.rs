@@ -748,6 +748,13 @@ pub enum SpawnRefusal {
     /// down, a stdio or pidfd registration refused) and drops it unkilled; that
     /// child is bounded only by the parent-death floor.
     Spawn(std::io::Error),
+    /// This host does not list the open descriptors a child would inherit.
+    ///
+    /// The descriptor floor walks the live listing (`/proc/self/fd` on Linux,
+    /// `/dev/fd` on FreeBSD and macOS) to mark every inherited descriptor
+    /// close-on-exec; without that listing nothing is forked.
+    #[cfg(unix)]
+    DescriptorTableUnlisted(std::io::Error),
 }
 
 impl std::fmt::Display for SpawnRefusal {
@@ -772,6 +779,12 @@ impl std::fmt::Display for SpawnRefusal {
             #[cfg(all(feature = "web", not(target_arch = "wasm32")))]
             Self::NoRuntime => f.write_str("no tokio runtime is active on the spawning thread"),
             Self::Spawn(e) => write!(f, "spawn failed ({})", e.kind()),
+            #[cfg(unix)]
+            Self::DescriptorTableUnlisted(e) => write!(
+                f,
+                "this host does not list the open descriptors a child would inherit, so nothing was spawned ({}); {DESCRIPTOR_LISTING_HINT}",
+                e.kind()
+            ),
         }
     }
 }
@@ -780,6 +793,8 @@ impl std::error::Error for SpawnRefusal {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Spawn(e) => Some(e),
+            #[cfg(unix)]
+            Self::DescriptorTableUnlisted(e) => Some(e),
             #[cfg(all(feature = "web", unix))]
             Self::ProbeRefused(e) => Some(e),
             #[cfg(all(feature = "web", unix))]
@@ -804,12 +819,393 @@ impl From<SpawnRefusal> for std::io::Error {
             }
             #[cfg(all(feature = "web", not(target_arch = "wasm32")))]
             refused @ SpawnRefusal::NoRuntime => Self::other(refused),
+            #[cfg(unix)]
+            refused @ SpawnRefusal::DescriptorTableUnlisted(_) => Self::other(refused),
             refused @ (SpawnRefusal::SpawnerUnavailable(_)
             | SpawnRefusal::SpawnerGone
             | SpawnRefusal::ReplyTimedOut
             | SpawnRefusal::SpawnPanicked) => Self::other(refused),
         }
     }
+}
+
+/// What a host must provide for the descriptor floor, named in its refusal.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const DESCRIPTOR_LISTING_HINT: &str = "mount procfs at /proc";
+/// What a host must provide for the descriptor floor, named in its refusal.
+#[cfg(target_os = "freebsd")]
+const DESCRIPTOR_LISTING_HINT: &str = "mount fdescfs with `mount -t fdescfs fdesc /dev/fd`";
+/// What a host must provide for the descriptor floor, named in its refusal.
+#[cfg(target_os = "macos")]
+const DESCRIPTOR_LISTING_HINT: &str = "/dev/fd must be the kernel's descriptor listing";
+/// What a host must provide for the descriptor floor, named in its refusal.
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "macos"
+    ))
+))]
+const DESCRIPTOR_LISTING_HINT: &str = "this platform has no supported descriptor listing";
+
+/// Where the calling process's live descriptor listing is mounted.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const DESCRIPTOR_LISTING: &std::ffi::CStr = c"/proc/self/fd";
+/// Where the calling process's live descriptor listing is mounted.
+#[cfg(any(target_os = "freebsd", target_os = "macos"))]
+const DESCRIPTOR_LISTING: &std::ffi::CStr = c"/dev/fd";
+
+/// The lowest descriptor number that is not stdin, stdout or stderr.
+#[cfg(unix)]
+const FIRST_UNNAMED_FD: std::os::fd::RawFd = 3;
+
+/// Bytes of a descriptor number's listing name: ten digits, the NUL, a spare.
+#[cfg(unix)]
+const FD_NAME_LEN: usize = 12;
+
+/// Bytes of the stack buffer the Linux listing walk reads entries into.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const LISTING_READ_BUF: usize = 1024;
+
+/// Highest descriptor limit the `/dev/fd` probe walks up to; a larger limit refuses.
+#[cfg(all(unix, any(target_os = "freebsd", target_os = "macos", test)))]
+const DESCRIPTOR_PROBE_CEILING: u64 = 1 << 20;
+
+/// The most descriptors one hardened child can be handed by name.
+#[cfg(unix)]
+pub const NAMED_FD_CAP: usize = 4;
+
+/// Why a descriptor was refused a place in a [`NamedFds`] set.
+#[cfg(unix)]
+#[derive(Debug)]
+pub enum NamedFdRefusal {
+    /// The set already holds [`NAMED_FD_CAP`] descriptors.
+    Full,
+    /// The descriptor is stdin, stdout or stderr.
+    ///
+    /// std places the child's stdio over 0–2 before the floor runs, so a
+    /// named descriptor there would be replaced, never inherited.
+    Stdio,
+    /// The descriptor is inheritable in this process.
+    ///
+    /// A named descriptor stays close-on-exec in the parent from birth to
+    /// close, so no sibling forked concurrently can inherit it.
+    Inheritable,
+    /// The descriptor's flags could not be read.
+    FlagsUnreadable(std::io::Error),
+}
+
+#[cfg(unix)]
+impl std::fmt::Display for NamedFdRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Full => write!(
+                f,
+                "a child can be handed at most {NAMED_FD_CAP} descriptors"
+            ),
+            Self::Stdio => f.write_str("a stdio descriptor cannot be handed to a child by name"),
+            Self::Inheritable => {
+                f.write_str("a descriptor handed to a child must be close-on-exec in the parent")
+            }
+            Self::FlagsUnreadable(e) => {
+                write!(f, "the descriptor's flags could not be read ({})", e.kind())
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl std::error::Error for NamedFdRefusal {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::FlagsUnreadable(e) => Some(e),
+            Self::Full | Self::Stdio | Self::Inheritable => None,
+        }
+    }
+}
+
+/// The descriptors one hardened child inherits besides stdio.
+///
+/// Every member is close-on-exec in this process for its whole life. Only the
+/// child clears that flag, in its own descriptor table after the fork, so a
+/// sibling forked concurrently never inherits it. The capacity is fixed so the
+/// child walks the set without allocating. The set moves into the spawn, and
+/// this process's copies close when the spawn returns.
+#[cfg(unix)]
+#[derive(Debug, Default)]
+pub struct NamedFds {
+    slots: [Option<std::os::fd::OwnedFd>; NAMED_FD_CAP],
+}
+
+#[cfg(unix)]
+impl NamedFds {
+    /// The empty set: the child inherits only stdio.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            slots: [const { None }; NAMED_FD_CAP],
+        }
+    }
+
+    /// Add `fd` to the set.
+    ///
+    /// # Errors
+    ///
+    /// The refusal, with `fd` handed back unclosed, when `fd` is a stdio
+    /// number, is inheritable in this process, has unreadable flags, or the set
+    /// is full.
+    pub fn push(
+        &mut self,
+        fd: std::os::fd::OwnedFd,
+    ) -> Result<(), (NamedFdRefusal, std::os::fd::OwnedFd)> {
+        use std::os::fd::AsRawFd as _;
+        let flags = match rustix::io::fcntl_getfd(&fd) {
+            Ok(flags) => flags,
+            Err(e) => return Err((NamedFdRefusal::FlagsUnreadable(e.into()), fd)),
+        };
+        if let Err(refusal) = admit_named(fd.as_raw_fd(), flags) {
+            return Err((refusal, fd));
+        }
+        match self.slots.iter_mut().find(|slot| slot.is_none()) {
+            Some(slot) => {
+                *slot = Some(fd);
+                Ok(())
+            }
+            None => Err((NamedFdRefusal::Full, fd)),
+        }
+    }
+
+    /// Make every member inheritable and rewind it, in the forked child.
+    ///
+    /// Allocation-free: it only issues `fcntl` and `lseek`. A member that
+    /// cannot seek (a pipe or socket, `ESPIPE`) is handed over as it is.
+    fn reopen_in_child(&self) -> rustix::io::Result<()> {
+        for fd in self.slots.iter().flatten() {
+            rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::empty())?;
+            match rustix::fs::seek(fd, rustix::fs::SeekFrom::Start(0)) {
+                Ok(_) | Err(rustix::io::Errno::SPIPE) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Admit descriptor number `raw` with descriptor flags `flags` into a named set.
+#[cfg(unix)]
+fn admit_named(raw: std::os::fd::RawFd, flags: rustix::io::FdFlags) -> Result<(), NamedFdRefusal> {
+    if raw < FIRST_UNNAMED_FD {
+        Err(NamedFdRefusal::Stdio)
+    } else if flags.contains(rustix::io::FdFlags::CLOEXEC) {
+        Ok(())
+    } else {
+        Err(NamedFdRefusal::Inheritable)
+    }
+}
+
+/// The set a spawn hands its child: [`NamedFds`] on Unix, nothing elsewhere.
+#[cfg(unix)]
+type NamedSet = NamedFds;
+/// The set a spawn hands its child: [`NamedFds`] on Unix, nothing elsewhere.
+#[cfg(not(unix))]
+type NamedSet = ();
+
+/// Write `n`'s listing name (its decimal digits) into `buf`.
+///
+/// Allocation-free, for the forked child. `None` for a negative `n`.
+#[cfg(unix)]
+fn fd_name(n: std::os::fd::RawFd, buf: &mut [u8; FD_NAME_LEN]) -> Option<&std::ffi::CStr> {
+    const DIGITS: &[u8; 10] = b"0123456789";
+    let mut rest = u32::try_from(n).ok()?;
+    let mut reversed = [0_u8; FD_NAME_LEN];
+    let mut len = 0_usize;
+    loop {
+        let digit = DIGITS.get(usize::try_from(rest % 10).ok()?)?;
+        *reversed.get_mut(len)? = *digit;
+        len += 1;
+        rest /= 10;
+        if rest == 0 {
+            break;
+        }
+    }
+    for (slot, digit) in buf.iter_mut().zip(reversed.get(..len)?.iter().rev()) {
+        *slot = *digit;
+    }
+    *buf.get_mut(len)? = 0;
+    std::ffi::CStr::from_bytes_with_nul(buf.get(..=len)?).ok()
+}
+
+/// The descriptor number a Linux listing entry names, or `None` for any other name.
+#[cfg(all(unix, any(target_os = "linux", target_os = "android", test)))]
+fn parse_fd_number(name: &[u8]) -> Option<std::os::fd::RawFd> {
+    if name.is_empty() {
+        return None;
+    }
+    name.iter()
+        .try_fold(0, |number: std::os::fd::RawFd, &byte| {
+            let digit = match byte {
+                b'0'..=b'9' => std::os::fd::RawFd::from(byte - b'0'),
+                _ => return None,
+            };
+            number.checked_mul(10)?.checked_add(digit)
+        })
+}
+
+/// Whether descriptor `n` appears in `listing`, the open descriptor listing.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
+fn fd_listed(listing: &std::os::fd::OwnedFd, n: std::os::fd::RawFd) -> rustix::io::Result<bool> {
+    let mut buf = [0_u8; FD_NAME_LEN];
+    let name = fd_name(n, &mut buf).ok_or(rustix::io::Errno::INVAL)?;
+    match rustix::fs::statat(listing, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(_) => Ok(true),
+        Err(rustix::io::Errno::NOENT | rustix::io::Errno::BADF) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Open the directory at `at` as this process's live descriptor listing.
+///
+/// The listing is held at a number `>= 3` and must list that number itself,
+/// so a directory that is not the live table (FreeBSD's static `/dev/fd`
+/// without fdescfs, a `/proc` without procfs) is refused (`ENOENT`), never
+/// walked as if it were complete.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
+fn open_descriptor_listing_at(at: &std::ffi::CStr) -> rustix::io::Result<std::os::fd::OwnedFd> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::fd::AsRawFd as _;
+    let opened = rustix::fs::open(
+        at,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let listing = rustix::io::fcntl_dupfd_cloexec(&opened, FIRST_UNNAMED_FD)?;
+    drop(opened);
+    if fd_listed(&listing, listing.as_raw_fd())? {
+        Ok(listing)
+    } else {
+        Err(rustix::io::Errno::NOENT)
+    }
+}
+
+/// Open this process's live descriptor listing.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
+fn open_descriptor_listing() -> rustix::io::Result<std::os::fd::OwnedFd> {
+    open_descriptor_listing_at(DESCRIPTOR_LISTING)
+}
+
+/// Open this process's live descriptor listing: unsupported here (`ENOSYS`).
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "macos"
+    ))
+))]
+const fn open_descriptor_listing() -> rustix::io::Result<std::os::fd::OwnedFd> {
+    Err(rustix::io::Errno::NOSYS)
+}
+
+/// Call `mark` on every open descriptor `>= 3` that `listing` names, except `listing` itself.
+///
+/// Walks the `/proc/self/fd` entries with `getdents64` into a stack buffer:
+/// allocation-free, lock-free, async-signal-safe. An entry that is not a
+/// descriptor number refuses (`EINVAL`).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn for_each_inherited_fd(
+    listing: &std::os::fd::OwnedFd,
+    mut mark: impl FnMut(std::os::fd::RawFd) -> rustix::io::Result<()>,
+) -> rustix::io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+    let own = listing.as_raw_fd();
+    let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); LISTING_READ_BUF];
+    let mut entries = rustix::fs::RawDir::new(listing, &mut buf);
+    while let Some(entry) = entries.next() {
+        let entry = entry?;
+        let name = entry.file_name().to_bytes();
+        if name == b"." || name == b".." {
+            continue;
+        }
+        let n = parse_fd_number(name).ok_or(rustix::io::Errno::INVAL)?;
+        if n >= FIRST_UNNAMED_FD && n != own {
+            mark(n)?;
+        }
+    }
+    Ok(())
+}
+
+/// Call `mark` on every open descriptor `>= 3` that `listing` names, except `listing` itself.
+///
+/// Probes `/dev/fd/<n>` with `fstatat` for every number below the descriptor
+/// limit: allocation-free, lock-free, async-signal-safe (no `readdir`, which
+/// allocates). A limit past [`DESCRIPTOR_PROBE_CEILING`] refuses (`EMFILE`).
+#[cfg(any(target_os = "freebsd", target_os = "macos"))]
+fn for_each_inherited_fd(
+    listing: &std::os::fd::OwnedFd,
+    mut mark: impl FnMut(std::os::fd::RawFd) -> rustix::io::Result<()>,
+) -> rustix::io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+    let own = listing.as_raw_fd();
+    let limit = rustix::process::getrlimit(rustix::process::Resource::Nofile);
+    let bound =
+        descriptor_probe_bound(limit.current, limit.maximum).ok_or(rustix::io::Errno::MFILE)?;
+    for n in FIRST_UNNAMED_FD..bound {
+        if n != own && fd_listed(listing, n)? {
+            mark(n)?;
+        }
+    }
+    Ok(())
+}
+
+/// Call `mark` on every inherited descriptor: unsupported here (`ENOSYS`).
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "macos"
+    ))
+))]
+fn for_each_inherited_fd(
+    _listing: &std::os::fd::OwnedFd,
+    _mark: impl FnMut(std::os::fd::RawFd) -> rustix::io::Result<()>,
+) -> rustix::io::Result<()> {
+    Err(rustix::io::Errno::NOSYS)
+}
+
+/// The exclusive descriptor number the `/dev/fd` probe walks up to.
+///
+/// The hard limit when it is finite and within [`DESCRIPTOR_PROBE_CEILING`]
+/// (it also bounds a descriptor opened before the soft limit was lowered),
+/// else the soft limit under the same ceiling, else `None` (refuse).
+#[cfg(all(unix, any(target_os = "freebsd", target_os = "macos", test)))]
+fn descriptor_probe_bound(
+    current: Option<u64>,
+    maximum: Option<u64>,
+) -> Option<std::os::fd::RawFd> {
+    let within = |limit: Option<u64>| limit.filter(|&l| l <= DESCRIPTOR_PROBE_CEILING);
+    within(maximum)
+        .or_else(|| within(current))
+        .and_then(|l| std::os::fd::RawFd::try_from(l).ok())
 }
 
 /// Longest a hardened spawn waits for the spawner to accept and answer it.
@@ -916,10 +1312,12 @@ fn request_spawn<T: Send + 'static>(
     }
 }
 
-/// Spawn `cmd` with the parent-death floor, forked by the spawner thread.
+/// Spawn `cmd` with the hardened-child floor, forked by the spawner thread.
 ///
-/// On Linux the child is SIGTERMed when this process dies by ANY means, and
-/// never earlier: the forking thread is the process-lifetime spawner, not the
+/// The child inherits stdio and no other descriptor of this process (the
+/// descriptor floor; [`spawn_hardened_naming`] hands it more by name). On
+/// Linux it is also SIGTERMed when this process dies by ANY means, and never
+/// earlier: the forking thread is the process-lifetime spawner, not the
 /// caller's (possibly short-lived) thread.
 ///
 /// # Thread attributes
@@ -932,23 +1330,42 @@ fn request_spawn<T: Send + 'static>(
 /// # Errors
 ///
 /// A `SpawnRefusal` when the spawner is unavailable, gone, or silent past
-/// `SPAWN_REPLY_CEILING`, or when the spawn itself fails. No refusal leaves a
-/// child running, and none ever falls back to an unhardened spawn.
+/// `SPAWN_REPLY_CEILING`, when this host does not list its open descriptors
+/// (`DescriptorTableUnlisted`), or when the spawn itself fails. No refusal
+/// leaves a child running, and none ever falls back to an unhardened spawn.
 pub fn spawn_hardened(cmd: std::process::Command) -> Result<std::process::Child, SpawnRefusal> {
-    spawn_hardened_on(spawner()?, SPAWN_REPLY_CEILING, cmd)
+    spawn_hardened_on(spawner()?, SPAWN_REPLY_CEILING, cmd, NamedSet::default())
 }
 
-/// `spawn_hardened` against an explicit spawner queue and reply ceiling.
+/// [`spawn_hardened`], also handing the child every descriptor in `named`.
+///
+/// Each named descriptor keeps its number in the child, is inheritable there,
+/// and is rewound to offset 0 when it can seek. This process's copies close
+/// when the spawn returns.
+///
+/// # Errors
+///
+/// The refusals of [`spawn_hardened`].
+#[cfg(unix)]
+pub fn spawn_hardened_naming(
+    cmd: std::process::Command,
+    named: NamedFds,
+) -> Result<std::process::Child, SpawnRefusal> {
+    spawn_hardened_on(spawner()?, SPAWN_REPLY_CEILING, cmd, named)
+}
+
+/// `spawn_hardened_naming` against an explicit spawner queue and reply ceiling.
 fn spawn_hardened_on(
     jobs: &std::sync::mpsc::SyncSender<SpawnJob>,
     ceiling: std::time::Duration,
     mut cmd: std::process::Command,
+    named: NamedSet,
 ) -> Result<std::process::Child, SpawnRefusal> {
     request_spawn(
         jobs,
         ceiling,
         move || {
-            harden_child_parent_death(&mut cmd);
+            harden_spawned_child(&mut cmd, named)?;
             cmd.spawn().map_err(SpawnRefusal::Spawn)
         },
         |mut child: std::process::Child| {
@@ -958,13 +1375,14 @@ fn spawn_hardened_on(
     )
 }
 
-/// Spawn a tokio `cmd` with the parent-death floor, forked by the spawner thread.
+/// Spawn a tokio `cmd` with the hardened-child floor, forked by the spawner thread.
 ///
-/// The child is registered with the caller's tokio runtime (the spawner enters
-/// the caller's runtime handle to spawn it), so it is awaited like any tokio
-/// child, and the caller's `kill_on_drop` still applies. A child abandoned by
-/// a timed-out requester is killed; tokio's orphan queue reaps it when the
-/// runtime next handles `SIGCHLD`.
+/// The child inherits stdio and no other descriptor of this process. It is
+/// registered with the caller's tokio runtime (the spawner enters the caller's
+/// runtime handle to spawn it), so it is awaited like any tokio child, and the
+/// caller's `kill_on_drop` still applies. A child abandoned by a timed-out
+/// requester is killed; tokio's orphan queue reaps it when the runtime next
+/// handles `SIGCHLD`.
 ///
 /// Registering a child needs the runtime's IO and signal drivers, and tokio
 /// panics when they are absent. On Unix the spawner claims a `SIGCHLD`
@@ -991,13 +1409,28 @@ pub fn spawn_hardened_tokio(
             let _runtime = handle.enter();
             #[cfg(unix)]
             let _drivers = probe_child_listener()?;
-            harden_child_parent_death(cmd.as_std_mut());
+            harden_spawned_child(cmd.as_std_mut(), NamedSet::default())?;
             cmd.spawn().map_err(SpawnRefusal::Spawn)
         },
         |mut child: tokio::process::Child| {
             let _ = child.start_kill();
         },
     )
+}
+
+/// Replace this process with `cmd` under the descriptor floor.
+///
+/// The new program inherits stdio and the descriptors in `named`, and no other
+/// descriptor of this process. Returns only when the replacement did not
+/// happen, with why.
+#[cfg(unix)]
+#[must_use]
+pub fn exec_naming(mut cmd: std::process::Command, named: NamedFds) -> std::io::Error {
+    use std::os::unix::process::CommandExt as _;
+    match harden_child_parent_death(&mut cmd, ChildFloor::ProcessReplacement, named) {
+        Ok(()) => cmd.exec(),
+        Err(refused) => refused.into(),
+    }
 }
 
 /// Claim a `SIGCHLD` listener on the entered runtime before any fork.
@@ -1015,47 +1448,138 @@ fn probe_child_listener() -> Result<tokio::signal::unix::Signal, SpawnRefusal> {
     }
 }
 
-/// Give a child the non-graceful death floor: if the parent process dies by ANY
-/// means (SIGKILL, OOM, panic-abort — the paths a signal handler or `Drop` can
-/// never run on) the kernel delivers SIGTERM to the child, so it can never
-/// outlive the parent as an orphan holding a port or other resource. No-op on
-/// non-Linux (where graceful shutdown / kill-tracking are the only floor).
+/// Which process the hardened floor runs in.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum ChildFloor {
+    /// A child forked by the spawner thread: it also gets the parent-death floor.
+    SpawnedChild,
+    /// This process, about to replace itself through `exec`.
+    ProcessReplacement,
+}
+
+/// Give a spawner-forked child the hardened floor, handing it `named`.
+#[cfg(unix)]
+fn harden_spawned_child(
+    builder: &mut std::process::Command,
+    named: NamedSet,
+) -> Result<(), SpawnRefusal> {
+    harden_child_parent_death(builder, ChildFloor::SpawnedChild, named)
+}
+
+/// Give a spawner-forked child the hardened floor: none exists off Unix.
+#[cfg(not(unix))]
+fn harden_spawned_child(
+    _builder: &mut std::process::Command,
+    _named: NamedSet,
+) -> Result<(), SpawnRefusal> {
+    Ok(())
+}
+
+/// The pid a spawned child must stay parented by: this process, on Linux.
+#[cfg(target_os = "linux")]
+fn parent_death_launcher() -> Option<rustix::process::Pid> {
+    Some(rustix::process::getpid())
+}
+
+/// The pid a spawned child must stay parented by: unchecked off Linux.
+#[cfg(all(unix, not(target_os = "linux")))]
+const fn parent_death_launcher() -> Option<rustix::process::Pid> {
+    None
+}
+
+/// Arm the parent-death signal in the forked child, then confirm its parent.
 ///
-/// THE single sanctioned `PR_SET_PDEATHSIG` site in the whole workspace (see
-/// `PRINCIPLES.md` / `AGENTS.md`). Private: it runs only inside a spawn job on
-/// the process-lifetime spawner thread (`spawn_hardened` /
-/// `spawn_hardened_tokio`), because the kernel fires the signal when the thread
-/// that FORKED the child exits, and only that thread lives as long as the
-/// process.
+/// A failed `prctl` is non-fatal (best-effort hardening); a child already
+/// reparented away from `launcher` is refused (`ESRCH`).
+#[cfg(target_os = "linux")]
+fn arm_parent_death(launcher: Option<rustix::process::Pid>) -> std::io::Result<()> {
+    let Some(launcher) = launcher else {
+        return Ok(());
+    };
+    let _ = rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::TERM));
+    still_parented_by(launcher, rustix::process::getppid())
+}
+
+/// Arm the parent-death signal: no such signal exists off Linux.
+#[cfg(all(unix, not(target_os = "linux")))]
+const fn arm_parent_death(_launcher: Option<rustix::process::Pid>) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Give a child the hardened floor: the descriptor floor, plus the
+/// parent-death floor for a spawned child.
 ///
-/// A parent that dies after the fork but before the child armed the signal
-/// leaves the child already reparented, so the signal would never fire. The
-/// child therefore compares its parent pid, AFTER arming, with the launcher
-/// pid captured before the spawn, and refuses to exec (`ESRCH`) on a mismatch:
-/// no orphan survives the fork-to-`prctl` window.
-fn harden_child_parent_death(_builder: &mut std::process::Command) {
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::process::CommandExt as _;
-        let launcher = rustix::process::getpid();
-        // SAFETY: the closure runs in the forked child between fork and exec. It
-        // only issues the raw `prctl(PR_SET_PDEATHSIG)` and `getppid` syscalls
-        // through rustix's safe wrappers (async-signal-safe) and builds its error
-        // from a raw errno — no allocation, no locks, no Rust runtime re-entry.
-        // A failed `prctl` is non-fatal (best-effort hardening); a reparented
-        // child is refused.
-        // IPE-RUST-AUDIT:ACCEPTED — std `pre_exec` is an unsafe API with no safe
-        // parent-death-signal equivalent; the workspace's sole non-FFI `unsafe`.
-        #[allow(unsafe_code)]
-        unsafe {
-            _builder.pre_exec(move || {
-                let _ = rustix::process::set_parent_process_death_signal(Some(
-                    rustix::process::Signal::TERM,
-                ));
-                still_parented_by(launcher, rustix::process::getppid())
-            });
-        }
+/// **Descriptor floor.** Before anything forks, this process must open its live
+/// descriptor listing (`/proc/self/fd` on Linux, `/dev/fd` on FreeBSD and
+/// macOS) or the spawn is refused as `DescriptorTableUnlisted`. In the child,
+/// after std has placed stdio over 0–2, the hook re-opens that listing and
+/// marks every descriptor `>= 3` close-on-exec in the child's own table, then
+/// makes each `named` descriptor inheritable and rewinds it. So the new program
+/// holds stdio and `named` only, whatever this process's other threads left
+/// inheritable. A child that cannot list its table refuses to exec.
+///
+/// **Parent-death floor (Linux, spawned child).** If the parent process dies by
+/// ANY means (SIGKILL, OOM, panic-abort — the paths a signal handler or `Drop`
+/// can never run on) the kernel delivers SIGTERM to the child, so it can never
+/// outlive the parent as an orphan holding a port or other resource. A parent
+/// that dies after the fork but before the child armed the signal leaves the
+/// child already reparented, so the signal would never fire; the child
+/// therefore compares its parent pid, AFTER arming, with the launcher pid
+/// captured before the spawn, and refuses to exec (`ESRCH`) on a mismatch.
+///
+/// THE single sanctioned `pre_exec` and `PR_SET_PDEATHSIG` site in the whole
+/// workspace (see `PRINCIPLES.md` / `AGENTS.md`). Private: a spawned child is
+/// hardened only inside a spawn job on the process-lifetime spawner thread
+/// (`spawn_hardened`, `spawn_hardened_naming`, `spawn_hardened_tokio`), because
+/// the kernel fires the signal when the thread that FORKED the child exits,
+/// and only that thread lives as long as the process; a replacement is
+/// hardened by `exec_naming`.
+#[cfg(unix)]
+fn harden_child_parent_death(
+    builder: &mut std::process::Command,
+    floor: ChildFloor,
+    named: NamedFds,
+) -> Result<(), SpawnRefusal> {
+    use std::os::unix::process::CommandExt as _;
+    drop(open_descriptor_listing().map_err(|e| SpawnRefusal::DescriptorTableUnlisted(e.into()))?);
+    let launcher = match floor {
+        ChildFloor::SpawnedChild => parent_death_launcher(),
+        ChildFloor::ProcessReplacement => None,
+    };
+    // SAFETY: for a spawned child the closure runs in the forked,
+    // single-threaded child between fork and exec. It issues only
+    // async-signal-safe syscalls through rustix's safe wrappers (`prctl`,
+    // `getppid`, `open`, `fcntl`, `getdents64`/`fstatat`, `getrlimit`, `lseek`,
+    // `close`), reads the listing into a stack buffer, and builds its errors
+    // from raw errnos: no allocation, no locks, no Rust runtime re-entry. It
+    // closes nothing but the listing descriptor it opened itself. Each number
+    // passed to `BorrowedFd::borrow_raw` was just listed as open in this
+    // process's own table and the borrow lives for one `fcntl`; a number
+    // closed in between makes that `fcntl` fail with `EBADF`, never touch
+    // another object. For a process replacement other threads still run, so
+    // the worst case is close-on-exec set on a number they reopened, which
+    // only drops it from the replacement.
+    // IPE-RUST-AUDIT:ACCEPTED — std `pre_exec` is an unsafe API with no safe
+    // parent-death-signal or descriptor-floor equivalent, and the listed
+    // numbers are raw; the workspace's sole non-FFI `unsafe`.
+    #[allow(unsafe_code)]
+    unsafe {
+        builder.pre_exec(move || {
+            arm_parent_death(launcher)?;
+            let listing = open_descriptor_listing()?;
+            for_each_inherited_fd(&listing, |n| {
+                rustix::io::fcntl_setfd(
+                    std::os::fd::BorrowedFd::borrow_raw(n),
+                    rustix::io::FdFlags::CLOEXEC,
+                )
+            })?;
+            drop(listing);
+            named.reopen_in_child()?;
+            Ok(())
+        });
     }
+    Ok(())
 }
 
 /// Refuse (`ESRCH`) unless the child's current `parent` is still `launcher`.
@@ -2184,7 +2708,9 @@ mod home_dir_tests {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod parent_death_floor_tests {
-    use super::{SpawnJob, SpawnRefusal, run_spawn_jobs, spawn_hardened, spawn_hardened_on};
+    use super::{
+        NamedSet, SpawnJob, SpawnRefusal, run_spawn_jobs, spawn_hardened, spawn_hardened_on,
+    };
     use std::time::Duration;
 
     /// The floor installs a fork-time `pre_exec` (Linux `PR_SET_PDEATHSIG`); a
@@ -2228,7 +2754,7 @@ mod parent_death_floor_tests {
         let _ = std::fs::remove_file(&marker);
         let mut cmd = std::process::Command::new("/bin/sh");
         cmd.arg("-c").arg(": > \"$1\"").arg("sh").arg(&marker);
-        let refused = spawn_hardened_on(&jobs, Duration::from_secs(5), cmd);
+        let refused = spawn_hardened_on(&jobs, Duration::from_secs(5), cmd, NamedSet::default());
         assert!(
             matches!(refused, Err(SpawnRefusal::SpawnerGone)),
             "{refused:?}"
@@ -2250,7 +2776,7 @@ mod parent_death_floor_tests {
         let _ = std::fs::remove_file(&marker);
         let mut cmd = std::process::Command::new("/bin/sh");
         cmd.arg("-c").arg(": > \"$1\"").arg("sh").arg(&marker);
-        let refused = spawn_hardened_on(&jobs, Duration::ZERO, cmd);
+        let refused = spawn_hardened_on(&jobs, Duration::ZERO, cmd, NamedSet::default());
         assert!(
             matches!(refused, Err(SpawnRefusal::ReplyTimedOut)),
             "{refused:?}"
@@ -2355,6 +2881,7 @@ mod parent_death_floor_tests {
             &jobs,
             Duration::from_secs(5),
             std::process::Command::new("/bin/true"),
+            NamedSet::default(),
         );
         dropper.join().expect("dropper thread");
         assert!(
@@ -2375,7 +2902,7 @@ mod parent_death_floor_tests {
         let (mut reader, writer) = std::io::pipe().expect("pipe");
         let mut cmd = std::process::Command::new("/bin/sleep");
         cmd.arg("30").stdout(writer);
-        let refused = spawn_hardened_on(&jobs, Duration::ZERO, cmd);
+        let refused = spawn_hardened_on(&jobs, Duration::ZERO, cmd, NamedSet::default());
         assert!(
             matches!(refused, Err(SpawnRefusal::ReplyTimedOut)),
             "{refused:?}"
@@ -2405,6 +2932,103 @@ mod parent_death_floor_tests {
         let refused = still_parented_by(launcher, Some(other)).map_err(|e| e.raw_os_error());
         assert_eq!(refused, Err(Some(rustix::io::Errno::SRCH.raw_os_error())));
         assert!(still_parented_by(launcher, None).is_err());
+    }
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod descriptor_floor_tests {
+    use super::{
+        DESCRIPTOR_PROBE_CEILING, FD_NAME_LEN, NAMED_FD_CAP, NamedFdRefusal, NamedFds, admit_named,
+        descriptor_probe_bound, fd_name, parse_fd_number,
+    };
+
+    /// Open `/dev/null`, close-on-exec or inheritable.
+    fn dev_null(cloexec: bool) -> std::os::fd::OwnedFd {
+        use rustix::fs::{Mode, OFlags};
+        let flags = if cloexec {
+            OFlags::RDONLY | OFlags::CLOEXEC
+        } else {
+            OFlags::RDONLY
+        };
+        rustix::fs::open(c"/dev/null", flags, Mode::empty()).expect("open /dev/null")
+    }
+
+    /// A stdio number, an inheritable descriptor and a full set are each refused,
+    /// and the refused descriptor is handed back open.
+    #[test]
+    fn named_fds_refuse_stdio_inheritable_and_full() {
+        use std::os::fd::AsRawFd as _;
+        assert!(matches!(
+            admit_named(1, rustix::io::FdFlags::CLOEXEC),
+            Err(NamedFdRefusal::Stdio)
+        ));
+        let mut named = NamedFds::none();
+        let inheritable = dev_null(false);
+        let raw = inheritable.as_raw_fd();
+        let refused = named.push(inheritable);
+        assert!(
+            matches!(&refused, Err((NamedFdRefusal::Inheritable, back)) if back.as_raw_fd() == raw),
+            "{refused:?}"
+        );
+        for _ in 0..NAMED_FD_CAP {
+            assert!(named.push(dev_null(true)).is_ok());
+        }
+        let refused = named.push(dev_null(true));
+        assert!(
+            matches!(refused, Err((NamedFdRefusal::Full, _))),
+            "{refused:?}"
+        );
+    }
+
+    /// A directory that does not list this process's own descriptors is refused.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "macos"
+    ))]
+    #[test]
+    fn a_static_directory_is_not_a_descriptor_listing() {
+        use super::open_descriptor_listing_at;
+        assert!(open_descriptor_listing_at(c"/").is_err());
+        assert!(open_descriptor_listing_at(c"/nonexistent/ipe-fd-listing").is_err());
+        assert!(super::open_descriptor_listing().is_ok());
+    }
+
+    /// Only a whole, in-range decimal number names a descriptor.
+    #[test]
+    fn only_a_decimal_number_names_a_descriptor() {
+        assert_eq!(parse_fd_number(b"0"), Some(0));
+        assert_eq!(parse_fd_number(b"2147483647"), Some(i32::MAX));
+        assert_eq!(parse_fd_number(b""), None);
+        assert_eq!(parse_fd_number(b"."), None);
+        assert_eq!(parse_fd_number(b"3a"), None);
+        assert_eq!(parse_fd_number(b"-3"), None);
+        assert_eq!(parse_fd_number(b"2147483648"), None);
+    }
+
+    /// A descriptor number's listing name is its decimal digits.
+    #[test]
+    fn a_listing_name_round_trips() {
+        for n in [0, 3, 10, 1023, i32::MAX] {
+            let mut buf = [0_u8; FD_NAME_LEN];
+            let name = fd_name(n, &mut buf).expect("non-negative number");
+            assert_eq!(parse_fd_number(name.to_bytes()), Some(n));
+        }
+        let mut buf = [0_u8; FD_NAME_LEN];
+        assert!(fd_name(-1, &mut buf).is_none());
+    }
+
+    /// The probe walks the finite hard limit, else the soft one, and refuses past the ceiling.
+    #[test]
+    fn the_probe_bound_refuses_past_its_ceiling() {
+        let past = DESCRIPTOR_PROBE_CEILING + 1;
+        assert_eq!(descriptor_probe_bound(Some(256), Some(4096)), Some(4096));
+        assert_eq!(descriptor_probe_bound(Some(256), None), Some(256));
+        assert_eq!(descriptor_probe_bound(Some(256), Some(past)), Some(256));
+        assert_eq!(descriptor_probe_bound(None, None), None);
+        assert_eq!(descriptor_probe_bound(Some(past), Some(past)), None);
     }
 }
 

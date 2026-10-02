@@ -1,11 +1,13 @@
 use super::{
     BuildOptions, CliError, OutTarget, attribute_canon_errors, attribute_post_link_error,
-    build_emitted_project, build_loose_file_into, build_project_into, build_source_graph,
-    build_test_into, capabilities_including_served_widgets, cargo_target_directory,
-    classify_entry_shape, create_source_root, default_entry, discover_manifest, emit_machine_error,
-    emitted_bin_filename, force_cargo_terminal_ui, home_to_source_map, program_constructs_a_widget,
-    resolve_runtime, resolve_vendored_runtime_dir, run_build, runtime_context_for_message,
-    source_graph_for_target, typecheck_target,
+    build_loose_file_into, build_project_into, build_source_graph, build_test_into,
+    capabilities_including_served_widgets, classify_entry_shape, create_source_root, default_entry,
+    discover_manifest, emit_machine_error, emitted_bin_filename, home_to_source_map,
+    program_constructs_a_widget, resolve_runtime, resolve_vendored_runtime_dir, run_build,
+    runtime_context_for_message, source_graph_for_target, typecheck_target,
+};
+use crate::cargo_step::{
+    CargoBuild, CargoCrate, CargoOutput, CargoProfile, CargoTarget, Verbosity,
 };
 use crate::contained_path::ResolvedPath;
 use crate::output_dir::{EmitTarget, OutputArea, OutputRoot, OwnedDir, ProjectPaths};
@@ -399,20 +401,27 @@ impl<'a> BundleAssembler<'a> {
         )?;
 
         let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
-        let mut cargo = std::process::Command::new(cargo_bin.path());
-        cargo.arg("build");
-        // A `release web desktop` bundle carries an optimised binary; the
-        // `build` dev bundle carries a plain debug one.
-        if self.profile.cargo_release() {
-            cargo.arg("--release");
+        CargoBuild {
+            cargo: &cargo_bin,
+            krate: CargoCrate::Emitted(&crate_dir),
+            // A `release web desktop` bundle carries an optimised binary; the
+            // `build` dev bundle carries a plain debug one.
+            profile: if self.profile.cargo_release() {
+                CargoProfile::Release
+            } else {
+                CargoProfile::Dev
+            },
+            target: CargoTarget::Host,
+            output: CargoOutput::Human(Verbosity::Progress),
+            what: "the desktop app",
+            runtime: None,
         }
-        force_cargo_terminal_ui(&mut cargo);
-        build_emitted_project(&mut cargo, "the desktop app", None, &crate_dir)?;
+        .run()?;
 
         // Locate the compiled binary via cargo metadata (the target dir may be
         // a global CARGO_TARGET_DIR), then materialise (Linux) or describe
         // (macOS/Windows).
-        let target_dir = cargo_target_directory(crate_dir.path())?;
+        let target_dir = crate::cargo_step::target_directory(&cargo_bin, crate_dir.path())?;
         let bin_name = emitted_bin_filename(crate_dir.path());
         let binary = target_dir
             .join(self.profile.target_subdir())
@@ -1478,7 +1487,7 @@ pub fn run_project_tests_with(
         &test_entry,
         &out_dir,
         &runtime_dir,
-        cargo_bin.path(),
+        &cargo_bin,
         stdio,
     );
 
@@ -1504,7 +1513,7 @@ pub fn build_and_run_test_entry(
     test_entry: &Path,
     out_dir: &Path,
     runtime_dir: &Path,
-    cargo_bin: &Path,
+    cargo_bin: &crate::toolchain::CargoBin,
     stdio: TestStdio,
 ) -> Result<TestOutcome, CliError> {
     let out = OutTarget::Path(out_dir);
@@ -1523,20 +1532,22 @@ pub fn build_and_run_test_entry(
     };
 
     // Compile the emitted Rust project.
-    let mut cargo = std::process::Command::new(cargo_bin);
-    cargo.arg("build");
-    build_emitted_project(
-        &mut cargo,
-        "the emitted test runner",
-        runtime_context_for_message(),
-        &crate_dir,
-    )?;
+    CargoBuild {
+        cargo: cargo_bin,
+        krate: CargoCrate::Emitted(&crate_dir),
+        profile: CargoProfile::Dev,
+        target: CargoTarget::Host,
+        output: CargoOutput::Human(Verbosity::Progress),
+        what: "the emitted test runner",
+        runtime: runtime_context_for_message(),
+    }
+    .run()?;
 
     // Locate the compiled binary via `cargo metadata` so a user-level
     // `CARGO_TARGET_DIR` pin or workspace override is respected. The binary
     // name matches the emitted crate's package name (read from `Cargo.toml`).
     let test_bin_name = emitted_bin_filename(out_dir);
-    let mut bin = cargo_target_directory(out_dir)?;
+    let mut bin = crate::cargo_step::target_directory(cargo_bin, out_dir)?;
     bin.push("debug");
     bin.push(&test_bin_name);
 

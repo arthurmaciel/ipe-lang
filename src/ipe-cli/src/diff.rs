@@ -532,6 +532,24 @@ const fn compat_word(compatibility: Compatibility) -> &'static str {
     }
 }
 
+/// The `--json` record of `report`, one line, every string escaped by
+/// [`crate::cli_args::json::string`].
+fn report_json(report: &SemverReport) -> String {
+    use crate::cli_args::json;
+    let changes: Vec<String> = report
+        .changes
+        .iter()
+        .map(|c| json::string(c.to_string().trim()))
+        .collect();
+    format!(
+        "{{\"compatibility\":{},\"required\":{},\"floor\":{},\"changes\":[{}]}}\n",
+        json::string(compat_word(report.magnitude.compatibility())),
+        json::string(report.required.as_str()),
+        json::string(&report.floor.to_string()),
+        changes.join(","),
+    )
+}
+
 /// Render `report` in the requested [`OutputFormat`] and print it to stdout.
 ///
 /// - Human (default): a guttered report — a heading, one bullet per change, and
@@ -559,20 +577,7 @@ fn print_report(report: &SemverReport, format: crate::cli_args::OutputFormat) {
             crate::screen::emit_machine(crate::screen::Stream::Stdout, &out);
         }
         Json => {
-            let changes: Vec<String> = report
-                .changes
-                .iter()
-                .map(|c| format!("{:?}", c.to_string().trim()))
-                .collect();
-            crate::screen::emit_machine(
-                crate::screen::Stream::Stdout,
-                &format!(
-                    "{{\"compatibility\":{compat:?},\"required\":{required:?},\
-                     \"floor\":{:?},\"changes\":[{}]}}\n",
-                    report.floor.to_string(),
-                    changes.join(","),
-                ),
-            );
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &report_json(report));
         }
         Human => {
             use std::fmt::Write as _;
@@ -764,4 +769,39 @@ fn parse_version(raw: &str) -> Result<Version, CliError> {
     PublishedVersion::parse(raw)
         .map(|version| version.as_semver().clone())
         .map_err(|refusal| CliError::Usage(text::msg::diff_invalid_version(&refusal)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A change whose text holds a combining mark, a control, or a bidi
+    /// override still yields a `--json` record that parses back to it.
+    #[test]
+    fn report_json_is_valid_json_for_any_change_text() {
+        let name = "e\u{301}\u{1}\u{202e}\"\\x";
+        let report = SemverReport {
+            changes: vec![ApiChange::ValueAdded {
+                module: "Main".to_owned(),
+                name: name.to_owned(),
+            }],
+            magnitude: Magnitude::Additive,
+            required: RequiredBump::Minor,
+            floor: Version::new(1, 2, 0),
+            satisfied: true,
+        };
+        let json = report_json(&report);
+        assert!(!json.contains('\u{202e}'), "U+202E reached the record raw");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let field = |key: &str| parsed.get(key).and_then(serde_json::Value::as_str);
+        assert_eq!(field("compatibility"), Some("compatible"));
+        assert_eq!(field("required"), Some("minor"));
+        assert_eq!(field("floor"), Some("1.2.0"));
+        let change = parsed
+            .get("changes")
+            .and_then(|changes| changes.get(0))
+            .and_then(serde_json::Value::as_str)
+            .expect("a string change");
+        assert!(change.ends_with(name), "change text lost: {change:?}");
+    }
 }

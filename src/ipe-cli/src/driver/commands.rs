@@ -8,6 +8,9 @@ use super::{
     resolve_analysis_entry, resolve_analysis_target, resolve_vendored_runtime_dir, run_version,
     runtime_dep_from_env, single_file_cargo_name_from_env,
 };
+use crate::cargo_step::{
+    CargoBuild, CargoCrate, CargoOutput, CargoProfile, CargoTarget, EmbeddedApp, Verbosity,
+};
 use crate::contained_path::ResolvedPath;
 use crate::output_dir::{EmitTarget, OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::style::TerminalSafe;
@@ -938,22 +941,23 @@ pub fn compile_and_finalize_native_build(
         None => toolchain::require_cargo(toolchain::ToolIntent::Build)?,
     };
     let out_dir = crate_dir.path();
-    let mut cargo = std::process::Command::new(cargo_bin.path());
-    cargo.arg("build").current_dir(out_dir);
-    if quiet {
-        cargo.arg("-q");
-    } else {
-        force_cargo_terminal_ui(&mut cargo);
-    }
-    if let Some(plan) = &static_plan {
-        cargo.args(["--target", plan.triple.as_str()]);
-    }
-    let runtime_ctx = if runtime_dep {
+    let runtime = if runtime_dep {
         runtime_context_for_message()
     } else {
         None
     };
-    build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, crate_dir)?;
+    CargoBuild {
+        cargo: &cargo_bin,
+        krate: CargoCrate::Emitted(crate_dir),
+        profile: CargoProfile::Dev,
+        target: static_plan
+            .as_ref()
+            .map_or(CargoTarget::Host, |plan| CargoTarget::Static(plan.triple)),
+        output: CargoOutput::Human(Verbosity::of_quiet(quiet)),
+        what: "the emitted program",
+        runtime,
+    }
+    .run()?;
 
     let manifest_parsed = match manifest {
         Some(m) => Some(project::parse_manifest(m)?),
@@ -968,6 +972,7 @@ pub fn compile_and_finalize_native_build(
     // `cargo metadata`; a binary missing at that path fails closed (no stale
     // copy). Copy (never hardlink): the shared target is often a different mount.
     let artifact = copy_native_artifact(
+        &cargo_bin,
         out_dir,
         &output.claim_area(&[OutputArea::Bin])?,
         static_plan.as_ref(),
@@ -995,12 +1000,13 @@ pub fn compile_and_finalize_native_build(
 /// the caller can report it. Copy (not hardlink): the shared target is often on
 /// a different mount.
 fn copy_native_artifact(
+    cargo_bin: &toolchain::CargoBin,
     out_dir: &Path,
     bin_dir: &OwnedDir,
     static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
     manifest: Option<&project::ProjectManifest>,
 ) -> Result<PathBuf, CliError> {
-    let target_dir = cargo_target_directory(out_dir)?;
+    let target_dir = crate::cargo_step::target_directory(cargo_bin, out_dir)?;
     // LOCATE the built binary by its emitted crate identity (the hashed
     // `<friendly>_<hash>` cargo actually produces); DELIVER it under the plain
     // friendly project name, so the user-facing artifact stays `out/bin/<name>`
@@ -1429,16 +1435,18 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             options,
         )?;
 
-        let mut app_cargo = std::process::Command::new(cargo_bin.path());
-        app_cargo
-            .arg("build")
-            .arg("--release")
-            .args(["--target", triple.as_str()])
-            .current_dir(&out_dir);
-        force_cargo_terminal_ui(&mut app_cargo);
-        build_emitted_project(&mut app_cargo, "the release binary", None, &crate_dir)?;
+        CargoBuild {
+            cargo: &cargo_bin,
+            krate: CargoCrate::Emitted(&crate_dir),
+            profile: CargoProfile::Release,
+            target: CargoTarget::Static(triple),
+            output: CargoOutput::Human(Verbosity::Progress),
+            what: "the release binary",
+            runtime: None,
+        }
+        .run()?;
 
-        let app_target_dir = cargo_target_directory(&out_dir)?;
+        let app_target_dir = crate::cargo_step::target_directory(&cargo_bin, &out_dir)?;
         // Cargo names the built binary after the emitted crate IDENTITY (the
         // path-uniquified `<friendly>_<hash>`), so the artifact is LOCATED by that
         // identity; it is delivered under the plain FRIENDLY name so the hash the
@@ -1518,14 +1526,16 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         options,
     )?;
 
-    let mut app_cargo = std::process::Command::new(cargo_bin.path());
-    app_cargo
-        .arg("build")
-        .arg("--release")
-        .args(["--target", triple.as_str()])
-        .current_dir(&app_out);
-    force_cargo_terminal_ui(&mut app_cargo);
-    build_emitted_project(&mut app_cargo, "the release app", None, &app_dir)?;
+    CargoBuild {
+        cargo: &cargo_bin,
+        krate: CargoCrate::Emitted(&app_dir),
+        profile: CargoProfile::Release,
+        target: CargoTarget::Static(triple),
+        output: CargoOutput::Human(Verbosity::Progress),
+        what: "the release app",
+        runtime: None,
+    }
+    .run()?;
 
     // Write the capability enforcement artifacts (ipe.profile + embedded floor).
     let profile = run_sandbox::build_profile(resolved, driver)?;
@@ -1534,7 +1544,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     // Locate the compiled app binary. The target dir may be a global
     // `CARGO_TARGET_DIR` (set by the user or the agent lane), so we resolve
     // it via cargo metadata rather than assuming `app_out/target/`.
-    let app_target_dir = cargo_target_directory(&app_out)?;
+    let app_target_dir = crate::cargo_step::target_directory(&cargo_bin, &app_out)?;
     let release_bin_name = emitted_bin_filename(&app_out);
     let app_binary = app_target_dir
         .join(triple.as_str())
@@ -1556,40 +1566,32 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         },
     };
 
-    let mut wrapper_cargo = std::process::Command::new(cargo_bin.path());
-    wrapper_cargo
-        .arg("build")
-        .arg("--release")
-        .arg("--package")
-        .arg("ipe_wrapper")
-        .args(["--target", wrapper_static_plan.triple.as_str()]);
-
-    if matches!(args.mode, cli_args::ReleaseMode::Embed) {
-        // Embed mode: pass the app binary + profile as env vars so build.rs
-        // copies them into OUT_DIR and enables the embed_mode cfg.
-        wrapper_cargo
-            .env("IPE_EMBED_APP", &app_binary)
-            .env("IPE_EMBED_PROFILE", &profile_src);
-    }
-
     // Run from the workspace root so cargo finds the workspace Cargo.toml.
     let workspace_root = find_workspace_root()?;
-    wrapper_cargo.current_dir(&workspace_root);
-    force_cargo_terminal_ui(&mut wrapper_cargo);
-
-    build_workspace_crate(
-        &mut wrapper_cargo,
-        "the release wrapper",
-        None,
-        &workspace_root,
-    )?;
+    let embed = matches!(args.mode, cli_args::ReleaseMode::Embed).then_some(EmbeddedApp {
+        binary: &app_binary,
+        profile: &profile_src,
+    });
+    CargoBuild {
+        cargo: &cargo_bin,
+        krate: CargoCrate::ReleaseWrapper {
+            workspace_root: &workspace_root,
+            embed,
+        },
+        profile: CargoProfile::Release,
+        target: CargoTarget::Static(wrapper_static_plan.triple),
+        output: CargoOutput::Human(Verbosity::Progress),
+        what: "the release wrapper",
+        runtime: None,
+    }
+    .run()?;
 
     // Step 3: lay out the bundle.
     let bundle_dir = output.claim_area(&[OutputArea::Release, OutputArea::Bundle])?;
 
     // Locate the wrapper binary. As with the app binary, the target dir may be
     // a global CARGO_TARGET_DIR; resolve via cargo metadata.
-    let wrapper_target_dir = cargo_target_directory(&workspace_root)?;
+    let wrapper_target_dir = crate::cargo_step::target_directory(&cargo_bin, &workspace_root)?;
     let wrapper_src = wrapper_target_dir
         .join(wrapper_static_plan.triple.as_str())
         .join("release")
@@ -1751,269 +1753,9 @@ pub fn set_executable(path: &Path) -> Result<(), CliError> {
     })
 }
 
-/// Run a `cargo build` of an emitted project to completion, *streaming* its
-/// stderr to this process's stderr line by line as `cargo` emits it — so the
-/// user sees the live compile progress (which crate is building, warnings)
-/// rather than a silent wait that only reveals itself once `cargo` has already
-/// finished. The same lines are accumulated so that on a non-zero exit the
-/// captured text is returned inside a typed [`CliError::EmittedBuildFailed`]:
-/// the failure renders as a clean `ipe`-level diagnostic — a targeted
-/// runtime-feature line when `cargo` reports a missing feature, otherwise the
-/// trimmed `cargo` error under a plain header — and never the command's `--help`
-/// page. `what` names what was built; `runtime` is the crate the project linked
-/// against, when the caller resolved one.
-///
-/// `cargo`'s stdout is inherited untouched (a `cargo build` writes only status
-/// to stderr; nothing on stdout needs capture), so any tool output stays on
-/// stdout while progress stays on stderr.
-///
-/// # Errors
-/// - [`CliError::Io`] if `cargo` cannot be spawned or its stderr pipe cannot be
-///   opened.
-/// - [`CliError::EmittedBuildFailed`] if `cargo` exits non-zero.
-/// - [`CliError::OutputRefused`] if `crate_dir` was replaced before or while
-///   `cargo` ran.
-pub fn build_emitted_project(
-    cargo: &mut std::process::Command,
-    what: &'static str,
-    runtime: Option<RuntimeContext>,
-    crate_dir: &OwnedDir,
-) -> Result<(), CliError> {
-    build_owned_crate(cargo, what, runtime, crate_dir, false).map(drop)
-}
-
-/// Like [`build_emitted_project`], but *captures* `cargo`'s stdout and returns
-/// it on success instead of inheriting it. Used for a `--message-format=json`
-/// build whose machine-readable artifact stream (emitted on stdout, human
-/// progress on stderr) is parsed for the exact path cargo wrote — the single
-/// authoritative source for where an artifact landed, immune to any
-/// `CARGO_TARGET_DIR`/metadata divergence a reconstructed path would inherit.
-///
-/// A non-zero exit still surfaces as [`CliError::EmittedBuildFailed`] carrying
-/// the captured stderr (the SEAL build error), never a parse error.
-///
-/// # Errors
-/// - [`CliError::Io`] if `cargo` cannot be spawned or its pipes opened.
-/// - [`CliError::EmittedBuildFailed`] if `cargo` exits non-zero.
-/// - [`CliError::OutputRefused`] if `crate_dir` was replaced before or while
-///   `cargo` ran.
-pub fn build_emitted_project_capturing_stdout(
-    cargo: &mut std::process::Command,
-    what: &'static str,
-    runtime: Option<RuntimeContext>,
-    crate_dir: &OwnedDir,
-) -> Result<String, CliError> {
-    build_owned_crate(cargo, what, runtime, crate_dir, true)
-}
-
-/// Build the claimed crate in `crate_dir`, proven that directory before `cargo` starts and after it exits.
-///
-/// `cargo` reaches the crate, its lock and its `target` by path, so a swap
-/// while it runs cannot be prevented, only detected: a directory replaced in
-/// the meantime fails the build closed instead of its output being trusted.
-fn build_owned_crate(
-    cargo: &mut std::process::Command,
-    what: &'static str,
-    runtime: Option<RuntimeContext>,
-    crate_dir: &OwnedDir,
-    capture_stdout: bool,
-) -> Result<String, CliError> {
-    crate_dir.verify()?;
-    cargo.current_dir(crate_dir.path());
-    let stdout =
-        build_emitted_project_core(cargo, what, runtime, crate_dir.path(), capture_stdout)?;
-    crate_dir.verify()?;
-    Ok(stdout)
-}
-
-/// Build a crate ipe does not own — the workspace the release wrapper lives in.
-///
-/// Nothing is written into an ipe output area, so no claim is proven.
-fn build_workspace_crate(
-    cargo: &mut std::process::Command,
-    what: &'static str,
-    runtime: Option<RuntimeContext>,
-    workspace_root: &Path,
-) -> Result<(), CliError> {
-    build_emitted_project_core(cargo, what, runtime, workspace_root, false).map(drop)
-}
-
-/// Whether `cmd` already carries cargo's own `-q`/`--quiet` flag — the single
-/// SSOT for "this build should stay quiet" read back off the command a caller
-/// already built, rather than a second quiet flag threaded through every
-/// [`build_emitted_project`] call site just to gate the dependency-resolve
-/// stage below.
-fn cargo_is_quiet(cmd: &std::process::Command) -> bool {
-    cmd.get_args()
-        .any(|a| matches!(a.to_str(), Some("-q" | "--quiet")))
-}
-
-/// Shared body of the emitted-project build. Streams `cargo`'s stderr live (and
-/// accumulates it for the typed failure diagnostic); `cargo`'s stdout is either
-/// inherited (`capture_stdout == false`, the default `cargo build` where stdout
-/// carries nothing) or captured and returned (`capture_stdout == true`, a
-/// `--message-format=json` build whose artifact stream is parsed by the caller).
-fn build_emitted_project_core(
-    cargo: &mut std::process::Command,
-    what: &'static str,
-    runtime: Option<RuntimeContext>,
-    io_path: &Path,
-    capture_stdout: bool,
-) -> Result<String, CliError> {
-    use std::io::{BufReader, Read};
-    use std::process::Stdio;
-
-    let io_err = |e: std::io::Error| CliError::Io {
-        path: io_path.to_path_buf(),
-        source: e,
-    };
-
-    // Hermetic resolve: pin the emitted crate's whole dependency graph into a
-    // per-emit `Cargo.lock` ONCE, then build against exactly that lock. Without
-    // this the build resolves "latest-compatible" live on every run, so a
-    // transitive point-release can red the SEAL with no source change. The
-    // `--locked` flag below makes the build refuse to touch the network or
-    // re-resolve: any lock↔manifest drift fails closed as a build error at `ipe`
-    // time, never a silent divergence.
-    //
-    // This lockfile resolve is the one genuinely silent gap in the whole
-    // command: it runs before `force_cargo_terminal_ui`'s forced progress bar
-    // has anything to draw, so without a stage of our own the terminal sits
-    // frozen with no feedback. A stage covers exactly this gap and is settled
-    // (never left running) before the relay loop below starts forwarding
-    // cargo's own output, so the two never draw over one another. Skipped when
-    // the caller told cargo itself to stay quiet (`-q`/`--quiet`) — that is the
-    // one SSOT for this build's quiet intent, so no second flag is threaded
-    // through every caller just to gate this line.
-    let dep_stage = (!cargo_is_quiet(cargo)).then(|| {
-        crate::progress::Stage::start(
-            std::io::stderr(),
-            "resolving the emitted crate's dependencies…",
-        )
-    });
-    match lock_emitted_dependencies(cargo, io_path) {
-        Ok(()) => {
-            if let Some(stage) = dep_stage {
-                stage.success("dependencies resolved");
-            }
-        }
-        Err(e) => {
-            if let Some(stage) = dep_stage {
-                stage.failure("dependency resolution failed");
-            }
-            return Err(e);
-        }
-    }
-    cargo.arg("--locked");
-
-    // Pipe stderr so we can both forward it live AND capture it for the typed
-    // error. Stdout is inherited for a plain build (nothing to capture) or piped
-    // when the caller wants the machine-readable JSON artifact stream.
-    cargo.stderr(Stdio::piped());
-    if capture_stdout {
-        cargo.stdout(Stdio::piped());
-    } else {
-        cargo.stdout(Stdio::inherit());
-    }
-    let mut child = cargo.spawn().map_err(io_err)?;
-
-    // Drain stdout on a dedicated thread so a large JSON stream and the live
-    // stderr relay make progress concurrently — reading them serially would
-    // deadlock once either full-and-unread pipe buffer stalls the child.
-    let stdout_reader = child.stdout.take().map(|mut stdout| {
-        std::thread::spawn(move || {
-            let mut buf = String::new();
-            stdout.read_to_string(&mut buf).map(|_| buf)
-        })
-    });
-
-    // The pipe is present because we just set `Stdio::piped()`; the fallback
-    // keeps this panic-free rather than unwrapping the `Option`.
-    let mut captured = String::new();
-    if let Some(stderr) = child.stderr.take() {
-        let mut reader = BufReader::new(stderr);
-        let mut line = String::new();
-        // Read raw bytes per chunk so a carriage-return progress bar (which
-        // carries no newline) still surfaces; `read_line` alone would block on
-        // cargo's in-place progress line until the next newline.
-        loop {
-            line.clear();
-            let read = read_progress_chunk(&mut reader, &mut line).map_err(io_err)?;
-            if read == 0 {
-                break;
-            }
-            // Forward this chunk live so the user sees cargo's progress as it
-            // happens — indented one shared column off the edge, never the raw
-            // chunk (see `screen::indent_relay_chunk`) — and separately
-            // accumulate the UNINDENTED chunk for the failure diagnostic, so
-            // the relay's cosmetic indent never leaks into `captured` text a
-            // downstream matcher or the typed `CliError` compares verbatim.
-            screen::emit_machine(screen::Stream::Stderr, &screen::indent_relay_chunk(&line));
-            captured.push_str(&line);
-        }
-    }
-
-    // Join the stdout drain: a thread panic or read error collapses to an I/O
-    // error rather than a lost artifact stream.
-    let stdout_captured = match stdout_reader {
-        Some(handle) => handle
-            .join()
-            .map_err(|_| io_err(std::io::Error::other("cargo stdout reader thread panicked")))?
-            .map_err(io_err)?,
-        None => String::new(),
-    };
-
-    let status = child.wait().map_err(io_err)?;
-    if status.success() {
-        return Ok(stdout_captured);
-    }
-    Err(CliError::EmittedBuildFailed {
-        what,
-        code: status.code().unwrap_or(1),
-        stderr: TerminalSafe::sanitize(&captured),
-        runtime,
-    })
-}
-
-/// Resolve the emitted crate's dependency graph ONCE into a per-emit
-/// `Cargo.lock` under `out_dir`, so the subsequent `--locked` build is a
-/// byte-reproducible, network-free replay of that single resolution rather than
-/// a fresh "latest-compatible" resolve on every run. The `generate-lockfile`
-/// invocation mirrors the build command's program, cwd, and environment (the
-/// same `cargo` binary, `out_dir`, and any cleared `RUSTC_WRAPPER` or pinned
-/// `CARGO_TARGET_DIR`) so the lock is produced by the toolchain that consumes it.
-///
-/// # Errors
-/// - [`CliError::Io`] if `cargo generate-lockfile` cannot be spawned or waited on.
-/// - [`CliError::EmittedBuildFailed`] if resolution exits non-zero (e.g. the
-///   registry is unreachable) — surfaced through the same typed channel as the
-///   build failure it precedes.
-fn lock_emitted_dependencies(
-    build_cmd: &std::process::Command,
-    out_dir: &Path,
-) -> Result<(), CliError> {
-    let mut lock = std::process::Command::new(build_cmd.get_program());
-    lock.arg("generate-lockfile").current_dir(out_dir);
-    for (key, val) in build_cmd.get_envs() {
-        match val {
-            Some(v) => lock.env(key, v),
-            None => lock.env_remove(key),
-        };
-    }
-    let output = lock.output().map_err(|e| CliError::Io {
-        path: out_dir.to_path_buf(),
-        source: e,
-    })?;
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(CliError::EmittedBuildFailed {
-        what: "the emitted crate's dependency lockfile",
-        code: output.status.code().unwrap_or(1),
-        stderr: TerminalSafe::sanitize(&String::from_utf8_lossy(&output.stderr)),
-        runtime: None,
-    })
-}
+/// Bytes one [`read_progress_chunk`] call reads before it ends the chunk
+/// without a terminator.
+pub const RELAY_CHUNK_CAP: usize = 64 * 1024;
 
 /// Read the next chunk of `cargo`'s stderr into `out`, stopping at either a
 /// newline (a completed message line) or a carriage return (the boundary of
@@ -2024,6 +1766,10 @@ fn lock_emitted_dependencies(
 /// Bytes are decoded lossily so a non-UTF-8 byte from a compiler message never
 /// aborts the build's progress relay.
 ///
+/// A chunk is at most [`RELAY_CHUNK_CAP`] bytes: a longer run with neither
+/// terminator ends at the first ASCII byte past it (a character boundary), and
+/// at twice the cap whatever the byte.
+///
 /// # Errors
 /// Propagates the underlying read error from the `cargo` stderr pipe.
 pub fn read_progress_chunk<R: std::io::Read>(
@@ -2031,19 +1777,21 @@ pub fn read_progress_chunk<R: std::io::Read>(
     out: &mut String,
 ) -> std::io::Result<usize> {
     let mut bytes: Vec<u8> = Vec::new();
-    let mut total = 0usize;
     loop {
         let mut byte = [0u8; 1];
         let n = reader.read(&mut byte)?;
         if n == 0 {
             break;
         }
-        total += n;
-        bytes.push(byte[0]);
-        if byte[0] == b'\n' || byte[0] == b'\r' {
+        let [byte] = byte;
+        bytes.push(byte);
+        let full = bytes.len() >= RELAY_CHUNK_CAP
+            && (byte.is_ascii() || bytes.len() >= RELAY_CHUNK_CAP.saturating_mul(2));
+        if byte == b'\n' || byte == b'\r' || full {
             break;
         }
     }
+    let total = bytes.len();
     out.push_str(&String::from_utf8_lossy(&bytes));
     Ok(total)
 }
@@ -2150,23 +1898,22 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::BundleWasm)?;
 
     // Step 1: compile to .wasm
-    let mut cargo = std::process::Command::new(cargo_bin.path());
-    cargo
-        .args(["build", "--target", "wasm32-unknown-unknown", "--release"])
-        .current_dir(out_dir);
-    force_cargo_terminal_ui(&mut cargo);
     // The wasm build uses the SAME dependency-model runtime crate the native path
     // does (selected via the `wasm-client` floor). Attach the resolved runtime
     // context so a `cargo build` failure that names a missing runtime feature can
     // point at the exact crate; resolution failure degrades to `None` (message
     // enrichment only, never a gate — the missing-path-dependency error cargo
     // itself raises is already fail-closed).
-    build_emitted_project(
-        &mut cargo,
-        "the emitted wasm program",
-        runtime_context_for_message(),
-        crate_dir,
-    )?;
+    CargoBuild {
+        cargo: &cargo_bin,
+        krate: CargoCrate::Emitted(crate_dir),
+        profile: CargoProfile::Release,
+        target: CargoTarget::WasmBrowser,
+        output: CargoOutput::Human(Verbosity::Progress),
+        what: "the emitted wasm program",
+        runtime: runtime_context_for_message(),
+    }
+    .run()?;
 
     // Step 2: wasm-bindgen — locate the .wasm the cargo build just produced
     // (`CARGO_TARGET_DIR` may relocate it; probe the env var first, then the
@@ -2319,30 +2066,20 @@ pub fn bundle_wasi(crate_dir: &OwnedDir) -> Result<PathBuf, CliError> {
     // root-cause message rather than an opaque OS spawn error.
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::BundleWasm)?;
 
-    let mut cargo = std::process::Command::new(cargo_bin.path());
-    cargo
-        .args([
-            "build",
-            "--target",
-            "wasm32-wasip1",
-            "--release",
-            // Emit one JSON message per line on stdout so the exact artifact
-            // path cargo writes is read from the build itself, not reconstructed
-            // from a target-dir guess that a toggled `CARGO_TARGET_DIR` or a
-            // relocated `cargo metadata` can invalidate. Human progress stays on
-            // stderr (still streamed live by the build helper).
-            "--message-format=json",
-        ])
-        .current_dir(out_dir)
-        .env_remove("RUSTFLAGS")
-        .env_remove("CARGO_ENCODED_RUSTFLAGS");
-    force_cargo_terminal_ui(&mut cargo);
-    let messages = build_emitted_project_capturing_stdout(
-        &mut cargo,
-        "the emitted wasm32-wasip1 module",
-        runtime_context_for_message(),
-        crate_dir,
-    )?;
+    // One JSON message per line on stdout, so the exact artifact path cargo
+    // writes is read from the build itself, never reconstructed from a
+    // target-dir guess that a toggled `CARGO_TARGET_DIR` or a relocated
+    // `cargo metadata` can invalidate.
+    let messages = CargoBuild {
+        cargo: &cargo_bin,
+        krate: CargoCrate::Emitted(crate_dir),
+        profile: CargoProfile::Release,
+        target: CargoTarget::Wasip1,
+        output: CargoOutput::JsonStream(Verbosity::Progress),
+        what: "the emitted wasm32-wasip1 module",
+        runtime: runtime_context_for_message(),
+    }
+    .run()?;
 
     // The authoritative module path: the `.wasm` bin artifact cargo reported it
     // wrote. Same value the executor loads — build-output and load-path are one
@@ -2976,22 +2713,23 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         Some(bin) => bin,
         None => toolchain::require_cargo(toolchain::ToolIntent::Run)?,
     };
-    let mut cargo = std::process::Command::new(cargo_bin.path());
-    cargo.arg("build").current_dir(&out_dir);
-    if args.quiet {
-        cargo.arg("-q");
-    } else {
-        force_cargo_terminal_ui(&mut cargo);
-    }
-    if let Some(plan) = &static_plan {
-        cargo.args(["--target", plan.triple.as_str()]);
-    }
-    let runtime_ctx = if runtime_dep && !wasm_target {
+    let runtime = if runtime_dep && !wasm_target {
         runtime_context_for_message()
     } else {
         None
     };
-    build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, &crate_dir)?;
+    CargoBuild {
+        cargo: &cargo_bin,
+        krate: CargoCrate::Emitted(&crate_dir),
+        profile: CargoProfile::Dev,
+        target: static_plan
+            .as_ref()
+            .map_or(CargoTarget::Host, |plan| CargoTarget::Static(plan.triple)),
+        output: CargoOutput::Human(Verbosity::of_quiet(args.quiet)),
+        what: "the emitted program",
+        runtime,
+    }
+    .run()?;
 
     // --- Step 3: exec the emitted binary, forwarding args and exit code ---
     // The binary name is read from the emitted crate's `Cargo.toml` — the
@@ -3003,7 +2741,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     // relocates the artifact, so a hardcoded `<out>/target` would exec a
     // missing or stale binary.
     let bin_name = emitted_bin_filename(&out_dir);
-    let mut bin = cargo_target_directory(&out_dir)?;
+    let mut bin = crate::cargo_step::target_directory(&cargo_bin, &out_dir)?;
     if let Some(plan) = &static_plan {
         bin.push(plan.triple.as_str());
     }
@@ -3141,7 +2879,8 @@ pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
     // the artifact dir's `Cargo.toml`. Falls back to `"ipe-app"` when the
     // manifest is absent or the name cannot be parsed.
     let exec_bin_name = emitted_bin_filename(&dir);
-    let mut bin = cargo_target_directory(&dir)?;
+    let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Run)?;
+    let mut bin = crate::cargo_step::target_directory(&cargo_bin, &dir)?;
     bin.push("debug");
     bin.push(&exec_bin_name);
     if !bin.is_file() {
@@ -3284,33 +3023,6 @@ fn friendly_artifact_filename(manifest: Option<&project::ProjectManifest>) -> St
         friendly_artifact_name(manifest),
         std::env::consts::EXE_SUFFIX
     )
-}
-
-/// The target directory cargo will use for a build with CWD = `crate_dir`,
-/// resolved by cargo itself (`cargo metadata`) so every relocation source —
-/// `CARGO_TARGET_DIR`, a user-level `[build] target-dir` pin, a config in an
-/// ancestor dir — is honoured instead of guessed at.
-pub fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliError> {
-    let output = std::process::Command::new("cargo")
-        .args(["metadata", "--format-version", "1", "--no-deps"])
-        .current_dir(crate_dir)
-        .output()
-        .map_err(|e| CliError::Io {
-            path: crate_dir.to_path_buf(),
-            source: e,
-        })?;
-    if !output.status.success() {
-        return Err(CliError::Usage(text::msg::cargo_metadata_failed(
-            &crate_dir.display(),
-            &String::from_utf8_lossy(&output.stderr),
-        )));
-    }
-    let meta: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| CliError::Usage(text::msg::cargo_metadata_unparsable(&e)))?;
-    meta.get("target_directory")
-        .and_then(serde_json::Value::as_str)
-        .map(PathBuf::from)
-        .ok_or_else(|| CliError::Usage(text::msg::cargo_metadata_no_target_dir()))
 }
 
 /// `ipe explain` has been folded into `ipe doc`.
@@ -4129,34 +3841,6 @@ mod artifact_name_tests {
 }
 
 #[cfg(test)]
-mod cargo_is_quiet_tests {
-    //! Pins the SSOT the dependency-resolve stage reads to decide whether to
-    //! show itself: a cargo `Command` already carrying `-q`/`--quiet` (set by
-    //! the caller for a quiet build) must be recognised, and one that carries
-    //! neither must not be mistaken for a quiet build.
-    use super::cargo_is_quiet;
-
-    #[test]
-    fn short_and_long_quiet_flags_are_both_recognised() {
-        for flag in ["-q", "--quiet"] {
-            let mut cmd = std::process::Command::new("cargo");
-            cmd.arg("build").arg(flag);
-            assert!(cargo_is_quiet(&cmd), "{flag} must read as quiet");
-        }
-    }
-
-    #[test]
-    fn a_command_with_no_quiet_flag_is_not_quiet() {
-        let mut cmd = std::process::Command::new("cargo");
-        cmd.arg("build")
-            .arg("--locked")
-            .arg("--target")
-            .arg("x86_64-unknown-linux-gnu");
-        assert!(!cargo_is_quiet(&cmd));
-    }
-}
-
-#[cfg(test)]
 mod capability_resolution_once_tests {
     //! Whole-program capability inference is the costliest pre-build step, and
     //! its result is a trust-boundary fact: `build`, `run`, and `release` each
@@ -4221,9 +3905,13 @@ mod held_crate_tests {
     use std::os::unix::fs::PermissionsExt as _;
     use std::path::{Path, PathBuf};
 
-    use super::{WasmTools, build_emitted_project_capturing_stdout, bundle_wasm_pkg};
+    use super::{WasmTools, bundle_wasm_pkg};
     use crate::CliError;
+    use crate::cargo_step::{
+        CargoBuild, CargoCrate, CargoOutput, CargoProfile, CargoTarget, Verbosity,
+    };
     use crate::output_dir::{OutputRefusal, OwnedDir};
+    use crate::toolchain::CargoBin;
 
     /// A fresh scratch base for `tag`, holding a claimed `crate/`.
     fn scratch(tag: &str) -> (PathBuf, OwnedDir) {
@@ -4270,17 +3958,26 @@ mod held_crate_tests {
         )
     }
 
+    /// A quiet host build of `crate_dir` through `cargo`, its artifact stream returned.
+    fn build_with(cargo: &Path, crate_dir: &OwnedDir) -> Result<String, CliError> {
+        CargoBuild {
+            cargo: &CargoBin::stub(cargo.to_path_buf()),
+            krate: CargoCrate::Emitted(crate_dir),
+            profile: CargoProfile::Dev,
+            target: CargoTarget::Host,
+            output: CargoOutput::JsonStream(Verbosity::Quiet),
+            what: "the emitted program",
+            runtime: None,
+        }
+        .run()
+    }
+
     /// A crate replaced while `cargo` built it is refused, its artifact stream dropped.
     #[test]
     fn a_crate_replaced_during_the_cargo_build_is_refused() {
         let (base, crate_dir) = scratch("cargo-swap");
         let cargo = cargo_stub(&base, &swap(&crate_dir));
-        let built = build_emitted_project_capturing_stdout(
-            &mut std::process::Command::new(&cargo),
-            "the emitted program",
-            None,
-            &crate_dir,
-        );
+        let built = build_with(&cargo, &crate_dir);
         assert!(
             replaced(&built),
             "a swapped crate must fail closed with no executable, got {built:?}"
@@ -4293,12 +3990,7 @@ mod held_crate_tests {
     fn an_untouched_crate_build_returns_its_artifact_stream() {
         let (base, crate_dir) = scratch("cargo-ok");
         let cargo = cargo_stub(&base, "true");
-        let built = build_emitted_project_capturing_stdout(
-            &mut std::process::Command::new(&cargo),
-            "the emitted program",
-            None,
-            &crate_dir,
-        );
+        let built = build_with(&cargo, &crate_dir);
         assert!(
             built
                 .as_ref()

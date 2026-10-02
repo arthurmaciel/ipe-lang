@@ -577,24 +577,19 @@ pub fn render_type_matches_human(hits: &[TypeMatch<'_>]) -> String {
 /// Each element: `{"kind":"symbol","key":"…","signature":"…"}`.
 #[must_use]
 pub fn render_type_matches_json(hits: &[TypeMatch<'_>]) -> String {
+    use crate::cli_args::json;
     let items: Vec<String> = hits
         .iter()
         .map(|hit| {
             let key = format!("{}.{}", hit.module, hit.value.name);
             format!(
                 "{{\"kind\":\"symbol\",\"key\":{},\"signature\":{}}}",
-                json_str(&key),
-                json_str(&hit.value.signature),
+                json::string(&key),
+                json::string(&hit.value.signature),
             )
         })
         .collect();
     format!("[{}]", items.join(","))
-}
-
-/// Minimal JSON string escaping.
-fn json_str(s: &str) -> String {
-    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -764,5 +759,33 @@ mod tests {
             json.contains("List a -> (a -> b) -> List b"),
             "must contain sig"
         );
+    }
+
+    /// A control character in a signature still yields JSON that parses back to it.
+    #[test]
+    fn render_json_with_a_control_character_is_valid_json() {
+        let signature = "List a -> \u{1}\u{202e} b";
+        let value = ValueDoc {
+            name: "map".to_owned(),
+            signature: signature.to_owned(),
+            signature_ty: ipe_diagnostics::TyDoc::Unit,
+            comment: String::new(),
+        };
+        let module_doc = crate::doc::ModuleDoc {
+            name: "Ipe.List".to_owned(),
+            kind: crate::doc::ModuleKind::Stdlib,
+            comment: String::new(),
+            unions: vec![],
+            values: vec![value],
+        };
+        let hit = TypeMatch {
+            value: &module_doc.values[0],
+            module: &module_doc.name,
+            score: 0,
+        };
+        let json = render_type_matches_json(&[hit]);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(parsed[0]["signature"], signature);
+        assert!(!json.contains('\u{202e}'), "U+202E reached the JSON raw");
     }
 }

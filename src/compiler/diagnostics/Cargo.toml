@@ -12,6 +12,8 @@ unicode-width = "0.1"
 [dev-dependencies]
 # The Unicode general-category data the format-character deny table is checked against.
 unicode-general-category = "1"
+# Decodes the JSON display escaper's output back to its input.
+serde_json = "1"
 
 [lints]
 workspace = true

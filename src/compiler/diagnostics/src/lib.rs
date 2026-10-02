@@ -5,6 +5,7 @@
 
 mod code;
 mod diagnostic;
+pub mod json;
 pub mod path_check;
 mod render;
 mod span;
