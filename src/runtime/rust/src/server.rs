@@ -53,21 +53,21 @@ pub struct ServerResponse {
     pub body: String,
     pub headers: HashMap<String, String>,
     pub contentType: String,
-    /// Pre-built `Set-Cookie` header VALUES (e.g. `"sid=abc; Path=/; HttpOnly"`),
+    /// Typed `Set-Cookie` header values (e.g. `"sid=abc; Path=/; HttpOnly"`),
     /// one entry per cookie. Kept separate from `headers` because `headers` is a
     /// `HashMap` (one value per key) and HTTP allows/requires MULTIPLE
     /// `Set-Cookie` response headers when a response needs to set more than one
     /// cookie (RFC 6265 §4.1 — Set-Cookie is the one header that must NEVER be
     /// comma-folded). A second caller writing into `headers["Set-Cookie"]` would
     /// silently clobber the first.
-    pub cookies: Vec<String>,
+    pub cookies: Vec<SetCookie>,
 }
 
 /// Ipe.Http.Server.Cookie (opaque) — safe defaults applied at attach time.
 #[derive(Clone, Debug)]
 pub struct ServerCookie {
-    pub name: String,
-    pub value: String,
+    pub name: CookieName,
+    pub value: CookieValue,
 }
 
 /// A handler erased of its Ipê error type `E`: it awaits the Ipê task and maps
@@ -419,7 +419,7 @@ fn reissue_set_cookie(
     token: &str,
     slide_window_secs: u64,
     is_https: bool,
-) -> String {
+) -> SetCookie {
     // The cookie-security signal lives in `web::csrf` for a program that emits the
     // web surface; a server-only program (no `web` module) falls back to the
     // production-env signal. `feature = "web"` is the exact condition under which
@@ -428,11 +428,7 @@ fn reissue_set_cookie(
     let base_secure = crate::web::csrf::cookies_secure();
     #[cfg(not(feature = "web"))]
     let base_secure = crate::telemetry::production_from_env();
-    let secure = if base_secure || is_https {
-        "; Secure"
-    } else {
-        ""
-    };
+    let secure = base_secure || is_https;
 
     // Frame-ancestors (CSP embedding) is a web-surface concept; a server-only
     // program cannot be framed, so `SameSite=Lax` is the fail-closed default.
@@ -440,10 +436,20 @@ fn reissue_set_cookie(
     let embeddable = crate::web::csrf::frame_ancestors().is_some();
     #[cfg(not(feature = "web"))]
     let embeddable = false;
-    let same_site = if embeddable { "None" } else { "Lax" };
-    format!(
-        "{}={}; Path=/; HttpOnly; SameSite={same_site}{secure}; Max-Age={slide_window_secs}",
-        cookie_name, token
+    let same_site = if embeddable {
+        SameSite::None
+    } else {
+        SameSite::Lax
+    };
+    SetCookie::new(
+        &CookieName::encode(cookie_name),
+        &CookieValue::encode(token),
+        CookieAttributes {
+            http_only: true,
+            same_site,
+            secure,
+            max_age_secs: Some(slide_window_secs),
+        },
     )
 }
 
@@ -522,55 +528,56 @@ where
 
             // Sliding re-issue — cookie-source only (bearer tokens are API
             // credentials; the client manages re-issue itself via re-auth).
-            let reissue_cookie: Option<String> = if let TokenSource::Cookie(ref name) = cfg.source {
-                if let Some(ctx) = crate::auth::reissue_context_from_claims(&claims) {
-                    let slide_window_secs = crate::app_config::resolve_auth_slide_window();
-                    let slide_i64 = i64::try_from(slide_window_secs).unwrap_or(i64::MAX);
-                    let now = crate::jwt::now_unix_seconds();
-                    // Throttle: re-issue only once past exp - slide_window/2.
-                    // Parse exp from the verified claims string representation.
-                    let past_threshold = claims
-                        .get("exp")
-                        .and_then(|s| s.parse::<i64>().ok())
-                        .map(|exp| now > exp.saturating_sub(slide_i64 / 2))
-                        .unwrap_or(false);
-                    if past_threshold && now < ctx.cap {
-                        // Extra claims to carry into the re-issued token (all
-                        // verified claims except the time anchors and subject —
-                        // those come from the ReissueContext).
-                        let extra: HashMap<String, String> = claims
-                            .iter()
-                            .filter(|(k, _)| {
-                                // Time anchors and session-identity fields come from
-                                // ReissueContext verbatim; skip them in extra_claims.
-                                *k != "exp"
-                                    && *k != "iat"
-                                    && *k != "cap"
-                                    && *k != "jti"
-                                    && *k != "sub"
-                            })
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
-                        match crate::auth::auth_reissue_token::<String>(
-                            &secret, &ctx, extra, slide_i64,
-                        ) {
-                            Some(IpeResult::Ok(new_token)) => Some(reissue_set_cookie(
-                                name,
-                                &new_token,
-                                slide_window_secs,
-                                is_https,
-                            )),
-                            _ => None,
+            let reissue_cookie: Option<SetCookie> =
+                if let TokenSource::Cookie(ref name) = cfg.source {
+                    if let Some(ctx) = crate::auth::reissue_context_from_claims(&claims) {
+                        let slide_window_secs = crate::app_config::resolve_auth_slide_window();
+                        let slide_i64 = i64::try_from(slide_window_secs).unwrap_or(i64::MAX);
+                        let now = crate::jwt::now_unix_seconds();
+                        // Throttle: re-issue only once past exp - slide_window/2.
+                        // Parse exp from the verified claims string representation.
+                        let past_threshold = claims
+                            .get("exp")
+                            .and_then(|s| s.parse::<i64>().ok())
+                            .map(|exp| now > exp.saturating_sub(slide_i64 / 2))
+                            .unwrap_or(false);
+                        if past_threshold && now < ctx.cap {
+                            // Extra claims to carry into the re-issued token (all
+                            // verified claims except the time anchors and subject —
+                            // those come from the ReissueContext).
+                            let extra: HashMap<String, String> = claims
+                                .iter()
+                                .filter(|(k, _)| {
+                                    // Time anchors and session-identity fields come from
+                                    // ReissueContext verbatim; skip them in extra_claims.
+                                    *k != "exp"
+                                        && *k != "iat"
+                                        && *k != "cap"
+                                        && *k != "jti"
+                                        && *k != "sub"
+                                })
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            match crate::auth::auth_reissue_token::<String>(
+                                &secret, &ctx, extra, slide_i64,
+                            ) {
+                                Some(IpeResult::Ok(new_token)) => Some(reissue_set_cookie(
+                                    name,
+                                    &new_token,
+                                    slide_window_secs,
+                                    is_https,
+                                )),
+                                _ => None,
+                            }
+                        } else {
+                            None
                         }
                     } else {
                         None
                     }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
             let mut resp = handler(req, principal).await;
             // Attach the re-issue cookie when warranted. The handler returns an
@@ -725,51 +732,182 @@ pub fn server_method(req: ServerRequest) -> String {
 
 // ─── cookies ──────────────────────────────────────────────────────────────
 
+pub use cookie_octets::{CookieAttributes, CookieName, CookieValue, SameSite, SetCookie};
+
+/// RFC 6265 cookie grammar, held in types.
+///
+/// A cookie name holds only `token` bytes and a value only `cookie-octet`
+/// bytes; every other byte (non-ASCII, a CTL including CR/LF, `;`, `,`,
+/// whitespace, `"`, `\`) is percent-encoded as `%XX` when the type is built.
+/// A [`SetCookie`] line is assembled only from those types and a typed
+/// attribute set, so every `Set-Cookie` value the server emits is a valid
+/// header value and carries no attribute or line the caller supplied.
+mod cookie_octets {
+    use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
+
+    /// Bytes outside RFC 6265 `cookie-octet`: CTLs, space, `"`, `,`, `;`, `\`.
+    ///
+    /// Non-ASCII bytes are always encoded by `utf8_percent_encode`.
+    const NOT_COOKIE_OCTET: &AsciiSet =
+        &CONTROLS.add(b' ').add(b'"').add(b',').add(b';').add(b'\\');
+
+    /// Bytes outside RFC 7230 `token`: the `cookie-octet` exclusions plus the separators.
+    const NOT_TOKEN: &AsciiSet = &NOT_COOKIE_OCTET
+        .add(b'(')
+        .add(b')')
+        .add(b'<')
+        .add(b'>')
+        .add(b'@')
+        .add(b':')
+        .add(b'/')
+        .add(b'[')
+        .add(b']')
+        .add(b'?')
+        .add(b'=')
+        .add(b'{')
+        .add(b'}');
+
+    /// A cookie name made only of RFC 6265 `token` bytes.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct CookieName(String);
+
+    impl CookieName {
+        /// Parse `raw`, percent-encoding every byte that is not a `token` byte.
+        ///
+        /// A name already made of `token` bytes is kept byte-for-byte.
+        #[must_use]
+        pub fn encode(raw: &str) -> Self {
+            Self(utf8_percent_encode(raw, NOT_TOKEN).to_string())
+        }
+
+        /// The encoded name.
+        #[must_use]
+        pub fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    /// A cookie value made only of RFC 6265 `cookie-octet` bytes.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct CookieValue(String);
+
+    impl CookieValue {
+        /// Parse `raw`, percent-encoding every byte that is not a `cookie-octet`.
+        ///
+        /// A value already made of `cookie-octet` bytes is kept byte-for-byte.
+        #[must_use]
+        pub fn encode(raw: &str) -> Self {
+            Self(utf8_percent_encode(raw, NOT_COOKIE_OCTET).to_string())
+        }
+
+        /// The encoded value.
+        #[must_use]
+        pub fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    /// The `SameSite` attribute of a `Set-Cookie` line.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum SameSite {
+        Lax,
+        Strict,
+        None,
+    }
+
+    impl SameSite {
+        const fn as_str(self) -> &'static str {
+            match self {
+                Self::Lax => "Lax",
+                Self::Strict => "Strict",
+                Self::None => "None",
+            }
+        }
+    }
+
+    /// The attributes of a `Set-Cookie` line; `Path=/` is always present.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct CookieAttributes {
+        pub http_only: bool,
+        pub same_site: SameSite,
+        pub secure: bool,
+        pub max_age_secs: Option<u64>,
+    }
+
+    /// One `Set-Cookie` header value built from typed parts.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct SetCookie(String);
+
+    impl SetCookie {
+        /// Render `name=value; Path=/` and then `attributes` in a fixed order.
+        #[must_use]
+        pub fn new(name: &CookieName, value: &CookieValue, attributes: CookieAttributes) -> Self {
+            let http_only = if attributes.http_only {
+                "; HttpOnly"
+            } else {
+                ""
+            };
+            let same_site = attributes.same_site.as_str();
+            let secure = if attributes.secure { "; Secure" } else { "" };
+            let max_age = attributes
+                .max_age_secs
+                .map_or_else(String::new, |secs| format!("; Max-Age={secs}"));
+            Self(format!(
+                "{}={}; Path=/{http_only}; SameSite={same_site}{secure}{max_age}",
+                name.as_str(),
+                value.as_str()
+            ))
+        }
+
+        /// The header value.
+        #[must_use]
+        pub fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    impl std::ops::Deref for SetCookie {
+        type Target = str;
+
+        fn deref(&self) -> &str {
+            &self.0
+        }
+    }
+
+    impl std::fmt::Display for SetCookie {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+}
+
+/// `Server.cookie name value` — parses both fields into their cookie grammar.
+#[must_use]
 pub fn server_cookie(name: String, value: String) -> ServerCookie {
-    ServerCookie { name, value }
+    ServerCookie {
+        name: CookieName::encode(&name),
+        value: CookieValue::encode(&value),
+    }
 }
 
-/// Strip any byte that could smuggle extra cookie attributes or inject a header
-/// line. We drop CTLs (incl. CR/LF), `;`, `,`, and whitespace from both the
-/// cookie name and value rather than reject (a total, never-panicking transform):
-/// the resulting Set-Cookie carries exactly one attribute set we control, and the
-/// downstream `builder.header` can't see a CRLF to error on. Conservative — these
-/// bytes are not valid in a cookie name/value per RFC 6265 token/cookie-octet
-/// grammar anyway.
-fn sanitise_cookie_field(s: &str) -> String {
-    s.chars()
-        .filter(|&c| {
-            !c.is_control()
-                && c != ';'
-                && c != ','
-                && c != ' '
-                && c != '\t'
-                && c != '"'
-                && c != '\\'
-        })
-        .collect()
-}
-
+/// `Server.withCookie` — attach `c` with `Path=/; HttpOnly; SameSite=Lax`.
+///
+/// `Secure` is added in production so an auth/session cookie never crosses the
+/// cleartext proxy-to-app hop; dev omits it so cookies work over plain-http
+/// localhost. The gate is the runtime's production detection (`ENV` /
+/// `IPE_ENV` via `productionFromEnv`).
+#[must_use]
 pub fn server_with_cookie(c: ServerCookie, mut r: ServerResponse) -> ServerResponse {
-    // Minimal Set-Cookie with safe defaults; full attributes land with step 4.
-    // name/value are sanitised so a value containing `;`/`,`/CRLF can't smuggle
-    // extra attributes or inject a second header line.
-    let name = sanitise_cookie_field(&c.name);
-    let value = sanitise_cookie_field(&c.value);
-    // Add `Secure` in production so an auth/session cookie is never transmitted
-    // over the cleartext proxy→app hop (SSL-strip / sniff). Omit it in dev so
-    // cookies still work over plain-http localhost. Gate matches the rest of the
-    // runtime's production detection (ENV / IPE_ENV via productionFromEnv).
-    let secure = if crate::telemetry::production_from_env() {
-        "; Secure"
-    } else {
-        ""
-    };
-    let v = format!(
-        "{}={}; HttpOnly; Path=/; SameSite=Lax{}",
-        name, value, secure
-    );
-    r.cookies.push(v);
+    r.cookies.push(SetCookie::new(
+        &c.name,
+        &c.value,
+        CookieAttributes {
+            http_only: true,
+            same_site: SameSite::Lax,
+            secure: crate::telemetry::production_from_env(),
+            max_age_secs: None,
+        },
+    ));
     r
 }
 
@@ -2512,14 +2650,17 @@ pub fn csrf_pair_valid(cookie_tok: &str, header_tok: &str) -> bool {
 /// moving `req` into the wrapped handler `h(req)`. By the time this function
 /// runs (after the handler's `Task` resolves), the request itself is gone;
 /// only the pre-captured bool survives.
-fn csrf_set_cookie_value(token: &str, request_is_https: bool) -> String {
-    let name = csrf_cookie_name();
-    let secure = if crate::telemetry::production_from_env() || request_is_https {
-        "; Secure"
-    } else {
-        ""
-    };
-    format!("{name}={token}; Path=/; SameSite=Strict{secure}")
+fn csrf_set_cookie_value(token: &str, request_is_https: bool) -> SetCookie {
+    SetCookie::new(
+        &CookieName::encode(csrf_cookie_name()),
+        &CookieValue::encode(token),
+        CookieAttributes {
+            http_only: false,
+            same_site: SameSite::Strict,
+            secure: crate::telemetry::production_from_env() || request_is_https,
+            max_age_secs: None,
+        },
+    )
 }
 
 /// Middleware.withCsrf : Handler -> Handler. Double-submit-cookie CSRF guard
@@ -3539,6 +3680,152 @@ mod tests {
             .iter()
             .collect();
         assert_eq!(cookies.len(), 2, "both Set-Cookie lines must survive");
+    }
+
+    /// RFC 6265 `cookie-octet`, written out independently of the encoder's set.
+    const fn is_cookie_octet(b: u8) -> bool {
+        matches!(b, 0x21 | 0x23..=0x2B | 0x2D..=0x3A | 0x3C..=0x5B | 0x5D..=0x7E)
+    }
+
+    /// RFC 7230 `tchar`, written out independently of the encoder's set.
+    const fn is_tchar(b: u8) -> bool {
+        b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'!' | b'#'
+                    | b'$'
+                    | b'%'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'|'
+                    | b'~'
+            )
+    }
+
+    #[test]
+    fn cookie_value_encodes_every_byte_outside_cookie_octet() {
+        for (raw, encoded) in [
+            ("é", "%C3%A9"),
+            (";", "%3B"),
+            (",", "%2C"),
+            (" ", "%20"),
+            ("\t", "%09"),
+            ("\"", "%22"),
+            ("\\", "%5C"),
+            ("a\r\nSet-Cookie: x=y", "a%0D%0ASet-Cookie:%20x=y"),
+            ("\u{7f}", "%7F"),
+            ("😀", "%F0%9F%98%80"),
+        ] {
+            assert_eq!(CookieValue::encode(raw).as_str(), encoded, "value {raw:?}");
+        }
+    }
+
+    #[test]
+    fn cookie_value_keeps_cookie_octets_byte_for_byte() {
+        let octets: String = (0u8..=0x7F)
+            .filter(|&b| is_cookie_octet(b))
+            .map(char::from)
+            .collect();
+        assert_eq!(CookieValue::encode(&octets).as_str(), octets);
+        assert_eq!(CookieValue::encode("").as_str(), "");
+    }
+
+    #[test]
+    fn cookie_name_encodes_every_byte_outside_token() {
+        for (raw, encoded) in [
+            ("a=b", "a%3Db"),
+            ("sé", "s%C3%A9"),
+            ("a b", "a%20b"),
+            ("a;b", "a%3Bb"),
+            ("(x)", "%28x%29"),
+        ] {
+            assert_eq!(CookieName::encode(raw).as_str(), encoded, "name {raw:?}");
+        }
+        let tchars: String = (0u8..=0x7F)
+            .filter(|&b| is_tchar(b))
+            .map(char::from)
+            .collect();
+        assert_eq!(CookieName::encode(&tchars).as_str(), tchars);
+    }
+
+    /// Every ASCII byte and non-ASCII text, in name and value, yields a line of
+    /// grammar bytes that is a valid header value.
+    #[test]
+    fn set_cookie_from_any_text_is_a_valid_header_value() {
+        let mut inputs: Vec<String> = (0u8..=0x7F).map(|b| char::from(b).to_string()).collect();
+        inputs.extend(["é".to_owned(), "\u{2028}".to_owned(), "日本".to_owned()]);
+        for raw in &inputs {
+            let name = CookieName::encode(raw);
+            let value = CookieValue::encode(raw);
+            assert!(name.as_str().bytes().all(is_tchar), "name {raw:?}");
+            assert!(value.as_str().bytes().all(is_cookie_octet), "value {raw:?}");
+            let line = SetCookie::new(
+                &name,
+                &value,
+                CookieAttributes {
+                    http_only: true,
+                    same_site: SameSite::Lax,
+                    secure: true,
+                    max_age_secs: Some(60),
+                },
+            );
+            assert!(
+                axum::http::HeaderValue::from_str(line.as_str()).is_ok(),
+                "{line}"
+            );
+            assert_eq!(
+                line.matches(';').count(),
+                5,
+                "no smuggled attribute: {line}"
+            );
+        }
+    }
+
+    /// A non-ASCII, `;`, `,`, whitespace or `"` value no longer fails the whole
+    /// response: it is answered with the encoded cookie.
+    #[tokio::test]
+    async fn with_cookie_non_cookie_octet_value_keeps_the_response() {
+        let r = server_with_cookie(
+            server_cookie("sid".into(), "é; a, b \"c\"".into()),
+            server_text("ok".to_string()),
+        );
+        let resp = to_axum_response(r);
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let cookies: Vec<_> = resp
+            .headers()
+            .get_all(axum::http::header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().map(str::to_owned))
+            .collect();
+        assert_eq!(cookies.len(), 1, "{cookies:?}");
+        let Some(Ok(line)) = cookies.first() else {
+            return;
+        };
+        assert!(
+            line.starts_with("sid=%C3%A9%3B%20a%2C%20b%20%22c%22; Path=/; HttpOnly; SameSite=Lax"),
+            "{line}"
+        );
+    }
+
+    #[cfg(feature = "jwt")]
+    #[test]
+    fn reissue_set_cookie_encodes_name_and_token() {
+        let line = reissue_set_cookie("my sid", "t;ok", 1800, false);
+        assert!(
+            line.starts_with("my%20sid=t%3Bok; Path=/; HttpOnly; SameSite="),
+            "{line}"
+        );
+        assert!(
+            axum::http::HeaderValue::from_str(line.as_str()).is_ok(),
+            "{line}"
+        );
     }
 
     fn mk_req(
