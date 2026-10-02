@@ -305,6 +305,9 @@ pub enum BuiltinTag {
     /// `BackoffStrategy` — the four-constructor retry-strategy ADT
     /// (`Linear | LinearWithJitter | Exponential | ExponentialWithJitter`).
     BackoffStrategy,
+    /// `Step` — `Ipe.Task`'s two-constructor loop step `Continue s | Done a`,
+    /// applied to its state and result types.
+    TaskStep,
     /// `Decimal` — the nullary fixed-point decimal value type.
     Decimal,
     /// `Task` — the effect constructor `Task a` (its error channel is the
@@ -1205,6 +1208,28 @@ const _: () = assert!(
     "a kernel's sync_obliged_scheme_vars names a variable its scheme_shape does not carry at an aligned position",
 );
 
+/// Whether every [`StdlibKernel::shared_fn_kernel_arg`] index of `kernels` is below its kernel's arity.
+#[must_use]
+pub const fn shared_fn_kernel_args_fit_arity(kernels: &[StdlibKernel]) -> bool {
+    let mut rest = kernels;
+    while let Some((kernel, tail)) = rest.split_first() {
+        if let Some(index) = kernel.shared_fn_kernel_arg()
+            && index >= kernel.decl().arity as usize
+        {
+            return false;
+        }
+        rest = tail;
+    }
+    true
+}
+
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if a demoted bare-`impl Fn` kernel slot names an argument past its kernel's arity, which would leave a stored `Arc<dyn Fn>` undemoted (E0277) [ledger #boundary]
+#[allow(clippy::assertions_on_constants)] // the constant IS the tripwire
+const _: () = assert!(
+    shared_fn_kernel_args_fit_arity(StdlibKernel::ALL),
+    "a kernel's shared_fn_kernel_arg index is not below its arity",
+);
+
 /// Whether `shape`'s final result, past every arrow, is an app carrier (a `Program` or the opaque `WebApp` leaf).
 #[must_use]
 pub const fn shape_yields_app(shape: &TyShape) -> bool {
@@ -2051,6 +2076,11 @@ pub enum StdlibKernel {
     TaskPerform,
     /// `Task.lazy : (() -> Task e a) -> Task e a` — deferred task creation.
     TaskLazy,
+    /// `Task.loop : Int -> s -> (s -> Task Error (Step s a)) -> Task Error a`.
+    ///
+    /// Runs a step from an initial state until it returns `Done`, at most the
+    /// ceiling's number of times, at constant stack depth (runtime `task_loop`).
+    TaskLoop,
     // ── Task retry surface (retryWith) ──────────────────────────────────────
     /// `Task.retryWith : RetryPolicy Error -> Task Error a -> Task Error a`
     /// Runs the task retrying per policy on failure.
@@ -4867,6 +4897,7 @@ impl StdlibKernel {
             Self::TaskRun => d("Task", "run", 1, Pure, "task_run", IpeOrder),
             Self::TaskPerform => d("Task", "perform", 1, Pure, "task_run", IpeOrder),
             Self::TaskLazy => d("Task", "lazy", 1, Pure, "task_lazy", IpeOrder),
+            Self::TaskLoop => d("Task", "loop", 3, Pure, "task_loop", IpeOrder),
             // ── Task retry surface (special-case emitter in emit_expr.rs) ───
             Self::TaskRetryWith => d("Task", "retryWith", 2, Pure, "task_retry_with", IpeOrder),
             Self::TaskLinearBackoff => d(
@@ -7927,6 +7958,7 @@ impl StdlibKernel {
         Self::TaskSequence,
         Self::TaskParallel,
         Self::TaskLazy,
+        Self::TaskLoop,
         Self::TaskRetryWith,
         Self::TaskLinearBackoff,
         Self::TaskExponentialBackoff,
@@ -9808,6 +9840,14 @@ impl StdlibKernel {
         // `lazy : (() -> Task a) -> Task a`.
         const UNIT_TO_TASK_A: TyShape = TyShape::Fun(&UNIT, &TASK_A);
         const TASK_LAZY: TyShape = TyShape::Fun(&UNIT_TO_TASK_A, &TASK_A);
+        // `loop : Int -> s -> (s -> Task (Step s a)) -> Task a`, with `s` = `A`
+        // and `a` = `B`.
+        const STEP_A_B: TyShape = TyShape::Con(BuiltinTag::TaskStep, &[A, B]);
+        const TASK_STEP_A_B: TyShape = TyShape::Con(BuiltinTag::Task, &[STEP_A_B]);
+        const A_TO_TASK_STEP: TyShape = TyShape::Fun(&A, &TASK_STEP_A_B);
+        const STEP_FN_TO_TASK_B: TyShape = TyShape::Fun(&A_TO_TASK_STEP, &TASK_B);
+        const A_TO_STEP_FN_TO_TASK_B: TyShape = TyShape::Fun(&A, &STEP_FN_TO_TASK_B);
+        const TASK_LOOP: TyShape = TyShape::Fun(&INT, &A_TO_STEP_FN_TO_TASK_B);
 
         // ── Cmd / Sub shapes. ──
         // `Cmd.batch : List (Cmd a) -> Cmd a`.
@@ -12080,6 +12120,7 @@ impl StdlibKernel {
             Self::TaskSequence | Self::TaskParallel => Some(&TASK_SEQUENCE),
             Self::TaskRun | Self::TaskPerform => Some(&TASK_A_TO_RESULT_ERR_A),
             Self::TaskLazy => Some(&TASK_LAZY),
+            Self::TaskLoop => Some(&TASK_LOOP),
 
             // ── Cmd / Sub / PubSub. ──
             Self::CmdNone => Some(&CMD_A),
@@ -13934,6 +13975,7 @@ impl StdlibKernel {
             | Self::TaskRun
             | Self::TaskPerform
             | Self::TaskLazy
+            | Self::TaskLoop
             | Self::TaskRetryWith
             | Self::TaskLinearBackoff
             | Self::TaskExponentialBackoff
@@ -15790,6 +15832,39 @@ impl StdlibKernel {
         }
     }
 
+    /// The argument index of a bare `impl Fn` parameter that rejects a stored `Arc<dyn Fn>`.
+    ///
+    /// `json_enc_list`'s element encoder and `task_loop`'s step are bare
+    /// `impl Fn` slots: a function read out of a storage carrier (a record
+    /// field, a `case`-bound payload — each an `Arc<dyn Fn>`) does not
+    /// `impl Fn`, so the lowerer eta-demotes it onto the `Box` carrier at this
+    /// index. The lowerer also flattens a curried spine headed by such a kernel
+    /// (`f |> Task.loop n s`, `Task.loop n s <| f`) into the saturated call
+    /// before the arity split, so the demotion sees every argument. The index
+    /// is checked against the kernel's arity at build time.
+    #[must_use]
+    pub const fn shared_fn_kernel_arg(self) -> Option<usize> {
+        match self {
+            Self::JsonEncList => Some(0),
+            Self::TaskLoop => Some(2),
+            _ => None,
+        }
+    }
+
+    /// The scheme variable whose solved instance must hold no function type.
+    ///
+    /// `task_loop` carries its state between steps as plain data, so the
+    /// lowerer refuses a call whose state variable is solved to a type
+    /// containing a function, and refuses fail-closed when no solved type is
+    /// recorded for the reference.
+    #[must_use]
+    pub const fn plain_data_scheme_var(self) -> Option<u8> {
+        match self {
+            Self::TaskLoop => Some(0),
+            _ => None,
+        }
+    }
+
     /// `true` when this variant belongs to the `Ipe.Web` subsystem — the
     /// `Ipe.Web` app-entry kernels plus the Task-shaped `PubSub.publish` /
     /// `publishNoEcho`, all of which are `class = Web` and whose symbols live in
@@ -15882,13 +15957,14 @@ impl StdlibKernel {
     /// Whether this kernel is emittable only as a saturated call.
     ///
     /// Such a kernel's emit arm carries a bridge or a guard (the input
-    /// subscriptions' `KeyEvent` bridge and surface check) that a point-free
+    /// subscriptions' `KeyEvent` bridge and surface check, `Task.loop`'s bridge
+    /// from the emitted `Step` enum to the runtime `LoopStep`) that a point-free
     /// first-class reference would bypass, so the lowerer eta-expands every
     /// point-free reference to it into `\x -> kernel x` and the backend refuses
     /// to box it as a bare function value.
     #[must_use]
     pub const fn requires_saturated_emit(self) -> bool {
-        self.input_surface().is_some()
+        self.input_surface().is_some() || matches!(self, Self::TaskLoop)
     }
 
     /// `true` when this variant belongs to the `Ipe.CssSafety` leaf
@@ -16189,6 +16265,7 @@ impl StdlibKernel {
                         | Self::TaskFromResult
                         | Self::TaskAndThenResult
                         | Self::TaskSequence
+                        | Self::TaskLoop
                 ) ||
                 // `Env.public` — build-time-embedded `[wasm] publicEnv`
                 // allowlist (`option_env!` on wasm32; the SAME allowlist via
@@ -16323,6 +16400,7 @@ impl StdlibKernel {
                         | Self::TaskFromResult
                         | Self::TaskAndThenResult
                         | Self::TaskSequence
+                        | Self::TaskLoop
                 )
                 // `Env.public` — build-time-embedded allowlist (`option_env!` on
                 // wasm32, the same as the browser arm).
@@ -17495,6 +17573,7 @@ mod tests {
             StdlibKernel::TaskMap,
             StdlibKernel::TaskAndThen,
             StdlibKernel::TaskSequence,
+            StdlibKernel::TaskLoop,
             // Entropy pair (`random_get`) + `Env.public`.
             StdlibKernel::CryptoRandomBytes,
             StdlibKernel::CryptoRandomToken,
@@ -17549,6 +17628,24 @@ mod tests {
                 "{denied:?} must have NO WASI denotation (breaks THE SEAL otherwise)"
             );
         }
+    }
+
+    /// `Task.loop`'s runtime driver is a pure `async` loop beside
+    /// `task_sequence`, so it builds on both wasm targets; it keeps the
+    /// fail-closed reactor-requiring default like every non-`Backoff*` `Task`
+    /// member.
+    #[test]
+    fn task_loop_is_wasm_representable_and_keeps_the_reactor_default() {
+        use super::Target;
+        assert!(StdlibKernel::TaskLoop.available_on(Target::WasmWasi));
+        assert!(StdlibKernel::TaskLoop.available_on(Target::WasmClient));
+        assert!(StdlibKernel::TaskLoop.requires_async_runtime());
+        // Its emit arm carries the `Step` bridge, so a point-free reference is
+        // eta-expanded rather than boxed as a bare runtime function.
+        assert!(StdlibKernel::TaskLoop.requires_saturated_emit());
+        // Its step is a bare `impl Fn` slot a stored `Arc<dyn Fn>` read is
+        // demoted at, directly and through a pipe.
+        assert_eq!(StdlibKernel::TaskLoop.shared_fn_kernel_arg(), Some(2));
     }
 
     /// Verifies that no two non-internal variants in [`StdlibKernel::ALL`] share

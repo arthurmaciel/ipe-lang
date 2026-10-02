@@ -1344,6 +1344,8 @@ mod registry_phase_c_tests {
             K::TaskMap4,
             K::TaskMap5,
             K::TaskAttempt,
+            // `loop` runs a step to `Done` under a ceiling (Ipê-new).
+            K::TaskLoop,
             // `Web.embed : WebConfig -> WebApp` — Ipê-new (no legacy oracle);
             // a mountable web-app handle sharing `Web.tea`'s cfg scheme.
             K::WebEmbed,

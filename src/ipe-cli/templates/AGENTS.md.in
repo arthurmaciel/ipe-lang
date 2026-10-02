@@ -387,7 +387,7 @@ app code.
 
 | Module | Path | Key functions |
 |---|---|---|
-| `Task` | `Ipe.Task` | succeed, fail, map, andThen, perform, sequence, parallel, lazy, run, fromResult, andThenResult, mapError, onError; **retryWith** + `RetryPolicy e` + `BackoffStrategy` ADT (Linear \| LinearWithJitter \| Exponential \| ExponentialWithJitter). Build via linearBackoff/exponentialBackoff/defaultRetryPolicy; decorate via withJitter/withMaxAttempts/withBaseMs (`Ipe.Duration`)/withRetryOn. |
+| `Task` | `Ipe.Task` | succeed, fail, map, andThen, perform, sequence, parallel, lazy, run, fromResult, andThenResult, mapError, onError; **loop** + `Step s a` ADT (Continue \| Done): `loop ceiling init step` repeats a step at constant stack depth, at most `ceiling` times; **retryWith** + `RetryPolicy e` + `BackoffStrategy` ADT (Linear \| LinearWithJitter \| Exponential \| ExponentialWithJitter). Build via linearBackoff/exponentialBackoff/defaultRetryPolicy; decorate via withJitter/withMaxAttempts/withBaseMs (`Ipe.Duration`)/withRetryOn. |
 | `Cmd` | `Ipe.Tea.<Shape>.Cmd` | Shape-scoped (`Ipe.Tea.Web.Cmd` / `Ipe.Tea.WebView.Cmd` / `Ipe.Tea.Tui.Cmd` / `Ipe.Tea.Cli.Cmd`; `Ipe.Tea.Terminal.Cmd` serves both terminal shapes); importing another shape's `Cmd` in an app is rejected (IPE-N0035). none, batch, perform, map, publish (echo-by-default pub/sub from update return), publishNoEcho (opt-out echo) |
 | `Sub` | `Ipe.Tea.<Shape>.Sub` | Shape-scoped (`Ipe.Tea.Web.Sub` / `Ipe.Tea.WebView.Sub` / `Ipe.Tea.Tui.Sub` / `Ipe.Tea.Cli.Sub`; `Ipe.Tea.Terminal.Sub` serves both terminal shapes but has no input subscription); wrong-shape import rejected (IPE-N0035). none, every, batch, map, subscribeTopic (pub/sub receive); `Tui.Sub` adds onKey (key input), `Cli.Sub` adds onLine (stdin lines) |
 | `PubSub` | `Ipe.PubSub` | publish (Task-shaped, callable wherever a broadcast bus runs — a Web-app process, or `Err` in a plain CLI; complements `Ipe.Tea.Web.PubSub.publish`), publishNoEcho (Task-shaped no-echo) |
@@ -1068,7 +1068,7 @@ instance); `Log.*` goes to `console.{log,error}`; `Random.int`/`float`/
 (`onOpen`/`onMessage`/`onClose`/`onError`) both go through
 `web_sys::WebSocket` and are live in the browser;
 `Task.map`/`andThen`/`mapError`/`onError`/`fromResult`/`andThenResult`/
-`succeed`/`fail`/`sequence` all work (the pure future-combinator half of
+`succeed`/`fail`/`sequence`/`loop` all work (the pure future-combinator half of
 `Task.*`). CORS/timeout/connect failures surface as `Task.fail`, never a
 trap. Server-only effects (`Db.*`, `File.*`, `Auth.*`, `System.getenv`,
 `Server.*`, `Task.parallel`/`retryWith`, …) have NO wasm denotation —

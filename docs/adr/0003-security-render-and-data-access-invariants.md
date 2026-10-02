@@ -128,11 +128,13 @@ negotiation — the driver is frozen per binary. `SqlParam::Null(Box<SqlParam>)`
 carries a witness for its variant tag (not a value) so Postgres's per-parameter
 type OID matches the target column at prepare time; a degenerate nested-null falls
 back to TEXT rather than panicking. Tenant scope is a hub-specific concern
-(task-local `TENANT_PREFIX`, an optional `AND service_name LIKE ?` on hub's
-`read_*`), not a generic `Db.*` feature; when a prefix is in scope every
-`hub_read_filtered_*` short-circuits to enforce the gate *before* SQL is built, and
-`escape_like_prefix` strips `%`/`_` so a tenant name like `"%"` cannot match all
-services.
+(task-local `TENANT_PREFIX` holding a non-empty `TenantPrefix`, and an optional
+`AND substr(service_name, 1, length(?)) = ?` on every hub read that returns,
+names or counts a service's rows), not a generic
+`Db.*` feature; when a prefix is in scope every `hub_read_filtered_*`
+short-circuits to enforce the gate *before* SQL is built. Both layers compare a
+byte-exact prefix, with no `LIKE`, so no wildcard or case folding can widen a
+tenant's scope.
 
 ### WebSocket server is kernel-only with typed opaque handles and bounded send
 The `Ipe.Http.Server.WebSocket` module is kernel-only (a `Ws` qualifier + 12

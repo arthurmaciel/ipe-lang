@@ -36,7 +36,8 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use ipe_docs::render::{STYLESHEET, highlight_snippet, html_escape, page};
+use ipe_docs::html;
+use ipe_docs::render::{STYLESHEET, highlight_snippet, page};
 use ipe_docs::{Entry, EntryKind, Index};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -162,7 +163,7 @@ fn render_entry(key: &str, entry: &Entry) -> String {
     let kind_label = kind_label(&entry.kind);
     let mut body = format!(
         "<h1>{} <span class=\"kind-badge\">{kind_label}</span></h1>\n",
-        html_escape(key)
+        html::escape(key)
     );
 
     // Body text: highlight fenced ipe blocks, escape everything else.
@@ -229,7 +230,7 @@ fn emit_prose(out: &mut String, text: &str) {
         let p = paragraph.trim();
         if !p.is_empty() {
             out.push_str("<p>");
-            out.push_str(&html_escape(p));
+            out.push_str(&html::escape(p));
             out.push_str("</p>\n");
         }
     }
@@ -272,21 +273,23 @@ fn render_index_section(out: &mut String, title: &str, entries: &[&Entry], style
     if entries.is_empty() {
         return;
     }
-    let _ = writeln!(out, "<h2>{title}</h2>\n<ul class=\"index-list\">");
+    let _ = writeln!(
+        out,
+        "<h2>{}</h2>\n<ul class=\"index-list\">",
+        html::escape(title)
+    );
     for e in entries {
         let subdir = e.kind.route_subdir();
         let key = &e.source_key;
-        let name = html_escape(key);
+        let href = html::escape(&format!("/{subdir}/{key}/"));
+        let name = html::escape(key);
         match style {
             ListStyle::Name => {
-                let _ = writeln!(out, "<li><a href=\"/{subdir}/{key}/\">{name}</a></li>");
+                let _ = writeln!(out, "<li><a href=\"{href}\">{name}</a></li>");
             }
             ListStyle::NameSummary => {
-                let summary = html_escape(&e.text);
-                let _ = writeln!(
-                    out,
-                    "<li><a href=\"/{subdir}/{key}/\">{name}: {summary}</a></li>"
-                );
+                let summary = html::escape(&e.text);
+                let _ = writeln!(out, "<li><a href=\"{href}\">{name}: {summary}</a></li>");
             }
         }
     }
@@ -313,4 +316,27 @@ fn create_dir_all(path: &Path) -> Result<(), String> {
 
 fn write_file(path: &Path, content: &str) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use ipe_docs::{Entry, EntryKind};
+
+    use super::{ListStyle, render_index_section};
+
+    /// A key or title holding markup cannot close the `href` attribute or open
+    /// a tag in the index list.
+    #[test]
+    fn index_section_escapes_key_in_href_and_title() {
+        let entry = Entry {
+            kind: EntryKind::Construct,
+            source_key: "a\"b".to_owned(),
+            text: String::new(),
+        };
+        let mut out = String::new();
+        render_index_section(&mut out, "x<y", &[&entry], ListStyle::Name);
+        assert!(out.contains("<h2>x&lt;y</h2>"), "{out}");
+        assert!(out.contains("href=\"/construct/a&quot;b/\""), "{out}");
+        assert!(!out.contains("a\"b"), "{out}");
+    }
 }

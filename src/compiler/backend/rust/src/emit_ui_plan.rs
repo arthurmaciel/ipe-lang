@@ -815,6 +815,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::TaskRun
         | KernelFn::TaskPerform
         | KernelFn::TaskLazy
+        | KernelFn::TaskLoop
         | KernelFn::TaskRetryWith
         | KernelFn::TaskLinearBackoff
         | KernelFn::TaskExponentialBackoff

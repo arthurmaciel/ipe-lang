@@ -1,0 +1,32 @@
+module Main exposing (main)
+
+import Ipe.Task as Task exposing (Step(..))
+import Ipe.Error exposing (Error)
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- The step closure captures the `Task` parameter `tick` and runs it on every
+-- step. A `Task` is not `Clone`, and the step may run many times, so `ipe` must
+-- refuse this with a typed lowering diagnostic rather than emit Rust that
+-- `cargo` rejects.
+tickThrice : Task Error () -> Task Error Int
+tickThrice tick =
+    Task.loop 3
+        0
+        (\n ->
+            tick
+                |> Task.andThen
+                    (\_ ->
+                        if n >= 2 then
+                            Task.succeed (Done n)
+
+                        else
+                            Task.succeed (Continue (n + 1))
+                    )
+        )
+
+
+main =
+    tickThrice (Io.println "tick")
+        |> Task.andThen (\n -> Io.println (String.fromInt n))

@@ -145,6 +145,7 @@ pub fn call_has_kernel_special_case(
                     || emit_http_builder_call(ctx, callee, args, indent, child, generics)?
                         .is_some()
                     || emit_task_retry_call(ctx, callee, args, indent, child, generics)?.is_some()
+                    || emit_task_loop_call(ctx, callee, args, indent, child, generics)?.is_some()
                     // `Db.defaultMigration` is `class = Pure` but `emit_db_call`
                     // synthesises its `Migration` record literal — probe it here, as
                     // the real dispatcher does. Every other Pure kernel is not a Db
@@ -667,6 +668,89 @@ pub fn emit_http_builder_call(
 /// Factored out of `emit_expr_at` to keep that function's stack frame small
 /// (same rationale as `emit_http_call`).
 #[inline(never)]
+/// Emit a saturated `Task.loop ceiling init step` call.
+///
+/// The runtime `task_loop` drives the step in one `async` loop, so the stack
+/// stays constant however many steps run; it is generic over the step's result
+/// and reads it through a classifier. This arm passes the closure that maps the
+/// compiled `Ipe.Task.Step` enum onto the runtime's `LoopStep`, so the runtime
+/// never names a compiled-source type. The enum must be the declared two-variant
+/// `Continue s | Done a`, in that order; any other shape is a lowering bug and
+/// refuses with a typed diagnostic rather than emitting a mismatched bridge.
+pub fn emit_task_loop_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    const WHERE: &str = "ipe_backend_rust::emit_task_loop_call";
+    if !matches!(callee, Callee::Kernel(KernelFn::TaskLoop)) {
+        return Ok(None);
+    }
+    let [ceiling, init, step] = args else {
+        return Err(Diagnostic::CompilerBug {
+            where_: WHERE,
+            detail: format!(
+                "Task.loop expects 3 arguments (ceiling, init, step), got {}; the \
+                 lowerer must saturate the kernel before emission",
+                args.len()
+            ),
+        });
+    };
+    let interner = ctx.interner;
+    let step_enum = ctx.enum_variants.iter().find(|((home, name), _)| {
+        interner.resolve(*name) == Some("Step")
+            && matches!(
+                home.0.as_slice(),
+                [seg0, seg1] if interner.resolve(*seg0) == Some("Ipe")
+                    && interner.resolve(*seg1) == Some("Task")
+            )
+    });
+    let Some(((home, name), variants)) = step_enum else {
+        return Err(Diagnostic::CompilerBug {
+            where_: WHERE,
+            detail: "no emitted `Ipe.Task.Step` enum for a Task.loop call; the lowerer \
+                     must keep the enum whenever the kernel is used"
+                .to_owned(),
+        });
+    };
+    let [(continue_sym, continue_fields), (done_sym, done_fields)] = variants.as_slice() else {
+        return Err(Diagnostic::CompilerBug {
+            where_: WHERE,
+            detail: format!(
+                "`Ipe.Task.Step` must declare exactly two variants, got {}",
+                variants.len()
+            ),
+        });
+    };
+    if interner.resolve(*continue_sym) != Some("Continue")
+        || interner.resolve(*done_sym) != Some("Done")
+        || continue_fields.len() != 1
+        || done_fields.len() != 1
+    {
+        return Err(Diagnostic::CompilerBug {
+            where_: WHERE,
+            detail: "`Ipe.Task.Step` must be `Continue s | Done a`, one field each, in that \
+                     order"
+                .to_owned(),
+        });
+    }
+    let path = ctx.enum_name(home, *name)?;
+    let continue_ident = ctx.emit_ident(*continue_sym)?;
+    let done_ident = ctx.emit_ident(*done_sym)?;
+    let ceiling_s = emit_expr_at(ctx, ceiling, indent, child, generics)?;
+    let init_s = emit_expr_at(ctx, init, indent, child, generics)?;
+    let step_s = emit_expr_at(ctx, step, indent, child, generics)?;
+    Ok(Some(format!(
+        "ipe_runtime::task::task_loop({ceiling_s}, {init_s}, {step_s}, \
+         |__ipe_st: {path}<_, _>| match __ipe_st {{ \
+         {path}::{continue_ident}(__ipe_s) => ipe_runtime::task::LoopStep::Continue(__ipe_s), \
+         {path}::{done_ident}(__ipe_a) => ipe_runtime::task::LoopStep::Done(__ipe_a), }})"
+    )))
+}
+
 #[allow(clippy::too_many_lines)]
 // linear dispatch over many projection cases
 /// Emit `Task.retryWith` and all `RetryPolicy` builder kernels.
