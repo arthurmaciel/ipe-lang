@@ -605,9 +605,13 @@ const fn win_exit_to_i32(code: u32) -> i32 {
 /// - **env** — scrubbed in the launcher (a jail does not scrub the inherited
 ///   environment), via the SAME allowlist the macOS/Windows arms use.
 ///
-/// The mounts' read-only binds are unused on FreeBSD (the jail chroots an existing
-/// view of the real filesystem rather than building a bind-mount namespace); the
-/// scratch and working tree are rechecked before the jail is built.
+/// Over the read-only root the jail applies the SAME mount plan the Linux arm
+/// renders for bwrap ([`crate::mounts::mount_plan`]): every home and `/tmp` is
+/// masked by a fresh root-owned tmpfs, and the read-only binds (the cargo tool
+/// dirs), the scratch, and the granted working tree are re-exposed through the
+/// masks by `mount_nullfs`. Every path is rechecked before the jail is built, and
+/// a mask that cannot mount refuses the jail rather than run it over an unmasked
+/// home.
 ///
 /// A jail that cannot be established (`jail` absent, a scratch that cannot be
 /// created/chowned, a `jail(8)` invocation that fails to enter the jail) yields
@@ -635,12 +639,7 @@ pub fn build_in_jail(
     if let Err(outcome) = recheck_mounts(mounts) {
         return outcome;
     }
-    freebsd_jail::build_in_jail(
-        profile,
-        mounts.scoped_tmp().as_path(),
-        mounts.working_tree().as_path(),
-        payload,
-    )
+    freebsd_jail::build_in_jail(profile, mounts, payload)
 }
 
 /// Off Linux (x86_64/aarch64), macOS, Windows, and FreeBSD the returning build jail is a
@@ -1238,13 +1237,127 @@ pub(crate) fn freebsd_jail_network_params(network_granted: bool) -> Vec<OsString
     }
 }
 
+/// Join a safe, absolute, normalised `inner` path under the jail `root`.
+///
+/// The scratch, the working tree, and every mask land at their original
+/// absolute paths inside the chroot, so the payload's `SCRATCH_DIR=<abs>`
+/// resolves to the writable mount. `inner` is a [`SafeMountPath`], so both
+/// absoluteness and `..`/`.`-freedom are proven by construction and
+/// `root.join(stripped)` nests inside `root`.
+#[cfg(any(target_os = "freebsd", test))]
+fn under_root(root: &Path, inner: &SafeMountPath) -> PathBuf {
+    let rel = inner.as_path().strip_prefix("/").unwrap_or(inner.as_path());
+    root.join(rel)
+}
+
+/// One mount the FreeBSD jail applies under its chroot root.
+///
+/// The FreeBSD rendering of one [`crate::mounts::MountStep`]: a mask is a fresh
+/// root-owned tmpfs (the counterpart of bwrap's `--tmpfs`), a bind a
+/// `mount_nullfs` of the host path onto the same path inside the root.
+#[cfg(any(target_os = "freebsd", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FreebsdMountOp {
+    /// `mount -t tmpfs -o mode=0755 tmpfs <target>`: an empty mask the
+    /// unprivileged jail user cannot write.
+    Mask {
+        /// The masked directory inside the jail root.
+        target: PathBuf,
+    },
+    /// `mount_nullfs -o ro <source> <target>`.
+    ReadOnlyBind {
+        /// The host path.
+        source: PathBuf,
+        /// The same path inside the jail root.
+        target: PathBuf,
+    },
+    /// `mount_nullfs <source> <target>`.
+    ReadWriteBind {
+        /// The host path.
+        source: PathBuf,
+        /// The same path inside the jail root.
+        target: PathBuf,
+    },
+}
+
+#[cfg(any(target_os = "freebsd", test))]
+impl FreebsdMountOp {
+    /// The mountpoint inside the jail root.
+    pub(crate) fn target(&self) -> &Path {
+        match self {
+            Self::Mask { target }
+            | Self::ReadOnlyBind { target, .. }
+            | Self::ReadWriteBind { target, .. } => target,
+        }
+    }
+}
+
+/// Render the mount plan `plan` as the mounts the FreeBSD jail applies under
+/// `root`, in plan order.
+///
+/// # Errors
+///
+/// [`RunJailDefect::MountFailed`] when a step's path is not absolute or carries
+/// a `..`/`.` component, so it cannot be re-rooted inside the jail.
+#[cfg(any(target_os = "freebsd", test))]
+pub(crate) fn freebsd_mount_ops(
+    root: &Path,
+    plan: &[crate::mounts::MountStep<'_>],
+) -> Result<Vec<FreebsdMountOp>, RunJailDefect> {
+    use crate::mounts::{Bind, MountStep};
+    plan.iter()
+        .map(|step| {
+            Ok(match step {
+                MountStep::Mask(mask) => FreebsdMountOp::Mask {
+                    target: under_root(root, &SafeMountPath::new(mask)?),
+                },
+                MountStep::Bind(Bind::ReadOnly(path)) => {
+                    let safe = SafeMountPath::new(path.as_path())?;
+                    FreebsdMountOp::ReadOnlyBind {
+                        target: under_root(root, &safe),
+                        source: safe.0,
+                    }
+                }
+                MountStep::Bind(Bind::ReadWrite(path)) => {
+                    let safe = SafeMountPath::new(path.as_path())?;
+                    FreebsdMountOp::ReadWriteBind {
+                        target: under_root(root, &safe),
+                        source: safe.0,
+                    }
+                }
+            })
+        })
+        .collect()
+}
+
+/// Apply `ops` in order through `mount`, stopping at the first failure.
+///
+/// A mask that cannot mount refuses the whole jail: no later bind runs over an
+/// unmasked home.
+///
+/// # Errors
+///
+/// The first error `mount` returns.
+#[cfg(any(target_os = "freebsd", test))]
+pub(crate) fn apply_mount_ops(
+    ops: &[FreebsdMountOp],
+    mount: impl FnMut(&FreebsdMountOp) -> Result<(), RunJailDefect>,
+) -> Result<(), RunJailDefect> {
+    ops.iter().try_for_each(mount)
+}
+
 /// The FreeBSD returning build-jail arm: establish a scratch-rooted `jail(2)`
 /// (via the `jail(8)` CLI) lowering the profile's axes, scrub the env in the
 /// launcher, run the payload confined, wait, and decode the exit into a
 /// [`JailOutcome`] — fail-closed at every establishment step.
 #[cfg(target_os = "freebsd")]
 mod freebsd_jail {
-    use super::{JailOutcome, SafeMountPath, find_in_path, macos_scrubbed_env};
+    use super::{
+        FreebsdMountOp, JailOutcome, SafeMountPath, apply_mount_ops, find_in_path,
+        freebsd_mount_ops, macos_scrubbed_env, under_root,
+    };
+    use crate::JailMounts;
+    use crate::mounts::{WorkingTree, jail_binds, mount_plan};
     use crate::run_jail::{FilesystemScope, RunJailDefect, SandboxProfile};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
@@ -1259,8 +1372,7 @@ mod freebsd_jail {
     /// lowering and the fail-closed contract.
     pub(super) fn build_in_jail(
         profile: &SandboxProfile,
-        scoped_tmp: &Path,
-        working_tree: &Path,
+        mounts: &JailMounts,
         payload: &[OsString],
     ) -> JailOutcome {
         // `jail` is the mandatory primitive. Absent ⇒ refuse; the untrusted build
@@ -1273,35 +1385,24 @@ mod freebsd_jail {
             };
         };
 
-        // Both paths must be absolute and lexically normalised (no `..`/`.`) so each
-        // can be re-mounted at the same absolute location inside the chroot without
-        // escaping the jail root. `SafeMountPath::new` is the single gate; a path
-        // that fails this check makes the jail unavailable (fail-closed) rather than
-        // mounting at an unexpected location.
-        let scoped_tmp = match SafeMountPath::new(scoped_tmp) {
-            Ok(p) => p,
-            Err(defect) => return JailOutcome::Unavailable { defect },
-        };
-        let working_tree = match SafeMountPath::new(working_tree) {
-            Ok(p) => p,
-            Err(defect) => return JailOutcome::Unavailable { defect },
-        };
-
         // The filesystem axis is confined STRUCTURALLY, not by DAC ownership: the
         // jail is chrooted (`path=`) to a fresh root that is a READ-ONLY nullfs view
-        // of the host `/`, with ONLY the scratch (and, when the filesystem axis is
-        // granted, the working tree) nullfs-mounted read-write inside it, plus a
-        // FRESH minimal devfs and an EMPTY `/proc` (its nullfs source rooted OUTSIDE
-        // the writable scratch, so the payload cannot write it) masking the host's.
+        // of the host `/`, plus a FRESH minimal devfs and an EMPTY `/proc` (its
+        // nullfs source rooted OUTSIDE the writable scratch, so the payload cannot
+        // write it) masking the host's, then the jail's mount plan: every home and
+        // `/tmp` masked, and only the planned binds (the scratch and, when the
+        // filesystem axis is granted, the working tree read-write) re-exposed.
         // This is the exact FreeBSD counterpart of the Linux arm's `--ro-bind / /` +
-        // one writable mount + fresh `--dev`/`--proc`: an out-of-scratch write
-        // targets the read-only root and is denied by the mount flag, never reliant
-        // on host file permissions. Absent the mount root the untrusted build is
-        // never run — fail-closed.
-        let jail_root = match RoRootMount::establish(&scoped_tmp, &working_tree, profile) {
+        // fresh `--dev`/`--proc` + the same plan: an out-of-scratch write targets
+        // the read-only root and is denied by the mount flag, never reliant on host
+        // file permissions. Absent the mount root the untrusted build is never run —
+        // fail-closed. Every planned path is a `SafeMountPath` (absolute, no
+        // `..`/`.`), so it re-roots inside the jail root and nowhere else.
+        let jail_root = match RoRootMount::establish(mounts, profile) {
             Ok(root) => root,
             Err(defect) => return JailOutcome::Unavailable { defect },
         };
+        let (scoped_tmp, working_tree) = (mounts.scoped_tmp(), mounts.working_tree());
 
         // A withheld subprocess axis MUST be a genuine kernel denial of process
         // creation, not mere omission (ADR 0004). `rctl(8)` with
@@ -1529,17 +1630,6 @@ mod freebsd_jail {
         }
     }
 
-    /// Join a safe, absolute, normalised `inner` path under the jail `root`, so
-    /// the scratch (and granted working tree) mount at their ORIGINAL absolute paths
-    /// inside the chroot — the payload's `SCRATCH_DIR=<abs>` resolves to the
-    /// writable mount. `inner` is a [`SafeMountPath`], so both absoluteness and
-    /// `..`/`.`-freedom are proven by construction; `root.join(stripped)` is
-    /// guaranteed to nest inside `root`.
-    fn under_root(root: &Path, inner: &SafeMountPath) -> PathBuf {
-        let rel = inner.as_path().strip_prefix("/").unwrap_or(inner.as_path());
-        root.join(rel)
-    }
-
     /// Run `mount_nullfs [opts] <source> <target>`, refusing (fail-closed) on any
     /// non-success so the untrusted payload never runs against a half-built root.
     fn mount_nullfs(
@@ -1602,17 +1692,21 @@ mod freebsd_jail {
         }
     }
 
-    /// Mount a FRESH writable `tmpfs` at `target`, refusing (fail-closed) on any
-    /// non-success. A read-write nullfs source needs an existing, writable
-    /// mountpoint, but the target's parent is an empty stub of the read-only host
-    /// view (`EROFS`), so a writable tmpfs is layered over it to hold the leaf the
-    /// nullfs then mounts over. `mount(8)` — the stable base-system primitive, the
-    /// same binary used for devfs — carries the tmpfs type on every supported
-    /// FreeBSD release.
+    /// Mount a FRESH root-owned `tmpfs` with mode `0755` at `target`, refusing
+    /// (fail-closed) on any non-success.
+    ///
+    /// It serves two roles: a mask of the mount plan (the counterpart of bwrap's
+    /// `--tmpfs`), and the provisioned parent a missing mountpoint leaf is created
+    /// on. Mode `0755` keeps both unwritable by the unprivileged jail user, whatever
+    /// the mode of the directory it covers. `mount(8)` — the stable base-system
+    /// primitive, the same binary used for devfs — carries the tmpfs type on every
+    /// supported FreeBSD release.
     fn mount_tmpfs(mount_bin: &Path, target: &Path) -> Result<(), RunJailDefect> {
         let status = std::process::Command::new(mount_bin)
             .arg("-t")
             .arg("tmpfs")
+            .arg("-o")
+            .arg("mode=0755")
             .arg("tmpfs")
             .arg(target)
             .status();
@@ -1620,7 +1714,7 @@ mod freebsd_jail {
             Ok(s) if s.success() => Ok(()),
             Ok(s) => Err(RunJailDefect::MountFailed {
                 target: target.to_path_buf(),
-                detail: format!("mount -t tmpfs tmpfs failed ({s})"),
+                detail: format!("mount -t tmpfs -o mode=0755 tmpfs failed ({s})"),
             }),
             Err(e) => Err(RunJailDefect::MountFailed {
                 target: target.to_path_buf(),
@@ -1655,20 +1749,22 @@ mod freebsd_jail {
         }
     }
 
-    /// The read-only jail root: a fresh directory over which the whole host `/` is
-    /// nullfs-mounted READ-ONLY, with the scratch (and, when the filesystem axis is
-    /// granted, the working tree) nullfs-mounted READ-WRITE at their original
-    /// absolute paths inside it, plus a FRESH minimal devfs over `/dev` and an EMPTY
-    /// read-only `/proc` mask over `/proc`. This is the FreeBSD counterpart of the
-    /// Linux arm's `--ro-bind / /` + one writable mount + fresh `--dev`/`--proc`:
-    /// `jail path=<root>` chroots the payload here, so an out-of-scratch write targets
-    /// the read-only mount and is denied by the mount flag — never reliant on host
-    /// file permissions — and the fresh `/dev`/empty `/proc` deny the host
-    /// device/process metadata the ro-root would otherwise expose read-only. Each
-    /// read-write nullfs source needs an existing, writable mountpoint; the
-    /// read-only host view supplies only an `EROFS` stub, so a fresh writable tmpfs
-    /// is layered over the target's parent to hold the leaf the source mounts over.
-    /// Every mount and the root dir are torn down on drop, in reverse mount order.
+    /// The read-only jail root, built from one [`JailMounts`] value.
+    ///
+    /// A fresh directory over which the whole host `/` is nullfs-mounted
+    /// READ-ONLY, with a FRESH minimal devfs over `/dev` and an EMPTY read-only
+    /// `/proc` mask over `/proc`, then the shared mount plan
+    /// ([`crate::mounts::mount_plan`]) applied at the planned paths' original
+    /// absolute locations inside it: every home and static mask as a root-owned
+    /// tmpfs, the read-only binds, the scratch read-write, and the working tree
+    /// read-write when the filesystem axis is granted. This is the FreeBSD
+    /// counterpart of the Linux arm's `--ro-bind / /` + fresh `--dev`/`--proc` +
+    /// the same rendered plan: `jail path=<root>` chroots the payload here, so an
+    /// out-of-scratch write targets a read-only mount and is denied by the mount
+    /// flag — never reliant on host file permissions — and no home is readable
+    /// except what a planned bind re-exposes. A planned mountpoint the read-only
+    /// view lacks is created on a fresh tmpfs layered over its parent. Every mount
+    /// and the root dir are torn down on drop, in reverse mount order.
     struct RoRootMount {
         umount_bin: PathBuf,
         root: PathBuf,
@@ -1680,26 +1776,21 @@ mod freebsd_jail {
         proc_mask_source: PathBuf,
         /// Every mounted target, in mount order; unmounted in reverse on drop.
         mounted: Vec<PathBuf>,
-        /// In-root parent stubs a fresh writable tmpfs has been layered over, so a
-        /// read-write nullfs target's leaf can be created (the read-only host view
-        /// is `EROFS`). Deduplicated: two targets sharing a parent are provisioned
-        /// by a single tmpfs. Each is also recorded in `mounted` so it is unmounted
-        /// on drop.
+        /// In-root parent stubs a fresh tmpfs has been layered over, so a missing
+        /// mountpoint leaf can be created (the read-only host view is `EROFS`).
+        /// Deduplicated: two targets sharing a parent are provisioned by a single
+        /// tmpfs. Each is also recorded in `mounted` so it is unmounted on drop.
         tmpfs_parents: Vec<PathBuf>,
     }
 
     impl RoRootMount {
-        /// Establish the read-only root + writable scratch (+ working tree when the
-        /// filesystem axis is granted). Any missing primitive or failed mount refuses
-        /// (`Err`) so the payload never runs against an incompletely-confined root.
-        fn establish(
-            scoped_tmp: &SafeMountPath,
-            working_tree: &SafeMountPath,
-            profile: &SandboxProfile,
-        ) -> Result<Self, RunJailDefect> {
-            // Both `scoped_tmp` and `working_tree` are `SafeMountPath` values —
-            // absolute and `..`/`.`-free by construction — so `under_root` nests
-            // each provably inside the jail root without any re-check here.
+        /// Establish the read-only root, `/dev`, `/proc`, and the mount plan of
+        /// `mounts`.
+        ///
+        /// Any missing primitive or failed mount — a mask included — refuses
+        /// (`Err`), so the payload never runs against an incompletely-confined or
+        /// unmasked root.
+        fn establish(mounts: &JailMounts, profile: &SandboxProfile) -> Result<Self, RunJailDefect> {
             let Some(mount_nullfs_bin) = find_in_path("mount_nullfs") else {
                 return Err(RunJailDefect::PrimitiveUnavailable {
                     missing: vec!["mount_nullfs"],
@@ -1721,8 +1812,14 @@ mod freebsd_jail {
             // The jail root is created exclusively under the private cache root
             // (`~/.cache/ipe/jail/`), not world-writable `/tmp`, so a local attacker
             // cannot pre-plant or symlink it before the nullfs mount. The returned
-            // path is verified to be a real directory owned by the current uid.
-            let root = jail_root_dir()?;
+            // path is verified to be a real directory owned by the current uid. It
+            // is canonicalised once, so every planned mountpoint under it can be
+            // checked to resolve to itself.
+            let created = jail_root_dir()?;
+            let root = std::fs::canonicalize(&created).map_err(|e| RunJailDefect::MountFailed {
+                target: created.clone(),
+                detail: format!("could not resolve the jail root: {e}"),
+            })?;
 
             // The `/proc`-mask source: an empty dir rooted OUTSIDE the writable
             // scratch, under the same private cache root as the jail root. It is NOT
@@ -1784,59 +1881,108 @@ mod freebsd_jail {
             )?;
             mount.mounted.push(proc_target);
 
-            // A `mount_nullfs` target must ALREADY exist — the tool never creates
-            // its mountpoint (a missing target is `ENOENT`, exit 64). The read-only
-            // nullfs of `/` (step 1) supplies the empty stub dirs of the ROOT
-            // filesystem only; a nullfs of `/` does NOT cross into filesystems
-            // mounted UNDER it (a tmpfs `/tmp`, a separate `/home`), so a re-rooted
-            // scratch/working-tree LEAF under such a submount is invisible in the
-            // read-only view, and the read-only view cannot be `mkdir`'d into
-            // (`EROFS`). Layer a FRESH writable tmpfs
-            // over the target's in-root parent stub, then create the leaf on THAT
-            // tmpfs, so the read-write nullfs source has a real mountpoint to land
-            // on — the FreeBSD counterpart of the Linux arm's bwrap `--bind`, which
-            // materialises its mount target inside the namespace automatically.
-            let scratch_target = under_root(&mount.root, scoped_tmp);
-            mount.provision_rw_mountpoint(&mount_devfs_bin, &scratch_target)?;
-            mount_nullfs(
-                &mount_nullfs_bin,
-                false,
-                scoped_tmp.as_path(),
-                &scratch_target,
-            )?;
-            mount.mounted.push(scratch_target);
-
-            // 5. The working tree, READ-WRITE, only when the filesystem axis is
-            //    granted, so a granted effect is not false-denied.
-            if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
-                let tree_target = under_root(&mount.root, working_tree);
-                mount.provision_rw_mountpoint(&mount_devfs_bin, &tree_target)?;
-                mount_nullfs(
-                    &mount_nullfs_bin,
-                    false,
-                    working_tree.as_path(),
-                    &tree_target,
-                )?;
-                mount.mounted.push(tree_target);
-            }
+            // 4. The mount plan shared with the bwrap arm: every home and static
+            //    mask as a fresh root-owned tmpfs, each bind right after the mask
+            //    that most closely contains it, the working tree only when the
+            //    filesystem axis is granted. A step that cannot mount refuses the
+            //    whole jail, so no bind ever runs over an unmasked home.
+            let working = if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
+                WorkingTree::ReadWrite
+            } else {
+                WorkingTree::Unbound
+            };
+            let binds = jail_binds(mounts, working);
+            let ops = freebsd_mount_ops(&mount.root, &mount_plan(mounts.homes(), &binds))?;
+            apply_mount_ops(&ops, |op| {
+                mount.mount_op(&mount_nullfs_bin, &mount_devfs_bin, op)
+            })?;
 
             Ok(mount)
         }
 
-        /// Make `target` a real, writable mountpoint for a read-write nullfs source.
+        /// Apply one planned mount under the root and record it for teardown.
         ///
-        /// `target` is `<root>/<abs>` — its parent is an empty stub directory that
-        /// the read-only nullfs of `/` exposes, but the read-only view is `EROFS`
-        /// so the leaf cannot be `mkdir`'d there, and a nullfs of `/` does not cross
-        /// a submounted filesystem (a tmpfs `/tmp`), so a re-rooted leaf under such
-        /// a submount is `ENOENT`. Layer a FRESH writable tmpfs over the parent stub
-        /// (once per distinct parent), then create the leaf on that tmpfs.
+        /// # Errors
+        ///
+        /// [`RunJailDefect::MountFailed`] when the mountpoint cannot be made ready
+        /// or the mount itself fails.
+        fn mount_op(
+            &mut self,
+            mount_nullfs_bin: &Path,
+            mount_bin: &Path,
+            op: &FreebsdMountOp,
+        ) -> Result<(), RunJailDefect> {
+            let target = op.target();
+            self.ensure_mountpoint(mount_bin, target)?;
+            match op {
+                FreebsdMountOp::Mask { .. } => mount_tmpfs(mount_bin, target)?,
+                FreebsdMountOp::ReadOnlyBind { source, .. } => {
+                    mount_nullfs(mount_nullfs_bin, true, source, target)?;
+                }
+                FreebsdMountOp::ReadWriteBind { source, .. } => {
+                    mount_nullfs(mount_nullfs_bin, false, source, target)?;
+                }
+            }
+            self.mounted.push(target.to_path_buf());
+            Ok(())
+        }
+
+        /// Make `target` an existing directory that resolves to itself.
+        ///
+        /// A `mount_nullfs` or `tmpfs` target must ALREADY exist — the tools never
+        /// create their mountpoint. The read-only nullfs of `/` supplies the
+        /// directories of the ROOT filesystem only; it does not cross into
+        /// filesystems mounted under it (a tmpfs `/tmp`, a separate `/home`), and it
+        /// cannot be `mkdir`'d into (`EROFS`). A target already present is used as
+        /// is; one on a tmpfs this jail mounted is created there; otherwise a fresh
+        /// tmpfs is layered over its parent to hold the leaf — the FreeBSD
+        /// counterpart of bwrap materialising its mount targets inside the
+        /// namespace.
+        ///
+        /// # Errors
+        ///
+        /// [`RunJailDefect::MountFailed`] when the leaf cannot be provisioned, or
+        /// when the target resolves anywhere but itself (a symlink in the
+        /// read-only view would carry the mount outside the planned path).
+        fn ensure_mountpoint(
+            &mut self,
+            mount_bin: &Path,
+            target: &Path,
+        ) -> Result<(), RunJailDefect> {
+            if !target.is_dir() && std::fs::create_dir_all(target).is_err() {
+                self.provision_rw_mountpoint(mount_bin, target)?;
+            }
+            let resolved =
+                std::fs::canonicalize(target).map_err(|e| RunJailDefect::MountFailed {
+                    target: target.to_path_buf(),
+                    detail: format!("could not resolve the mount target: {e}"),
+                })?;
+            if resolved == target {
+                Ok(())
+            } else {
+                Err(RunJailDefect::MountFailed {
+                    target: target.to_path_buf(),
+                    detail: format!(
+                        "mount target does not resolve to itself inside the jail root (it resolves to {})",
+                        resolved.display()
+                    ),
+                })
+            }
+        }
+
+        /// Create the missing mountpoint `target` on a fresh tmpfs over its parent.
+        ///
+        /// `target` is `<root>/<abs>`; its parent is an empty stub directory of the
+        /// read-only view, where the leaf cannot be `mkdir`'d. A FRESH root-owned
+        /// tmpfs is layered over the parent (once per distinct parent), then the
+        /// leaf is created on it.
         ///
         /// # Errors
         ///
         /// [`RunJailDefect::MountFailed`] when the target has no parent, when the
-        /// tmpfs mount fails, or when the leaf cannot be created — fail-closed: the
-        /// payload never runs against a half-built root with a missing mountpoint.
+        /// parent is the jail root itself or holds an earlier mount (a tmpfs there
+        /// would hide it), when the tmpfs mount fails, or when the leaf cannot be
+        /// created — fail-closed: the payload never runs against a half-built root.
         fn provision_rw_mountpoint(
             &mut self,
             mount_bin: &Path,
@@ -1844,11 +1990,28 @@ mod freebsd_jail {
         ) -> Result<(), RunJailDefect> {
             let parent = target.parent().ok_or_else(|| RunJailDefect::MountFailed {
                 target: target.to_path_buf(),
-                detail: "read-write mount target has no parent to provision".to_owned(),
+                detail: "mount target has no parent to provision".to_owned(),
             })?;
             // A single tmpfs per distinct parent: mounting a second over the same
             // stub would mask the first, hiding the leaf already created on it.
             if !self.tmpfs_parents.iter().any(|p| p == parent) {
+                if parent == self.root {
+                    return Err(RunJailDefect::MountFailed {
+                        target: target.to_path_buf(),
+                        detail: "provisioning this mountpoint would hide the jail root".to_owned(),
+                    });
+                }
+                if self
+                    .mounted
+                    .iter()
+                    .any(|earlier| earlier != parent && earlier.starts_with(parent))
+                {
+                    return Err(RunJailDefect::MountFailed {
+                        target: target.to_path_buf(),
+                        detail: "provisioning this mountpoint would hide an earlier mount"
+                            .to_owned(),
+                    });
+                }
                 mount_tmpfs(mount_bin, parent)?;
                 self.tmpfs_parents.push(parent.to_path_buf());
                 // Unmounted in reverse mount order on drop with the rest.
@@ -1856,7 +2019,7 @@ mod freebsd_jail {
             }
             std::fs::create_dir_all(target).map_err(|e| RunJailDefect::MountFailed {
                 target: target.to_path_buf(),
-                detail: format!("could not create the read-write nullfs mountpoint: {e}"),
+                detail: format!("could not create the mountpoint: {e}"),
             })
         }
 
@@ -3286,5 +3449,204 @@ mod tests {
                  '{macos_token}' in SBPL: {sbpl}"
             );
         }
+    }
+
+    /// A real-directory fixture: a user home holding a cargo home with a `bin`
+    /// and a working tree, plus a scratch outside the home.
+    struct MountFixture {
+        _base: crate::test_dir::TestDir,
+        user: PathBuf,
+        cargo: PathBuf,
+        bin: PathBuf,
+        tree: PathBuf,
+        scratch: PathBuf,
+        mounts: crate::JailMounts,
+    }
+
+    #[allow(clippy::expect_used)] // a fixture the test host cannot create is a broken host, not a case
+    fn mount_fixture() -> MountFixture {
+        use crate::mounts::{CanonicalPath, HomeMasks};
+        let base = crate::test_dir::TestDir::new("freebsd-mount-ops").expect("fixture dir");
+        let user = base.path().join("u");
+        let cargo = user.join(".cargo");
+        let bin = cargo.join("bin");
+        let tree = user.join("tree");
+        let scratch = base.path().join("scratch");
+        for dir in [&bin, &tree, &scratch] {
+            std::fs::create_dir_all(dir).expect("fixture subdir");
+        }
+        let canonical = |path: &Path| CanonicalPath::resolve(path).expect("fixture path resolves");
+        let homes = HomeMasks::resolve(Some(&user), Some(&cargo)).expect("fixture homes");
+        let mounts = crate::JailMounts::checked_against(
+            canonical(&scratch),
+            canonical(&tree),
+            vec![canonical(&bin)],
+            homes,
+            &cargo,
+        )
+        .expect("the fixture binds expose no cargo home");
+        MountFixture {
+            _base: base,
+            user,
+            cargo,
+            bin,
+            tree,
+            scratch,
+            mounts,
+        }
+    }
+
+    fn jailed(root: &Path, path: &Path) -> PathBuf {
+        root.join(path.strip_prefix("/").unwrap_or(path))
+    }
+
+    #[test]
+    fn freebsd_mount_ops_mask_homes_and_cargo_home() {
+        use crate::mounts::{WorkingTree, jail_binds, mount_plan, plan_bind_after_covered_mask};
+        let fixture = mount_fixture();
+        let root = Path::new("/jailroot");
+        let binds = jail_binds(&fixture.mounts, WorkingTree::ReadWrite);
+        let plan = mount_plan(fixture.mounts.homes(), &binds);
+        assert_eq!(plan_bind_after_covered_mask(&plan), None, "{plan:?}");
+        let rendered = freebsd_mount_ops(root, &plan);
+        assert!(matches!(rendered, Ok(_)), "{rendered:?}");
+        let Ok(ops) = rendered else {
+            return;
+        };
+        assert!(
+            ops.iter().all(|op| op.target().starts_with(root)),
+            "every mount lands inside the jail root: {ops:?}"
+        );
+        let at = |wanted: &FreebsdMountOp| ops.iter().position(|op| op == wanted);
+        let user_mask = at(&FreebsdMountOp::Mask {
+            target: jailed(root, &fixture.user),
+        });
+        let cargo_mask = at(&FreebsdMountOp::Mask {
+            target: jailed(root, &fixture.cargo),
+        });
+        let bin_bind = at(&FreebsdMountOp::ReadOnlyBind {
+            source: fixture.bin.clone(),
+            target: jailed(root, &fixture.bin),
+        });
+        let tree_bind = at(&FreebsdMountOp::ReadWriteBind {
+            source: fixture.tree.clone(),
+            target: jailed(root, &fixture.tree),
+        });
+        let scratch_bind = at(&FreebsdMountOp::ReadWriteBind {
+            source: fixture.scratch.clone(),
+            target: jailed(root, &fixture.scratch),
+        });
+        let found = (user_mask, cargo_mask, bin_bind, tree_bind, scratch_bind);
+        assert!(
+            matches!(found, (Some(_), Some(_), Some(_), Some(_), Some(_))),
+            "both homes masked, every bind rendered: {found:?} in {ops:?}"
+        );
+        let (Some(user_mask), Some(cargo_mask), Some(bin_bind), Some(tree_bind), Some(_)) = found
+        else {
+            return;
+        };
+        assert!(user_mask < cargo_mask, "shallowest mask first: {ops:?}");
+        assert!(
+            cargo_mask < bin_bind,
+            "cargo bin re-exposed after its mask: {ops:?}"
+        );
+        assert!(
+            user_mask < tree_bind,
+            "tree re-exposed after the home mask: {ops:?}"
+        );
+    }
+
+    #[test]
+    fn freebsd_mount_ops_leave_the_tree_unbound_unless_granted() {
+        use crate::mounts::{WorkingTree, jail_binds, mount_plan};
+        let fixture = mount_fixture();
+        let root = Path::new("/jailroot");
+        let binds = jail_binds(&fixture.mounts, WorkingTree::Unbound);
+        let rendered = freebsd_mount_ops(root, &mount_plan(fixture.mounts.homes(), &binds));
+        assert!(matches!(rendered, Ok(_)), "{rendered:?}");
+        let Ok(ops) = rendered else {
+            return;
+        };
+        let tree = jailed(root, &fixture.tree);
+        assert!(
+            ops.iter().all(|op| op.target() != tree),
+            "an ungranted working tree is never mounted: {ops:?}"
+        );
+    }
+
+    #[test]
+    fn freebsd_refuses_when_a_mask_cannot_mount() {
+        use crate::mounts::{WorkingTree, jail_binds, mount_plan};
+        let fixture = mount_fixture();
+        let root = Path::new("/jailroot");
+        let binds = jail_binds(&fixture.mounts, WorkingTree::ReadWrite);
+        let rendered = freebsd_mount_ops(root, &mount_plan(fixture.mounts.homes(), &binds));
+        assert!(matches!(rendered, Ok(_)), "{rendered:?}");
+        let Ok(ops) = rendered else {
+            return;
+        };
+        let user_mask = jailed(root, &fixture.user);
+        let mut attempted: Vec<PathBuf> = Vec::new();
+        let result = apply_mount_ops(&ops, |op| {
+            attempted.push(op.target().to_path_buf());
+            match op {
+                FreebsdMountOp::Mask { target } if *target == user_mask => {
+                    Err(RunJailDefect::MountFailed {
+                        target: target.clone(),
+                        detail: "tmpfs refused".to_owned(),
+                    })
+                }
+                _ => Ok(()),
+            }
+        });
+        assert!(
+            matches!(result, Err(RunJailDefect::MountFailed { .. })),
+            "{result:?}"
+        );
+        assert_eq!(
+            attempted.last(),
+            Some(&user_mask),
+            "no mount runs after the failed mask: {attempted:?}"
+        );
+        assert!(
+            attempted
+                .iter()
+                .all(|target| !target.starts_with(&user_mask) || *target == user_mask),
+            "nothing inside the unmasked home was mounted: {attempted:?}"
+        );
+    }
+
+    #[test]
+    fn freebsd_applies_every_mount_when_each_succeeds() {
+        use crate::mounts::{WorkingTree, jail_binds, mount_plan};
+        let fixture = mount_fixture();
+        let root = Path::new("/jailroot");
+        let binds = jail_binds(&fixture.mounts, WorkingTree::ReadWrite);
+        let rendered = freebsd_mount_ops(root, &mount_plan(fixture.mounts.homes(), &binds));
+        assert!(matches!(rendered, Ok(_)), "{rendered:?}");
+        let Ok(ops) = rendered else {
+            return;
+        };
+        let mut attempted: Vec<PathBuf> = Vec::new();
+        let result = apply_mount_ops(&ops, |op| {
+            attempted.push(op.target().to_path_buf());
+            Ok(())
+        });
+        assert!(matches!(result, Ok(())), "{result:?}");
+        let planned: Vec<PathBuf> = ops.iter().map(|op| op.target().to_path_buf()).collect();
+        assert_eq!(attempted, planned);
+    }
+
+    #[test]
+    fn freebsd_mount_ops_refuse_a_path_that_cannot_be_re_rooted() {
+        use crate::mounts::MountStep;
+        let rendered = freebsd_mount_ops(
+            Path::new("/jailroot"),
+            &[MountStep::Mask(PathBuf::from("/srv/../etc"))],
+        );
+        assert!(
+            matches!(rendered, Err(RunJailDefect::MountFailed { .. })),
+            "{rendered:?}"
+        );
     }
 }
