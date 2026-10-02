@@ -73,8 +73,11 @@
 #                          BOTH legs (default 600).
 #   IPE_BIN                path to the built `ipe` binary (default: `ipe` on PATH).
 #   GITHUB_RUN_ID / GITHUB_RUN_ATTEMPT  set by Actions; they tag the probe
-#                          versions so two runs in one second never collide.
-#                          Off CI the shell's pid and attempt 0 stand in.
+#                          versions so two Actions runs in one second never
+#                          collide. Off CI the shell's pid and attempt 0 stand
+#                          in: distinct from every Actions tag (attempts start
+#                          at 1) and from runs live at once in one pid
+#                          namespace, but not across hosts or containers.
 #
 # Every value above except the token and IPE_BIN is parsed once by
 # `lib/smoke-inputs.sh`; a value off its grammar exits 2 naming the input. The
@@ -125,7 +128,7 @@ BAD_SOURCE_REPO="$(parse_repo_slug IPE_SMOKE_BAD_SOURCE_REPO "${IPE_SMOKE_BAD_SO
 # this reserved package ever carries is a `0.0.0-smoke.*` prerelease no real
 # consumer would depend on. The UTC stamp orders runs; the run tag (the GitHub
 # run id + attempt, or this shell's pid + 0 off CI) keeps two runs started in
-# the same second apart.
+# the same second apart (off CI, only within one pid namespace).
 STAMP="$(date -u +%Y%m%d%H%M%S)"
 RUN_TAG="$(parse_run_tag "${GITHUB_RUN_ID:-$$}" "${GITHUB_RUN_ATTEMPT:-0}")"
 VERSION="$(probe_version smoke "$STAMP" "$RUN_TAG")"

@@ -86,10 +86,20 @@ fn run_with_deadline(command: &mut Command) -> Result<Output, Box<dyn Error>> {
 ///
 /// Values travel as positional arguments, never spliced into `script`.
 fn lib(script: &str, args: &[&str]) -> Result<Output, Box<dyn Error>> {
+    lib_with_env(script, args, &[])
+}
+
+/// [`lib`] with `extra` environment pairs set on the bash child.
+fn lib_with_env(
+    script: &str,
+    args: &[&str],
+    extra: &[(&str, &str)],
+) -> Result<Output, Box<dyn Error>> {
     let mut command = Command::new("bash");
     command
         .env_clear()
         .env("PATH", ipe_env::var_os("PATH").unwrap_or_default())
+        .envs(extra.iter().copied())
         .env("SMOKE_LIB", lib_path())
         .arg("-c")
         .arg(format!(". \"$SMOKE_LIB\"\n{script}"))
@@ -400,5 +410,79 @@ fn askpass_template_is_static() -> TestResult {
     let out = lib("parse_gh_owner FORK_INPUT \"$1\"", &[&hostile])?;
     assert_refused(&out, "FORK_INPUT", "hostile owner");
     let _ = fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// The helper's bytes do not depend on the writer's environment, and the token
+/// reaches git only on stdout at the password prompt, never the file.
+#[test]
+fn askpass_text_never_carries_the_token() -> TestResult {
+    let dir = scratch("askpass_token")?;
+    let token = "ghp_smoke_token_marker_0123456789";
+    let plain = dir.join("plain.sh");
+    let primed = dir.join("primed.sh");
+    let plain_arg = plain.to_string_lossy();
+    let primed_arg = primed.to_string_lossy();
+    let out = lib("write_askpass \"$1\"", &[&plain_arg])?;
+    assert!(out.status.success(), "write_askpass: {}", stderr_of(&out));
+    let out = lib_with_env(
+        "write_askpass \"$1\"",
+        &[&primed_arg],
+        &[
+            ("IPE_SMOKE_TOKEN", token),
+            ("IPE_SMOKE_ASKPASS_USER", "someone"),
+        ],
+    )?;
+    assert!(out.status.success(), "write_askpass: {}", stderr_of(&out));
+    let plain_bytes = fs::read(&plain)?;
+    assert_eq!(
+        plain_bytes,
+        fs::read(&primed)?,
+        "the helper text must not depend on the environment"
+    );
+    assert!(
+        !String::from_utf8_lossy(&plain_bytes).contains(token),
+        "the token must never be written into the helper"
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&primed)?.permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "the helper is owner-only");
+    }
+
+    let mut command = Command::new(&primed);
+    command
+        .env_clear()
+        .env("PATH", ipe_env::var_os("PATH").unwrap_or_default())
+        .env("IPE_SMOKE_TOKEN", token)
+        .arg("Password for 'https://someone@github.com':");
+    let asked = run_with_deadline(&mut command)?;
+    assert!(asked.status.success(), "askpass: {}", stderr_of(&asked));
+    assert_eq!(
+        stdout_of(&asked),
+        token,
+        "the password prompt prints the token"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// The parsers admit ASCII only, whatever the locale: a non-ASCII letter or
+/// digit is refused under `en_US.UTF-8`, where a `[a-z]` range would admit `é`.
+#[test]
+fn parsers_refuse_non_ascii_under_utf8_locale() -> TestResult {
+    let utf8 = [("LC_ALL", "en_US.UTF-8")];
+    for name in ["caf\u{e9}", "a\u{ff41}", "a\u{663}"] {
+        let out = lib_with_env("parse_package_name NAME_INPUT \"$1\"", &[name], &utf8)?;
+        assert_refused(&out, "NAME_INPUT", &format!("name {name:?}"));
+    }
+    for owner in ["\u{c5}ngstr\u{f6}m", "o\u{663}"] {
+        let out = lib_with_env("parse_gh_owner OWNER_INPUT \"$1\"", &[owner], &utf8)?;
+        assert_refused(&out, "OWNER_INPUT", &format!("owner {owner:?}"));
+    }
+    let out = lib_with_env("parse_run_tag \"$1\" 1", &["1\u{663}"], &utf8)?;
+    assert_refused(&out, "GITHUB_RUN_ID", "non-ASCII run id");
+    let out = lib_with_env("parse_poll_secs POLL_INPUT \"$1\"", &["\u{661}0"], &utf8)?;
+    assert_refused(&out, "POLL_INPUT", "non-ASCII poll budget");
     Ok(())
 }
