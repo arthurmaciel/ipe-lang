@@ -13,6 +13,7 @@
 //! [`ParseError::IntLiteralOutOfRange`] for an `i64` overflow.
 
 use ipe_diagnostics::{DResult, Diagnostic, ParseError, Span};
+use ipe_syntax::ESCAPES;
 
 /// A lexical token kind.
 ///
@@ -729,25 +730,13 @@ fn lex_char(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     }
 }
 
-/// The escapes a string or char literal resolves, as `(letter, value)` pairs.
-///
-/// [`push_escape`] reads `\letter` as `value`; [`literal_source`] writes `value`
-/// back as `\letter`. One table drives both directions, so a printed literal
-/// re-lexes to the value it was printed from.
-const ESCAPES: [(char, char); 7] = [
-    ('n', '\n'),
-    ('t', '\t'),
-    ('r', '\r'),
-    ('\\', '\\'),
-    ('"', '"'),
-    ('\'', '\''),
-    ('0', '\0'),
-];
-
 /// Resolve one escape sequence (the leading `\` already consumed) and push its
-/// value into `out`. An unrecognised escape is kept as backslash + char so the
-/// user can see the typo rather than silently losing data. End of input after
-/// a lone `\` pushes just the backslash.
+/// value into `out`. [`ipe_syntax::ESCAPES`] is the same table
+/// `ipe_syntax::escape_str_body`/`escape_char_body` write back from, so a
+/// printed literal re-lexes to the value it was printed from. An unrecognised
+/// escape is kept as backslash + char so the user can see the typo rather
+/// than silently losing data. End of input after a lone `\` pushes just the
+/// backslash.
 fn push_escape(lx: &mut Lexer, out: &mut String) {
     let Some(next) = lx.peek() else {
         out.push('\\');
@@ -762,39 +751,6 @@ fn push_escape(lx: &mut Lexer, out: &mut String) {
     if resolved.is_none() {
         out.push(next);
     }
-}
-
-/// The quote that delimits a literal.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum LiteralQuote {
-    /// A character literal `'…'`.
-    Char,
-    /// A single-line string literal `"…"`.
-    Str,
-}
-
-/// The source text of a resolved literal `value`, without its quotes.
-///
-/// Every value in [`ESCAPES`] is written as its escape, except the quote of the
-/// other literal kind (a `"` in a char, a `'` in a string), which stays bare.
-/// Lexed back between `quote`s, the result yields `value` again.
-#[must_use]
-pub fn literal_source(value: &str, quote: LiteralQuote) -> String {
-    let bare_quote = match quote {
-        LiteralQuote::Char => '"',
-        LiteralQuote::Str => '\'',
-    };
-    let mut out = String::with_capacity(value.len());
-    for c in value.chars() {
-        match ESCAPES.iter().find(|(_, v)| *v == c) {
-            Some((letter, _)) if c != bare_quote => {
-                out.push('\\');
-                out.push(*letter);
-            }
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 fn lex_ident(lx: &mut Lexer, lo: u32) -> Tok {
@@ -1047,8 +1003,10 @@ mod source_size_guard_tests {
 }
 
 #[cfg(test)]
-mod literal_source_tests {
-    use super::{ESCAPES, LiteralQuote, Tok, lex, literal_source};
+mod escape_round_trip_tests {
+    use ipe_syntax::{escape_char_body, escape_str_body};
+
+    use super::{ESCAPES, Tok, lex};
 
     /// The kind of the single token `src` lexes to.
     fn only_token(src: &str) -> Option<Tok> {
@@ -1057,12 +1015,13 @@ mod literal_source_tests {
         Some(tok.kind.clone())
     }
 
-    /// Every escapable value, and plain text, re-lexes as the char it was printed from.
+    /// Every table row's value, and plain text, re-lexes to the char it was
+    /// printed from: `lex(escape(v)) == v` for every row.
     #[test]
     fn every_char_value_round_trips() {
         let plain = ['a', ' ', 'é', '"'];
         for c in ESCAPES.iter().map(|(_, v)| *v).chain(plain) {
-            let printed = format!("'{}'", literal_source(&c.to_string(), LiteralQuote::Char));
+            let printed = format!("'{}'", escape_char_body(&c.to_string()));
             assert_eq!(
                 only_token(&printed),
                 Some(Tok::Char(c.to_string())),
@@ -1071,19 +1030,20 @@ mod literal_source_tests {
         }
     }
 
-    /// A string holding every escapable value and a kept unknown escape round-trips.
+    /// A string holding every table row's value and a kept unknown escape
+    /// round-trips: `lex(escape(v)) == v`.
     #[test]
     fn every_string_value_round_trips() {
         let mut value: String = ESCAPES.iter().map(|(_, v)| *v).collect();
         value.push_str("plain \\q 'text'");
-        let printed = format!("\"{}\"", literal_source(&value, LiteralQuote::Str));
+        let printed = format!("\"{}\"", escape_str_body(&value));
         assert_eq!(only_token(&printed), Some(Tok::Str(value)));
     }
 
     /// A backslash char prints escaped: a bare `'\'` is a malformed literal.
     #[test]
     fn a_backslash_char_is_escaped() {
-        assert_eq!(literal_source("\\", LiteralQuote::Char), "\\\\");
+        assert_eq!(escape_char_body("\\"), "\\\\");
         assert!(lex("'\\'").is_err(), "a bare backslash char stays refused");
     }
 }
