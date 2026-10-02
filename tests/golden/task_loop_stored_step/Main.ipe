@@ -1,0 +1,47 @@
+module Main exposing (main)
+
+import Ipe.Task as Task exposing (Step(..))
+import Ipe.Error exposing (Error)
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- A step function read out of storage: a record field and a user-ADT payload
+-- bound by `case`, each passed straight to `Task.loop`.
+
+
+type alias Runner =
+    { step : Int -> Task Error (Step Int Int) }
+
+
+type Holder
+    = Holder (Int -> Task Error (Step Int Int))
+
+
+countUp : Int -> Task Error (Step Int Int)
+countUp n =
+    if n >= 2 then
+        Task.succeed (Done n)
+
+    else
+        Task.succeed (Continue (n + 1))
+
+
+fromRecord : Runner -> Task Error Int
+fromRecord runner =
+    Task.loop 5 0 runner.step
+
+
+fromPayload : Holder -> Task Error Int
+fromPayload holder =
+    case holder of
+        Holder f ->
+            Task.loop 5 0 f
+
+
+main =
+    do
+        a <- fromRecord { step = countUp }
+        _ <- Io.println (String.fromInt a)
+        b <- fromPayload (Holder countUp)
+        Io.println (String.fromInt b)

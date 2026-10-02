@@ -2438,6 +2438,14 @@ const fn feature_label(f: Feature) -> &'static str {
              so the effect flows through a single continuation \
              [feature: non-clone-value-reuse]"
         }
+        Feature::TaskLoopFunctionState => {
+            "a `Task.loop` state that holds a function is not supported yet — the \
+             state is both the `init` argument and the `Continue` constructor's \
+             payload, and a function cannot take one representation in both; keep \
+             the state plain data (a number, a record of values, a custom type \
+             without function fields) and call the function from the step instead \
+             [feature: task-loop-function-state]"
+        }
         Feature::StreamHandlerCapture => {
             "a `Stream.stream` handler is rebuilt for every request, so each value \
              it captures is copied into it — this capture cannot be copied (a \

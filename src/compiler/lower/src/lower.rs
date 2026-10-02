@@ -21529,6 +21529,43 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    /// Refuse a `Task.loop` whose state type `s` embeds a function.
+    ///
+    /// The state is the direct `init` argument (a function there is on the
+    /// `Box<dyn Fn>` carrier) and the `Continue` payload of the `Step` enum (a
+    /// function there is on the storage `Arc<dyn Fn>` carrier), and the runtime
+    /// loop threads ONE state type through both, so a function-embedding state
+    /// is `ipe`-accept-then-`cargo`-fail (E0308). Read from the kernel
+    /// reference's own solved type at the single callee funnel, so a saturated
+    /// call, a partial `Task.loop n`, and a point-free `Task.loop` are all
+    /// checked. An unreadable instance is refused (fail closed).
+    fn reject_task_loop_function_state(
+        &self,
+        resolved: &Callee,
+        callee: &canon::Expr,
+    ) -> DResult<()> {
+        // `Task.loop : Int -> s -> (s -> Task Error (Step s a)) -> Task Error a`,
+        // with `s` the scheme's variable 0.
+        const STATE_VAR: u8 = 0;
+        if !matches!(resolved, Callee::Kernel(KernelFn::TaskLoop)) {
+            return Ok(());
+        }
+        let (Some(shape), Some(solved)) = (
+            KernelFn::TaskLoop.scheme_shape(),
+            self.region_ty(callee.span),
+        ) else {
+            return Err(unsupported(callee.span, Feature::TaskLoopFunctionState));
+        };
+        let heads = SchemeHeads {
+            builtins: &self.builtins.kernel_types,
+            interner: self.interner,
+        };
+        match scheme_var_instance(shape, solved, STATE_VAR, heads) {
+            Some(state) if !ty_contains_fun(state) => Ok(()),
+            Some(_) | None => Err(unsupported(callee.span, Feature::TaskLoopFunctionState)),
+        }
+    }
+
     /// Lower the `Web.tea` cfg record literal, intentionally omitting the
     /// per-field [`Self::reject_function_valued_field`] gate (the L0107 exemption).
     ///
@@ -23580,9 +23617,11 @@ impl<'a> Lowerer<'a> {
     /// Demote a `SharedFun`-carried argument that flows into a KERNEL parameter
     /// wanting a bare `impl Fn` onto the `Box<dyn Fn>` carrier that `impl Fn`
     /// accepts. `json_enc_list(f: impl Fn(A) -> Value, items)`'s element encoder
-    /// (argument 0) is such a slot: a `Codec a`'s stored encoder read
-    /// (`r.enc`, an `Arc<dyn Fn>`) does not `impl Fn`, so passing it directly is
-    /// `ipe`-accept-then-`cargo`-fail (E0277). The eta-demotion
+    /// (argument 0) and `task_loop(ceiling, init, step: impl Fn(S) -> …, …)`'s
+    /// step (argument 2) are such slots: a stored fn read (`r.enc`, `cfg.step`,
+    /// a `case`-bound user-ADT payload — each an `Arc<dyn Fn>`) does not
+    /// `impl Fn`, so passing it directly is `ipe`-accept-then-`cargo`-fail
+    /// (E0277). The eta-demotion
     /// ([`Self::demote_shared_fn_read`]) wraps the shared read in a fresh
     /// `Box<dyn Fn>` (`move |eta_0, …| (read)(eta_0, …)`), which the `impl Fn`
     /// bound accepts, mirroring the top-level-def read-frontier discipline.
@@ -23599,13 +23638,15 @@ impl<'a> Lowerer<'a> {
         lowered_args: &mut [Expr],
     ) -> DResult<()> {
         // The set of (kernel, arg index) whose Rust parameter is a bare `impl Fn`
-        // that rejects an `Arc<dyn Fn>` — the element encoder of `json_enc_list`.
-        // `json_enc_object` takes `Vec<(String, Value)>` (no fn param), so it is
-        // not here; the decoder-side factories store their `Fn` on the runtime
-        // `Decoder`'s own boxed carrier, not a bare `impl Fn`, so they are owned
-        // by their carrier path, not this demotion.
+        // that rejects an `Arc<dyn Fn>` — the element encoder of `json_enc_list`
+        // and the step of `task_loop`. `json_enc_object` takes
+        // `Vec<(String, Value)>` (no fn param), so it is not here; the
+        // decoder-side factories store their `Fn` on the runtime `Decoder`'s own
+        // boxed carrier, not a bare `impl Fn`, so they are owned by their carrier
+        // path, not this demotion.
         let fn_arg_index = match resolved {
             Callee::Kernel(KernelFn::JsonEncList) => 0,
+            Callee::Kernel(KernelFn::TaskLoop) => 2,
             _ => return Ok(()),
         };
         let Some(slot) = lowered_args.get_mut(fn_arg_index) else {
@@ -26640,6 +26681,7 @@ impl<'a> Lowerer<'a> {
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         let resolved = self.lower_callee_resolve(callee)?;
         self.reject_hof_callback_function_result(&resolved, callee)?;
+        self.reject_task_loop_function_state(&resolved, callee)?;
         self.reject_input_sub_outside_its_surface(&resolved, callee.span)?;
         match &resolved {
             Callee::Kernel(kernel) => {

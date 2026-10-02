@@ -258,7 +258,8 @@ and fails with an `InvalidInput` error after N-1 steps under a ceiling of N-1. A
 ceiling below 1 fails before any step runs, and a failing step ends the loop with
 that step's error unchanged. The loop runs at constant stack depth however many
 steps it takes, so repeat a step with `loop` rather than with a function that
-calls itself inside `andThen`.
+calls itself inside `andThen`. The state is plain data: a state that holds a
+function is refused (IPE-L0114).
 
 ```ipe
 loop 10 0 (\n -> if n >= 3 then succeed (Done n) else succeed (Continue (n + 1))) --> Task Error Int

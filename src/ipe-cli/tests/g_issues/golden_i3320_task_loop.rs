@@ -4,11 +4,13 @@
 //! |---|---|---|
 //! | `task_loop` | 150,000-step counter, `do`-block step; then a ceiling hit | prints `150000`, then the typed limit error |
 //! | `task_loop_recursive_control` | the same counter as a self-recursive `andThen` | exits nonzero with `RecursionLimit` |
-//! | `task_loop_no_step_value` | a step that always fails, no `Step` ever built | prints `Conflict: x` |
-//! | `task_loop_nonclone_capture` | a step capturing a `Task` parameter | refused by `ipe` with a typed lowering code |
+//! | `task_loop_no_step_value` | a step that always fails, its `Step` result type never fixed | refused by `ipe`, IPE-L0102 |
+//! | `task_loop_nonclone_capture` | a step capturing a `Task` parameter | refused by `ipe`, IPE-L0126 |
 //! | `task_loop_shapes` | top-level fn, capturing lambda, partial `Task.loop 5`, `case` on `Step` | builds and runs |
+//! | `task_loop_stored_step` | a step read from a record field and from a `case`-bound ADT payload | builds and runs |
+//! | `task_loop_fn_state` | a loop state that is a function | refused by `ipe`, IPE-L0114 |
 //! | `task_loop_parser_clash` | qualified `Parser.Done` beside `Task.Done` | builds and runs |
-//! | inline sources | a `String` ceiling; a step that is not a `Step`; two unqualified `Step(..)` imports | typed type / name errors |
+//! | inline sources | a `String` ceiling; a step that is not a `Step`; two unqualified `Step(..)` imports; a point-free loop at a function state | typed type / name / lowering errors |
 //!
 //! Every fixture is checked at `ipe` time here; under `IPE_E2E=1` the accepted
 //! ones are also built with `cargo` and run (THE SEAL).
@@ -152,9 +154,22 @@ fn self_recursive_and_then_at_the_same_size_trips_the_recursion_guard() {
     );
 }
 
+/// A step that only fails leaves the `Step`'s result type free; a lambda whose
+/// return embeds a user type at a free parameter has no concrete Rust type, so
+/// `ipe` refuses it with the polymorphism code rather than emitting a guess.
 #[test]
-fn a_step_that_never_builds_a_step_value_ends_with_its_error() {
-    accept_and_run("task_loop_no_step_value", "Conflict: x");
+fn a_step_whose_result_type_is_never_fixed_is_refused_at_ipe_time() {
+    let name = "task_loop_no_step_value";
+    let entry = fixture_entry(&repo_root(), name);
+    let Some(code) = refusal_code(name, &entry) else {
+        return;
+    };
+    assert_eq!(
+        code,
+        ipe_diagnostics::IPE_L0102,
+        "{name}: expected IPE-L0102, got {}",
+        code.as_str()
+    );
 }
 
 #[test]
@@ -164,9 +179,34 @@ fn a_step_capturing_a_task_is_refused_at_ipe_time() {
     let Some(code) = refusal_code(name, &entry) else {
         return;
     };
-    assert!(
-        code == ipe_diagnostics::IPE_L0135 || code == ipe_diagnostics::IPE_L0125,
-        "{name}: expected IPE-L0135 or IPE-L0125, got {}",
+    assert_eq!(
+        code,
+        ipe_diagnostics::IPE_L0126,
+        "{name}: expected IPE-L0126, got {}",
+        code.as_str()
+    );
+}
+
+/// A step read out of a record field and out of a `case`-bound user-ADT payload
+/// is a stored function; both reach `Task.loop`'s step slot and run.
+#[test]
+fn a_stored_step_from_a_record_field_or_adt_payload_builds_and_runs() {
+    accept_and_run("task_loop_stored_step", "2\n2");
+}
+
+/// A loop state that is a function would sit on two carriers at once (the
+/// direct `init` and the `Continue` payload), so `ipe` refuses it.
+#[test]
+fn a_function_typed_loop_state_is_refused_at_ipe_time() {
+    let name = "task_loop_fn_state";
+    let entry = fixture_entry(&repo_root(), name);
+    let Some(code) = refusal_code(name, &entry) else {
+        return;
+    };
+    assert_eq!(
+        code,
+        ipe_diagnostics::IPE_L0114,
+        "{name}: expected IPE-L0114, got {}",
         code.as_str()
     );
 }
@@ -233,6 +273,41 @@ main =
         |> Task.andThen (\n -> Io.println (String.fromInt n))
 ";
 
+const POINT_FREE_FN_STATE: &str = r"module Main exposing (main)
+
+import Ipe.Task as Task exposing (Step(..))
+import Ipe.Error exposing (Error)
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+runWith : (Int -> (Int -> Int) -> ((Int -> Int) -> Task Error (Step (Int -> Int) Int)) -> Task Error Int) -> Task Error Int
+runWith run =
+    run 3 (\x -> x + 1) (\f -> Task.succeed (Done (f 0)))
+
+
+main =
+    runWith Task.loop
+        |> Task.andThen (\n -> Io.println (String.fromInt n))
+";
+
+/// A point-free `Task.loop` instantiated at a function state is refused at the
+/// reference itself, like the saturated call.
+#[test]
+fn a_point_free_loop_at_a_function_state_is_refused_at_ipe_time() {
+    let name = "task_loop_point_free_fn_state";
+    let entry = crate::support::expect_scratch_entry(name, write_single(name, POINT_FREE_FN_STATE));
+    let Some(code) = refusal_code(name, &entry) else {
+        return;
+    };
+    assert_eq!(
+        code,
+        ipe_diagnostics::IPE_L0114,
+        "{name}: expected IPE-L0114, got {}",
+        code.as_str()
+    );
+}
+
 #[test]
 fn a_string_ceiling_is_a_type_error() {
     assert_refused_in_family("task_loop_string_ceiling", STRING_CEILING, Family::Type);
@@ -243,8 +318,11 @@ fn a_step_that_returns_no_step_is_a_type_error() {
     assert_refused_in_family("task_loop_non_step_result", NON_STEP_RESULT, Family::Type);
 }
 
+/// Exposing `Step` unqualified from both `Ipe.Parser` and `Ipe.Task` brings two
+/// distinct types under one name; the import itself is refused as a duplicate
+/// type (IPE-N0012), before any constructor use is resolved.
 #[test]
-fn two_unqualified_step_imports_are_ambiguous() {
+fn two_unqualified_step_imports_are_refused_as_a_duplicate_type() {
     let name = "task_loop_two_unqualified_steps";
     let entry =
         crate::support::expect_scratch_entry(name, write_single(name, TWO_UNQUALIFIED_STEPS));
@@ -253,8 +331,8 @@ fn two_unqualified_step_imports_are_ambiguous() {
     };
     assert_eq!(
         code,
-        ipe_diagnostics::IPE_N0024,
-        "{name}: expected IPE-N0024, got {}",
+        ipe_diagnostics::IPE_N0012,
+        "{name}: expected IPE-N0012, got {}",
         code.as_str()
     );
 }
