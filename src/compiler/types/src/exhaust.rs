@@ -242,26 +242,34 @@ impl Sigs {
         })
     }
 
-    /// The payload arity of a head constructor. A [`Head::Tuple`] carries its own
-    /// arity; an ADT head is looked up. A missing ADT entry can only arise for a
-    /// constructor outside this module's unions — and [`case_analysable`] has
-    /// already excluded any such `case` from the matrix walk — so the `0`
-    /// fallback is unreachable in practice yet keeps the function total (no panic).
-    fn arity(&self, head: &Head) -> usize {
+    /// The payload arity of a head constructor.
+    ///
+    /// A [`Head::Tuple`] carries its own arity; an ADT head is looked up. The
+    /// tables hold every union reachable from the module (its own, the builtins,
+    /// and every union a dependency interface carries), so a missing ADT entry
+    /// is an internal invariant break and fails closed as a `CompilerBug` rather
+    /// than defaulting to a nullary arity that would mis-shape the matrix.
+    fn arity(&self, head: &Head) -> DResult<usize> {
         match head {
-            Head::Tuple(n) => *n,
+            Head::Tuple(n) => Ok(*n),
             Head::Adt(h, c) => self
                 .ctor_arity
                 .get(h.as_slice())
                 .and_then(|by_ctor| by_ctor.get(c))
                 .copied()
-                .unwrap_or(0),
+                .ok_or_else(|| Diagnostic::CompilerBug {
+                    where_: STAGE,
+                    detail: format!(
+                        "constructor symbol {} is absent from the exhaustiveness tables",
+                        c.as_raw()
+                    ),
+                }),
             // Literal heads carry no sub-patterns; the empty-list `[]` (`Nil`) is
             // likewise nullary.
-            Head::Bool(_) | Head::Int(_) | Head::Char(_) | Head::Str(_) | Head::Nil => 0,
+            Head::Bool(_) | Head::Int(_) | Head::Char(_) | Head::Str(_) | Head::Nil => Ok(0),
             // The cons constructor `head :: tail` carries the head element and the
             // tail list.
-            Head::Cons => 2,
+            Head::Cons => Ok(2),
         }
     }
 }
@@ -569,10 +577,11 @@ fn check_param_irrefutable(pat: &canon::Pattern) -> DResult<()> {
 /// **parameter / binder** pattern for irrefutability (IPE-T0015).
 ///
 /// `extra_unions` supplies union definitions declared outside `module` (a
-/// scoped per-module solve passes its dependencies' interface unions;
-/// the whole-program solve passes none — the linked merge already carries
-/// every union), so a `case` over an imported ADT is analysed against the
-/// full constructor signature instead of being skipped as unknown.
+/// scoped per-module solve passes every union reachable through its dependency
+/// interfaces, transitively; the whole-program solve passes none — the linked
+/// merge already carries every union), so a `case` over an imported ADT is
+/// analysed against the full constructor signature instead of being skipped as
+/// unknown.
 ///
 /// Redundant-branch findings ([`TypeError::RedundantCaseBranch`], IPE-T0011)
 /// are pushed onto `warnings`, each paired with its owning definition's home,
@@ -1014,12 +1023,13 @@ fn useful(
 
     match first {
         UPat::Ctor(c, args) => {
-            let specialised = specialise(matrix, c, sigs);
+            let arity = sigs.arity(c)?;
+            let specialised = specialise(matrix, c, arity);
             let mut sub_q = args.clone();
             sub_q.extend_from_slice(rest_q);
             Ok(useful(&specialised, &sub_q, sigs, cap, budget)?
                 .into_iter()
-                .map(|w| rebuild(c, sigs.arity(c), w))
+                .map(|w| rebuild(c, arity, w))
                 .collect())
         }
         UPat::Wild => {
@@ -1029,7 +1039,7 @@ fn useful(
                 // refine the wildcard into one of them. Try each in turn.
                 let mut out: Vec<Vec<UPat>> = Vec::new();
                 for (head, arity) in signature {
-                    let specialised = specialise(matrix, &head, sigs);
+                    let specialised = specialise(matrix, &head, arity);
                     let mut sub_q = vec![UPat::Wild; arity];
                     sub_q.extend_from_slice(rest_q);
                     for w in useful(&specialised, &sub_q, sigs, cap - out.len(), budget)? {
@@ -1070,10 +1080,9 @@ fn useful(
 
 /// Specialise `matrix` by head constructor `c` (Maranget's `S(c, P)`): rows whose
 /// first pattern is `c` expand its sub-patterns into the leading columns; rows
-/// with a wildcard first contribute `arity(c)` fresh wildcards; rows with a
-/// different head are dropped.
-fn specialise(matrix: &[Vec<UPat>], c: &Head, sigs: &Sigs) -> Vec<Vec<UPat>> {
-    let arity = sigs.arity(c);
+/// with a wildcard first contribute `arity` (the payload arity of `c`) fresh
+/// wildcards; rows with a different head are dropped.
+fn specialise(matrix: &[Vec<UPat>], c: &Head, arity: usize) -> Vec<Vec<UPat>> {
     let mut out = Vec::new();
     for row in matrix {
         let Some((first, rest)) = row.split_first() else {
@@ -1550,6 +1559,63 @@ mod tests {
             union_of_scrutinee(&["Lib"], "Order"),
             None,
             "a user `Lib.Order` is never mistaken for the builtin"
+        );
+    }
+
+    /// A stdlib union listed as distinct from the builtin of its name keys no
+    /// builtin union.
+    ///
+    /// `Ipe.Db.Store` declares its own `Order` (`Asc | Desc`); without its own
+    /// table entry a catch-all over it must not be judged against `LT | EQ | GT`.
+    #[test]
+    fn a_stdlib_distinct_scrutinee_is_not_the_builtin_union() {
+        assert_eq!(
+            union_of_scrutinee(&["Ipe", "Db", "Store"], "Order"),
+            None,
+            "`Ipe.Db.Store.Order` is never mistaken for the builtin `Order`"
+        );
+        assert!(
+            union_of_scrutinee(&["Ipe", "Basics"], "Order")
+                .is_some_and(|(home, _)| home.is_empty()),
+            "`Basics.Order` is the builtin `Order`"
+        );
+    }
+
+    /// A constructor absent from the signature tables is a typed internal
+    /// error, never a nullary default.
+    #[test]
+    #[allow(clippy::expect_used)] // interning short literals cannot exhaust the interner
+    fn an_arity_table_miss_fails_closed() {
+        let mut interner = Interner::new();
+        let main = vec![interner.intern("Main").expect("intern Main")];
+        let ghost = interner.intern("Ghost").expect("intern Ghost");
+        let entry = canon::Module {
+            name: main.clone(),
+            unions: Vec::new(),
+            defs: Vec::new(),
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: BTreeSet::new(),
+        };
+        let sigs = Sigs::build(&entry, &[], &mut interner).expect("builtin signatures build");
+        let head = Head::Adt(main, ghost);
+        assert!(
+            matches!(sigs.arity(&head), Err(Diagnostic::CompilerBug { .. })),
+            "a constructor missing from the tables must fail closed"
+        );
+        let matrix = vec![vec![UPat::Wild]];
+        let mut budget = ExhaustBudget::unbounded();
+        assert!(
+            matches!(
+                useful(
+                    &matrix,
+                    &[UPat::Ctor(head, Vec::new())],
+                    &sigs,
+                    1,
+                    &mut budget
+                ),
+                Err(Diagnostic::CompilerBug { .. })
+            ),
+            "the usefulness walk must surface the miss, not analyse a guessed shape"
         );
     }
 }
