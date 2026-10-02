@@ -2619,8 +2619,11 @@ const fn if_defect_str(d: IfDefect) -> &'static str {
 }
 
 /// A human-safe representation of a character for inline display.
+///
+/// A control, a denied format character, or a space is invisible or
+/// reorders the line around it, so it is shown by its code point.
 fn char_repr(c: char) -> String {
-    if c.is_control() || c == ' ' {
+    if c.is_control() || crate::terminal::is_denied_format_char(c) || c == ' ' {
         format!("U+{:04X}", c as u32)
     } else {
         format!("`{c}`")
@@ -2706,6 +2709,16 @@ mod tests {
     use super::*;
     use crate::code::{IPE_I0001, IPE_N0001, IPE_P0050, IPE_T0001};
     use crate::diagnostic::{Diagnostic, Expected, ExpectedSet, ParseError, SortedNames};
+
+    /// A bidi override or zero-width character named in a diagnostic is shown
+    /// by its code point, never raw where it would reorder or hide the line.
+    #[test]
+    fn char_repr_names_invisible_and_reordering_chars_by_code_point() {
+        assert_eq!(char_repr('\u{202e}'), "U+202E");
+        assert_eq!(char_repr('\u{200b}'), "U+200B");
+        assert_eq!(char_repr('\u{1b}'), "U+001B");
+        assert_eq!(char_repr('$'), "`$`");
+    }
 
     fn con(name: &str) -> TyDoc {
         TyDoc::Con {

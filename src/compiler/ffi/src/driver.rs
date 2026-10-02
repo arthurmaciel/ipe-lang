@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use crate::diag::{Diagnostic, SourceDefect};
 use crate::naming::{WRAPPER_END_SENTINEL, WRAPPER_SENTINEL_PREFIX};
 use crate::pkginfo::{CrateVersion, FeatureName, PackageName, PkgInfo};
-use ipe_diagnostics::terminal::{TerminalLine, TerminalSafe};
+use ipe_diagnostics::terminal::TerminalLine;
 
 // ── crate-name gate ─────────────────────────────────────────────────────────
 
@@ -845,16 +845,10 @@ pub fn install_hint_for(sys_lib: &SysLibName) -> String {
 /// interpolating it into a diagnostic, keeping it on one line.
 ///
 /// A length-capped but un-stripped foreign string can carry terminal control
-/// codes that forge markup or corrupt a structured output consumer. The rules
-/// are [`TerminalSafe::sanitize`]'s, the one sanitiser every user-facing text
-/// passes; the line break it keeps is dropped here, since the value is shown
-/// inline.
+/// codes that forge markup or corrupt a structured output consumer. The value
+/// is shown inline, so it is parsed into one [`TerminalLine`].
 fn strip_foreign_str(s: &str) -> String {
-    TerminalSafe::sanitize(s)
-        .as_str()
-        .chars()
-        .filter(|&c| c != '\n')
-        .collect()
+    TerminalLine::sanitize(s).as_str().to_owned()
 }
 
 /// Summarise the raw inspector error strings into a short human-readable
@@ -2864,11 +2858,11 @@ mod tests {
     }
 
     #[test]
-    fn strip_foreign_str_drops_control_chars_except_tab() {
-        // NUL (\x00), BEL (\x07), and US (\x1f) are stripped; tab and printable
-        // chars pass through unchanged.
-        let s = "a\x00b\x07c\td\x1fe";
-        assert_eq!(strip_foreign_str(s), "abc\tde");
+    fn strip_foreign_str_drops_every_control_char_and_layout_whitespace() {
+        // NUL (\x00), BEL (\x07), US (\x1f), and the tab and line break a
+        // block renderer would keep are all stripped from an inline value.
+        let s = "a\x00b\x07c\td\x1fe\nf";
+        assert_eq!(strip_foreign_str(s), "abcdef");
     }
 
     #[test]
