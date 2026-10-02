@@ -1684,22 +1684,20 @@ mod tests {
         let bytes = s.as_bytes();
         let mut out = Vec::with_capacity(bytes.len());
         let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'%' && i + 2 < bytes.len() {
-                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
-                let byte = hex.and_then(|h| u8::from_str_radix(h, 16).ok());
-                match byte {
-                    Some(b) => {
-                        out.push(b);
-                        i += 3;
-                    }
-                    None => {
-                        out.push(bytes[i]);
-                        i += 1;
-                    }
-                }
+        while let Some(&b) = bytes.get(i) {
+            let decoded_escape = if b == b'%' {
+                bytes
+                    .get(i + 1..i + 3)
+                    .and_then(|h| std::str::from_utf8(h).ok())
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
             } else {
-                out.push(bytes[i]);
+                None
+            };
+            if let Some(decoded) = decoded_escape {
+                out.push(decoded);
+                i += 3;
+            } else {
+                out.push(b);
                 i += 1;
             }
         }
