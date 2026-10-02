@@ -48,7 +48,9 @@ import TestSupport exposing
     , execIndex
     , execIndexUnchecked
     , Scratch
-    , scratchAt
+    , freshScratch
+    , freshDir
+    , check
     , indexSchemaStatements
     , execIndexSchema
     , seedIndexDb
@@ -67,9 +69,7 @@ import TestSupport exposing
     , renderedForeign
     , describeText
     , refusedFor
-    , openReviewAt
     , openReadOnlyAt
-    , countDrainRows
     , vectorsPath
     , ipeIndexTestFile
     , repoFile
@@ -277,8 +277,8 @@ testKeys =
         ]
 
 
-checks : Db -> Task.Task Error (List ( String, Bool ))
-checks _ =
+checks : Task.Task Error (List ( String, Bool ))
+checks =
     Task.sequence
         [ Task.succeed
             ( "formatReviewedAt renders UTC"

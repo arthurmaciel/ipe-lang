@@ -48,7 +48,9 @@ import TestSupport exposing
     , execIndex
     , execIndexUnchecked
     , Scratch
-    , scratchAt
+    , freshScratch
+    , freshDir
+    , check
     , indexSchemaStatements
     , execIndexSchema
     , seedIndexDb
@@ -88,10 +90,13 @@ import TestSupport exposing
 -- units' metadata and source slices.
 indexBridge : Task.Task Error Bool
 indexBridge =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b3-test"
+    freshDir "ipe-index-b3-test" |> Task.andThen indexBridgeIn
 
+
+
+indexBridgeIn : String -> Task.Task Error Bool
+indexBridgeIn base =
+    let
         repo =
             base ++ "/repo"
 
@@ -111,11 +116,8 @@ indexBridge =
 -- returns the view tag of each queued unit as `uid=tag`.
 viewTagsAfter : String -> (Scratch -> Task.Task Error ()) -> Task.Task Error (List String)
 viewTagsAfter name mutate =
-    let
-        at =
-            scratchAt name
-    in
     do
+        at <- freshScratch name
         removeFileIfAny at.indexDb
         seedIndex at.indexDb at.repo
         mutate at
@@ -197,10 +199,13 @@ oneMissingFileIsolated =
 -- loads.
 oversizedSourceRefused : Task.Task Error Bool
 oversizedSourceRefused =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-oversized-source"
+    freshDir "ipe-index-oversized-source" |> Task.andThen oversizedSourceRefusedIn
 
+
+
+oversizedSourceRefusedIn : String -> Task.Task Error Bool
+oversizedSourceRefusedIn base =
+    let
         repo =
             base ++ "/repo"
 
@@ -221,10 +226,13 @@ oversizedSourceRefused =
 -- name; a bogus uid loads Nothing; the qualified-name table lists every unit.
 unitPageLoad : Task.Task Error Bool
 unitPageLoad =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b9-unit"
+    freshDir "ipe-index-b9-unit" |> Task.andThen unitPageLoadIn
 
+
+
+unitPageLoadIn : String -> Task.Task Error Bool
+unitPageLoadIn base =
+    let
         repo =
             base ++ "/repo"
 
@@ -365,15 +373,15 @@ vectorHolds v =
             False
 
 
-checks : Db -> Task.Task Error (List ( String, Bool ))
-checks _ =
+checks : Task.Task Error (List ( String, Bool ))
+checks =
     Task.sequence
-        [ Task.map (\ok -> ( "index bridge loads queued units", ok )) indexBridge
-        , Task.map (\ok -> ( "a drifted unit's source is withheld", ok )) driftedSourceNotShown
-        , Task.map (\ok -> ( "a span past the file is refused, not clamped", ok )) rangePastFileIsStale
-        , Task.map (\ok -> ( "an unprefixed or foreign-scheme hash is unverifiable", ok )) legacyHashUnverifiable
-        , Task.map (\ok -> ( "one missing file fails only its unit", ok )) oneMissingFileIsolated
-        , Task.map (\ok -> ( "source file past the read ceiling refused", ok )) oversizedSourceRefused
-        , Task.map (\ok -> ( "view and attestation match the shared ipe-index vectors", ok )) viewHashVectors
-        , Task.map (\ok -> ( "unit page loads by uid, names resolve", ok )) unitPageLoad
+        [ check "index bridge loads queued units" indexBridge
+        , check "a drifted unit's source is withheld" driftedSourceNotShown
+        , check "a span past the file is refused, not clamped" rangePastFileIsStale
+        , check "an unprefixed or foreign-scheme hash is unverifiable" legacyHashUnverifiable
+        , check "one missing file fails only its unit" oneMissingFileIsolated
+        , check "source file past the read ceiling refused" oversizedSourceRefused
+        , check "view and attestation match the shared ipe-index vectors" viewHashVectors
+        , check "unit page loads by uid, names resolve" unitPageLoad
         ]

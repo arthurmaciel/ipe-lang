@@ -31,7 +31,7 @@ import Lib.RepoPath as RepoPath exposing (PathError(..), Root, RootMap)
 import Lib.SafeText as SafeText
 import Lib.Settings as Settings
 
-import TestSupport exposing (migratedReviewAt)
+import HarnessTests
 import DbTests
 import ViewTests
 import IndexTests
@@ -54,17 +54,18 @@ contributesChecks moduleName results =
         Task.succeed results
 
 
-gatherChecks : Db -> Task.Task Error (List ( String, Bool ))
-gatherChecks db =
+gatherChecks : Task.Task Error (List ( String, Bool ))
+gatherChecks =
     Task.sequence
-        [ DbTests.checks db |> Task.andThen (contributesChecks "DbTests")
-        , ViewTests.checks db |> Task.andThen (contributesChecks "ViewTests")
-        , IndexTests.checks db |> Task.andThen (contributesChecks "IndexTests")
-        , QueueTests.checks db |> Task.andThen (contributesChecks "QueueTests")
-        , LinksTests.checks db |> Task.andThen (contributesChecks "LinksTests")
-        , SafeTextTests.checks db |> Task.andThen (contributesChecks "SafeTextTests")
-        , RepoPathTests.checks db |> Task.andThen (contributesChecks "RepoPathTests")
-        , SettingsTests.checks db |> Task.andThen (contributesChecks "SettingsTests")
+        [ HarnessTests.checks |> Task.andThen (contributesChecks "HarnessTests")
+        , DbTests.checks |> Task.andThen (contributesChecks "DbTests")
+        , ViewTests.checks |> Task.andThen (contributesChecks "ViewTests")
+        , IndexTests.checks |> Task.andThen (contributesChecks "IndexTests")
+        , QueueTests.checks |> Task.andThen (contributesChecks "QueueTests")
+        , LinksTests.checks |> Task.andThen (contributesChecks "LinksTests")
+        , SafeTextTests.checks |> Task.andThen (contributesChecks "SafeTextTests")
+        , RepoPathTests.checks |> Task.andThen (contributesChecks "RepoPathTests")
+        , SettingsTests.checks |> Task.andThen (contributesChecks "SettingsTests")
         ]
         |> Task.map List.concat
 
@@ -99,27 +100,9 @@ finish results =
             )
 
 
+-- Every check opens the stores it reads under a directory of its own
+-- (`TestSupport.freshDir`), so the run shares no database between checks.
 main : Task.Task Error ()
 main =
-    let
-        dbPath =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-b2-test.db"
-    in
-    Task.fromResult (Path.fromString dbPath)
-        |> Task.andThen File.remove
-        |> Task.onError (\_ -> Task.succeed ())
-        |> Task.andThen (\_ -> migratedReviewAt dbPath)
-        |> Task.andThen gatherChecks
-        |> Task.andThen
-            (\results ->
-                removeDbFile dbPath
-                    |> Task.map (\_ -> results)
-            )
+    gatherChecks
         |> Task.andThen finish
-
-
-removeDbFile : String -> Task.Task Error ()
-removeDbFile dbPath =
-    Task.fromResult (Path.fromString dbPath)
-        |> Task.andThen File.remove
-        |> Task.onError (\_ -> Task.succeed ())

@@ -48,7 +48,9 @@ import TestSupport exposing
     , execIndex
     , execIndexUnchecked
     , Scratch
-    , scratchAt
+    , freshScratch
+    , freshDir
+    , check
     , indexSchemaStatements
     , execIndexSchema
     , seedIndexDb
@@ -67,9 +69,7 @@ import TestSupport exposing
     , renderedForeign
     , describeText
     , refusedFor
-    , openReviewAt
     , openReadOnlyAt
-    , countDrainRows
     , vectorsPath
     , ipeIndexTestFile
     , repoFile
@@ -131,8 +131,8 @@ linksSubstring =
     noSelf && urlPunct && firstWins
 
 
-checks : Db -> Task.Task Error (List ( String, Bool ))
-checks _ =
+checks : Task.Task Error (List ( String, Bool ))
+checks =
     Task.succeed
         [ ( "links resolve internal and external", linksResolve )
         , ( "link tokens: no self-links, urls strip punctuation, first occurrence wins", linksSubstring )

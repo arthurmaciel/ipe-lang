@@ -48,7 +48,10 @@ import TestSupport exposing
     , execIndex
     , execIndexUnchecked
     , Scratch
-    , scratchAt
+    , freshScratch
+    , freshDir
+    , check
+    , onFreshReview
     , indexSchemaStatements
     , execIndexSchema
     , seedIndexDb
@@ -82,28 +85,6 @@ import TestSupport exposing
 
 
 
--- A scratch review database at `name`, migrated through `LibDb.probe`, given
--- to `run`, then removed with its WAL files.
-withScratchReview : String -> (Db -> Task.Task Error Bool) -> Task.Task Error Bool
-withScratchReview name run =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/" ++ name
-
-        dbPath =
-            base ++ "/review.db"
-    in
-    do
-        dir <- Task.fromResult (Path.fromString base)
-        File.mkdirAll dir
-        removeReviewFiles dbPath
-        db <- migratedReviewAt dbPath
-        ok <- run db
-        removeReviewFiles dbPath
-        Task.succeed ok
-
-
-
 removeReviewFiles : String -> Task.Task Error ()
 removeReviewFiles dbPath =
     do
@@ -119,17 +100,17 @@ removeReviewFiles dbPath =
 -- `drain_cursor` migration stands without the one dropping it.
 drainCursorGoneAfterMigrate : Task.Task Error Bool
 drainCursorGoneAfterMigrate =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-table-set"
+    freshDir "ipe-review-table-set" |> Task.andThen drainCursorGoneAfterMigrateIn
 
+
+
+drainCursorGoneAfterMigrateIn : String -> Task.Task Error Bool
+drainCursorGoneAfterMigrateIn base =
+    let
         dbPath =
             base ++ "/review.db"
     in
     do
-        dir <- Task.fromResult (Path.fromString base)
-        File.mkdirAll dir
-        removeReviewFiles dbPath
         loc <- Settings.parseDbLocation "IPE_REVIEW_DB" dbPath
         LibDb.probe loc
         LibDb.probe loc
@@ -146,17 +127,17 @@ drainCursorGoneAfterMigrate =
 -- empty. Red while `open` migrates.
 openDoesNotMigrate : Task.Task Error Bool
 openDoesNotMigrate =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-open-no-migrate"
+    freshDir "ipe-review-open-no-migrate" |> Task.andThen openDoesNotMigrateIn
 
+
+
+openDoesNotMigrateIn : String -> Task.Task Error Bool
+openDoesNotMigrateIn base =
+    let
         dbPath =
             base ++ "/review.db"
     in
     do
-        dir <- Task.fromResult (Path.fromString base)
-        File.mkdirAll dir
-        removeReviewFiles dbPath
         System.setenv "IPE_REVIEW_DB" dbPath
         db <- LibDb.open
         readFailed <-
@@ -173,7 +154,7 @@ openDoesNotMigrate =
 -- first decision kept.
 duplicateInsertIsNoop : Task.Task Error Bool
 duplicateInsertIsNoop =
-    withScratchReview "ipe-review-duplicate"
+    onFreshReview "ipe-review-duplicate"
         (\db ->
             do
                 attested <- attestedFor "ipe-review-duplicate-index" "u-a"
@@ -280,7 +261,7 @@ storedReasonShown expected found =
 
 decisionRoundtrip : Task.Task Error Bool
 decisionRoundtrip =
-    withScratchReview "ipe-review-roundtrip"
+    onFreshReview "ipe-review-roundtrip"
         (\db ->
             do
                 insertBoth "ipe-review-roundtrip-index" db
@@ -486,10 +467,13 @@ loadTicketsSettleLatest =
 -- SQLite's read-only result code (`SQLITE_READONLY`, 8).
 failedWritesKeepTheirError : Task.Task Error Bool
 failedWritesKeepTheirError =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-failed-writes"
+    freshDir "ipe-review-failed-writes" |> Task.andThen failedWritesKeepTheirErrorIn
 
+
+
+failedWritesKeepTheirErrorIn : String -> Task.Task Error Bool
+failedWritesKeepTheirErrorIn base =
+    let
         dbPath =
             base ++ "/review.db"
 
@@ -538,10 +522,13 @@ hasDecision m =
 -- page with their columns, and that short page is the last one.
 historyRoundtrip : Task.Task Error Bool
 historyRoundtrip =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b6-history"
+    freshDir "ipe-index-b6-history" |> Task.andThen historyRoundtripIn
 
+
+
+historyRoundtripIn : String -> Task.Task Error Bool
+historyRoundtripIn base =
+    let
         reviewDb =
             base ++ "/review.db"
     in
@@ -593,21 +580,21 @@ insertBoth scratch db =
         LibDb.insertDecision db b tooBig
 
 
-checks : Db -> Task.Task Error (List ( String, Bool ))
-checks db =
+checks : Task.Task Error (List ( String, Bool ))
+checks =
     Task.sequence
-        [ Task.map (\ok -> ( "drain_cursor is gone after migrate", ok )) drainCursorGoneAfterMigrate
-        , Task.map (\ok -> ( "open does not migrate", ok )) openDoesNotMigrate
-        , Task.map (\ok -> ( "a duplicate attested decision is a no-op", ok )) duplicateInsertIsNoop
-        , Task.map (\ok -> ( "refusal reason is non-blank and bounded", ok )) (reasonBounded db)
-        , Task.map (\ok -> ( "a stored over-long reason decodes and shows its length", ok )) (storedOverlongReasonDecodes db)
-        , Task.map (\ok -> ( "a stored blank reason decodes as blank", ok )) (storedBlankReasonDecodes db)
-        , Task.map (\ok -> ( "history pages walk every row once in order", ok )) (historyWalkMatchesOrder db)
-        , Task.map (\ok -> ( "a history page below one row is refused", ok )) (historyPageSizeRefused db)
-        , Task.map (\ok -> ( "history pages read in index order", ok )) (historyPagesUseIndex db)
+        [ check "drain_cursor is gone after migrate" drainCursorGoneAfterMigrate
+        , check "open does not migrate" openDoesNotMigrate
+        , check "a duplicate attested decision is a no-op" duplicateInsertIsNoop
+        , check "refusal reason is non-blank and bounded" (onFreshReview "ipe-review-reasonBounded" reasonBounded)
+        , check "a stored over-long reason decodes and shows its length" (onFreshReview "ipe-review-storedOverlongReasonDecodes" storedOverlongReasonDecodes)
+        , check "a stored blank reason decodes as blank" (onFreshReview "ipe-review-storedBlankReasonDecodes" storedBlankReasonDecodes)
+        , check "history pages walk every row once in order" (onFreshReview "ipe-review-historyWalkMatchesOrder" historyWalkMatchesOrder)
+        , check "a history page below one row is refused" (onFreshReview "ipe-review-historyPageSizeRefused" historyPageSizeRefused)
+        , check "history pages read in index order" (onFreshReview "ipe-review-historyPagesUseIndex" historyPagesUseIndex)
         , Task.succeed ( "only the latest load settles a page slot", loadTicketsSettleLatest )
         , Task.succeed ( "history state texts distinguish loading/empty/failed/loaded", historyStateTextsDistinct )
-        , Task.map (\ok -> ( "decision roundtrip", ok )) decisionRoundtrip
+        , check "decision roundtrip" decisionRoundtrip
         , Task.succeed
             ( "history shows the digest, not the scheme"
             , shortHashShown "sha256:0123456789abcdef"
@@ -626,6 +613,6 @@ checks db =
                 && shortHashShown ("dead" ++ codeText 8294 ++ "beef")
                 == "dead\\u{2066}bee"
             )
-        , Task.map (\ok -> ( "review history roundtrip", ok )) historyRoundtrip
-        , Task.map (\ok -> ( "failed writes keep their error", ok )) failedWritesKeepTheirError
+        , check "review history roundtrip" historyRoundtrip
+        , check "failed writes keep their error" failedWritesKeepTheirError
         ]

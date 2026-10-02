@@ -15,7 +15,11 @@ module TestSupport exposing
     , execIndex
     , execIndexUnchecked
     , Scratch
-    , scratchAt
+    , freshScratch
+    , freshDir
+    , check
+    , checkReporting
+    , onFreshReview
     , indexSchemaStatements
     , execIndexSchema
     , seedIndexDb
@@ -36,13 +40,11 @@ module TestSupport exposing
     , renderedForeign
     , describeText
     , refusedFor
-    , openReviewAt
     , migratedReviewAt
     , tableNames
     , tableRowCounts
     , attestedFor
     , openReadOnlyAt
-    , countDrainRows
     , vectorsPath
     , ipeIndexTestFile
     , repoFile
@@ -258,13 +260,69 @@ type alias Scratch =
 
 
 
-scratchAt : String -> Scratch
-scratchAt name =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/" ++ name
-    in
-    { repo = base ++ "/repo", indexDb = base ++ "/index.db", reviewDb = base ++ "/review.db" }
+-- A directory `File.tempDir` creates for this one call, named after `name`.
+-- No two calls share a path, so no store a check opens can be one another
+-- check (or an earlier run) already wrote, and no connection the runtime
+-- keeps open for a path can serve a later check a file it has since removed.
+freshDir : String -> Task.Task Error String
+freshDir name =
+    File.tempDir (name ++ "-")
+
+
+
+-- The scratch paths of one check, under its own `freshDir`.
+freshScratch : String -> Task.Task Error Scratch
+freshScratch name =
+    freshDir name
+        |> Task.map (\base -> { repo = base ++ "/repo", indexDb = base ++ "/index.db", reviewDb = base ++ "/review.db" })
+
+
+
+-- A migrated review store of its own, under a `freshDir` named `name`, handed
+-- to `f`: no check reads a row another check wrote.
+onFreshReview : String -> (Db -> Task.Task Error Bool) -> Task.Task Error Bool
+onFreshReview name f =
+    freshDir name
+        |> Task.andThen (\base -> onReviewAt (base ++ "/review.db") f)
+
+
+
+onReviewAt : String -> (Db -> Task.Task Error Bool) -> Task.Task Error Bool
+onReviewAt reviewDb f =
+    do
+        db <- migratedReviewAt reviewDb
+        ok <- f db
+        removeFileIfAny reviewDb
+        removeFileIfAny (reviewDb ++ "-wal")
+        removeFileIfAny (reviewDb ++ "-shm")
+        Task.succeed ok
+
+
+
+-- One named check. A check whose task fails is reported by name with its
+-- error and counted as failed; the run goes on to every later check and still
+-- exits non-zero, so one error neither hides which check raised it nor
+-- drops the checks after it.
+check : String -> Task.Task Error Bool -> Task.Task Error ( String, Bool )
+check name task =
+    checkReporting Io.println name task
+
+
+
+-- `check` with the line naming a failed check's error sent to `report`.
+checkReporting : (String -> Task.Task Error ()) -> String -> Task.Task Error Bool -> Task.Task Error ( String, Bool )
+checkReporting report name task =
+    task
+        |> Task.map (\ok -> ( name, ok ))
+        |> Task.onError (\e -> report (checkErrorLine name e) |> Task.map (\_ -> ( name, False )))
+
+
+
+-- The error is foreign text (a database or OS message), so it reaches the
+-- terminal rendered, never raw.
+checkErrorLine : String -> Error -> String
+checkErrorLine name e =
+    "ERROR " ++ name ++ ": " ++ SafeText.toString (SafeText.renderForeign (Error.toString e))
 
 
 
@@ -570,15 +628,6 @@ refusedFor reason refusal =
 
 
 
--- The review database at a test file path, opened through the app's own
--- location parse and review URL builder.
-openReviewAt : String -> Task.Task Error Db
-openReviewAt path =
-    Settings.parseDbLocation "IPE_REVIEW_DB" path
-        |> Task.andThen LibDb.openAt
-
-
-
 -- The review database at a test file path, migrated through `LibDb.probe`,
 -- the app's one migrate, then opened.
 migratedReviewAt : String -> Task.Task Error Db
@@ -624,7 +673,7 @@ tableRowCount db name =
 -- unit that is not shown fails the run.
 attestedFor : String -> String -> Task.Task Error Index.Attested
 attestedFor name uid =
-    attestedIn (scratchAt name) uid
+    freshScratch name |> Task.andThen (\at -> attestedIn at uid)
 
 
 
@@ -664,18 +713,6 @@ openReadOnlyAt : String -> Task.Task Error Db
 openReadOnlyAt path =
     Settings.parseDbLocation "IPE_INDEX_DB" path
         |> Task.andThen (\loc -> Db.open "sqlite" (Settings.indexReadUrl loc))
-
-
-
-countDrainRows : Db -> String -> String -> Task.Task Error Int
-countDrainRows db uid bodyHash =
-    Db.findWhere db
-        "drain_cursor"
-        (Sql.and
-            (Sql.eq (Sql.column "uid") (Sql.string uid))
-            (Sql.eq (Sql.column "body_hash") (Sql.string bodyHash))
-        )
-        |> Task.map List.length
 
 
 
