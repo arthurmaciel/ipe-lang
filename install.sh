@@ -66,8 +66,13 @@ done
 # is 1; every other byte >= 0x80 (a malformed, overlong, surrogate or
 # out-of-range sequence, or any non-ASCII byte when MSG_UTF8 is 0) is escaped
 # one byte at a time, resyncing at the next byte.
+#
+# awk sees TEXT only as `od` byte numbers and prints only ASCII: a byte kept raw
+# leaves awk as a `\0ooo` escape that `printf %b` turns back into that byte. So
+# the verdict never depends on how an awk splits characters (some awks decode
+# UTF-8 whatever the locale) or on what its `%c` prints for a byte >= 0x80.
 safe_text() {
-  printf '%sx' "$1" | LC_ALL=C awk -v utf8="$MSG_UTF8" '
+  printf '%b' "$(printf '%s' "$1" | od -An -v -tu1 | LC_ALL=C awk -v utf8="$MSG_UTF8" '
     function hex(s,   v, k) {
       v = 0
       for (k = 1; k <= length(s); k++) v = v * 16 + index("0123456789ABCDEF", substr(s, k, 1)) - 1
@@ -77,10 +82,9 @@ safe_text() {
       for (k = 1; k <= nr; k++) if (cp >= lo[k] && cp <= hi[k]) return 1
       return 0
     }
-    function cont(b) { return b >= 128 && b <= 191 }
-    function esc(o) { return sprintf("\\%03o", o) }
+    function cont(x) { return x >= 128 && x <= 191 }
+    function shown(x) { return sprintf("\\\\%03o", x) }
     BEGIN {
-      for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i
       # The escaped code points >= 0x80: C1 (Cc), Cf, Zl and Zp (Unicode 15.1;
       # U+2065 is the unassigned slot inside the 2060-206F format run).
       nr = split("80-9F AD 600-605 61C 6DD 70F 890-891 8E2 180E 200B-200F 2028-202E 2060-206F FEFF FFF9-FFFB 110BD 110CD 13430-1343F 1BCA0-1BCA3 1D173-1D17A E0001 E0020-E007F", r, " ")
@@ -89,23 +93,25 @@ safe_text() {
         if (d) { lo[k] = hex(substr(r[k], 1, d - 1)); hi[k] = hex(substr(r[k], d + 1)) }
         else { lo[k] = hex(r[k]); hi[k] = lo[k] }
       }
-      out = ""
+      n = 0
     }
-    {
-      if (NR > 1) out = out "\\012"
-      n = length($0); i = 1
+    { for (f = 1; f <= NF; f++) b[++n] = $f + 0 }
+    END {
+      out = ""; i = 1
       while (i <= n) {
-        c = substr($0, i, 1); o = ord[c]
+        o = b[i]
         if (o < 128) {
-          if (o < 32 || o == 127) out = out esc(o)
-          else if (c == "\\") out = out "\\\\"
-          else out = out c
+          if (o < 32 || o == 127) out = out shown(o)
+          else if (o == 92) out = out "\\\\\\\\"
+          else out = out sprintf("%c", o)
           i++
           continue
         }
         len = 0; cp = 0
         if (utf8 == 1) {
-          b2 = ord[substr($0, i + 1, 1)]; b3 = ord[substr($0, i + 2, 1)]; b4 = ord[substr($0, i + 3, 1)]
+          b2 = (i + 1 <= n) ? b[i + 1] : 0
+          b3 = (i + 2 <= n) ? b[i + 2] : 0
+          b4 = (i + 3 <= n) ? b[i + 3] : 0
           if (o >= 194 && o <= 223) {
             if (cont(b2)) { len = 2; cp = (o - 192) * 64 + b2 - 128 }
           } else if (o >= 224 && o <= 239) {
@@ -120,14 +126,16 @@ safe_text() {
             }
           }
         }
-        if (len == 0) { out = out esc(o); i++; continue }
-        if (hidden(cp)) {
-          for (k = 0; k < len; k++) out = out esc(ord[substr($0, i + k, 1)])
-        } else out = out substr($0, i, len)
+        if (len == 0) { out = out shown(o); i++; continue }
+        h = hidden(cp)
+        for (k = 0; k < len; k++) {
+          if (h) out = out shown(b[i + k])
+          else out = out sprintf("\\0%03o", b[i + k])
+        }
         i += len
       }
-    }
-    END { printf "%s", substr(out, 1, length(out) - 1) }'
+      printf "%s", out
+    }')"
 }
 
 # msg_style FMT — set MSG_STYLED to FMT with each style token replaced by its
@@ -785,14 +793,7 @@ else
     fi
   fi
   if [ "$cargo_ok" != 1 ]; then
-    case "$plat" in
-      linux|darwin|freebsd)
-        rustup_cmd="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-        ;;
-      windows)
-        rustup_url="https://win.rustup.rs/x86_64"
-        ;;
-    esac
+    rustup_url="https://win.rustup.rs/x86_64"
     if [ "$IS_TTY" = 1 ] && [ -r /dev/tty ]; then
       say '\n    @B@Rust is not installed.@0@'
       case "$plat" in
@@ -811,7 +812,9 @@ else
             case "$plat" in
               linux|darwin|freebsd)
                 stage_start 'Installing Rust via rustup…'
-                if eval "$rustup_cmd" -y 2>/dev/null; then
+                # `sh -s -- -y` hands `-y` to rustup-init (unattended install).
+                if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs 2>/dev/null \
+                  | sh -s -- -y 2>/dev/null; then
                   if [ -f "$HOME/.cargo/env" ]; then
                     # shellcheck source=/dev/null
                     . "$HOME/.cargo/env"
