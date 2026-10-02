@@ -186,8 +186,7 @@ fn sanitise_path(path: &str) -> String {
     const MAX_PATH_BYTES: usize = 256;
     let mut out = String::with_capacity(path.len().min(MAX_PATH_BYTES));
     for ch in path.chars() {
-        // Drop ASCII/Unicode control chars (incl. ESC for ANSI, NUL, newlines).
-        if ch.is_control() {
+        if crate::system::is_log_hazard(ch) {
             continue;
         }
         if out.len() + ch.len_utf8() > MAX_PATH_BYTES {
@@ -238,6 +237,14 @@ mod tests {
     async fn body_string(r: axum::response::Response) -> String {
         let bytes = to_bytes(r.into_body(), 64 * 1024).await.unwrap_or_default();
         String::from_utf8(bytes.to_vec()).unwrap_or_default()
+    }
+
+    #[test]
+    fn sanitise_path_drops_every_log_hazard() {
+        assert_eq!(
+            sanitise_path("/a\u{202E}b\u{200B}c\u{E0041}d\u{2028}e\u{1B}[31mf\n"),
+            "/abcde[31mf"
+        );
     }
 
     #[test]

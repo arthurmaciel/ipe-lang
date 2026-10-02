@@ -1177,15 +1177,17 @@ fn metadata_from_output(
 
 /// Bounded, terminal-safe rendering of `cargo metadata` stderr.
 ///
-/// The text reaches the operator's terminal inside a refusal, so control
-/// characters (ESC sequences, bell, line breaks) and bidirectional-override
-/// characters each become a space.
+/// The text reaches the operator's terminal inside a refusal, so every
+/// control character (ESC sequences, bell, line breaks) and every character of
+/// the compiler's terminal set (`ipe_diagnostics::terminal::DENIED_FORMAT_CHARS`:
+/// bidi controls, zero-width and other format characters, line separators)
+/// becomes a space.
 fn terminal_safe_stderr(stderr: &[u8]) -> String {
     String::from_utf8_lossy(stderr)
         .trim()
         .chars()
         .map(|c| {
-            if c.is_control() || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}') {
+            if c.is_control() || ipe_diagnostics::terminal::is_denied_format_char(c) {
                 ' '
             } else {
                 c
@@ -13895,7 +13897,7 @@ mod tests {
     fn metadata_stderr_in_refusal_strips_control_characters() {
         use std::os::unix::process::ExitStatusExt as _;
         let mut output = metadata_output(std::process::ExitStatus::from_raw(1 << 8), b"");
-        output.stderr = "\x1b[31merror\x07\nnext\r\u{202E}evil\u{2066}"
+        output.stderr = "\x1b[31merror\x07\nnext\r\u{202E}evil\u{2066}\u{200B}\u{FEFF}"
             .as_bytes()
             .to_vec();
         let graph = metadata_from_output(Ok(output));
@@ -13903,8 +13905,9 @@ mod tests {
             panic!("expected MetadataError::Failed, got {graph:?}");
         };
         assert!(
-            !stderr.chars().any(|c| c.is_control()
-                || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')),
+            !stderr
+                .chars()
+                .any(|c| c.is_control() || ipe_diagnostics::terminal::is_denied_format_char(c)),
             "stderr must be terminal-safe: {stderr:?}"
         );
         assert!(stderr.contains("error"), "text survives: {stderr:?}");
