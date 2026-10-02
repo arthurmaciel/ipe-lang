@@ -2496,58 +2496,61 @@ mod tests {
         assert_eq!(h1, h2, "hash_tree must be deterministic for plain trees");
     }
 
-    /// A single file over the production per-file ceiling is refused as a typed
-    /// byte overrun rather than materialized whole in memory — the `DoS`
-    /// ceiling on a fetched, still-untrusted checkout.
-    #[test]
-    fn hash_tree_rejects_a_file_over_the_per_file_ceiling() {
+    /// One file under a fresh test root, `len` bytes long, for a per-file ceiling test.
+    fn one_file_tree(tag: &str, len: usize) -> PathBuf {
         let base = ipe_test_temp::temp_root().join(format!(
-            "ipe-cache-test-bigfile-{}-{:?}",
+            "ipe-cache-test-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("create base");
-        // One byte over the ceiling — proves the boundary, not a multi-GiB write.
-        let over = usize::try_from(crate::remote_ingest::PACKAGE_FILE_MAX_BYTES)
-            .expect("cap fits usize")
-            + 1;
-        std::fs::write(base.join("Big.ipe"), vec![b'a'; over]).expect("write oversized file");
-
-        let result = hash_tree(&base);
-        let _ = std::fs::remove_dir_all(&base);
-
-        assert!(matches!(
-            result,
-            Err(TreeHashError::Exceeded(LocalRefusal {
-                source: LocalSource::PackageTree,
-                limit: IngestLimit::Bytes(crate::remote_ingest::PACKAGE_FILE_MAX_BYTES),
-                name: None,
-            }))
-        ));
+        std::fs::write(base.join("File.ipe"), vec![b'a'; len]).expect("write file");
+        base
     }
 
-    /// A file exactly at the production per-file ceiling still hashes (the
-    /// ceiling is inclusive — a file at the cap succeeds, one byte over fails).
+    /// A file one byte over the per-file ceiling is refused as a typed byte overrun.
     #[test]
-    fn hash_tree_accepts_a_file_at_the_per_file_ceiling() {
-        let base = ipe_test_temp::temp_root().join(format!(
-            "ipe-cache-test-atcap-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+    fn hash_tree_within_refuses_one_byte_over_a_small_ceiling() {
+        let base = one_file_tree("over-small-cap", 17);
+        let result = hash_tree_within(&base, &ceiling(64, 8, 16, 4));
         let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).expect("create base");
-        let at =
-            usize::try_from(crate::remote_ingest::PACKAGE_FILE_MAX_BYTES).expect("cap fits usize");
-        std::fs::write(base.join("AtCap.ipe"), vec![b'a'; at]).expect("write file at cap");
+        assert!(
+            matches!(result, Err(TreeHashError::Exceeded(refusal)) if refusal == refused(IngestLimit::Bytes(16)))
+        );
+    }
 
-        let result = hash_tree(&base);
+    /// A file exactly at the per-file ceiling hashes: the ceiling is inclusive.
+    #[test]
+    fn hash_tree_within_accepts_a_file_at_a_small_ceiling() {
+        let base = one_file_tree("at-small-cap", 16);
+        let result = hash_tree_within(&base, &ceiling(64, 8, 16, 4));
         let _ = std::fs::remove_dir_all(&base);
-
         assert!(
             result.is_ok(),
             "a file exactly at the ceiling must hash, got: {result:?}"
+        );
+    }
+
+    /// [`hash_tree`] holds each file to [`crate::remote_ingest::PACKAGE_FILE_MAX_BYTES`].
+    ///
+    /// The over-ceiling file is extended with `set_len`, never written: the
+    /// refusal reads only its declared length, so the proof costs no 64 MiB write.
+    #[test]
+    fn hash_tree_uses_the_package_file_ceiling() {
+        let cap = crate::remote_ingest::PACKAGE_FILE_MAX_BYTES;
+        assert_eq!(PACKAGE_SOURCE.tree().per_file(), cap);
+
+        let base = one_file_tree("package-cap", 0);
+        std::fs::File::options()
+            .write(true)
+            .open(base.join("File.ipe"))
+            .and_then(|file| file.set_len(cap + 1))
+            .expect("extend file one byte past the package ceiling");
+        let result = hash_tree(&base);
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            matches!(result, Err(TreeHashError::Exceeded(refusal)) if refusal == refused(IngestLimit::Bytes(cap)))
         );
     }
 
