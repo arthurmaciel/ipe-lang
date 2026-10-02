@@ -294,10 +294,13 @@ def run_errors(
 def jobs_of(pages: list[object], rid: int) -> list[dict]:
     """Return the jobs `pages` (a run's job listing, page by page) hold for run `rid`.
 
-    The pages must cover the listing's `total_count` exactly, and every job
-    must name `rid` and carry a string name; anything else refuses.
+    The pages must cover the listing's `total_count` exactly with distinct
+    jobs (a page that shifts under the read repeats one job in place of
+    another), and every job must name `rid` and carry a positive id and a
+    string name; anything else refuses.
     """
     jobs: list[dict] = []
+    ids: set[int] = set()
     total: int | None = None
     for page in pages:
         if not isinstance(page, dict) or not isinstance(page.get("jobs"), list):
@@ -313,6 +316,12 @@ def jobs_of(pages: list[object], rid: int) -> list[dict]:
                 raise NightlyError(f"run {rid} job listing entry is not a named job")
             if job.get("run_id") != rid:
                 raise NightlyError(f"run {rid} job listing holds a job of run {job.get('run_id')!r}")
+            jid = _positive_int(job.get("id"))
+            if jid is None:
+                raise NightlyError(f"run {rid} job {job['name']!r} id {job.get('id')!r} is not a positive integer")
+            if jid in ids:
+                raise NightlyError(f"run {rid} job listing holds job {jid} twice")
+            ids.add(jid)
             jobs.append(job)
     if total is None or len(jobs) != total:
         raise NightlyError(f"run {rid} job listing holds {len(jobs)} jobs, not its total_count {total!r}")
@@ -326,7 +335,7 @@ def job_errors(jobs: list[dict], producer: Producer) -> list[str]:
     for job in jobs:
         name = job["name"]
         seen.add(name)
-        if name in producer.non_blocking:
+        if name in producer.non_blocking and name not in producer.gates:
             continue
         status, conclusion = job.get("status"), job.get("conclusion")
         allowed = ("success",) if name in producer.gates else ("success", "skipped")
@@ -486,7 +495,7 @@ def producer_errors(repo: str, producer: Producer, change_sha: str | None, now: 
     hint = (
         f" (prove a fix with `gh workflow run {producer.workflow} --ref <branch>`)"
         if producer.recovery is not None
-        else " (it runs on main only; its next run there proves a fix)"
+        else " (it runs on main only: `gh run rerun` its run, or follow the break-glass in .github/ci/RECONCILIATION.md)"
     )
     return reasons + [f"{producer.workflow} main nightly: {e}{hint}" for e in main]
 
@@ -568,6 +577,11 @@ def derive_producers(manifest: object, triggers: dict[str, set[str] | None]) -> 
             errors.append(f"nightly-gate producer {workflow} has no {'/'.join(NIGHTLY_TRIGGERS)} trigger")
             continue
         mine = [e for e in checks if e.get("producer") == workflow]
+        contexts = [str(e.get("context")) for e in mine]
+        errors += [
+            f"nightly-gate producer {workflow} declares context {c!r} more than once"
+            for c in sorted({c for c in contexts if contexts.count(c) > 1})
+        ]
         producers.append(
             Producer(
                 workflow=workflow,

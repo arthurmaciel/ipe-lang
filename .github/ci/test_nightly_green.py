@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import itertools
 import os
 import sys
 import unittest
@@ -76,8 +77,11 @@ def _prun(producer: ng.Producer, **over: object) -> dict:
     return run
 
 
+_JOB_IDS = itertools.count(1)
+
+
 def _jobs_page(rid: int, *jobs: tuple[str, str], total: int | None = None) -> dict:
-    listed = [{"name": n, "status": "completed", "conclusion": c, "run_id": rid} for n, c in jobs]
+    listed = [{"id": next(_JOB_IDS), "name": n, "status": "completed", "conclusion": c, "run_id": rid} for n, c in jobs]
     return {"total_count": len(listed) if total is None else total, "jobs": listed}
 
 
@@ -721,8 +725,13 @@ class ProducerVerdictTest(unittest.TestCase):
         jobs = {STATIC_ID: _gates_page(STATIC_ID, STATIC, ("windows-static (dlmalloc, MSVC +crt-static)", "failure"))}
         self.assertEqual(_verdict(FakeApi(_listing(_run()), others={STATIC.workflow: failed}, jobs=jobs)), [])
 
+    def test_gate_also_listed_non_blocking_is_still_judged(self) -> None:
+        both = ng.Producer("x.yml", ("schedule",), None, frozenset({"heavy"}), frozenset({"heavy"}))
+        jobs = [{"id": 1, "name": "heavy", "status": "completed", "conclusion": "failure", "run_id": 1}]
+        self.assertTrue(ng.job_errors(jobs, both))
+
     def test_unfinished_job_fails(self) -> None:
-        jobs = {STATIC_ID: [{"total_count": 1, "jobs": [{"name": "linux-cfree-gate (refusal is fail-closed)", "status": "in_progress", "conclusion": None, "run_id": STATIC_ID}]}]}
+        jobs = {STATIC_ID: [{"total_count": 1, "jobs": [{"id": 1, "name": "linux-cfree-gate (refusal is fail-closed)", "status": "in_progress", "conclusion": None, "run_id": STATIC_ID}]}]}
         self.assertTrue(_verdict(FakeApi(_listing(_run()), jobs=jobs)))
 
     def test_own_dispatch_recovers_only_its_producer(self) -> None:
@@ -743,6 +752,7 @@ class ProducerVerdictTest(unittest.TestCase):
         api = FakeApi(_listing(_run()), others=red, others_own=own)
         reasons = _verdict(api)
         self.assertTrue(any(r.startswith("ruleset-admin-read.yml main nightly:") for r in reasons), reasons)
+        self.assertTrue(all("RECONCILIATION.md" in r for r in reasons if r.startswith("ruleset-admin-read.yml")), reasons)
         self.assertFalse(any("ruleset-admin-read.yml/runs?" in c and "head_sha=" in c for c in api.calls))
 
     def test_producer_hint_names_the_recovery(self) -> None:
@@ -771,6 +781,22 @@ class JobListingTest(unittest.TestCase):
         ):
             with self.subTest(pages), self.assertRaises(ng.NightlyError):
                 ng.jobs_of(pages, 5)
+
+    def test_repeated_job_refused(self) -> None:
+        # A page that shifted under the read repeats one job where another stood:
+        # the count matches, the missing job would go unjudged.
+        first = _jobs_page(5, ("a", "success"), total=2)
+        again = {"total_count": 2, "jobs": [dict(first["jobs"][0])]}
+        with self.assertRaises(ng.NightlyError):
+            ng.jobs_of([first, again], 5)
+
+    def test_job_without_an_id_refused(self) -> None:
+        for jid in (None, 0, -1, True, "7"):
+            with self.subTest(jid):
+                page = _jobs_page(5, ("a", "success"))
+                page["jobs"][0]["id"] = jid
+                with self.assertRaises(ng.NightlyError):
+                    ng.jobs_of([page], 5)
 
     def test_listing_past_the_page_bound_refused(self) -> None:
         total = ng.JOBS_PAGE * ng.MAX_JOB_PAGES + 1
@@ -862,6 +888,11 @@ class ProducersTest(unittest.TestCase):
             with self.subTest(triggers):
                 errors = self.check(triggers=triggers)
                 self.assertTrue(any("nightly-a.yml" in e for e in errors), errors)
+
+    def test_context_declared_twice_refused(self) -> None:
+        manifest = _manifest(("heavy", "nightly-gate", "nightly-a.yml"), ("heavy", "informational", "nightly-a.yml"), ("note", "informational", "nightly-a.yml"))
+        errors = self.check(manifest=manifest)
+        self.assertTrue(any("'heavy' more than once" in e for e in errors), errors)
 
     def test_unreadable_manifest_refused(self) -> None:
         for manifest in (None, {}, {"checks": {}}):
