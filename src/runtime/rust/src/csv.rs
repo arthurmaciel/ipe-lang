@@ -311,6 +311,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn env_ceilings_honour_the_shared_contract() {
+        crate::system::assert_env_ceiling_contract(CSV_ROWS_CEILING);
+        crate::system::assert_env_ceiling_contract(CSV_BYTES_CEILING);
+    }
+
+    #[test]
     fn formula_guard_is_opt_in() {
         let doc = CsvDoc {
             header: vec!["a".into()],

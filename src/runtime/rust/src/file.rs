@@ -646,6 +646,11 @@ fn tp(p: &std::path::Path) -> Path {
 mod read_ceiling_tests {
     use super::*;
 
+    #[test]
+    fn env_ceilings_honour_the_shared_contract() {
+        crate::system::assert_env_ceiling_contract(FILE_READ_CEILING);
+    }
+
     fn block<T>(fut: impl std::future::Future<Output = T>) -> T {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()

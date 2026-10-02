@@ -171,6 +171,11 @@ fn zstd_decompress_capped(data: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn env_ceilings_honour_the_shared_contract() {
+        crate::system::assert_env_ceiling_contract(DECOMPRESS_CEILING);
+    }
     use crate::task::task_run;
 
     #[test]

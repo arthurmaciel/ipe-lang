@@ -259,6 +259,12 @@ pub fn config_load_from_file<E: From<String> + Send + 'static, T: Send + 'static
 #[cfg(test)]
 mod load_from_file_tests {
     use super::*;
+
+    #[test]
+    fn env_ceilings_honour_the_shared_contract() {
+        crate::system::assert_env_ceiling_contract(YAML_SOURCE_CEILING);
+        crate::system::assert_env_ceiling_contract(CONFIG_FILE_CEILING);
+    }
     use crate::json::{decode_field, json_decode_string};
 
     fn block<T>(fut: impl std::future::Future<Output = T>) -> T {
