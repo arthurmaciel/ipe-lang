@@ -4733,7 +4733,8 @@ fn certify_versions_leaves_no_scratch_under_the_cache_base() {
     let starved = FetchBudget::for_test(
         PACKAGE_SOURCE
             .transfer()
-            .with_disk_bytes(ByteBudget::for_test(1).expect("in-range byte budget")),
+            .with_staged_bytes(ByteBudget::for_test(1).expect("in-range byte budget"))
+            .expect("a package fetch stages on disk"),
         *PACKAGE_SOURCE.refs(),
         TreeCeiling::for_test(0, 1, 0, 1).expect("paired tree ceiling"),
     )

@@ -2345,18 +2345,14 @@ mod tests {
             url: src.display().to_string(),
             rev: None,
         };
-        let budget = FetchBudget::for_test(
-            PACKAGE_SOURCE
-                .transfer()
-                .with_wall(std::time::Duration::from_millis(1)),
-            *PACKAGE_SOURCE.refs(),
-            *PACKAGE_SOURCE.tree(),
-        )
-        .expect("paired budget");
         let proj = temp_dir("slow-drip-over");
         scaffold_project(&proj);
         let manifest_before = std::fs::read(proj.join("package.ipe")).expect("manifest");
-        let result = resolve_escape_within(&proj, "lib", &dep, &budget);
+        crate::remote_ingest::spend_transfer_clock_for_test(
+            PACKAGE_SOURCE.transfer().wall().get() + std::time::Duration::from_secs(1),
+        );
+        let result = resolve_escape_within(&proj, "lib", &dep, &PACKAGE_SOURCE);
+        crate::remote_ingest::spend_transfer_clock_for_test(std::time::Duration::ZERO);
         assert!(
             matches!(
                 result,
@@ -2381,7 +2377,8 @@ mod tests {
         FetchBudget::for_test(
             PACKAGE_SOURCE
                 .transfer()
-                .with_disk_bytes(byte_budget(disk_bytes)),
+                .with_staged_bytes(byte_budget(disk_bytes))
+                .expect("a package fetch stages on disk"),
             *PACKAGE_SOURCE.refs(),
             TreeCeiling::for_test(tree, PACKAGE_TREE_MAX_ENTRIES, tree, PACKAGE_TREE_MAX_DEPTH)
                 .expect("paired tree ceiling"),

@@ -49,6 +49,7 @@
 //! address space would need a pre-exec hook, which needs `unsafe`.
 
 use std::io::Read;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
@@ -74,12 +75,20 @@ pub const MAX_REMOTE_BYTES: u64 = GIB;
 /// The index clone, the widest surface, sits exactly at it.
 pub const MAX_REMOTE_ENTRIES: u64 = 262_144;
 
-/// A byte ceiling of one remote-ingest surface, never above [`MAX_REMOTE_BYTES`].
+/// Ceiling on every wall-time budget of a remote-ingest surface, in seconds.
 ///
-/// The only values are the named constants of this module: [`ByteBudget::NONE`]
-/// for a surface that stages nothing, and in-range literals whose bound the
-/// build checks. Code outside this module cannot build one, so no caller can
-/// hand a transfer, a capped read or a curl limit an unbounded ceiling.
+/// No surface may run longer than ten minutes; the package fetch and the index
+/// clone sit exactly at it.
+pub const MAX_WALL_SECS: u64 = 600;
+
+/// A byte ceiling of one remote-ingest surface, in `1..=MAX_REMOTE_BYTES`.
+///
+/// The only values are the named constants of this module, in-range literals
+/// whose bound the build checks; zero has no representation, so no ceiling can
+/// read as "unlimited" (curl takes `--max-filesize 0` as no limit). Code
+/// outside this module cannot build one, so no caller can hand a transfer, a
+/// capped read or a curl limit an unbounded ceiling. A surface that stages
+/// nothing says so with [`Staging::Nothing`], never with a zero ceiling.
 ///
 /// ```compile_fail,E0624
 /// let _ = ipe::remote_ingest::ByteBudget::of::<1>();
@@ -88,76 +97,155 @@ pub const MAX_REMOTE_ENTRIES: u64 = 262_144;
 /// ```compile_fail,E0423
 /// let _ = ipe::remote_ingest::ByteBudget(u64::MAX);
 /// ```
+///
+/// ```compile_fail,E0599
+/// let _ = ipe::remote_ingest::ByteBudget::NONE;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ByteBudget(u64);
+pub struct ByteBudget(NonZeroU64);
 
 impl ByteBudget {
-    /// No bytes: a surface that stages or keeps nothing.
-    pub const NONE: Self = Self(0);
-
     /// The ceiling `N`, which the build refuses outside `1..=MAX_REMOTE_BYTES`.
     const fn of<const N: u64>() -> Self {
-        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD when a named byte budget is zero or above `MAX_REMOTE_BYTES` [ledger #boundary]
-        const { assert!(N > 0 && N <= MAX_REMOTE_BYTES) };
-        Self(N)
+        let ceiling = const {
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD when a named byte budget is zero or above `MAX_REMOTE_BYTES` [ledger #boundary]
+            assert!(N > 0 && N <= MAX_REMOTE_BYTES);
+            match NonZeroU64::new(N) {
+                Some(ceiling) => ceiling,
+                None => NonZeroU64::MIN,
+            }
+        };
+        Self(ceiling)
     }
 
-    /// The ceiling in bytes.
+    /// The ceiling in bytes, never zero.
     #[must_use]
     pub const fn get(self) -> u64 {
-        self.0
+        self.0.get()
     }
 
     /// The ceiling `bytes`, or `None` outside `1..=MAX_REMOTE_BYTES`, for a test to drive the refusals.
     #[cfg(test)]
     #[must_use]
-    pub const fn for_test(bytes: u64) -> Option<Self> {
-        if bytes == 0 || bytes > MAX_REMOTE_BYTES {
-            None
-        } else {
-            Some(Self(bytes))
-        }
+    pub fn for_test(bytes: u64) -> Option<Self> {
+        NonZeroU64::new(bytes)
+            .filter(|ceiling| ceiling.get() <= MAX_REMOTE_BYTES)
+            .map(Self)
     }
 }
 
-/// An entry ceiling of one remote-ingest surface, never above [`MAX_REMOTE_ENTRIES`].
+/// An entry ceiling of one remote-ingest surface, in `1..=MAX_REMOTE_ENTRIES`.
 ///
-/// Built only as [`ByteBudget`] is: [`EntryBudget::NONE`] or a named in-range
-/// constant of this module.
+/// Built only as [`ByteBudget`] is: a named in-range constant of this module.
 ///
 /// ```compile_fail,E0624
 /// let _ = ipe::remote_ingest::EntryBudget::of::<1>();
 /// ```
+///
+/// ```compile_fail,E0599
+/// let _ = ipe::remote_ingest::EntryBudget::NONE;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct EntryBudget(u64);
+pub struct EntryBudget(NonZeroU64);
 
 impl EntryBudget {
-    /// No entries: a surface that stages nothing.
-    pub const NONE: Self = Self(0);
-
     /// The ceiling `N`, which the build refuses outside `1..=MAX_REMOTE_ENTRIES`.
     const fn of<const N: u64>() -> Self {
-        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD when a named entry budget is zero or above `MAX_REMOTE_ENTRIES` [ledger #boundary]
-        const { assert!(N > 0 && N <= MAX_REMOTE_ENTRIES) };
-        Self(N)
+        let ceiling = const {
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD when a named entry budget is zero or above `MAX_REMOTE_ENTRIES` [ledger #boundary]
+            assert!(N > 0 && N <= MAX_REMOTE_ENTRIES);
+            match NonZeroU64::new(N) {
+                Some(ceiling) => ceiling,
+                None => NonZeroU64::MIN,
+            }
+        };
+        Self(ceiling)
     }
 
-    /// The ceiling in entries.
+    /// The ceiling in entries, never zero.
     #[must_use]
     pub const fn get(self) -> u64 {
-        self.0
+        self.0.get()
     }
 
     /// The ceiling `entries`, or `None` outside `1..=MAX_REMOTE_ENTRIES`, for a test to drive the refusals.
     #[cfg(test)]
     #[must_use]
-    pub const fn for_test(entries: u64) -> Option<Self> {
-        if entries == 0 || entries > MAX_REMOTE_ENTRIES {
-            None
-        } else {
-            Some(Self(entries))
-        }
+    pub fn for_test(entries: u64) -> Option<Self> {
+        NonZeroU64::new(entries)
+            .filter(|ceiling| ceiling.get() <= MAX_REMOTE_ENTRIES)
+            .map(Self)
     }
+}
+
+/// A wall-time ceiling of one remote-ingest surface: whole seconds in `1..=MAX_WALL_SECS`.
+///
+/// A zero or sub-second wall has no representation, so `--max-time` is always
+/// a whole number of seconds of at least one (curl takes `--max-time 0` as no
+/// limit) and the watcher's deadline is always the same value.
+///
+/// ```compile_fail,E0080
+/// let _ = ipe::remote_ingest::WallBudget::of_secs::<0>();
+/// ```
+///
+/// ```compile_fail,E0080
+/// let _ = ipe::remote_ingest::WallBudget::of_secs::<601>();
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WallBudget(NonZeroU64);
+
+impl WallBudget {
+    /// The ceiling of `S` seconds, which the build refuses outside `1..=MAX_WALL_SECS`.
+    #[must_use]
+    pub const fn of_secs<const S: u64>() -> Self {
+        let secs = const {
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD when a named wall budget is zero or above `MAX_WALL_SECS` [ledger #boundary]
+            assert!(S > 0 && S <= MAX_WALL_SECS);
+            match NonZeroU64::new(S) {
+                Some(secs) => secs,
+                None => NonZeroU64::MIN,
+            }
+        };
+        Self(secs)
+    }
+
+    /// The ceiling in whole seconds, never zero.
+    #[must_use]
+    pub const fn secs(self) -> u64 {
+        self.0.get()
+    }
+
+    /// The ceiling as a duration.
+    #[must_use]
+    pub const fn get(self) -> Duration {
+        Duration::from_secs(self.0.get())
+    }
+
+    /// The ceiling `wall`, or `None` unless it is whole seconds in `1..=MAX_WALL_SECS`, for a test to drive the refusals.
+    #[cfg(test)]
+    #[must_use]
+    pub fn for_test(wall: Duration) -> Option<Self> {
+        if wall.subsec_nanos() != 0 {
+            return None;
+        }
+        NonZeroU64::new(wall.as_secs())
+            .filter(|secs| secs.get() <= MAX_WALL_SECS)
+            .map(Self)
+    }
+}
+
+/// What a remote-ingest surface may leave on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Staging {
+    /// Nothing: one staged byte or entry is a refusal.
+    Nothing,
+    /// A staged path held to both ceilings.
+    Disk {
+        /// Bytes of the regular files the staged path may hold.
+        bytes: ByteBudget,
+        /// Entries (files, directories, links) the staged path may hold.
+        entries: EntryBudget,
+    },
 }
 
 /// Ceiling on the bytes of one package source tree the content hash walks.
@@ -226,7 +314,7 @@ pub const STATUS_STDOUT_MAX_BYTES: ByteBudget = ByteBudget::of::<64>();
 ///
 /// Passed to curl as `--max-time` and enforced again by the watcher; a server
 /// that trickles a response is cut off rather than holding the CLI.
-pub const HTTP_MAX_TIME: Duration = Duration::from_secs(60);
+pub const HTTP_MAX_TIME: WallBudget = WallBudget::of_secs::<60>();
 
 /// How often the watcher samples a running child's staged bytes and clock.
 ///
@@ -245,10 +333,9 @@ const PIPE_DRAIN_GRACE: Duration = Duration::from_secs(5);
 /// Its stdout (a revision, a remote URL, a porcelain status) is held to 4 MiB
 /// and its run to one minute.
 const QUERY_LIMITS: Limits = Limits {
-    disk_bytes: 0,
-    disk_entries: 0,
-    stdout_bytes: 4 * MIB,
-    wall: Duration::from_secs(60),
+    staging: Staging::Nothing,
+    stdout_bytes: ByteBudget::of::<{ 4 * MIB }>(),
+    wall: WallBudget::of_secs::<60>(),
 };
 
 /// The declared ingest ceilings of one remote surface.
@@ -258,15 +345,19 @@ const QUERY_LIMITS: Limits = Limits {
 ///
 /// ```compile_fail,E0451
 /// use ipe::remote_ingest::{Budget, GITHUB_API};
-/// let _ = Budget { wall: std::time::Duration::MAX, ..GITHUB_API };
+/// let _ = Budget { wall: ipe::remote_ingest::WallBudget::of_secs::<600>(), ..GITHUB_API };
+/// ```
+///
+/// ```compile_fail,E0451
+/// use ipe::remote_ingest::{Budget, OAUTH_FORM, Staging};
+/// let _ = Budget { staging: Staging::Nothing, ..OAUTH_FORM };
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
     source: IngestSource,
-    disk_bytes: ByteBudget,
-    disk_entries: EntryBudget,
+    staging: Staging,
     stdout_bytes: ByteBudget,
-    wall: Duration,
+    wall: WallBudget,
 }
 
 impl Budget {
@@ -276,16 +367,10 @@ impl Budget {
         self.source
     }
 
-    /// Bytes the staged path may hold on disk.
+    /// What the staged path may hold on disk.
     #[must_use]
-    pub const fn disk_bytes(&self) -> ByteBudget {
-        self.disk_bytes
-    }
-
-    /// Entries (files and directories) the staged path may hold.
-    #[must_use]
-    pub const fn disk_entries(&self) -> EntryBudget {
-        self.disk_entries
+    pub const fn staging(&self) -> Staging {
+        self.staging
     }
 
     /// Bytes the child's stdout may carry.
@@ -296,27 +381,28 @@ impl Budget {
 
     /// Wall time the whole transfer may take.
     #[must_use]
-    pub const fn wall(&self) -> Duration {
+    pub const fn wall(&self) -> WallBudget {
         self.wall
     }
 
-    /// This budget with its disk byte ceiling set, for a test to drive the refusals.
+    /// This budget with what it may stage set, for a test to drive the refusals.
     #[cfg(test)]
     #[must_use]
-    pub const fn with_disk_bytes(self, bytes: ByteBudget) -> Self {
-        Self {
-            disk_bytes: bytes,
-            ..self
-        }
+    pub const fn with_staging(self, staging: Staging) -> Self {
+        Self { staging, ..self }
     }
 
-    /// This budget with its disk entry ceiling set, for a test to drive the refusals.
+    /// This budget with its staged byte ceiling set, for a test to drive the refusals.
+    ///
+    /// `None` for a budget that stages nothing.
     #[cfg(test)]
     #[must_use]
-    pub const fn with_disk_entries(self, entries: EntryBudget) -> Self {
-        Self {
-            disk_entries: entries,
-            ..self
+    pub const fn with_staged_bytes(self, bytes: ByteBudget) -> Option<Self> {
+        match self.staging {
+            Staging::Nothing => None,
+            Staging::Disk { entries, .. } => {
+                Some(self.with_staging(Staging::Disk { bytes, entries }))
+            }
         }
     }
 
@@ -333,16 +419,15 @@ impl Budget {
     /// This budget with its wall time set, for a test to drive the refusals.
     #[cfg(test)]
     #[must_use]
-    pub const fn with_wall(self, wall: Duration) -> Self {
+    pub const fn with_wall(self, wall: WallBudget) -> Self {
         Self { wall, ..self }
     }
 
     /// The ceilings the watcher enforces, without the surface name.
     const fn limits(&self) -> Limits {
         Limits {
-            disk_bytes: self.disk_bytes.get(),
-            disk_entries: self.disk_entries.get(),
-            stdout_bytes: self.stdout_bytes.get(),
+            staging: self.staging,
+            stdout_bytes: self.stdout_bytes,
             wall: self.wall,
         }
     }
@@ -358,10 +443,12 @@ impl Budget {
 /// [`PACKAGE_SOURCE`].
 const PACKAGE_FETCH: Budget = Budget {
     source: IngestSource::PackageFetch,
-    disk_bytes: ByteBudget::of::<GIB>(),
-    disk_entries: EntryBudget::of::<{ 4 * PACKAGE_TREE_MAX_ENTRIES }>(),
+    staging: Staging::Disk {
+        bytes: ByteBudget::of::<GIB>(),
+        entries: EntryBudget::of::<{ 4 * PACKAGE_TREE_MAX_ENTRIES }>(),
+    },
     stdout_bytes: CHILD_STDERR_MAX_BYTES,
-    wall: Duration::from_secs(600),
+    wall: WallBudget::of_secs::<600>(),
 };
 
 /// The ceilings of the ref advertisement one package fetch reads.
@@ -478,7 +565,7 @@ impl TreeCeiling {
 /// A relation a [`FetchBudget`] must hold between its transfer and tree ceilings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BudgetPairing {
-    /// The transfer disk ceiling holds less than a pack and a checkout at the tree ceiling.
+    /// The transfer stages nothing, or its disk ceiling holds less than a pack and a checkout at the tree ceiling.
     TransferBytesUnderTree,
     /// The transfer entry ceiling holds less than a tree at its ceiling, its refs and `.git`.
     TransferEntriesUnderTree,
@@ -522,7 +609,10 @@ impl FetchBudget {
 
     /// The first relation between the ceilings that does not hold, if any.
     const fn pairing(&self) -> Result<(), BudgetPairing> {
-        if self.transfer.disk_bytes.get() < self.tree.bytes.saturating_mul(2) {
+        let Staging::Disk { bytes, entries } = self.transfer.staging else {
+            return Err(BudgetPairing::TransferBytesUnderTree);
+        };
+        if bytes.get() < self.tree.bytes.saturating_mul(2) {
             return Err(BudgetPairing::TransferBytesUnderTree);
         }
         let staged_entries = self
@@ -530,7 +620,7 @@ impl FetchBudget {
             .entries
             .saturating_add(self.refs.count)
             .saturating_add(GIT_STAGE_OVERHEAD_ENTRIES);
-        if self.transfer.disk_entries.get() < staged_entries {
+        if entries.get() < staged_entries {
             return Err(BudgetPairing::TransferEntriesUnderTree);
         }
         if self.tree.per_file > self.tree.bytes {
@@ -568,10 +658,12 @@ impl FetchBudget {
 /// inflates without bound.
 pub const INDEX_CLONE: Budget = Budget {
     source: IngestSource::IndexClone,
-    disk_bytes: ByteBudget::of::<{ 512 * MIB }>(),
-    disk_entries: EntryBudget::of::<MAX_REMOTE_ENTRIES>(),
+    staging: Staging::Disk {
+        bytes: ByteBudget::of::<{ 512 * MIB }>(),
+        entries: EntryBudget::of::<MAX_REMOTE_ENTRIES>(),
+    },
     stdout_bytes: CHILD_STDERR_MAX_BYTES,
-    wall: Duration::from_secs(600),
+    wall: WallBudget::of_secs::<600>(),
 };
 
 /// The budget of the local commit and push steps of `ipe package publish`, taken together.
@@ -580,10 +672,9 @@ pub const INDEX_CLONE: Budget = Budget {
 /// Ten minutes covers a push over a slow link.
 pub const INDEX_PUSH: Budget = Budget {
     source: IngestSource::IndexPush,
-    disk_bytes: ByteBudget::NONE,
-    disk_entries: EntryBudget::NONE,
+    staging: Staging::Nothing,
     stdout_bytes: CHILD_STDERR_MAX_BYTES,
-    wall: Duration::from_secs(600),
+    wall: WallBudget::of_secs::<600>(),
 };
 
 /// The budget of one GitHub API call made through `curl -o <scratch>`.
@@ -592,8 +683,10 @@ pub const INDEX_PUSH: Budget = Budget {
 /// [`JSON_RESPONSE_MAX_BYTES`]; stdout carries only the status code.
 pub const GITHUB_API: Budget = Budget {
     source: IngestSource::GithubApi,
-    disk_bytes: JSON_RESPONSE_MAX_BYTES,
-    disk_entries: EntryBudget::of::<1>(),
+    staging: Staging::Disk {
+        bytes: JSON_RESPONSE_MAX_BYTES,
+        entries: EntryBudget::of::<1>(),
+    },
     stdout_bytes: STATUS_STDOUT_MAX_BYTES,
     wall: HTTP_MAX_TIME,
 };
@@ -601,23 +694,40 @@ pub const GITHUB_API: Budget = Budget {
 /// The budget of one OAuth device-flow request (`ipe login`), whose body arrives on curl's stdout.
 pub const OAUTH_FORM: Budget = Budget {
     source: IngestSource::OauthDevice,
-    disk_bytes: ByteBudget::NONE,
-    disk_entries: EntryBudget::NONE,
+    staging: Staging::Nothing,
     stdout_bytes: JSON_RESPONSE_MAX_BYTES,
     wall: HTTP_MAX_TIME,
 };
 
-/// The budget of the installer script `ipe upgrade` downloads before running it.
+/// Ceiling on the bytes of the installer script `ipe upgrade` downloads.
 ///
 /// The script lands in one private scratch file; 1 MiB is far above the
 /// installer's size while refusing a response built to fill the disk.
+pub const INSTALLER_MAX_BYTES: ByteBudget = ByteBudget::of::<MIB>();
+
+/// The budget of the installer script `ipe upgrade` downloads before running it.
+///
+/// The script lands in one file held to [`INSTALLER_MAX_BYTES`].
 pub const INSTALLER: Budget = Budget {
     source: IngestSource::Installer,
-    disk_bytes: ByteBudget::of::<MIB>(),
-    disk_entries: EntryBudget::of::<1>(),
+    staging: Staging::Disk {
+        bytes: INSTALLER_MAX_BYTES,
+        entries: EntryBudget::of::<1>(),
+    },
     stdout_bytes: STATUS_STDOUT_MAX_BYTES,
     wall: HTTP_MAX_TIME,
 };
+
+/// Every named surface budget, for a test to hold each to the remote ceilings.
+#[cfg(test)]
+const ALL_BUDGETS: [Budget; 6] = [
+    PACKAGE_FETCH,
+    INDEX_CLONE,
+    INDEX_PUSH,
+    GITHUB_API,
+    OAUTH_FORM,
+    INSTALLER,
+];
 
 /// The remote surface an ingest refusal names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -662,7 +772,7 @@ pub enum IngestLimit {
     /// A directory-depth ceiling.
     Depth(u32),
     /// A wall-time ceiling.
-    Time(Duration),
+    Time(WallBudget),
     /// A file name that is not valid UTF-8, which the tree hash cannot name.
     NonUtf8Name,
     /// An entry that is neither a regular file, a directory nor a link.
@@ -689,8 +799,7 @@ impl std::fmt::Display for IngestLimit {
             Self::Bytes(max) => write!(f, "{max}-byte"),
             Self::Entries(max) => write!(f, "{max}-entry"),
             Self::Depth(max) => write!(f, "{max}-level depth"),
-            Self::Time(max) => match max.as_secs() {
-                0 => write!(f, "{} ms", max.as_millis()),
+            Self::Time(max) => match max.secs() {
                 1 => f.write_str("1 second"),
                 secs => write!(f, "{secs} seconds"),
             },
@@ -878,10 +987,9 @@ pub struct Usage {
 /// The ceilings the watcher enforces on one child.
 #[derive(Debug, Clone, Copy)]
 struct Limits {
-    disk_bytes: u64,
-    disk_entries: u64,
-    stdout_bytes: u64,
-    wall: Duration,
+    staging: Staging,
+    stdout_bytes: ByteBudget,
+    wall: WallBudget,
 }
 
 /// Measure `root` without following links, stopping once either disk ceiling of `budget` is passed.
@@ -945,11 +1053,17 @@ fn measure_limits(root: &Path, limits: &Limits) -> Result<Usage, (PathBuf, std::
 }
 
 /// The first disk ceiling of `limits` that `usage` passes, if any.
+///
+/// A surface that stages nothing refuses its first staged byte or entry.
 const fn exceeded(usage: Usage, limits: &Limits) -> Option<IngestLimit> {
-    if usage.bytes > limits.disk_bytes {
-        Some(IngestLimit::Bytes(limits.disk_bytes))
-    } else if usage.entries > limits.disk_entries {
-        Some(IngestLimit::Entries(limits.disk_entries))
+    let (bytes, entries) = match limits.staging {
+        Staging::Nothing => (0, 0),
+        Staging::Disk { bytes, entries } => (bytes.get(), entries.get()),
+    };
+    if usage.bytes > bytes {
+        Some(IngestLimit::Bytes(bytes))
+    } else if usage.entries > entries {
+        Some(IngestLimit::Entries(entries))
     } else {
         None
     }
@@ -1046,7 +1160,7 @@ impl Transfer {
     pub fn begin(budget: Budget) -> Self {
         Self {
             budget,
-            started: Instant::now(),
+            started: transfer_start(),
         }
     }
 
@@ -1094,6 +1208,36 @@ impl Transfer {
     }
 }
 
+/// The instant a new [`Transfer`] starts its clock at: now.
+#[cfg(not(test))]
+fn transfer_start() -> Instant {
+    Instant::now()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How long before now every transfer this thread begins counts as started.
+    static TRANSFER_HEAD_START: std::cell::Cell<Duration> =
+        const { std::cell::Cell::new(Duration::ZERO) };
+}
+
+/// Start every transfer this thread begins `spent` in the past, for a test to drive a deadline refusal.
+///
+/// A wall is at least one second, so a test that must cross it without waiting
+/// spends the clock instead of shrinking the wall.
+#[cfg(test)]
+pub fn spend_transfer_clock_for_test(spent: Duration) {
+    TRANSFER_HEAD_START.with(|head_start| head_start.set(spent));
+}
+
+/// The instant a new [`Transfer`] starts its clock at: now, less the head start a test spent.
+#[cfg(test)]
+fn transfer_start() -> Instant {
+    let now = Instant::now();
+    now.checked_sub(TRANSFER_HEAD_START.with(std::cell::Cell::get))
+        .unwrap_or(now)
+}
+
 /// Whether a watched child is detached from the terminal in its own process group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -1120,7 +1264,7 @@ fn run_core(
     started: Instant,
     mode: Mode,
 ) -> Result<Captured, RunError<IngestLimit>> {
-    let out_of_time = || started.elapsed() >= limits.wall;
+    let out_of_time = || started.elapsed() >= limits.wall.get();
     if out_of_time() {
         return Err(RunError::Exceeded(IngestLimit::Time(limits.wall)));
     }
@@ -1144,7 +1288,7 @@ fn run_core(
         .child
         .stderr
         .take()
-        .map(|pipe| spawn_capture(pipe, CHILD_STDERR_MAX_BYTES.get()))
+        .map(|pipe| spawn_capture(pipe, CHILD_STDERR_MAX_BYTES))
         .transpose()
         .map_err(RunError::Spawn)?;
     if let (Some(bytes), Some(pipe)) = (stdin, running.child.stdin.take()) {
@@ -1176,7 +1320,9 @@ fn run_core(
     }
     let (stdout, stdout_over) = drain(stdout.as_ref(), Stream::Stdout)?;
     if stdout_over {
-        return Err(RunError::Exceeded(IngestLimit::Bytes(limits.stdout_bytes)));
+        return Err(RunError::Exceeded(IngestLimit::Bytes(
+            limits.stdout_bytes.get(),
+        )));
     }
     let (stderr, _) = drain(stderr.as_ref(), Stream::Stderr)?;
     Ok(Captured {
@@ -1637,8 +1783,7 @@ mod relay {
             .args(["-o", "sigignore=", "-p"])
             .arg(pid.to_string());
         let limits = super::Limits {
-            disk_bytes: 0,
-            disk_entries: 0,
+            staging: super::Staging::Nothing,
             stdout_bytes: PS_STDOUT_MAX_BYTES,
             wall: PS_WALL,
         };
@@ -1659,11 +1804,11 @@ mod relay {
 
     /// The most `ps` may print for one process's mask.
     #[cfg(any(not(target_os = "linux"), test))]
-    const PS_STDOUT_MAX_BYTES: u64 = 256;
+    const PS_STDOUT_MAX_BYTES: super::ByteBudget = super::ByteBudget::of::<256>();
 
     /// The longest `ps` may take to report one process's mask.
     #[cfg(any(not(target_os = "linux"), test))]
-    const PS_WALL: std::time::Duration = std::time::Duration::from_secs(5);
+    const PS_WALL: super::WallBudget = super::WallBudget::of_secs::<5>();
 
     /// The hexadecimal mask `ps -o sigignore=` printed: one field of hex digits.
     #[cfg(any(not(target_os = "linux"), test))]
@@ -1919,7 +2064,7 @@ mod relay {
 type Capture = mpsc::Receiver<(Vec<u8>, bool)>;
 
 /// Read `pipe` on a thread, keeping at most `cap` bytes and draining the rest.
-fn spawn_capture(pipe: impl Read + Send + 'static, cap: u64) -> std::io::Result<Capture> {
+fn spawn_capture(pipe: impl Read + Send + 'static, cap: ByteBudget) -> std::io::Result<Capture> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("ipe-child-capture".to_owned())
@@ -1951,9 +2096,9 @@ fn spawn_feed(
 ///
 /// The flag reports whether anything past `cap` arrived. The pipe is drained to
 /// its end so the child never blocks on a full pipe.
-fn capture(mut pipe: impl Read, cap: u64) -> (Vec<u8>, bool) {
+fn capture(mut pipe: impl Read, cap: ByteBudget) -> (Vec<u8>, bool) {
     let mut kept = Vec::new();
-    let _ = (&mut pipe).take(cap).read_to_end(&mut kept);
+    let _ = (&mut pipe).take(cap.get()).read_to_end(&mut kept);
     let over = std::io::copy(&mut pipe, &mut std::io::sink()).is_ok_and(|rest| rest > 0);
     (kept, over)
 }
@@ -2295,7 +2440,7 @@ pub fn curl_limit_args(response_bytes: ByteBudget, budget: &Budget) -> [String; 
         "--max-filesize".to_owned(),
         response_bytes.get().to_string(),
         "--max-time".to_owned(),
-        budget.wall.as_secs().to_string(),
+        budget.wall.secs().to_string(),
     ]
 }
 
@@ -2321,44 +2466,50 @@ pub fn curl_refusal(
 #[cfg(test)]
 mod tests {
     use super::{
-        Budget, BudgetPairing, ByteBudget, CappedReadError, Captured, EntryBudget, FetchBudget,
-        GITHUB_API, Git, IngestLimit, IngestRefusal, IngestSource, LocalRefusal, LocalSource,
-        MAX_REMOTE_BYTES, MAX_REMOTE_ENTRIES, Mode, PACKAGE_SOURCE, PackageName, RefsCeiling,
-        RunError, Stream, Transfer, TreeCeiling, Usage, curl_limit_args, curl_refusal, measure,
-        read_capped, run_core,
+        ALL_BUDGETS, Budget, BudgetPairing, ByteBudget, CappedReadError, Captured, EntryBudget,
+        FetchBudget, GITHUB_API, Git, IngestLimit, IngestRefusal, IngestSource, LocalRefusal,
+        LocalSource, MAX_REMOTE_BYTES, MAX_REMOTE_ENTRIES, MAX_WALL_SECS, Mode, PACKAGE_SOURCE,
+        PackageName, RefsCeiling, RunError, Staging, Stream, Transfer, TreeCeiling, Usage,
+        WallBudget, curl_limit_args, curl_refusal, measure, read_capped, run_core,
     };
     use std::process::Command;
     use std::time::{Duration, Instant};
 
     const CAP: u64 = 16;
 
-    /// The byte ceiling `n`, zero naming a surface that stages nothing.
+    /// The byte ceiling `n`.
     #[allow(clippy::expect_used)] // fixture ceilings are literal in-range values
     fn bytes(n: u64) -> ByteBudget {
-        if n == 0 {
-            ByteBudget::NONE
-        } else {
-            ByteBudget::for_test(n).expect("in-range byte budget")
-        }
+        ByteBudget::for_test(n).expect("in-range byte budget")
     }
 
-    /// The entry ceiling `n`, zero naming a surface that stages nothing.
+    /// The entry ceiling `n`.
     #[allow(clippy::expect_used)] // fixture ceilings are literal in-range values
     fn entries(n: u64) -> EntryBudget {
-        if n == 0 {
-            EntryBudget::NONE
-        } else {
-            EntryBudget::for_test(n).expect("in-range entry budget")
-        }
+        EntryBudget::for_test(n).expect("in-range entry budget")
     }
 
-    fn budget(disk_bytes: u64, disk_entries: u64) -> Budget {
+    /// The wall ceiling of `secs` seconds.
+    #[allow(clippy::expect_used)] // fixture ceilings are literal in-range values
+    fn wall(secs: u64) -> WallBudget {
+        WallBudget::for_test(Duration::from_secs(secs)).expect("in-range wall budget")
+    }
+
+    /// A fixture budget that stages nothing.
+    fn unstaged() -> Budget {
         PACKAGE_SOURCE
             .transfer()
-            .with_disk_bytes(bytes(disk_bytes))
-            .with_disk_entries(entries(disk_entries))
+            .with_staging(Staging::Nothing)
             .with_stdout(bytes(CAP))
-            .with_wall(Duration::from_secs(30))
+            .with_wall(wall(30))
+    }
+
+    /// A fixture budget staging at most `disk_bytes` bytes in `disk_entries` entries.
+    fn staged(disk_bytes: u64, disk_entries: u64) -> Budget {
+        unstaged().with_staging(Staging::Disk {
+            bytes: bytes(disk_bytes),
+            entries: entries(disk_entries),
+        })
     }
 
     /// A byte or entry ceiling exists only inside `1..=MAX`; zero and one past are refused.
@@ -2380,28 +2531,108 @@ mod tests {
         assert_eq!(EntryBudget::for_test(MAX_REMOTE_ENTRIES + 1), None);
     }
 
+    /// A wall ceiling exists only as whole seconds inside `1..=MAX_WALL_SECS`.
+    #[test]
+    fn a_sub_second_wall_has_no_representation() {
+        assert_eq!(WallBudget::for_test(Duration::ZERO), None);
+        assert_eq!(WallBudget::for_test(Duration::from_millis(1)), None);
+        assert_eq!(WallBudget::for_test(Duration::from_millis(999)), None);
+        assert_eq!(WallBudget::for_test(Duration::from_millis(1_500)), None);
+        assert_eq!(
+            WallBudget::for_test(Duration::from_secs(1)).map(WallBudget::secs),
+            Some(1)
+        );
+        assert_eq!(
+            WallBudget::for_test(Duration::from_secs(MAX_WALL_SECS)).map(WallBudget::get),
+            Some(Duration::from_secs(MAX_WALL_SECS))
+        );
+        assert_eq!(
+            WallBudget::for_test(Duration::from_secs(MAX_WALL_SECS + 1)),
+            None
+        );
+    }
+
     /// Every named surface budget sits inside the remote ceilings.
     #[test]
     fn every_named_budget_is_within_the_remote_ceilings() {
-        let named = [
-            *PACKAGE_SOURCE.transfer(),
-            super::INDEX_CLONE,
-            super::INDEX_PUSH,
-            GITHUB_API,
-            super::OAUTH_FORM,
-            super::INSTALLER,
-        ];
-        for budget in named {
-            assert!(budget.disk_bytes().get() <= MAX_REMOTE_BYTES, "{budget:?}");
+        assert!(ALL_BUDGETS.contains(PACKAGE_SOURCE.transfer()));
+        for budget in ALL_BUDGETS {
+            if let Staging::Disk { bytes, entries } = budget.staging() {
+                assert!(bytes.get() <= MAX_REMOTE_BYTES, "{budget:?}");
+                assert!(entries.get() <= MAX_REMOTE_ENTRIES, "{budget:?}");
+            }
             assert!(
                 budget.stdout_bytes().get() <= MAX_REMOTE_BYTES,
                 "{budget:?}"
             );
-            assert!(
-                budget.disk_entries().get() <= MAX_REMOTE_ENTRIES,
-                "{budget:?}"
-            );
+            assert!(budget.wall().secs() <= MAX_WALL_SECS, "{budget:?}");
         }
+    }
+
+    /// No named budget yields a curl argument curl reads as "no limit" (`0`).
+    #[test]
+    fn curl_limit_args_never_emit_an_unlimited_value() {
+        for budget in ALL_BUDGETS {
+            let mut ceilings = vec![budget.stdout_bytes()];
+            if let Staging::Disk { bytes, .. } = budget.staging() {
+                ceilings.push(bytes);
+            }
+            for ceiling in ceilings {
+                let [max_filesize, filesize, max_time, time] = curl_limit_args(ceiling, &budget);
+                assert_eq!(max_filesize, "--max-filesize");
+                assert_eq!(max_time, "--max-time");
+                for value in [filesize, time] {
+                    assert!(
+                        value.parse::<u64>().is_ok_and(|n| n > 0),
+                        "{budget:?} printed `{value}`"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A surface that stages nothing refuses its first staged byte.
+    #[test]
+    fn staging_nothing_refuses_one_staged_byte() {
+        let dir = scratch();
+        let empty = measure(dir.path(), &unstaged()).expect("measures");
+        assert_eq!(empty, Usage::default());
+        assert!(super::exceeded(empty, &unstaged().limits()).is_none());
+        std::fs::write(dir.path().join("a"), [0u8; 1]).expect("a");
+        let usage = measure(dir.path(), &unstaged()).expect("measures");
+        assert_eq!(
+            usage,
+            Usage {
+                bytes: 1,
+                entries: 1
+            }
+        );
+        assert_eq!(
+            super::exceeded(usage, &unstaged().limits()),
+            Some(IngestLimit::Bytes(0))
+        );
+    }
+
+    /// A surface that stages nothing refuses its first staged entry, an empty file included.
+    #[test]
+    fn staging_nothing_refuses_one_staged_entry() {
+        let dir = scratch();
+        std::fs::write(dir.path().join("a"), b"").expect("a");
+        let usage = measure(dir.path(), &unstaged()).expect("measures");
+        assert_eq!(
+            super::exceeded(usage, &unstaged().limits()),
+            Some(IngestLimit::Entries(0))
+        );
+    }
+
+    /// A fetch budget whose transfer stages nothing is not paired with any tree.
+    #[test]
+    fn a_fetch_budget_that_stages_nothing_is_refused() {
+        let refs = RefsCeiling::for_test(bytes(64), 2);
+        assert_eq!(
+            FetchBudget::for_test(unstaged(), refs, tree(10, 4)),
+            Err(BudgetPairing::TransferBytesUnderTree)
+        );
     }
 
     fn scratch() -> crate::scratch::ScratchDir {
@@ -2458,7 +2689,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("sub")).expect("sub");
         std::fs::write(dir.path().join("sub").join("a"), [0u8; 10]).expect("a");
         std::fs::write(dir.path().join("b"), [0u8; 6]).expect("b");
-        let budget = budget(16, 3);
+        let budget = staged(16, 3);
         let usage = measure(dir.path(), &budget).expect("measures");
         assert_eq!(
             usage,
@@ -2474,7 +2705,7 @@ mod tests {
     fn a_tree_one_byte_past_its_ceiling_is_over_budget() {
         let dir = scratch();
         std::fs::write(dir.path().join("a"), [0u8; 17]).expect("a");
-        let budget = budget(16, 8);
+        let budget = staged(16, 8);
         let usage = measure(dir.path(), &budget).expect("measures");
         assert_eq!(
             super::exceeded(usage, &budget.limits()),
@@ -2488,7 +2719,7 @@ mod tests {
         for name in ["a", "b", "c", "d"] {
             std::fs::write(dir.path().join(name), b"").expect("entry");
         }
-        let budget = budget(1024, 3);
+        let budget = staged(1024, 3);
         let usage = measure(dir.path(), &budget).expect("measures");
         assert_eq!(
             super::exceeded(usage, &budget.limits()),
@@ -2504,7 +2735,7 @@ mod tests {
         for index in 0..64 {
             std::fs::create_dir(dir.path().join(format!("d{index}"))).expect("entry");
         }
-        let budget = budget(1024, 3);
+        let budget = staged(1024, 3);
         let usage = measure(dir.path(), &budget).expect("measures");
         assert_eq!(usage.entries, 4);
         assert_eq!(
@@ -2532,16 +2763,16 @@ mod tests {
     #[test]
     fn an_unpaired_fetch_budget_is_refused() {
         let refs = RefsCeiling::for_test(bytes(64), 2);
-        let at_bytes = budget(20, 1_000);
+        let at_bytes = staged(20, 1_000);
         assert!(FetchBudget::for_test(at_bytes, refs, tree(10, 4)).is_ok());
         assert_eq!(
-            FetchBudget::for_test(budget(19, 1_000), refs, tree(10, 4)),
+            FetchBudget::for_test(staged(19, 1_000), refs, tree(10, 4)),
             Err(BudgetPairing::TransferBytesUnderTree)
         );
-        let staged = 4 + 2 + super::GIT_STAGE_OVERHEAD_ENTRIES;
-        assert!(FetchBudget::for_test(budget(20, staged), refs, tree(10, 4)).is_ok());
+        let stage_entries = 4 + 2 + super::GIT_STAGE_OVERHEAD_ENTRIES;
+        assert!(FetchBudget::for_test(staged(20, stage_entries), refs, tree(10, 4)).is_ok());
         assert_eq!(
-            FetchBudget::for_test(budget(20, staged - 1), refs, tree(10, 4)),
+            FetchBudget::for_test(staged(20, stage_entries - 1), refs, tree(10, 4)),
             Err(BudgetPairing::TransferEntriesUnderTree)
         );
         assert!(TreeCeiling::for_test(10, 4, 10, 8).is_ok());
@@ -2558,9 +2789,8 @@ mod tests {
             (IngestLimit::Bytes(7), "7-byte"),
             (IngestLimit::Entries(3), "3-entry"),
             (IngestLimit::Depth(64), "64-level depth"),
-            (IngestLimit::Time(Duration::from_secs(9)), "9 seconds"),
-            (IngestLimit::Time(Duration::from_secs(1)), "1 second"),
-            (IngestLimit::Time(Duration::from_millis(1)), "1 ms"),
+            (IngestLimit::Time(wall(9)), "9 seconds"),
+            (IngestLimit::Time(wall(1)), "1 second"),
             (IngestLimit::NonUtf8Name, "not valid UTF-8"),
             (IngestLimit::SpecialFile, "special file"),
             (IngestLimit::Symlink, "symbolic link"),
@@ -2647,7 +2877,7 @@ mod tests {
     /// network; a local query past its wall time does not blame the network.
     #[test]
     fn a_timed_out_refusal_says_it_did_not_finish() {
-        let limit = IngestLimit::Time(Duration::from_secs(9));
+        let limit = IngestLimit::Time(wall(9));
         let remote = IngestRefusal {
             source: IngestSource::PackageFetch,
             limit,
@@ -2706,18 +2936,18 @@ mod tests {
     /// A step with its own stdout ceiling keeps the transfer's deadline.
     #[test]
     fn a_stdout_ceiling_step_shares_the_transfer_deadline() {
-        let transfer = Transfer::begin(budget(0, 0));
+        let transfer = Transfer::begin(unstaged());
         let step = transfer.with_stdout_ceiling(bytes(7));
         assert_eq!(step.started, transfer.started);
         assert_eq!(step.budget.stdout_bytes, bytes(7));
         assert_eq!(step.budget.wall, transfer.budget.wall);
-        assert_eq!(step.budget.disk_bytes, transfer.budget.disk_bytes);
+        assert_eq!(step.budget.staging, transfer.budget.staging);
     }
 
     #[test]
     fn a_missing_stage_measures_empty() {
         let dir = scratch();
-        let usage = measure(&dir.path().join("absent"), &budget(0, 0)).expect("measures");
+        let usage = measure(&dir.path().join("absent"), &unstaged()).expect("measures");
         assert_eq!(usage, Usage::default());
     }
 
@@ -2748,7 +2978,7 @@ mod tests {
         let out = dir.path().join("out");
         let mut command = sh("head -c 16 /dev/zero > \"$0\"");
         command.arg(&out);
-        let run = run(command, None, Some(&out), &budget(16, 1));
+        let run = run(command, None, Some(&out), &staged(16, 1));
         assert!(matches!(run, Ok(ref captured) if captured.status.success()));
     }
 
@@ -2759,7 +2989,7 @@ mod tests {
         let out = dir.path().join("out");
         let mut command = sh("head -c 17 /dev/zero > \"$0\"");
         command.arg(&out);
-        let run = run(command, None, Some(&out), &budget(16, 1));
+        let run = run(command, None, Some(&out), &staged(16, 1));
         assert!(matches!(
             run,
             Err(RunError::Exceeded(IngestLimit::Bytes(16)))
@@ -2774,7 +3004,7 @@ mod tests {
         let mut command = sh("cat /dev/zero > \"$0\"");
         command.arg(&out);
         let cap = 1024 * 1024;
-        let run = run(command, None, Some(&out), &budget(cap, 1));
+        let run = run(command, None, Some(&out), &staged(cap, 1));
         assert!(matches!(
             run,
             Err(RunError::Exceeded(IngestLimit::Bytes(c))) if c == cap
@@ -2795,7 +3025,7 @@ mod tests {
     fn a_child_staging_exactly_the_entry_cap_is_accepted() {
         let dir = scratch();
         let command = touch_files(dir.path(), 4);
-        let run = run(command, None, Some(dir.path()), &budget(0, 4));
+        let run = run(command, None, Some(dir.path()), &staged(1, 4));
         assert!(matches!(run, Ok(ref captured) if captured.status.success()));
     }
 
@@ -2804,7 +3034,7 @@ mod tests {
     fn a_child_staging_one_entry_past_the_cap_is_refused() {
         let dir = scratch();
         let command = touch_files(dir.path(), 5);
-        let run = run(command, None, Some(dir.path()), &budget(0, 4));
+        let run = run(command, None, Some(dir.path()), &staged(1, 4));
         assert!(matches!(
             run,
             Err(RunError::Exceeded(IngestLimit::Entries(4)))
@@ -2816,7 +3046,7 @@ mod tests {
     #[test]
     fn a_transfer_staging_exactly_its_entry_ceiling_is_accepted() {
         let dir = scratch();
-        let transfer = Transfer::begin(budget(0, 4));
+        let transfer = Transfer::begin(staged(1, 4));
         let run = transfer.run(
             touch_files(dir.path(), 4),
             None,
@@ -2832,7 +3062,7 @@ mod tests {
     #[test]
     fn a_transfer_staging_one_entry_past_its_ceiling_is_refused() {
         let dir = scratch();
-        let transfer = Transfer::begin(budget(0, 4));
+        let transfer = Transfer::begin(staged(1, 4));
         let run = transfer.run(
             touch_files(dir.path(), 5),
             None,
@@ -2861,7 +3091,7 @@ mod tests {
         let mut command = sh("(cat /dev/zero > \"$0\") & wait");
         command.arg(&out);
         let cap = 1024 * 1024;
-        let run = run(command, None, Some(&out), &budget(cap, 1));
+        let run = run(command, None, Some(&out), &staged(cap, 1));
         assert!(matches!(
             run,
             Err(RunError::Exceeded(IngestLimit::Bytes(c))) if c == cap
@@ -2878,7 +3108,7 @@ mod tests {
     #[test]
     fn a_finished_childs_lingering_grandchild_is_killed() {
         let started = Instant::now();
-        let run = run(sh("sleep 30 & exit 0"), None, None, &budget(0, 0));
+        let run = run(sh("sleep 30 & exit 0"), None, None, &unstaged());
         assert!(matches!(run, Ok(ref captured) if captured.status.success()));
         assert!(started.elapsed() < Duration::from_secs(4));
     }
@@ -2891,7 +3121,7 @@ mod tests {
             sh("sleep 8 & exit 0"),
             None,
             None,
-            &budget(0, 0).limits(),
+            &unstaged().limits(),
             Instant::now(),
             Mode::Attached,
         );
@@ -2905,8 +3135,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_second_step_is_held_to_the_first_steps_deadline() {
-        let mut limits = budget(0, 0).limits();
-        limits.wall = Duration::from_secs(2);
+        let mut limits = unstaged().limits();
+        limits.wall = wall(2);
         let started = Instant::now();
         let first = run_core(
             sh("sleep 1.2"),
@@ -2934,14 +3164,16 @@ mod tests {
     /// A step started after the deadline is refused without running.
     #[test]
     fn a_step_after_the_deadline_never_starts() {
-        let mut limits = budget(0, 0).limits();
-        limits.wall = Duration::ZERO;
+        let limits = unstaged().with_wall(wall(1)).limits();
+        let spent = Instant::now()
+            .checked_sub(Duration::from_secs(2))
+            .expect("the clock reads two seconds past its origin");
         let run = run_core(
             Command::new("ipe-no-such-program"),
             None,
             None,
             &limits,
-            Instant::now(),
+            spent,
             Mode::Detached,
         );
         assert!(matches!(run, Err(RunError::Exceeded(IngestLimit::Time(_)))));
@@ -2950,9 +3182,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn stdout_of_exactly_the_cap_is_kept_and_one_past_is_refused() {
-        let at_cap = run(sh("head -c 16 /dev/zero"), None, None, &budget(0, 0));
+        let at_cap = run(sh("head -c 16 /dev/zero"), None, None, &unstaged());
         assert!(matches!(at_cap, Ok(ref captured) if captured.stdout.len() == 16));
-        let past = run(sh("head -c 17 /dev/zero"), None, None, &budget(0, 0));
+        let past = run(sh("head -c 17 /dev/zero"), None, None, &unstaged());
         assert!(matches!(
             past,
             Err(RunError::Exceeded(IngestLimit::Bytes(CAP)))
@@ -2962,7 +3194,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_child_past_its_wall_time_is_killed() {
-        let quick = budget(0, 0).with_wall(Duration::from_millis(200));
+        let quick = unstaged().with_wall(wall(1));
         let run = run(sh("sleep 30"), None, None, &quick);
         assert!(matches!(run, Err(RunError::Exceeded(IngestLimit::Time(_)))));
     }
@@ -2979,7 +3211,7 @@ mod tests {
     #[test]
     fn stdin_larger_than_a_pipe_buffer_does_not_deadlock() {
         let input = vec![b'x'; 1024 * 1024];
-        let wide = budget(0, 0).with_stdout(bytes(2 * 1024 * 1024));
+        let wide = unstaged().with_stdout(bytes(2 * 1024 * 1024));
         let run = run(sh("cat"), Some(&input), None, &wide);
         assert!(matches!(run, Ok(ref captured) if captured.stdout.len() == input.len()));
     }
@@ -3132,7 +3364,7 @@ mod tests {
                 "--max-filesize".to_owned(),
                 "4096".to_owned(),
                 "--max-time".to_owned(),
-                GITHUB_API.wall.as_secs().to_string(),
+                GITHUB_API.wall.secs().to_string(),
             ]
         );
     }
