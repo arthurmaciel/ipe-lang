@@ -2705,16 +2705,14 @@ fn is_browser_noise_path(p: &str) -> bool {
     .any(|ext| p.ends_with(ext))
 }
 
-///go `handleInitial`): serve an unrouted browser-noise file
-/// from the static dir's ROOT when it exists there. Browsers always probe
-/// `/favicon.ico` (and friends) at the origin root, never under `/static/`,
-/// so without this shortcut an author with a configured static dir has no
-/// way to suppress the 404. `None` → the caller 404s.
+/// Serve an unrouted browser-noise file from the static dir's root when it
+/// exists there.
 ///
-/// Security: the path is attacker-shaped. Any non-plain segment (empty, `.`,
-/// `..`) is rejected BEFORE the join — stricter than  `filepath.Clean`,
-/// no traversal can escape the dir. A directory (or unreadable file) reads
-/// as `Err` → `None` → 404.
+/// Browsers probe `/favicon.ico` (and friends) at the origin root, never under
+/// `/static/`, so without this shortcut an author with a configured static dir
+/// has no way to suppress the 404. `None` means the caller answers 404: no
+/// static dir, a request path [`noise_candidate`] refuses, or an entry that is
+/// absent, a directory or unreadable.
 #[cfg(feature = "server")]
 async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Response> {
     use axum::response::IntoResponse;
@@ -2722,17 +2720,8 @@ async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Resp
     let dir = crate::system::read_env_var("IPE_WEB_STATIC_DIR")
         .ok()
         .filter(|d| !d.is_empty())?;
-    let rel = path.trim_start_matches('/');
-    if rel.is_empty()
-        || rel
-            .split('/')
-            .any(|seg| seg.is_empty() || seg == "." || seg == "..")
-    {
-        return None;
-    }
-    let candidate = std::path::Path::new(&dir).join(rel);
+    let (candidate, mime) = noise_candidate(&dir, path, crate::path_core::HOST)?;
     let bytes = tokio::fs::read(&candidate).await.ok()?;
-    let mime = static_noise_mime(rel.rsplit('.').next().unwrap_or(""));
     Some(
         (
             axum::http::StatusCode::OK,
@@ -2741,6 +2730,30 @@ async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Resp
         )
             .into_response(),
     )
+}
+
+/// The file beneath `dir` a browser-noise request path names under `regime`,
+/// with its content type, or `None` when the path may not reach the
+/// filesystem.
+///
+/// The request path is parsed by the one static-request parse
+/// ([`crate::server::static_request`]): decoded once by the strict core, every
+/// segment a plain name under the regime. The candidate is the checked join
+/// ([`crate::path::join_rel`]), never a raw `Path::join`.
+#[cfg(feature = "server")]
+fn noise_candidate(
+    dir: &str,
+    uri_path: &str,
+    regime: crate::path_core::Regime,
+) -> Option<(std::path::PathBuf, &'static str)> {
+    let crate::server::StaticRequest::File(rel) =
+        crate::server::static_request(uri_path, std::path::Path::new(dir), regime)?
+    else {
+        return None;
+    };
+    let candidate = std::path::PathBuf::from(crate::path::join_rel(dir, &rel, regime).ok()?);
+    let mime = static_noise_mime(rel.last().rsplit('.').next().unwrap_or(""));
+    Some((candidate, mime))
 }
 
 /// Content type for a browser-noise file served from the static root. The
@@ -6543,7 +6556,58 @@ mod sse_reconnect_reconcile_tests {
 
 #[cfg(all(test, feature = "server"))]
 mod static_noise_mime_tests {
-    use super::static_noise_mime;
+    use super::{noise_candidate, static_noise_mime};
+    use crate::path_core::Regime;
+
+    #[test]
+    fn noise_candidate_windows_refuses_escaping_paths() {
+        for uri in [
+            "/con.ico",
+            "/C:x.ico",
+            "/x:y.ico",
+            "/.well-known/..%5C..%5Cx",
+            "/.well-known/a.",
+        ] {
+            assert_eq!(
+                noise_candidate("C:\\site", uri, Regime::Windows),
+                None,
+                "{uri:?}"
+            );
+        }
+        let ok = noise_candidate("C:\\site", "/a/favicon.ico", Regime::Windows);
+        assert_eq!(
+            ok,
+            Some((
+                std::path::PathBuf::from("C:\\site\\a\\favicon.ico"),
+                "image/x-icon"
+            ))
+        );
+    }
+
+    #[test]
+    fn noise_candidate_unix_decodes_once_and_accepts_legal_names() {
+        assert_eq!(
+            noise_candidate("/srv/site", "/con.ico", Regime::Unix),
+            Some((
+                std::path::PathBuf::from("/srv/site/con.ico"),
+                "image/x-icon"
+            ))
+        );
+        assert_eq!(
+            noise_candidate("/srv/site", "/fav%69con.ico", Regime::Unix),
+            Some((
+                std::path::PathBuf::from("/srv/site/favicon.ico"),
+                "image/x-icon"
+            ))
+        );
+        for uri in ["/", "/a/../x.ico", "/a%2F..%2Fx.ico", "/a//b.ico"] {
+            assert_eq!(
+                noise_candidate("/srv/site", uri, Regime::Unix),
+                None,
+                "{uri:?}"
+            );
+        }
+    }
 
     #[test]
     fn known_browser_noise_extensions_map() {
