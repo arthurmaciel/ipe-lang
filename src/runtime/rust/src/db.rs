@@ -9753,8 +9753,9 @@ mod tests {
     #[tokio::test]
     async fn ipe_db_url_shared_connection_sees_same_data() {
         use crate::system::{locked_remove_var, locked_set_var};
-        let tmp = format!("/tmp/ipe_aud07_shared_{}.db", std::process::id());
-        let url = format!("sqlite://{}?mode=rwc", tmp);
+        let tmp = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_aud07_shared_{}.db", std::process::id()));
+        let url = format!("sqlite://{}?mode=rwc", tmp.display());
         locked_set_var("DATABASE_URL", &url);
         let resolved = crate::config::ipe_db_url();
         locked_remove_var("DATABASE_URL");

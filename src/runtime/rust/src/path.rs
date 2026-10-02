@@ -848,6 +848,32 @@ mod tests {
         }
     }
 
+    /// The HOST regime's own spelling of a Unix-slashed literal.
+    ///
+    /// Rewrites every `/` to the HOST separator, so an expected literal
+    /// matches `clean_with`'s own canonicalisation instead of hardcoding
+    /// Unix's `/` on every host.
+    fn host_sep(unix_spelled: &str) -> String {
+        if HOST.is_windows() {
+            unix_spelled.replace('/', "\\")
+        } else {
+            unix_spelled.to_string()
+        }
+    }
+
+    /// A HOST-absolute literal for `tail`.
+    ///
+    /// Unix roots it with `/`; Windows anchors it with a drive, since a bare
+    /// root with no volume is not self-anchored there — so no test embeds a
+    /// Unix-only `/abs` literal into a host-regime judgement.
+    fn host_abs(tail: &str) -> String {
+        if HOST.is_windows() {
+            format!("C:/{tail}")
+        } else {
+            format!("/{tail}")
+        }
+    }
+
     // ── construction: the seal validates ────────────────────────────────────
 
     #[test]
@@ -857,24 +883,24 @@ mod tests {
 
     #[test]
     fn plain_relative_is_accepted() {
-        assert_eq!(path_to_string(mk("src/Main.ipe")), "src/Main.ipe");
+        assert_eq!(path_to_string(mk("src/Main.ipe")), host_sep("src/Main.ipe"));
     }
 
     #[test]
     fn repeated_separators_collapse() {
-        assert_eq!(path_to_string(mk("a//b///c")), "a/b/c");
+        assert_eq!(path_to_string(mk("a//b///c")), host_sep("a/b/c"));
     }
 
     #[test]
     fn interior_dotdot_that_stays_in_bounds_is_accepted() {
         // "a/b/../c" resolves to "a/c" — never climbs above the base.
-        assert_eq!(path_to_string(mk("a/b/../c")), "a/c");
+        assert_eq!(path_to_string(mk("a/b/../c")), host_sep("a/c"));
     }
 
     #[test]
     fn rooted_dotdot_cannot_escape_and_is_accepted() {
         // `Clean` stops `..` at the root, so a rooted path is always safe.
-        assert_eq!(path_to_string(mk("/a/../../b")), "/b");
+        assert_eq!(path_to_string(mk("/a/../../b")), host_sep("/b"));
     }
 
     // ── construction: the seal rejects ──────────────────────────────────────
@@ -923,12 +949,12 @@ mod tests {
 
     #[test]
     fn base_root() {
-        assert_eq!(path_base(mk("/")), "/");
+        assert_eq!(path_base(mk("/")), host_sep("/"));
     }
 
     #[test]
     fn dir_with_parent() {
-        assert_eq!(path_dir(mk("/foo/bar.txt")), "/foo");
+        assert_eq!(path_dir(mk("/foo/bar.txt")), host_sep("/foo"));
     }
 
     #[test]
@@ -953,7 +979,7 @@ mod tests {
 
     #[test]
     fn is_absolute_true() {
-        assert!(path_is_absolute(mk("/usr/bin")));
+        assert!(path_is_absolute(mk(&host_abs("usr/bin"))));
     }
 
     #[test]
