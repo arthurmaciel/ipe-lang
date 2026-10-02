@@ -1,0 +1,330 @@
+module ViewTests exposing (checks)
+
+import Ipe.ByteSize as ByteSize
+import Ipe.Char as Char
+import Ipe.Crypto as Crypto
+import Ipe.Db as Db
+import Ipe.Db.Decode
+import Ipe.Db.Sql as Sql
+import Ipe.Dict as Dict
+import Ipe.Error as Error
+import Ipe.File as File
+import Ipe.Io as Io
+import Ipe.Json.Decode as Decode
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.Set as Set
+import Ipe.Path as Path
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+import Ipe.Time.Timestamp as Timestamp
+import Lib.Db as LibDb exposing (Decision(..), HistoryCursor(..))
+import Lib.Format as Format
+import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
+import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
+import Lib.Keys as Keys exposing (KeyAction(..))
+import Lib.Links as Links exposing (Link(..))
+import Lib.Queue as Queue exposing (HistoryState(..), QueueState(..), UnitPageState(..))
+import Lib.RepoPath as RepoPath exposing (PathError(..), Root, RootMap)
+import Lib.SafeText as SafeText
+import Lib.Settings as Settings
+
+import TestSupport exposing
+    ( tableExists
+    , countReviewRows
+    , expectErr
+    , refuse
+    , seedIndex
+    , writeFileText
+    , fixtureLibRs
+    , fixtureMainIpe
+    , viewA
+    , viewB
+    , viewTag
+    , shownTextOf
+    , unitViewTag
+    , execIndex
+    , execIndexUnchecked
+    , Scratch
+    , scratchAt
+    , indexSchemaStatements
+    , execIndexSchema
+    , seedIndexDb
+    , insertUnitRows
+    , setIndexEnv
+    , loadFirstPage
+    , checkUnits
+    , listSecond
+    , isUnitA
+    , isUnitB
+    , cleanupIndex
+    , removeFileIfAny
+    , codeText
+    , noHazard
+    , rendered
+    , renderedForeign
+    , describeText
+    , refusedFor
+    , openReviewAt
+    , openReadOnlyAt
+    , countDrainRows
+    , vectorsPath
+    , ipeIndexTestFile
+    , repoFile
+    , probeMessage
+    , probeNames
+    , maybeContains
+    )
+
+
+
+
+isKeyword : String -> Token -> Bool
+isKeyword kw tok =
+    case tok of
+        Keyword k ->
+            k == kw
+
+        Str _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Num _ ->
+            False
+
+        Ident _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+
+isIdent : String -> Token -> Bool
+isIdent s tok =
+    case tok of
+        Ident t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Str _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Num _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+
+isNum : String -> Token -> Bool
+isNum s tok =
+    case tok of
+        Num t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Str _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Ident _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+
+isStr : String -> Token -> Bool
+isStr s tok =
+    case tok of
+        Str t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Num _ ->
+            False
+
+        Ident _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+
+isComment : String -> Token -> Bool
+isComment s tok =
+    case tok of
+        Comment t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Str _ ->
+            False
+
+        Num _ ->
+            False
+
+        Ident _ ->
+            False
+
+        Plain _ ->
+            False
+
+
+
+isPlain : String -> Token -> Bool
+isPlain s tok =
+    case tok of
+        Plain t ->
+            t == s
+
+        Keyword _ ->
+            False
+
+        Str _ ->
+            False
+
+        Comment _ ->
+            False
+
+        Num _ ->
+            False
+
+        Ident _ ->
+            False
+
+
+
+isShell : Lang -> Bool
+isShell lang =
+    case lang of
+        Shell ->
+            True
+
+        Rust ->
+            False
+
+        Ipe ->
+            False
+
+        Unknown ->
+            False
+
+
+
+isUnknown : Lang -> Bool
+isUnknown lang =
+    case lang of
+        Unknown ->
+            True
+
+        Rust ->
+            False
+
+        Shell ->
+            False
+
+        Ipe ->
+            False
+
+
+
+-- The keyboard shortcuts drive exactly the messages the buttons send: a/r
+-- act on the selected unit, j/k/g/1-5 move the selection, Enter/Escape
+-- confirm/cancel an open refuse panel, and every key is ignored while the
+-- refuse reason input is open (so typing a reason is not hijacked).
+testKeys : Bool
+testKeys =
+    List.all identity
+        [ Keys.label (Keys.keyAction False 3 0 "a") == "approve"
+        , Keys.label (Keys.keyAction False 3 0 "r") == "refuse"
+        , Keys.label (Keys.keyAction False 3 0 "j") == "select1"
+        , Keys.label (Keys.keyAction False 3 0 "k") == "select0"
+        , Keys.label (Keys.keyAction False 3 2 "g") == "select0"
+        , Keys.label (Keys.keyAction False 3 0 "2") == "select1"
+        , Keys.label (Keys.keyAction False 3 0 "5") == "select2"
+        , Keys.label (Keys.keyAction False 3 2 "j") == "select2"
+        , Keys.label (Keys.keyAction False 3 1 "Enter") == "ignore"
+        , Keys.label (Keys.keyAction False 0 0 "a") == "ignore"
+        , Keys.label (Keys.keyAction True 3 0 "a") == "ignore"
+        , Keys.label (Keys.keyAction True 3 0 "j") == "ignore"
+        , Keys.label (Keys.keyAction True 3 0 "Enter") == "confirm"
+        , Keys.label (Keys.keyAction True 3 0 "Escape") == "cancel"
+        ]
+
+
+checks : Db -> Task.Task Error (List ( String, Bool ))
+checks _ =
+    Task.sequence
+        [ Task.succeed
+            ( "formatReviewedAt renders UTC"
+            , Format.formatReviewedAt (Timestamp.fromUnixMillis 0)
+                == "1970-01-01 00:00:00"
+                && Format.formatReviewedAt (Timestamp.fromUnixMillis 1700000000000)
+                == "2023-11-14 22:13:20"
+            )
+        , Task.succeed
+            ( "numberedLines counts from line_start"
+            , Format.numberedLines 10 "a\nb\nc"
+                == [ ( 10, "a" ), ( 11, "b" ), ( 12, "c" ) ]
+            )
+        , Task.succeed
+            ( "highlight: rust keywords vs identifiers"
+            , List.any (isKeyword "fn") (Highlight.tokenize Highlight.Rust "fn answer() -> i32 { 42 }")
+                && List.any (isIdent "answer") (Highlight.tokenize Highlight.Rust "fn answer() -> i32 { 42 }")
+                && List.any (isNum "42") (Highlight.tokenize Highlight.Rust "fn answer() -> i32 { 42 }")
+                && List.any (isStr "\"hi\"") (Highlight.tokenize Highlight.Rust "let s = \"hi\";")
+                && List.any (isComment "// note") (Highlight.tokenize Highlight.Rust "// note\nfn f() {}")
+            )
+        , Task.succeed
+            ( "highlight: shell tokenizes"
+            , List.any (isKeyword "echo") (Highlight.tokenize Highlight.Shell "echo hi")
+                && List.any (isIdent "hi") (Highlight.tokenize Highlight.Shell "echo hi")
+                && isShell (Highlight.langFor "sh")
+            )
+        , Task.succeed
+            ( "highlight: malformed degrades to plain"
+            , List.any (isPlain "\"unterminated") (Highlight.tokenize Highlight.Rust "\"unterminated")
+                && List.any (isPlain "/* open") (Highlight.tokenize Highlight.Rust "/* open")
+                && List.any (isPlain "any old text") (Highlight.tokenize Highlight.Unknown "any old text")
+                && isUnknown (Highlight.langFor "weird")
+            )
+        , Task.succeed
+            ( "percent: decided over queued"
+            , Format.percent 3 4
+                == "75%"
+                && Format.percent 0 4
+                == "0%"
+                && Format.percent 4 4
+                == "100%"
+                && Format.percent 5 4
+                == "125%"
+                && Format.percent 0 0
+                == "0%"
+            )
+        , Task.succeed ( "keyboard shortcuts map to the button msgs", testKeys )
+        ]
