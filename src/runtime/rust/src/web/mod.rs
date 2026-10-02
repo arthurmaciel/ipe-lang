@@ -1487,6 +1487,32 @@ fn cookie_path() -> String {
     cookie_path_for(&web_base_path())
 }
 
+/// The session cookie line: `Path` is the app's base, `HttpOnly`, `Max-Age` is
+/// the store TTL. `Secure` when cookies are secure or this request arrived over
+/// TLS at a trusted proxy; `SameSite=None` (always `Secure`) when the app may be
+/// framed cross-origin, else `Lax`.
+#[cfg(feature = "server")]
+fn session_set_cookie(sid: &str, headers: &axum::http::HeaderMap) -> crate::server::SetCookie {
+    use crate::server::{
+        CookieAttributes, CookieName, CookiePath, CookieValue, SameSite, SetCookie,
+    };
+    SetCookie::new(
+        &CookieName::encode(&session_cookie_name()),
+        &CookieValue::encode(sid),
+        CookieAttributes {
+            path: CookiePath::encode(&cookie_path()),
+            http_only: true,
+            same_site: if csrf::frame_ancestors().is_some() {
+                SameSite::None
+            } else {
+                SameSite::Lax
+            },
+            secure: csrf::cookies_secure() || request_is_https(headers),
+            max_age_secs: Some(web_ttl().as_secs()),
+        },
+    )
+}
+
 /// Whether to trust `X-Forwarded-Proto` for TLS-termination detection. Mirrors
 /// `server.rs`'s `IPE_TRUSTED_PROXY` gate (same env var, same rationale: a
 /// client-supplied header must never be trusted by default — an operator opts
@@ -1564,30 +1590,7 @@ fn page_response(
     // request-scoped.
     //
     // SameSite=Lax stays so top-level navigations keep the session.
-    let secure = if csrf::cookies_secure() || request_is_https(headers) {
-        "; Secure"
-    } else {
-        ""
-    };
-    // SameSite: a deploy opted into cross-origin embedding via
-    // IPE_WEB_FRAME_ANCESTORS needs `SameSite=None; Secure` so the
-    // session cookie survives inside a third-party iframe; otherwise `Lax`
-    // (top-level navigations keep the session). `cookies_secure()` is already true
-    // in frame-ancestors mode, so `None` always pairs with `Secure`.
-    let same_site = if csrf::frame_ancestors().is_some() {
-        "None"
-    } else {
-        "Lax"
-    };
-    // Max-Age: persist the cookie for the store TTL so a
-    // tab-close doesn't drop a still-live server session. Without it the cookie is
-    // session-scoped and the user loses state on tab close.
-    let max_age = web_ttl().as_secs();
-    let session_cookie = format!(
-        "{}={sid}; Path={}; HttpOnly; SameSite={same_site}{secure}; Max-Age={max_age}",
-        session_cookie_name(),
-        cookie_path()
-    );
+    let session_cookie = session_set_cookie(sid, headers);
     let csrf_cookie = csrf::csrf_set_cookie(csrf_token, &web_base_path());
     let mut resp = (
         axum::http::StatusCode::OK,
@@ -1627,22 +1630,7 @@ fn page_response_with_overlay(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let html = render_page_full_with_overlay(sid, &web_base_path(), body, csrf_token, overlay);
-    let secure = if csrf::cookies_secure() || request_is_https(headers) {
-        "; Secure"
-    } else {
-        ""
-    };
-    let same_site = if csrf::frame_ancestors().is_some() {
-        "None"
-    } else {
-        "Lax"
-    };
-    let max_age = web_ttl().as_secs();
-    let session_cookie = format!(
-        "{}={sid}; Path={}; HttpOnly; SameSite={same_site}{secure}; Max-Age={max_age}",
-        session_cookie_name(),
-        cookie_path()
-    );
+    let session_cookie = session_set_cookie(sid, headers);
     let csrf_cookie = csrf::csrf_set_cookie(csrf_token, &web_base_path());
     let mut resp = (
         axum::http::StatusCode::OK,
@@ -5829,6 +5817,33 @@ mod base_path_tests {
         assert_eq!(cookie_path_for(""), "/");
         // Scoped → the cookie is never sent to the parent's own routes.
         assert_eq!(cookie_path_for("/_ipe/console"), "/_ipe/console");
+    }
+
+    /// The typed session line keeps the exact bytes of the hand-formatted one,
+    /// so an existing browser session cookie is replaced, never duplicated.
+    #[test]
+    fn session_set_cookie_keeps_the_session_line_bytes() {
+        let headers = axum::http::HeaderMap::new();
+        let secure = if super::csrf::cookies_secure() {
+            "; Secure"
+        } else {
+            ""
+        };
+        let same_site = if super::csrf::frame_ancestors().is_some() {
+            "None"
+        } else {
+            "Lax"
+        };
+        let expected = format!(
+            "{}=0f3a-sid; Path={}; HttpOnly; SameSite={same_site}{secure}; Max-Age={}",
+            super::session_cookie_name(),
+            super::cookie_path(),
+            super::web_ttl().as_secs()
+        );
+        assert_eq!(
+            super::session_set_cookie("0f3a-sid", &headers).as_str(),
+            expected
+        );
     }
 
     #[test]

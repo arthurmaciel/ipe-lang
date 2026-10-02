@@ -151,20 +151,30 @@ pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
 /// `Path=/` is always `/` — the `__Host-` prefix mandates it, and keeping it
 /// constant means the browser sends the cookie on every request regardless of
 /// sub-path, so the double-submit validate path always sees it.
-pub fn csrf_set_cookie(token: &str, base: &str) -> String {
-    let name = csrf_cookie_name_for(base);
-    if frame_ancestors().is_some() {
-        // Cross-site iframe: the cookie must cross sites → None+Secure (Secure is
-        // mandatory for SameSite=None). `__Host-` is compatible (it only forbids
-        // Domain=, not SameSite=None).
-        format!("{name}={token}; Path=/; HttpOnly; SameSite=None; Secure")
-    } else if cookies_secure() {
-        // Production / TLS: `__Host-` name → Secure is mandatory.
-        format!("{name}={token}; Path=/; HttpOnly; SameSite=Strict; Secure")
+pub fn csrf_set_cookie(token: &str, base: &str) -> crate::server::SetCookie {
+    use crate::server::{
+        CookieAttributes, CookieName, CookiePath, CookieValue, SameSite, SetCookie,
+    };
+    // Cross-site iframe: the cookie must cross sites -> `SameSite=None`, which
+    // always renders `Secure`. Production / TLS: the `__Host-` name makes
+    // `Secure` mandatory. Plain-HTTP dev: bare name, no `Secure` (a browser
+    // drops a `Secure` cookie on `http://`).
+    let same_site = if frame_ancestors().is_some() {
+        SameSite::None
     } else {
-        // Plain-HTTP dev: bare name, no Secure (Secure would drop the cookie on http://).
-        format!("{name}={token}; Path=/; HttpOnly; SameSite=Strict")
-    }
+        SameSite::Strict
+    };
+    SetCookie::new(
+        &CookieName::encode(&csrf_cookie_name_for(base)),
+        &CookieValue::encode(token),
+        CookieAttributes {
+            path: CookiePath::root(),
+            http_only: true,
+            same_site,
+            secure: cookies_secure(),
+            max_age_secs: None,
+        },
+    )
 }
 
 /// Paths exempt from CSRF validation (observability paths, console prefix,
@@ -475,6 +485,24 @@ mod tests {
             !csrf_pair_valid(&read_b, &token_a),
             "app B must not accept a token minted for app A"
         );
+    }
+
+    /// The typed CSRF line keeps the exact bytes of each posture's line, so an
+    /// existing browser CSRF cookie is replaced, never duplicated.
+    #[test]
+    fn csrf_set_cookie_keeps_the_csrf_line_bytes() {
+        let tok = well_formed_tok();
+        let attrs = if frame_ancestors().is_some() {
+            "; Path=/; HttpOnly; SameSite=None; Secure"
+        } else if cookies_secure() {
+            "; Path=/; HttpOnly; SameSite=Strict; Secure"
+        } else {
+            "; Path=/; HttpOnly; SameSite=Strict"
+        };
+        for base in ["", "/shop"] {
+            let expected = format!("{}={tok}{attrs}", csrf_cookie_name_for(base));
+            assert_eq!(csrf_set_cookie(&tok, base).as_str(), expected);
+        }
     }
 
     // The Set-Cookie string always carries Path=/ regardless of the base path,
