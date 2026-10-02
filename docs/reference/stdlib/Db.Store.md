@@ -750,17 +750,23 @@ typed `Err` before any SQL is sent:
 * a target column that is not a valid identifier or not a column of the store;
 * a target column the database fills (`serial` / `defaultNow` /
   `touchOnUpdate`): a row never carries a value to match, so use `insert`;
-* a row whose key value is absent or `NULL` (a `NULL` key never conflicts, so
-  the row would be duplicated).
+* a row whose key value is `NULL` (a `NULL` key never conflicts, so the row
+  would be duplicated).
+
+A raw-column (`fromColumns`) row has no absent cell at this boundary:
+`rowCodec` writes a missing cell as the empty string, so a `Row` without its
+key cell is upserted under the key `""` (and overwrites a row already keyed
+`""`). Give every `Row` its key cell.
 
 On conflict, every non-key column the row supplies is overwritten; `serial` /
 `defaultNow` / `touchOnUpdate` columns are omitted from the write and keep
 their stored value (a `touchOnUpdate` column is not re-stamped). The count is
-`1` for an insert or an in-place update, and `0` only when every non-key
-column is DB-filled, leaving nothing to update (an existing row is then kept
-as is). A row that conflicts on a unique column other than the target is the
-database's typed `Err`, never a silent overwrite. Routes through the audited
-`Db.upsertFields`, which re-validates every identifier and binds every value.
+`1` for an insert or an in-place update, and `0` only when the key already
+exists and every non-key column is DB-filled, so nothing is left to update
+and the stored row is kept as is. A row that conflicts on a unique column
+other than the target is the database's typed `Err`, never a silent
+overwrite. Routes through the audited `Db.upsertFields`, which re-validates
+every identifier and binds every value.
 
 Example:
 
