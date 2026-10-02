@@ -273,21 +273,23 @@ fn render_index_section(out: &mut String, title: &str, entries: &[&Entry], style
     if entries.is_empty() {
         return;
     }
-    let _ = writeln!(out, "<h2>{title}</h2>\n<ul class=\"index-list\">");
+    let _ = writeln!(
+        out,
+        "<h2>{}</h2>\n<ul class=\"index-list\">",
+        html::escape(title)
+    );
     for e in entries {
         let subdir = e.kind.route_subdir();
         let key = &e.source_key;
+        let href = html::escape(&format!("/{subdir}/{key}/"));
         let name = html::escape(key);
         match style {
             ListStyle::Name => {
-                let _ = writeln!(out, "<li><a href=\"/{subdir}/{key}/\">{name}</a></li>");
+                let _ = writeln!(out, "<li><a href=\"{href}\">{name}</a></li>");
             }
             ListStyle::NameSummary => {
                 let summary = html::escape(&e.text);
-                let _ = writeln!(
-                    out,
-                    "<li><a href=\"/{subdir}/{key}/\">{name}: {summary}</a></li>"
-                );
+                let _ = writeln!(out, "<li><a href=\"{href}\">{name}: {summary}</a></li>");
             }
         }
     }
@@ -314,4 +316,27 @@ fn create_dir_all(path: &Path) -> Result<(), String> {
 
 fn write_file(path: &Path, content: &str) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use ipe_docs::{Entry, EntryKind};
+
+    use super::{ListStyle, render_index_section};
+
+    /// A key or title holding markup cannot close the `href` attribute or open
+    /// a tag in the index list.
+    #[test]
+    fn index_section_escapes_key_in_href_and_title() {
+        let entry = Entry {
+            kind: EntryKind::Construct,
+            source_key: "a\"b".to_owned(),
+            text: String::new(),
+        };
+        let mut out = String::new();
+        render_index_section(&mut out, "x<y", &[&entry], ListStyle::Name);
+        assert!(out.contains("<h2>x&lt;y</h2>"), "{out}");
+        assert!(out.contains("href=\"/construct/a&quot;b/\""), "{out}");
+        assert!(!out.contains("a\"b"), "{out}");
+    }
 }

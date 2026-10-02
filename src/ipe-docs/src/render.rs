@@ -120,7 +120,7 @@ pub fn build_highlighted(source: &str, tokens: &[ipe_annotate::AnnotatedToken]) 
         let class = css_class(tok.class);
 
         if let Some(def) = &tok.def {
-            let url = def_url(def);
+            let url = html::escape(&def_url(def));
             let escaped = html::escape(text);
             // `write!` on a `String` is infallible; the `Result` is intentionally
             // discarded rather than suppressed with `#[allow]`.
@@ -373,6 +373,26 @@ mod tests {
         assert!(
             html.contains("href=\"/symbol/List.map/\""),
             "kernel token must link to /symbol/List.map/; got: {html}"
+        );
+    }
+
+    /// A definition name holding a quote cannot close the `href` attribute.
+    #[test]
+    fn def_link_href_is_attribute_escaped() {
+        let source = "a";
+        let tokens = vec![AnnotatedToken {
+            byte_start: 0,
+            byte_len: 1,
+            class: TokenClass::Kernel,
+            def: Some(DefKey::Kernel {
+                module: "M".into(),
+                name: "a\"b".into(),
+            }),
+        }];
+        let html = build_highlighted(source, &tokens);
+        assert!(
+            html.contains("href=\"/symbol/M.a&quot;b/\""),
+            "href must escape the quote; got: {html}"
         );
     }
 

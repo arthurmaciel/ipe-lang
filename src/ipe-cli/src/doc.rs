@@ -4683,7 +4683,8 @@ fn render_html_tree_relative(nodes: &[NamespaceNode], out: &mut String) {
             let stem = module_stem(&node.full_name);
             let _ = write!(
                 out,
-                "<a href=\"../{stem}.html\">{}</a>",
+                "<a href=\"../{}.html\">{}</a>",
+                html::escape(&stem),
                 html::escape(&node.full_name)
             );
         } else {
@@ -4839,7 +4840,8 @@ fn render_curated_kind_indexes(
             let summary = first_sentence(&entry.body);
             let _ = write!(
                 body,
-                "<li><a href=\"{href}\" class=\"entry-title\">{}</a>",
+                "<li><a href=\"{}\" class=\"entry-title\">{}</a>",
+                html::escape(&href),
                 html::escape(&entry.title)
             );
             if !summary.is_empty() {
@@ -4989,7 +4991,8 @@ fn render_html_index(
             let summary = first_sentence(&entry.body);
             let _ = write!(
                 body,
-                "<li><a href=\"{href}\" class=\"entry-title\">{}</a>",
+                "<li><a href=\"{}\" class=\"entry-title\">{}</a>",
+                html::escape(&href),
                 html::escape(&entry.title)
             );
             if !summary.is_empty() {
@@ -5820,6 +5823,42 @@ mod tests {
         assert!(p < s, "project section comes first: {idx}");
         // The reference index lists the module with a link to its page.
         assert!(idx.contains("App.html"), "App module linked: {idx}");
+    }
+
+    /// A module name or a curated key holding a quote cannot close the `href`
+    /// attribute on the reference index, a curated kind index, or the landing.
+    #[test]
+    fn index_hrefs_escape_key_quotes() {
+        let docs = one_module_docs(local_module("A\"B"));
+        let mut bundle = crate::doc_bundle::DocBundle::empty();
+        bundle
+            .insert(
+                crate::doc_bundle::DocKind::Guide,
+                "g\"k".to_owned(),
+                "Guide".to_owned(),
+                String::new(),
+            )
+            .expect("insert");
+        let search = build_site_search_script(&docs, &bundle, "../");
+
+        let reference = render_reference_index(&docs, &search);
+        assert!(
+            reference.contains("href=\"../A&quot;B.html\""),
+            "reference index href: {reference}"
+        );
+
+        let curated = render_curated_kind_indexes(&bundle, &search);
+        let guides = curated.get("guide/index.html").expect("guide index");
+        assert!(
+            guides.contains("href=\"../guide/g&quot;k.html\""),
+            "guide index href: {guides}"
+        );
+
+        let landing = render_html_index(&docs, &bundle, &search);
+        assert!(
+            landing.contains("href=\"guide/g&quot;k.html\""),
+            "landing href: {landing}"
+        );
     }
 
     #[test]
