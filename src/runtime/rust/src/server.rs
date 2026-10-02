@@ -1417,7 +1417,13 @@ pub fn server_listen<E: From<String> + Send + 'static>(
         // the app behind its proxy) > `IPE_SERVER_PORT` (operator) > the port the
         // program passed to `Server.listen`. A malformed env layer falls through,
         // never to `0`.
-        let resolved = crate::system::listen_port_from_env(SERVER_PORT_ENV, port);
+        let resolved = crate::system::listen_port_from_env(
+            (
+                SERVER_PORT_ENV,
+                crate::system::read_env_var(SERVER_PORT_ENV).ok(),
+            ),
+            port,
+        );
         let port = resolved.port;
         // Bind host obeys the one runtime-config precedence: `IPE_HTTP_BIND`
         // (env) > the app's `Host.bind` setting > the build-profile fallback

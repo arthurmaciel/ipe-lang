@@ -349,12 +349,16 @@ pub(crate) fn resolve_listen_port(
 }
 
 /// [`resolve_listen_port`] over the live environment (overlay first): the
-/// relocation var [`crate::LISTEN_PORT_RELOCATION_ENV`], then `operator_var`.
+/// relocation var [`crate::LISTEN_PORT_RELOCATION_ENV`], then `operator`: the
+/// operator var's name and the value its caller read under that constant key.
 #[cfg(feature = "server")]
-pub(crate) fn listen_port_from_env(operator_var: &'static str, source: i64) -> ResolvedPort {
+pub(crate) fn listen_port_from_env(
+    operator: (&'static str, Option<String>),
+    source: i64,
+) -> ResolvedPort {
     resolve_listen_port(
         read_env_var(crate::LISTEN_PORT_RELOCATION_ENV).ok(),
-        (operator_var, read_env_var(operator_var).ok()),
+        operator,
         source,
     )
 }

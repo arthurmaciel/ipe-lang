@@ -4645,7 +4645,10 @@ where
     // Port precedence (shared with `Ipe.Http.Server`): the supervisor's
     // relocation var > `IPE_WEB_PORT` (operator) > 8000. A malformed env layer
     // falls through, never to `0`.
-    let resolved = crate::system::listen_port_from_env(WEB_PORT_ENV, 8000);
+    let resolved = crate::system::listen_port_from_env(
+        (WEB_PORT_ENV, crate::system::read_env_var(WEB_PORT_ENV).ok()),
+        8000,
+    );
     let port = resolved.port;
     // Honour the same host-bind precedence as the Ipe.Http.Server path
     // (`IPE_HTTP_BIND` > `Host.bind` setting > loopback-unless-production), so
