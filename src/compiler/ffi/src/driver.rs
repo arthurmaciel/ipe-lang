@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use crate::diag::{Diagnostic, SourceDefect};
 use crate::naming::{WRAPPER_END_SENTINEL, WRAPPER_SENTINEL_PREFIX};
 use crate::pkginfo::{CrateVersion, FeatureName, PackageName, PkgInfo};
-use ipe_diagnostics::terminal::TerminalSafe;
+use ipe_diagnostics::terminal::{TerminalLine, TerminalSafe};
 
 // ── crate-name gate ─────────────────────────────────────────────────────────
 
@@ -660,11 +660,7 @@ pub struct MissingSystemLib {
 /// before the name is parsed, so the parse sees the characters a terminal
 /// would show.
 fn sanitize_extracted_name(raw: &str) -> String {
-    TerminalSafe::sanitize(raw.trim())
-        .as_str()
-        .chars()
-        .filter(|&c| c != '\n' && c != '\t')
-        .collect()
+    TerminalLine::sanitize(raw.trim()).as_str().to_string()
 }
 
 /// Parse a missing-library failure's two names, or `None` when the library name does not parse.
@@ -2948,6 +2944,18 @@ mod tests {
             Some("wlsys")
         );
         assert!(!got.system_lib.as_str().contains('\u{1b}'));
+    }
+
+    #[test]
+    fn detect_missing_system_lib_strips_denied_format_chars_from_extracted_names() {
+        // A zero-width space (a denied format character, not a control byte)
+        // hidden inside a name must be gone before the name reaches the
+        // terminal or the parser.
+        let line = "Package 'wayland\u{200B}-client' was not found in the pkg-config search path."
+            .to_owned();
+        let got = detect_missing_system_lib(&[line]).expect("signature matches");
+        assert_eq!(got.system_lib.as_str(), "wayland-client");
+        assert!(!got.system_lib.as_str().contains('\u{200B}'));
     }
 
     /// A library name outside the `pkg-config` charset never reaches an install hint.

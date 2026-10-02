@@ -152,6 +152,64 @@ impl From<String> for TerminalSafe {
     }
 }
 
+/// Text that has been proven safe to write as a single terminal line.
+///
+/// Built from [`TerminalSafe`] by also dropping `\n` and `\t`: the two
+/// layout whitespaces `TerminalSafe` keeps for a block renderer would, on a
+/// single line, either forge a second output line or misalign a fixed-width
+/// column. A dependency name, an extracted library name, or a recorded trace
+/// step is untrusted text placed into exactly one line, so it is parsed into
+/// `TerminalLine` once at that boundary rather than hand-stripped per caller.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TerminalLine(String);
+
+impl TerminalLine {
+    /// Sanitise `raw` into one terminal-safe line: no ANSI, no control byte,
+    /// no [`DENIED_FORMAT_CHARS`] entry, and no `\n` or `\t`.
+    #[must_use]
+    pub fn sanitize(raw: &str) -> Self {
+        let safe = TerminalSafe::sanitize(raw);
+        let line: String = safe
+            .as_str()
+            .chars()
+            .filter(|&c| c != '\n' && c != '\t')
+            .collect();
+        Self(line)
+    }
+
+    /// The sanitised line text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether the sanitised line holds no characters.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Sanitise a borrowed string; see [`TerminalLine::sanitize`].
+impl From<&str> for TerminalLine {
+    fn from(raw: &str) -> Self {
+        Self::sanitize(raw)
+    }
+}
+
+/// Sanitise an owned string; see [`TerminalLine::sanitize`].
+impl From<String> for TerminalLine {
+    fn from(raw: String) -> Self {
+        Self::sanitize(&raw)
+    }
+}
+
+impl fmt::Display for TerminalLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Indent that opens every continuation line of a [`TerminalSafe`] rendered inline.
 ///
 /// Wider than the output gutter, so a continuation line never starts where a
@@ -288,5 +346,15 @@ mod tests {
     fn terminal_safe_keeps_printable_neighbours() {
         let kept = "\u{00AC}\u{00AE}\u{200A}\u{2010}\u{FEFC}\u{FFFC}\u{E0100}";
         assert_eq!(TerminalSafe::sanitize(kept).as_str(), kept);
+    }
+
+    /// A single line drops ANSI, control bytes, denied format chars, and the
+    /// two layout whitespaces `TerminalSafe` would otherwise keep.
+    #[test]
+    fn terminal_line_drops_layout_whitespace_too() {
+        let safe = TerminalLine::sanitize("a\nb\tc\x1b[31md\u{202e}");
+        assert_eq!(safe.as_str(), "abcd");
+        assert!(!safe.is_empty());
+        assert!(TerminalLine::sanitize("\n\t").is_empty());
     }
 }
