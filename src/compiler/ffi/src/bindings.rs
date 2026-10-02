@@ -70,20 +70,13 @@ pub fn absolutize_crate(krate: &str, s: &str) -> String {
     out
 }
 
-/// Render a Rust string literal, escaping `\` and `"` so an enum-variant /
-/// tag name containing those bytes cannot break out of the literal.
+/// Render `s` as a double-quoted Rust string literal.
+///
+/// Rust's own `Debug` grammar escapes every character a literal cannot carry
+/// raw, so a foreign tag name holding `"`, `\` or a bidi override stays inside
+/// the literal and never trips rustc's `text_direction_codepoint_in_literal`.
 fn rust_str_lit(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            _ => out.push(c),
-        }
-    }
-    out.push('"');
-    out
+    format!("{s:?}")
 }
 
 /// If the type is `Wrapper<inner>`, return `inner` (trimmed).
@@ -2352,6 +2345,11 @@ mod tests {
     }
 
     // ── helper units ────────────────────────────────────────────────────
+
+    #[test]
+    fn rust_str_lit_escapes_quotes_backslashes_and_bidi_overrides() {
+        assert_eq!(rust_str_lit("a\u{202E}\"b\\"), r#""a\u{202e}\"b\\""#);
+    }
 
     #[test]
     fn absolutize_rewrites_only_path_starts() {

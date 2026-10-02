@@ -8,7 +8,7 @@ use super::{
     emit_process_run_with_call, emit_record, emit_server_call, emit_shared_lambda,
     emit_task_loop_call, emit_task_retry_call, emit_tea_call, emit_ui_call, emit_ui_template,
     emit_update, float_literal, free_vars, indent_of, inlined_let_body, ir_type_is_definitely_copy,
-    op_str, render_type, rust_string_literal, swapped_container_clone_rewrite,
+    op_str, render_type, rust_str_lit, swapped_container_clone_rewrite,
 };
 use crate::EmitCtx;
 
@@ -1039,7 +1039,7 @@ pub fn emit_transition_arm(ctx: &EmitCtx, body: &Expr) -> DResult<Option<String>
     // string literal needs (`"` and `\`), which the JSON writer already produced,
     // so the literal is the exact JSON bytes the runtime decodes.
     let json = ct.to_json();
-    let json_lit = rust_string_literal(&json);
+    let json_lit = rust_str_lit(&json);
     Ok(Some(format!(
         "(ipe_runtime::web::apply_transition_hot({json_lit}, {model_ident}), cmd_none())"
     )))
@@ -1079,7 +1079,7 @@ pub fn emit_sub_arm(ctx: &EmitCtx, kernel: KernelFn, args: &[Expr]) -> Option<St
     // string literal needs (`"` and `\`), so the literal is the exact JSON bytes
     // the runtime decodes.
     let json = cs.to_json();
-    let json_lit = rust_string_literal(&json);
+    let json_lit = rust_str_lit(&json);
     Some(format!("ipe_runtime::web::sub_every_hot({json_lit})"))
 }
 
@@ -1133,7 +1133,7 @@ pub fn emit_init_datum(
     };
     let compiled_record = emit_expr_at(ctx, record_expr, indent, depth, generics)?;
     let json = cd.to_json();
-    let json_lit = rust_string_literal(&json);
+    let json_lit = rust_str_lit(&json);
     Ok(Some(format!(
         "(ipe_runtime::web::apply_init_hot({json_lit}, {compiled_record}), cmd_none())"
     )))
@@ -1218,7 +1218,7 @@ pub fn emit_cmd_wiring_arm(
     }
     let table = thunks.join(", ");
     let json = arm.wiring.to_json();
-    let json_lit = rust_string_literal(&json);
+    let json_lit = rust_str_lit(&json);
     Ok(Some(format!(
         "({model_s}, ipe_runtime::web::fire_cmd_wiring({json_lit}, vec![{table}]))"
     )))
