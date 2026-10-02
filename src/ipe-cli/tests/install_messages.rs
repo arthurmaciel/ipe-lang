@@ -3,9 +3,11 @@
 //! A message's fixed text and its values are separate arguments: every write
 //! `install.sh` makes to the terminal goes through the message-helper block,
 //! whose helpers take a single-quoted format plus values and escape each value
-//! through `safe_text`. These tests drive the whole script with hostile
-//! environment values, drive `safe_text` and the release-tag parser directly,
-//! and scan the script statically so that any other message shape is refused.
+//! through `safe_text`. The block alone writes to descriptor 3, the original
+//! stderr; every other command's stdout and stderr go to `/dev/null`. These
+//! tests drive the whole script with hostile environment values and failing
+//! tools, drive `safe_text` and the release-tag parser directly, and scan the
+//! script statically so that any other message shape is refused.
 #![cfg(unix)]
 
 use std::ffi::{OsStr, OsString};
@@ -36,13 +38,17 @@ const HELPERS: [&str; 8] = [
 ];
 
 /// The block-internal helpers, which print text they do not escape.
-const INTERNAL: [&str; 5] = [
+const INTERNAL: [&str; 6] = [
     "render",
     "msg_text",
     "msg_style",
     "stage_settle_ok",
     "stage_settle_fail",
+    "fail_line",
 ];
+
+/// The exit trap's phrase for a failure no message reported.
+const UNREPORTED: &str = "a step failed unexpectedly";
 
 /// The words after which the next word is still in command position.
 const KEYWORDS: [&str; 10] = [
@@ -107,10 +113,12 @@ fn run_block(body: &str, args: &[&OsStr], locale: &str) -> io::Result<Output> {
 }
 
 /// The `sh` command `run_block` runs, before its `$@`.
+///
+/// Descriptor 3, the helpers' terminal, is the command's stderr.
 fn block_command(body: &str, locale: &str) -> io::Result<Command> {
     let script = installer_script()?;
     let program = format!(
-        "{}\n{}\n{body}\n",
+        "exec 3>&2\n{}\n{}\n{body}\n",
         marked(&script, (BEGIN, END))?,
         marked(&script, PARSERS)?
     );
@@ -229,14 +237,26 @@ struct Run {
 /// 7, then `env` on top.
 /// Stdin is empty; a run past 30 s is killed.
 fn run_installer(r: &ScratchDir, env: &[(&str, &OsStr)]) -> io::Result<Run> {
+    run_installer_with(r, env, &[])
+}
+
+/// `run_installer`, with extra `(name, script)` command stubs on `PATH`.
+fn run_installer_with(
+    r: &ScratchDir,
+    env: &[(&str, &OsStr)],
+    stubs: &[(&str, &str)],
+) -> io::Result<Run> {
     let bin = leaf(r, "bin")?;
     std::fs::create_dir(&bin)?;
-    let curl = bin.join("curl");
-    std::fs::write(
-        &curl,
+    let curl_stub = (
+        "curl",
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$CURL_LOG\"\nprintf 'curl %s\\n' \"$*\"\nexit 7\n",
-    )?;
-    std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755))?;
+    );
+    for (name, script) in std::iter::once(&curl_stub).chain(stubs) {
+        let stub = bin.join(name);
+        std::fs::write(&stub, script)?;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))?;
+    }
     let home = leaf(r, "home")?;
     mkdir_mode(&home, 0o700)?;
     let log = leaf(r, "curl.log")?;
@@ -307,6 +327,10 @@ fn assert_refused_escaped(run: &Run, escaped: &str, why: &str) {
         run.curl_log.is_empty(),
         "{why}: the refusal must come before any network call, got curl {}",
         String::from_utf8_lossy(&run.curl_log)
+    );
+    assert!(
+        !stderr.contains(UNREPORTED),
+        "{why}: a reported refusal must not add the exit trap's line: {stderr}"
     );
 }
 
@@ -380,6 +404,36 @@ fn installer_stdout_never_reaches_the_terminal() -> io::Result<()> {
         run.stdout.is_empty(),
         "a command's stdout must go to /dev/null, got {}",
         String::from_utf8_lossy(&run.stdout)
+    );
+    assert!(
+        !String::from_utf8_lossy(&run.stderr).contains(UNREPORTED),
+        "die_no_prebuilt reports its own exit, so the exit trap must add nothing"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_failing_tools_error_text_never_reaches_the_terminal() -> io::Result<()> {
+    let r = root("install-msg-tool-stderr")?;
+    let uname = "#!/bin/sh\nprintf 'tool-diag \\033]0;x\\007\\n' >&2\nexit 1\n";
+    let run = run_installer_with(&r, &[], &[("uname", uname)])?;
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert_eq!(
+        run.status.and_then(|status| status.code()),
+        Some(1),
+        "a failing `uname` must stop the installer under `set -e`; stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("tool-diag") && !run.stderr.contains(&0x1b),
+        "a command's own stderr must go to /dev/null, got {stderr}"
+    );
+    assert!(
+        stderr.contains(UNREPORTED),
+        "a failure no message reported must end in the exit trap's line: {stderr}"
+    );
+    assert!(
+        run.stdout.is_empty() && run.curl_log.is_empty(),
+        "the run must stop before any output or network call"
     );
     Ok(())
 }
@@ -1091,9 +1145,16 @@ const RUSTUP_FETCH: [&str; 6] = [
 /// `set -eu`.
 const GUARD_OPEN: &str = "{";
 
-/// The installer's last line: the group's stdout goes to `/dev/null`, so only
-/// what the message helpers write to stderr reaches the terminal.
-const GUARD_CLOSE: &str = "} >/dev/null";
+/// The group's first line, which sets the installer's descriptors.
+///
+/// Descriptor 3 keeps the terminal (the original stderr) for the message
+/// helpers, then stderr and stdout go to `/dev/null`. `exec` sets this for the
+/// shell itself, so the exit trap runs under it too; a redirection on the
+/// group's close is undone before that trap runs.
+const GUARD_REGIME: &str = "exec 3>&2 2>/dev/null >/dev/null";
+
+/// The installer's last line, closing the group.
+const GUARD_CLOSE: &str = "}";
 
 /// The variable file targets the installer writes, each a regular file it
 /// owns.
@@ -1169,6 +1230,7 @@ fn scan_script_with(script: &str, check_commands: bool) -> Scan {
             (script.to_owned(), "")
         }
     };
+    block_redirects(block, &mut scan);
     let reserved = block_words(block);
     scan_source(&outside, false, &reserved, &mut scan);
     if !check_commands {
@@ -1189,12 +1251,61 @@ fn scan_script_with(script: &str, check_commands: bool) -> Scan {
     scan
 }
 
-/// The installer between its stdout guard's lines: everything before the
-/// `{` line is `set -eu` alone, and the last line is `} >/dev/null`.
+/// Refuse each redirection `block_redirect_refusal` refuses in `source`.
+///
+/// Command substitutions are walked too.
+fn block_redirects(source: &str, scan: &mut Scan) {
+    for token in lex(source) {
+        match token {
+            Token::Redirect { op, target } => {
+                if let Some(why) = block_redirect_refusal(&op, &target) {
+                    scan.violations.push(why);
+                }
+            }
+            Token::Word(word) => {
+                for body in &word.substitutions {
+                    block_redirects(body, scan);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Why the message block's redirection `op target` is refused, if it is.
+///
+/// Its one terminal write is `>&3`, any other output goes to `/dev/null`, and
+/// it never reopens descriptor 3.
+fn block_redirect_refusal(op: &str, target: &str) -> Option<String> {
+    if op == ">&" && target == "3" {
+        return None;
+    }
+    let fd = op.trim_end_matches(['<', '>', '&', '|', '-']);
+    if fd == "3" {
+        return Some(format!(
+            "`{op}{target}` reopens descriptor 3 inside the message block"
+        ));
+    }
+    if op.ends_with('&') {
+        return Some(format!(
+            "`{op}{target}` duplicates a descriptor inside the message block, whose one terminal write is `>&3`"
+        ));
+    }
+    (op.contains('>') && target != "/dev/null").then(|| {
+        format!(
+            "`{op}{target}` inside the message block writes somewhere other than `>&3` or `/dev/null`"
+        )
+    })
+}
+
+/// The installer between its stdout guard's lines.
+///
+/// Everything before the `{` line is `set -eu` alone, the line after it is
+/// `GUARD_REGIME`, and the last line is `}`.
 fn guarded_body(script: &str) -> Result<&str, String> {
     let refused = || {
         format!(
-            "the script must be `set -eu`, a `{GUARD_OPEN}` line, its body, and a last line `{GUARD_CLOSE}`"
+            "the script must be `set -eu`, a `{GUARD_OPEN}` line, a `{GUARD_REGIME}` line, its body, and a last line `{GUARD_CLOSE}`"
         )
     };
     let mut offset = 0;
@@ -1203,7 +1314,13 @@ fn guarded_body(script: &str) -> Result<&str, String> {
         offset += line.len();
         (line.trim_end_matches('\n') == GUARD_OPEN).then_some((start, offset))
     });
-    let (open_start, body_start) = open.ok_or_else(refused)?;
+    let (open_start, open_end) = open.ok_or_else(refused)?;
+    let regime = script
+        .get(open_end..)
+        .and_then(|rest| rest.split_inclusive('\n').next())
+        .filter(|line| line.trim_end_matches('\n') == GUARD_REGIME)
+        .ok_or_else(refused)?;
+    let body_start = open_end + regime.len();
     let prefix: Vec<String> = lex(script.get(..open_start).unwrap_or_default())
         .into_iter()
         .filter_map(|token| match token {
@@ -1788,10 +1905,10 @@ fn call_refusal(args: &[&Word]) -> Option<String> {
         .map(|value| format!("the value `{}` is not double-quoted", value.text))
 }
 
-/// `fixture` after a message block that itself writes to stderr.
+/// `fixture` after a message block that itself writes to the terminal.
 fn with_block(fixture: &str) -> String {
     format!(
-        "set -eu\n{GUARD_OPEN}\n{BEGIN}\nsay() {{ printf '%s\\n' \"$1\" >&2; }}\n{END}\n{fixture}\n{GUARD_CLOSE}\n"
+        "set -eu\n{GUARD_OPEN}\n{GUARD_REGIME}\n{BEGIN}\nsay() {{ printf '%s\\n' \"$1\" >&3; }}\n{END}\n{fixture}\n{GUARD_CLOSE}\n"
     )
 }
 
@@ -2032,7 +2149,7 @@ fn message_scan_refuses_every_bypass() {
             "a second message block",
         ),
         (
-            format!("set -eu\n{GUARD_OPEN}\n{END}\n{BEGIN}\n{GUARD_CLOSE}\n"),
+            format!("set -eu\n{GUARD_OPEN}\n{GUARD_REGIME}\n{END}\n{BEGIN}\n{GUARD_CLOSE}\n"),
             "markers out of order",
         ),
     ] {
@@ -2045,7 +2162,8 @@ fn message_scan_refuses_every_bypass() {
 
 #[test]
 fn message_scan_refuses_a_script_outside_the_stdout_guard() -> io::Result<()> {
-    let block = format!("{BEGIN}\nsay() {{ printf '%s\\n' \"$1\" >&2; }}\n{END}\n");
+    let block = format!("{BEGIN}\nsay() {{ printf '%s\\n' \"$1\" >&3; }}\n{END}\n");
+    let open = format!("set -eu\n{GUARD_OPEN}\n{GUARD_REGIME}\n");
     let guarded = with_block("");
     assert!(
         scan_script(&guarded).violations.is_empty(),
@@ -2055,27 +2173,49 @@ fn message_scan_refuses_a_script_outside_the_stdout_guard() -> io::Result<()> {
     for (script, why) in [
         (format!("set -eu\n{block}"), "no guard"),
         (
-            format!("{GUARD_OPEN}\n{block}{GUARD_CLOSE}\n"),
+            format!("{GUARD_OPEN}\n{GUARD_REGIME}\n{block}{GUARD_CLOSE}\n"),
             "no `set -eu`",
         ),
         (
-            format!("set -eu\n{GUARD_OPEN}\n{block}}}\n"),
-            "a close without `>/dev/null`",
+            format!("set -eu\n{GUARD_OPEN}\n{block}{GUARD_CLOSE}\n"),
+            "no descriptor regime",
         ),
         (
-            format!("set -eu\n{GUARD_OPEN}\n{block}}} >/dev/tty\n"),
+            format!("set -eu\n{GUARD_OPEN}\n{block}}} 3>&2 2>/dev/null >/dev/null\n"),
+            "the regime on the close, undone before the exit trap runs",
+        ),
+        (
+            format!("set -eu\n{GUARD_OPEN}\nexec 3>&2 >/dev/null\n{block}{GUARD_CLOSE}\n"),
+            "a regime that keeps stderr on the terminal",
+        ),
+        (
+            format!(
+                "set -eu\n{GUARD_OPEN}\nexec 2>/dev/null 3>&2 >/dev/null\n{block}{GUARD_CLOSE}\n"
+            ),
+            "a regime that points descriptor 3 at /dev/null",
+        ),
+        (
+            format!("set -eu\n{GUARD_OPEN}\nprintf x\n{GUARD_REGIME}\n{block}{GUARD_CLOSE}\n"),
+            "a command before the regime",
+        ),
+        (
+            format!("{open}{block}}} >/dev/null\n"),
+            "a close with a redirection",
+        ),
+        (
+            format!("{open}{block}}} >/dev/tty\n"),
             "a close onto the terminal",
         ),
         (
-            format!("set -eu\nprintf x\n{GUARD_OPEN}\n{block}{GUARD_CLOSE}\n"),
+            format!("set -eu\nprintf x\n{GUARD_OPEN}\n{GUARD_REGIME}\n{block}{GUARD_CLOSE}\n"),
             "a command before the guard",
         ),
         (
-            format!("set -eu\n{GUARD_OPEN}\n{block}{GUARD_CLOSE}\nprintf x\n"),
+            format!("{open}{block}{GUARD_CLOSE}\nprintf x\n"),
             "a command after the guard",
         ),
         (
-            format!("set -eu\n{GUARD_OPEN}\n{block}}}\nprintf x\n{{\n{GUARD_CLOSE}\n"),
+            format!("{open}{block}}}\nprintf x\n{{\n{GUARD_CLOSE}\n"),
             "a body that closes the guard early",
         ),
     ] {
@@ -2091,18 +2231,81 @@ fn message_scan_refuses_a_script_outside_the_stdout_guard() -> io::Result<()> {
         !scan_script(&unguarded).violations.is_empty(),
         "install.sh without its guard line must be refused"
     );
+    let no_regime = installer.replacen(&format!("\n{GUARD_REGIME}\n"), "\n", 1);
+    assert!(
+        !scan_script(&no_regime).violations.is_empty(),
+        "install.sh without its descriptor regime must be refused"
+    );
+    Ok(())
+}
+
+/// Redirections the message block may not make.
+const BLOCK_REFUSED_REDIRECTS: &[&str] = &[
+    "printf x >&2",
+    "printf x 1>&2",
+    "printf x 1>&3",
+    "printf x >&1",
+    "printf x >/dev/tty",
+    "printf x >/dev/stderr",
+    "printf x >\"$f\"",
+    "printf x 3>/dev/null",
+    "printf x 3>&2",
+    "exec 2>&3",
+    "read -r x <&3",
+    "x=\"$(printf y >&2)\"",
+];
+
+/// Redirections the message block may make.
+const BLOCK_ACCEPTED_REDIRECTS: &[&str] = &[
+    "printf x >&3",
+    "printf x >& 3",
+    "date +%s 2>/dev/null",
+    "printf x >/dev/null",
+];
+
+#[test]
+fn message_block_writes_to_the_terminal_only_through_descriptor_3() -> io::Result<()> {
+    let in_block = |line: &str| {
+        format!(
+            "set -eu\n{GUARD_OPEN}\n{GUARD_REGIME}\n{BEGIN}\nf() {{ {line}; }}\n{END}\n{GUARD_CLOSE}\n"
+        )
+    };
+    for line in BLOCK_REFUSED_REDIRECTS {
+        let scan = scan_script(&in_block(line));
+        assert!(
+            scan.violations
+                .iter()
+                .any(|why| why.contains("inside the message block")),
+            "the scan must refuse `{line}` inside the message block: {:?}",
+            scan.violations
+        );
+    }
+    for line in BLOCK_ACCEPTED_REDIRECTS {
+        let scan = scan_script(&in_block(line));
+        assert!(
+            scan.violations.is_empty(),
+            "the scan must accept `{line}` inside the message block: {:?}",
+            scan.violations
+        );
+    }
+    let installer = installer_script()?;
+    let stray = installer.replacen(" >&3\n", " >&2\n", 1);
+    assert!(
+        stray != installer && !scan_script(&stray).violations.is_empty(),
+        "install.sh with a helper writing `>&2` must be refused"
+    );
     Ok(())
 }
 
 #[test]
 fn message_scan_refuses_redefining_what_the_block_runs() -> io::Result<()> {
     let installer = installer_script()?;
+    let close = installer
+        .rfind(&format!("\n{GUARD_CLOSE}\n"))
+        .ok_or_else(|| io::Error::other("install.sh must end in its guard's close line"))?;
+    let (head, tail) = installer.split_at(close);
     for name in ["safe_text", "printf", "od", "awk"] {
-        let inside = installer.replacen(
-            &format!("\n{GUARD_CLOSE}\n"),
-            &format!("\n{name}() {{ :; }}\n{GUARD_CLOSE}\n"),
-            1,
-        );
+        let inside = format!("{head}\n{name}() {{ :; }}{tail}");
         let scan = scan_script(&inside);
         assert!(
             scan.violations

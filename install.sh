@@ -7,11 +7,13 @@
 # Overrides:  IPE_VERSION=v0.1.0  IPE_INSTALL_DIR=$HOME/.local/bin  sh install.sh
 set -eu
 
-# The whole installer is one group with stdout on /dev/null: it talks only
-# through the message helpers below, on stderr, so no command's own output
-# reaches the terminal. The shell reads the group in full before running any
-# of it, so a truncated download runs nothing.
+# The whole installer is one group whose first line keeps the terminal on
+# descriptor 3 and sends stdout and stderr to /dev/null: it talks only through
+# the message helpers below, which alone write to descriptor 3, so no command's
+# own output or error text reaches the terminal. The shell reads the group in
+# full before running any of it, so a truncated download runs nothing.
 {
+exec 3>&2 2>/dev/null >/dev/null
 
 REPO="ipe-lang/compiler"
 INSTALL_DIR="${IPE_INSTALL_DIR:-$HOME/.local/bin}"
@@ -28,14 +30,17 @@ TAG_FILE="${IPE_UPGRADE_TAG_FILE:-}"
 # the format only, never in a value. The install-script tests scan the rest of
 # the script and refuse any other shape: a `$` in a format, a non-literal
 # format, a value count that differs from the `%s` count, or a terminal write
-# outside this block.
+# outside this block. The terminal is descriptor 3, the installer's original
+# stderr: inside this block every write to it is `>&3`, and nothing else in the
+# script may name descriptor 3.
 
 # ── Palette ──────────────────────────────────────────────────────────────────
 # Mirror the CLI (style.rs): a soft Ipê-amarelo (256-colour 222) for the banner,
 # a light (bright) yellow (ANSI 93) for a running stage, a soft green (114) for
 # success, a plain red (31) for failure, a mid grey (244) for dim hints. Colour
-# only when stderr is a terminal and NO_COLOR is unset (per https://no-color.org).
-if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
+# only when descriptor 3 (the original stderr) is a terminal and NO_COLOR is
+# unset (per https://no-color.org).
+if [ -t 3 ] && [ -z "${NO_COLOR:-}" ]; then
   C_YELLOW="$(printf '\033[38;5;222m')"
   C_LYELLOW="$(printf '\033[93m')"
   C_DIM="$(printf '\033[38;5;244m')"
@@ -193,16 +198,16 @@ msg_text() {
   MSG_TEXT="${MSG_TEXT%x}"
 }
 
-# say FMT [VALUE...] — one rendered line on stderr.
+# say FMT [VALUE...] — one rendered line on the terminal.
 say() {
   msg_text "$@"
-  printf '%s\n' "$MSG_TEXT" >&2
+  printf '%s\n' "$MSG_TEXT" >&3
 }
 
-# prompt FMT [VALUE...] — a rendered question on stderr, with no newline.
+# prompt FMT [VALUE...] — a rendered question on the terminal, with no newline.
 prompt() {
   msg_text "$@"
-  printf '%s' "$MSG_TEXT" >&2
+  printf '%s' "$MSG_TEXT" >&3
 }
 
 # ── Stage progress ───────────────────────────────────────────────────────────
@@ -211,7 +216,8 @@ prompt() {
 # the SAME line is rewritten (carriage return) to a light-green ✓ + message; on
 # failure to a light-red ✗ + message. Off a terminal (pipe / CI / NO_COLOR) each
 # stage is one plain flush-left line with no spinner, no rewrite, and no ANSI, so
-# `curl … | sh` logs stay clean. All chatter goes to stderr so stdout stays clean.
+# `curl … | sh` logs stay clean. All chatter goes to descriptor 3, the original
+# stderr, so stdout stays clean.
 #
 # The rendered (already escaped) label of the stage currently in flight, so an
 # outcome can clear a line at least as wide as it and leave no tail behind.
@@ -225,9 +231,9 @@ stage_start() {
   STAGE_LABEL="$MSG_TEXT"
   if [ "$IS_TTY" = 1 ]; then
     printf '\r  %s⠋%s %s%s%s\033[0K' \
-      "$C_LYELLOW" "$C_RESET" "$C_LYELLOW" "$STAGE_LABEL" "$C_RESET" >&2
+      "$C_LYELLOW" "$C_RESET" "$C_LYELLOW" "$STAGE_LABEL" "$C_RESET" >&3
   else
-    printf '  %s\n' "$STAGE_LABEL" >&2
+    printf '  %s\n' "$STAGE_LABEL" >&3
   fi
 }
 
@@ -236,9 +242,9 @@ stage_start() {
 stage_settle_ok() {
   if [ "$IS_TTY" = 1 ]; then
     printf '\r  %s✓%s %s%s%s\033[0K\n' \
-      "$C_GREEN" "$C_RESET" "$C_GREEN" "$1" "$C_RESET" >&2
+      "$C_GREEN" "$C_RESET" "$C_GREEN" "$1" "$C_RESET" >&3
   else
-    printf '  ✓ %s\n' "$1" >&2
+    printf '  ✓ %s\n' "$1" >&3
   fi
   STAGE_LABEL=''
 }
@@ -248,9 +254,9 @@ stage_settle_ok() {
 stage_settle_fail() {
   if [ "$IS_TTY" = 1 ]; then
     printf '\r  %s✗%s %s%s%s\033[0K\n' \
-      "$C_RED" "$C_RESET" "$C_RED" "$1" "$C_RESET" >&2
+      "$C_RED" "$C_RESET" "$C_RED" "$1" "$C_RESET" >&3
   else
-    printf '  ✗ %s\n' "$1" >&2
+    printf '  ✗ %s\n' "$1" >&3
   fi
   STAGE_LABEL=''
 }
@@ -275,7 +281,7 @@ stage_fail() {
 stage_skip() {
   if [ -n "$STAGE_LABEL" ] && [ "$IS_TTY" = 1 ]; then
     printf '\r  %s•%s %s%s%s\033[0K\n' \
-      "$C_DIM" "$C_RESET" "$C_DIM" "$STAGE_LABEL" "$C_RESET" >&2
+      "$C_DIM" "$C_RESET" "$C_DIM" "$STAGE_LABEL" "$C_RESET" >&3
     STAGE_LABEL=''
   fi
 }
@@ -287,7 +293,37 @@ stage_skip() {
 info() {
   msg_text "$@"
   stage_skip
-  printf '    %s%s%s\n' "$C_DIM" "$MSG_TEXT" "$C_RESET" >&2
+  printf '    %s%s%s\n' "$C_DIM" "$MSG_TEXT" "$C_RESET" >&3
+}
+
+# fail_line TEXT — the rendered TEXT as a failure: on the running stage's line
+# when one is in flight, else on a ✗ line of its own.
+fail_line() {
+  if [ -n "$STAGE_LABEL" ]; then
+    stage_settle_fail "$1"
+  else
+    printf '\n  %s✗%s %s%s%s\n' "$C_RED" "$C_RESET" "$C_RED" "$1" "$C_RESET" >&3
+  fi
+}
+
+# MSG_REPORTED is 1 once the installer has reported why it stops, so the exit
+# trap adds no line of its own.
+MSG_REPORTED=0
+
+# exit_reported CODE — exit with CODE once the reason has been reported, on the
+# terminal or to the `ipe upgrade` wrapper.
+exit_reported() {
+  MSG_REPORTED=1
+  exit "$1"
+}
+
+# msg_unreported_exit STATUS — on a non-zero STATUS no message reported, say
+# that a step failed. Every command's own error text goes to /dev/null, so this
+# line is all an unexpected failure shows.
+msg_unreported_exit() {
+  [ "$1" != 0 ] && [ "$MSG_REPORTED" != 1 ] || return 0
+  msg_text 'The installation stopped: a step failed unexpectedly (exit status %s).' "$1"
+  fail_line "$MSG_TEXT"
 }
 
 # die FMT [VALUE...] — settle any running stage as a failure, then exit
@@ -295,29 +331,25 @@ info() {
 # line.
 die() {
   msg_text "$@"
-  if [ -n "$STAGE_LABEL" ]; then
-    stage_settle_fail "$MSG_TEXT"
-  else
-    printf '\n  %s✗%s %s%s%s\n' "$C_RED" "$C_RESET" "$C_RED" "$MSG_TEXT" "$C_RESET" >&2
-  fi
-  exit 1
+  fail_line "$MSG_TEXT"
+  exit_reported 1
 }
 
 # banner FMT [VALUE...] — the opening "Ipê language - <version>" line.
 banner() {
   msg_text "$@"
   printf '\n  %s%sIpê language%s %s- %s%s\n\n' \
-    "$C_BOLD" "$C_YELLOW" "$C_RESET" "$C_DIM" "$MSG_TEXT" "$C_RESET" >&2
+    "$C_BOLD" "$C_YELLOW" "$C_RESET" "$C_DIM" "$MSG_TEXT" "$C_RESET" >&3
 }
 
 # progress_begin — hide the cursor while the download line animates.
 progress_begin() {
-  printf '\033[?25l' >&2
+  printf '\033[?25l' >&3
 }
 
 # progress_end — show the cursor again and clear the progress line.
 progress_end() {
-  printf '\033[?25h\r\033[K' >&2
+  printf '\033[?25h\r\033[K' >&3
 }
 
 # spin_glyph IDX → the IDXth braille spinner frame (0-9). Selected by `case`
@@ -331,7 +363,7 @@ spin_glyph() {
   esac
 }
 
-# render_progress IDX GOT TOTAL START — one animated line to stderr: spinner
+# render_progress IDX GOT TOTAL START — one animated line on the terminal: spinner
 # frame IDX, then percent, bar, sizes and ETA (or bytes and elapsed time when
 # TOTAL is unknown). Every argument is a number the installer computed.
 render_progress() {
@@ -368,13 +400,13 @@ render_progress() {
       "$C_BOLD" "$pct" "$C_RESET" \
       "$C_YELLOW" "$bar" "$C_RESET" \
       "$(human "$rp_got")" "$(human "$rp_total")" \
-      "$C_DIM" "$eta" "$C_RESET" >&2
+      "$C_DIM" "$eta" "$C_RESET" >&3
   else
     # Unknown total: spinner + downloaded bytes + elapsed.
     printf '\r  %s%s%s  %s downloaded  %s%ds elapsed%s\033[K' \
       "$C_YELLOW" "$glyph" "$C_RESET" \
       "$(human "$rp_got")" \
-      "$C_DIM" "$elapsed" "$C_RESET" >&2
+      "$C_DIM" "$elapsed" "$C_RESET" >&3
   fi
 }
 
@@ -400,6 +432,18 @@ fmt_eta() {
   fi
 }
 # <<< message helpers
+
+# on_exit — the exit trap: remove the private scratch directory once it exists,
+# then report a failure no message has (see msg_unreported_exit).
+on_exit() {
+  _oe_status=$?
+  if [ -n "${tmp:-}" ]; then
+    rm -rf "$tmp" || :
+  fi
+  msg_unreported_exit "$_oe_status"
+  exit "$_oe_status"
+}
+trap 'on_exit' EXIT
 
 # >>> input parsers
 # release_tag_ok TAG — TAG is a release tag: `v` or `ipe-v`, then a digit, then
@@ -594,7 +638,7 @@ tag_file_ok() {
 #
 # IPE_UPGRADE_WRAPPED=1 marks a run launched BY `ipe upgrade` (never set by a
 # direct `curl | sh`): that wrapper renders its own single failure message
-# using the real resolved tag, so this function skips its own stderr banner
+# using the real resolved tag, so this function skips its own terminal banner
 # and instead writes the tag into the private file the wrapper named in
 # IPE_UPGRADE_TAG_FILE — only when tag_file_ok verifies it is a private file in
 # a private directory. Without such a file (or when the write fails) the banner
@@ -603,13 +647,13 @@ die_no_prebuilt() {
   _tag="$1"; _plat="$2"; _cpu="$3"
   if [ "$WRAPPED" = 1 ] && [ -n "$TAG_FILE" ] && tag_file_ok "$TAG_FILE" \
     && printf '%s\n' "$_tag" 2>/dev/null >"$TAG_FILE"; then
-    exit 2
+    exit_reported 2
   fi
   say '\n  @B@@R@@0@ No prebuilt binary for %s on %s-%s.' "$_tag" "$_plat" "$_cpu"
   say '      Possibly the binaries for that version are still being generated.'
   say '      If you prefer, build from source:'
   say '          cargo install --git https://github.com/%s ipe' "$REPO"
-  exit 2
+  exit_reported 2
 }
 
 # ── Gate every local input once, at the boundary ─────────────────────────────
@@ -855,7 +899,6 @@ fi
 # ── Download the binary with a friendly progress display ─────────────────────
 tmp="$(mktemp -d "$scratch_base/ipe-install.XXXXXX")" \
   || die 'Could not create a private temp directory under %s.' "$scratch_base"
-trap 'rm -rf "$tmp"' EXIT
 private_dir_ok "$tmp" || die 'The temp directory %s is not private to you.' "$tmp"
 pkg="$tmp/pkg.$ext"
 
@@ -1183,4 +1226,4 @@ fi
 # CLI's "report bugs" line (kept in sync with the style SSOT by a drift test).
 say '\n  Ipê %s was @G@successfully@0@ installed!' "$ver"
 say '\n  If you find any bugs, please report them at https://github.com/%s/issues.\n' "$REPO"
-} >/dev/null
+}

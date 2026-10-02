@@ -44,10 +44,12 @@ fn block<'s>(script: &'s str, (begin, end): (&str, &str)) -> io::Result<&'s str>
 }
 
 /// The message and private-scratch helper blocks of `install.sh`, in order.
+///
+/// A first line makes descriptor 3, the helpers' terminal, the stderr.
 fn helpers() -> io::Result<String> {
     let script = std::fs::read_to_string(e2e_support::manifest_dir!().join("../../install.sh"))?;
     Ok(format!(
-        "{}\n{}",
+        "exec 3>&2\n{}\n{}",
         block(&script, MESSAGE_BLOCK)?,
         block(&script, SCRATCH_BLOCK)?
     ))
