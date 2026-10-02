@@ -1456,18 +1456,34 @@ impl Env {
         if let Some(ctor) = self.ctors.get(&name) {
             return CtorLookup::Found(ctor);
         }
-        if let Some(origins) = self.wildcard_ctors.get(&name) {
-            let mut each = origins.values();
-            match (each.next(), each.next()) {
-                (Some(only), None) => return CtorLookup::Found(&only.ctor),
-                (Some(_), Some(_)) => return CtorLookup::Ambiguous(origins),
-                // An empty origin set is never written; it binds nothing.
-                (None, _) => {}
-            }
+        match self.lookup_open_ctor(name) {
+            CtorLookup::Missing => self
+                .ambient_ctors
+                .get(&name)
+                .map_or(CtorLookup::Missing, CtorLookup::Found),
+            found_or_ambiguous => found_or_ambiguous,
         }
-        self.ambient_ctors
-            .get(&name)
-            .map_or(CtorLookup::Missing, CtorLookup::Found)
+    }
+
+    /// Look up a bare constructor in the open-import tier alone
+    /// ([`Self::wildcard_ctors`]): one defining identity is
+    /// [`CtorLookup::Found`], two or more are [`CtorLookup::Ambiguous`].
+    ///
+    /// Expression resolution ranks this tier below the local and explicit
+    /// VALUE bindings (a record alias's auto-constructor), which
+    /// [`Self::lookup_ctor`] does not see.
+    #[must_use]
+    pub fn lookup_open_ctor(&self, name: Symbol) -> CtorLookup<'_> {
+        let Some(origins) = self.wildcard_ctors.get(&name) else {
+            return CtorLookup::Missing;
+        };
+        let mut each = origins.values();
+        match (each.next(), each.next()) {
+            (Some(only), None) => CtorLookup::Found(&only.ctor),
+            (Some(_), Some(_)) => CtorLookup::Ambiguous(origins),
+            // An empty origin set is never written; it binds nothing.
+            (None, _) => CtorLookup::Missing,
+        }
     }
 
     /// Every bare constructor name any tier binds, for a did-you-mean pool.

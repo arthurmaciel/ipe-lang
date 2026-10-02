@@ -872,7 +872,7 @@ fn canon_open_import_sweep_over_the_stdlib_registry_compiles() {
         return;
     };
     let mut src = format!("{HEAD}\nimport Ipe.Io as Io\n");
-    let mut joined = 0_usize;
+    let mut joined: Vec<&str> = Vec::new();
     for module in ipe_stdlib::COMPILED_STD_MODULES {
         let admitted = matches!(
             allowed_in(classify(module.dotted), script),
@@ -883,16 +883,29 @@ fn canon_open_import_sweep_over_the_stdlib_registry_compiles() {
         }
         let _ = writeln!(
             src,
-            "import {} as Open{joined} exposing (..)",
-            module.dotted
+            "import {} as Open{} exposing (..)",
+            module.dotted,
+            joined.len()
         );
-        joined += 1;
+        joined.push(module.dotted);
     }
     src.push_str("\nmain = Io.println \"ok\"\n");
-    assert!(
-        joined > 1,
-        "the sweep opens more than one module, opened {joined}"
-    );
+    // Every module of a known shared-name pair must join, so the rule can never
+    // filter the sweep down past the clashes it exists to pin.
+    for pinned in [
+        "Ipe.Parser",
+        "Ipe.Ui.Transition",
+        "Ipe.Ui",
+        "Ipe.Html.Attributes",
+        "Ipe.Codec",
+        "Ipe.Random",
+        "Ipe.Random.Generator",
+    ] {
+        assert!(
+            joined.contains(&pinned),
+            "the sweep must open `{pinned}`, opened {joined:?}"
+        );
+    }
     assert_compiles("canon_open_import_sweep", &src);
 }
 

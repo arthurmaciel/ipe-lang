@@ -6118,29 +6118,58 @@ fn canonicalise_fields(
     Ok(can_fields)
 }
 
-/// Resolve a bare name: constructor first, then variable. Unknown → error.
+/// Resolve a bare name through one precedence: the local and explicit tiers
+/// (constructors, then values such as a record alias's auto-constructor), then
+/// the open-import tier (constructors and values together), then the ambient
+/// built-in constructors. Unknown → error.
 fn resolve_var(name: Symbol, span: Span, env: &Env, interner: &Interner) -> DResult<canon::Expr_> {
-    match env.lookup_ctor(name) {
+    if let Some(ctor) = env.ctors.get(&name) {
+        return Ok(ctor_expr(ctor));
+    }
+    if let Some(home) = env.lookup_var(name) {
+        // A local / top-level / explicit-exposed / built-in binding wins over any
+        // open-import or ambient member of the same spelling (silent shadow).
+        return Ok(var_home_to_expr(name, home));
+    }
+    let open_values = env.wildcard_vars.get(&name).filter(|o| !o.is_empty());
+    match env.lookup_open_ctor(name) {
         CtorLookup::Found(ctor) => {
-            return Ok(canon::Expr_::VarCtor {
-                home: ctor.home.clone(),
-                type_name: ctor.type_name,
-                name: ctor.name,
-                index: ctor.index,
-            });
+            // An open constructor and an open value of one spelling come from
+            // distinct modules (a module never synthesises a record alias's
+            // auto-constructor over its own constructor): IPE-N0024.
+            if let Some(values) = open_values {
+                let modules = SortedNames::new(
+                    values
+                        .values()
+                        .map(|o| path_to_dot_string(interner, &o.dep_path))
+                        .chain(std::iter::once(path_to_dot_string(interner, &ctor.home))),
+                );
+                return Err(ambiguous_import(name, span, modules, interner)?);
+            }
+            return Ok(ctor_expr(ctor));
         }
         CtorLookup::Ambiguous(origins) => {
             return Err(ambiguous_ctor(name, span, origins, interner)?);
         }
         CtorLookup::Missing => {}
     }
-    if let Some(home) = env.lookup_var(name) {
-        // A local / top-level / explicit-exposed / built-in binding wins over any
-        // wildcard-exposed member of the same spelling (silent shadow).
-        return Ok(var_home_to_expr(name, home));
+    if open_values.is_none()
+        && let Some(ctor) = env.ambient_ctors.get(&name)
+    {
+        return Ok(ctor_expr(ctor));
     }
-    // Low-priority wildcard tier: only reached when the higher tiers miss.
+    // The open value tier, or the not-found diagnostic when every tier misses.
     resolve_wildcard_var(name, span, env, interner)
+}
+
+/// The canonical reference to a resolved constructor.
+fn ctor_expr(ctor: &CtorHome) -> canon::Expr_ {
+    canon::Expr_::VarCtor {
+        home: ctor.home.clone(),
+        type_name: ctor.type_name,
+        name: ctor.name,
+        index: ctor.index,
+    }
 }
 
 /// The IPE-N0024 for a bare constructor two open imports bring in from distinct

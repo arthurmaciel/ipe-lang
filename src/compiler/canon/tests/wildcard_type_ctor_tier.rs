@@ -470,14 +470,11 @@ fn an_open_alias_never_beats_an_explicit_union() {
                 import Ipe.B exposing (..)\n\n\
                 x : Foo\nx =\n    FooB\n\nmain = 0\n";
     let (result, _) = canonicalise_main(&[ALIAS_STUB, UNION_STUB], main);
-    let Some((_, modules)) = ambiguous_modules(&result) else {
-        assert!(
-            matches!(result, Err(Diagnostic::Name { .. })),
-            "an open alias and an open union of one name must be IPE-N0024, got {result:?}"
-        );
-        return;
-    };
-    assert_eq!(modules, vec!["Ipe.A".to_owned(), "Ipe.B".to_owned()]);
+    assert_eq!(
+        ambiguous_modules(&result).map(|(_, modules)| modules),
+        Some(vec!["Ipe.A".to_owned(), "Ipe.B".to_owned()]),
+        "an open alias and an open union of one name must be IPE-N0024, got {result:?}"
+    );
 }
 
 /// W15: a local type over an explicitly imported one stays IPE-N0012 at the
@@ -570,4 +567,78 @@ fn an_opening_module_exports_only_its_own_ctors() {
             .collect()
     });
     assert_eq!(types, Some(vec!["Step2"]));
+}
+
+/// The dot-joined module of the top-level value the body of `name` references.
+fn top_level_module(module: &Module, interner: &Interner, name: &str) -> Option<String> {
+    let Expr_::VarTopLevel { module: home, .. } = &body(module, interner, name)?.value else {
+        return None;
+    };
+    dotted(home, interner)
+}
+
+/// A local record alias `Done`, whose auto-constructor is a bare value.
+const LOCAL_RECORD_DONE: &str = "type alias Done = { n : Int }\n\n";
+
+/// A local record alias's auto-constructor is a tier-1 value: it outranks an
+/// open-imported constructor of the same spelling in expression position.
+#[test]
+fn a_local_record_alias_ctor_outranks_an_open_ctor() {
+    let main = format!(
+        "module Main exposing (main)\n\nimport Ipe.Task exposing (..)\n\n\
+         {LOCAL_RECORD_DONE}mk = Done\n\nmain = 0\n"
+    );
+    let (result, interner) = canonicalise_main(&[TASK_STUB], &main);
+    let Ok(module) = &result else {
+        assert!(
+            result.is_ok(),
+            "a local record alias over an open ctor must resolve, got {result:?}"
+        );
+        return;
+    };
+    assert_eq!(
+        top_level_module(module, &interner, "mk").as_deref(),
+        Some("Main"),
+        "the local auto-constructor wins over the open `Ipe.Task.Done`"
+    );
+}
+
+/// A local record alias's auto-constructor outranks the ambient `Done`.
+#[test]
+fn a_local_record_alias_ctor_outranks_the_ambient_ctor() {
+    let main = format!("module Main exposing (main)\n\n{LOCAL_RECORD_DONE}mk = Done\n\nmain = 0\n");
+    let (result, interner) = canonicalise_main(&[], &main);
+    let Ok(module) = &result else {
+        assert!(
+            result.is_ok(),
+            "a local record alias over the ambient ctor must resolve, got {result:?}"
+        );
+        return;
+    };
+    assert_eq!(
+        top_level_module(module, &interner, "mk").as_deref(),
+        Some("Main"),
+        "the local auto-constructor wins over the ambient `ChunkEvent` `Done`"
+    );
+}
+
+/// An open constructor and an open record-alias auto-constructor of one
+/// spelling, from two modules, are IPE-N0024 at a bare use, never a silent pick.
+#[test]
+fn an_open_ctor_and_an_open_record_alias_ctor_are_ambiguous() {
+    let record = "module Ipe.Rec exposing (Done)\n\ntype alias Done = { n : Int }\n";
+    let main = "module Main exposing (main)\n\n\
+                import Ipe.Task exposing (..)\n\
+                import Ipe.Rec exposing (..)\n\n\
+                mk = Done\n\nmain = 0\n";
+    let (result, _) = canonicalise_main(&[TASK_STUB, record], main);
+    assert_eq!(
+        ambiguous_modules(&result),
+        Some((
+            span_of(main, "Done", 0),
+            vec!["Ipe.Rec".to_owned(), "Ipe.Task".to_owned()]
+        )),
+        "an open ctor and an open value of one name must be IPE-N0024 at the use, \
+         got {result:?}"
+    );
 }
