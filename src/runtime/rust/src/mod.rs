@@ -552,6 +552,13 @@ pub mod ws_client;
 ))]
 pub use ws_client::*;
 
+// The one HTML escaper (text and attribute forms). Std-only and declared in
+// every module set (the emitted floor and the wasm set too): `html`, the
+// always-vendored `telemetry` dev banner, and the debugger overlay all call it,
+// so it must exist in a headless server that never vendors `html`. Reached by
+// qualified path (`crate::escape::…`); not glob-re-exported.
+pub mod escape;
+
 // Ipe.Html / Ipe.Ui render surface — the Html/Attribute/Event ADTs + renderer +
 // htmlXxx kernel wrappers. Pure (std only), so always available; a non-Web
 // Ipe.Ui app renders via Html.toString without the `web` server module. The

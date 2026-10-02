@@ -22,8 +22,9 @@
 //! / `sink_safe_keyframes_body`) and drops the block fail-closed on any
 //! breakout. The close-tag strip applied to EVERY CSS fragment stays as
 //! belt-and-braces and must never be dropped. The selector uses the element's
-//! own already-sanitised ipe-id (assign_ipe_ids), never a user attr, so the
-//! selector cannot be broken out of either.
+//! own ipe-id (`assign_ipe_ids`), never a user attr. That id holds only
+//! `[A-Za-z0-9_.:-]` (an unsafe tag contributes a fixed segment, a key is
+//! sanitised), so the quoted selector cannot be broken out of either.
 //!
 //! Idempotent: a second run finds the markers already stripped and is a no-op
 //! (matches  idempotency contract), a belt-and-braces against a missed

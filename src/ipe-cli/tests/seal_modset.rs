@@ -325,6 +325,30 @@ fn http_stream_chunks_no_open_builds() {
         .expect("HttpStream.chunks must pull in the server/http_stream module (was E0412/E0425)");
 }
 
+/// A headless `Ipe.Http.Server` program serving an HTML response, with no
+/// `Ipe.Html` import.
+///
+/// Its HTML responses get the dev-console banner, which `telemetry` builds
+/// through `crate::escape`; `html` is not vendored for it, so `escape` must be
+/// in the floor module set (or the build fails E0433).
+const HEADLESS_HTML_SERVER: &str = "module Main exposing (main)\n\
+    import Ipe.Http.Server as Server\n\
+    import Ipe.Task\n\
+    handle : Server.Request -> Task Error Server.Response\n\
+    handle _req =\n    Task.succeed (Server.html \"<p>headless</p>\")\n\
+    main =\n    Server.listen 8080 [ Server.get \"/\" handle ]\n";
+
+#[test]
+fn headless_html_server_builds_with_the_escape_module() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
+        return;
+    }
+    emit_and_build("headless_html_server", HEADLESS_HTML_SERVER).expect(
+        "a server without Ipe.Html must build: the dev banner escapes through \
+         crate::escape, which every module set declares",
+    );
+}
+
 // ── Vendored-model SEAL: jwt feature must be in default = [...] ─────────────
 
 /// Under the vendored emit model an authed-route program (`Server.getAuthed` +
