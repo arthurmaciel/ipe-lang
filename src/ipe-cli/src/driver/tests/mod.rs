@@ -2640,16 +2640,22 @@ fn type_check_of_a_non_default_src_file_is_analysed_as_itself() {
     );
 }
 
-/// A DIRECTORY argument still resolves to the project's own entry.
+/// A DIRECTORY argument resolves to the project's own entry, classified
+/// exactly as a file argument naming that entry: over the manifest's `src` root.
 #[test]
 fn type_check_of_a_directory_still_resolves_the_project_entry() {
     let tmp = analysis_project("ipe_type_check_directory_resolves_project_entry");
+    let expected = AnalysisTarget::SourceFile {
+        file: resolved(&tmp.join("src").join("Main.ipe")),
+        src_root: resolved(&tmp.join("src")),
+    };
     let target = resolve_analysis_target(&tmp);
     let result = run_type_check_body(&[tmp.to_string_lossy().into_owned()]);
     let _ = fs::remove_dir_all(&tmp);
-    assert!(
-        matches!(&target, Ok(AnalysisTarget::Project(_))),
-        "a directory argument resolves to the project's entry: {target:?}"
+    assert_eq!(
+        target.ok(),
+        Some(expected),
+        "a directory argument resolves to the project's entry over its src root"
     );
     assert!(
         result.is_ok(),
@@ -2935,6 +2941,104 @@ fn nested_src_module_importing_by_full_path_type_checks_green() {
         "a nested src/ file importing a sibling by its full module path must \
          type-check against the manifest's whole src tree: {:?}",
         result.err()
+    );
+}
+
+/// A project whose declared entry is nested under `src/`: `App.Main` importing
+/// `Shared.Util` by its full module path.
+fn nested_entry_project(name: &str, main_body: &str) -> PathBuf {
+    let tmp = ipe_test_temp::temp_root().join(name);
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    fs::create_dir_all(src.join("App")).expect("create src/App/");
+    fs::create_dir_all(src.join("Shared")).expect("create src/Shared/");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"app\"\n    , programs = [ { name = \"app\", entry = \"App/Main.ipe\" } ]\n    }\n",
+    )
+    .expect("pkg");
+    fs::write(
+        src.join("Shared").join("Util.ipe"),
+        "module Shared.Util exposing (one)\none = 1\n",
+    )
+    .expect("src/Shared/Util.ipe");
+    fs::write(src.join("App").join("Main.ipe"), main_body).expect("src/App/Main.ipe");
+    tmp
+}
+
+/// A directory argument over a nested-entry project analyses the `src`-rooted
+/// module set the build compiles: `App.Main` importing `Shared.Util` resolves,
+/// where a closure rooted at the entry's own directory (`src/App/`) would probe
+/// `src/App/Shared/Util.ipe` and refuse a program the build accepts.
+#[test]
+fn type_check_of_a_nested_entry_project_directory_resolves_src_rooted_imports() {
+    let tmp = nested_entry_project(
+        "ipe_type_check_nested_entry_directory_src_rooted",
+        "module App.Main exposing (main)\nimport Shared.Util as Util\nmain = Util.one\n",
+    );
+    let expected = AnalysisTarget::SourceFile {
+        file: resolved(&tmp.join("src").join("App").join("Main.ipe")),
+        src_root: resolved(&tmp.join("src")),
+    };
+    let target = resolve_analysis_target(&tmp);
+    let result = run_type_check_body(&[tmp.to_string_lossy().into_owned()]);
+    let _ = fs::remove_dir_all(&tmp);
+    assert_eq!(
+        target.ok(),
+        Some(expected),
+        "a nested-entry directory resolves to its entry over the src root"
+    );
+    assert!(
+        result.is_ok(),
+        "a nested entry importing a src module by its full path must type-check \
+         via a directory argument: {:?}",
+        result.err()
+    );
+}
+
+/// A module that lives outside `src/` is not part of the build's module set, so
+/// a directory argument refuses an import of it, blamed on the entry.
+#[test]
+fn type_check_of_a_directory_refuses_an_import_from_outside_src() {
+    let tmp = nested_entry_project(
+        "ipe_type_check_directory_refuses_outside_src_import",
+        "module App.Main exposing (main)\nimport Extra\nmain = Extra.one\n",
+    );
+    fs::write(
+        tmp.join("Extra.ipe"),
+        "module Extra exposing (one)\none = 1\n",
+    )
+    .expect("Extra.ipe outside src/");
+    let entry = resolved(&tmp.join("src").join("App").join("Main.ipe"));
+    let result = run_type_check_body(&[tmp.to_string_lossy().into_owned()]);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(
+        matches!(&result, Err(CliError::Pipeline { file, .. }) if file == entry.as_path()),
+        "an import of a module outside src/ must be refused, blamed on the entry: {result:?}"
+    );
+}
+
+/// The analysis entry follows the build's precedence: a declared program's
+/// entry wins over a `src/Main.ipe` beside it.
+#[test]
+fn analysis_root_prefers_the_declared_program_entry_like_the_build() {
+    let tmp = nested_entry_project(
+        "ipe_analysis_root_prefers_declared_program",
+        "module App.Main exposing (main)\nmain = 1\n",
+    );
+    let src = tmp.join("src");
+    fs::write(
+        src.join("Main.ipe"),
+        "module Main exposing (main)\nmain = 1\n",
+    )
+    .expect("src/Main.ipe");
+    let manifest = project::parse_manifest(&tmp.join("package.ipe")).expect("parses");
+    let root = analysis_root_of(&manifest);
+    let _ = fs::remove_dir_all(&tmp);
+    assert_eq!(
+        root.ok(),
+        Some(src.join("App").join("Main.ipe")),
+        "the declared program's entry is the analysis root, as it is the build's"
     );
 }
 

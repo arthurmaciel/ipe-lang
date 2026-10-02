@@ -4049,7 +4049,6 @@ fn typecheck_graph(graph: &SourceGraph, blame_path: &Path) -> Result<(), CliErro
 /// Same as [`typecheck_entry_via_graph`].
 pub fn typecheck_target(target: &AnalysisTarget) -> Result<(), CliError> {
     match target {
-        AnalysisTarget::Project(entry) => typecheck_entry_via_graph(entry),
         AnalysisTarget::LooseFile(file) => typecheck_entry_via_graph(file.as_path()),
         AnalysisTarget::SourceFile { file, src_root } => {
             typecheck_manifest_file_via_graph(src_root.as_path(), file.as_path())
@@ -4073,7 +4072,6 @@ pub fn source_graph_for_target(
     target: &AnalysisTarget,
 ) -> Result<(SourceGraph, PathBuf), CliError> {
     match target {
-        AnalysisTarget::Project(entry) => Ok((build_source_graph(entry)?, entry.clone())),
         AnalysisTarget::LooseFile(file) => Ok((
             build_source_graph(file.as_path())?,
             file.as_path().to_path_buf(),

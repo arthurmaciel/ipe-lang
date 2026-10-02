@@ -1117,25 +1117,19 @@ pub fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
 /// The source file `ipe type-check` uses as its analysis root for a manifest
 /// project.
 ///
-/// An application uses `<src_root>/Main.ipe`. A library (a manifest declaring
-/// `exposedModules` with no `src/Main.ipe` and no runnable program) has no
-/// `main` to check, so its analysis root is its first exposed module's file —
-/// checking the public surface is a library's meaningful verification. A
-/// declared-program entry (when a `programs` stage names one) takes precedence,
-/// resolved through the same [`contained_path::ContainedRelPath`] gate the build
-/// path uses so an absolute or `..` entry cannot escape the source root.
+/// The entry precedence is the build's ([`project::ProjectManifest::resolved_entry`]):
+/// a declared program's entry (when a `programs` stage names one) wins, resolved
+/// through the same [`contained_path::ContainedRelPath`] gate the build path uses
+/// so an absolute or `..` entry cannot escape the source root; otherwise
+/// `<src_root>/Main.ipe`. A library (a manifest declaring `exposedModules` with
+/// no `src/Main.ipe` and no runnable program) has no `main` to check, so its
+/// analysis root is its first exposed module's file — checking the public
+/// surface is a library's meaningful verification.
 ///
 /// # Errors
 /// [`CliError::PathEscape`] when a declared program's entry resolves outside the
 /// source root.
 pub fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<PathBuf, CliError> {
-    let main = parsed.src_root.join("Main.ipe");
-    if main.is_file() {
-        return Ok(main);
-    }
-    // No Main: prefer a declared program's entry file, else the first exposed
-    // module's file. Fall back to `Main.ipe` (the caller surfaces a clean
-    // missing-entry diagnostic) when the manifest names neither.
     if let Some(program) = parsed.default_program() {
         let contained = contained_path::ContainedRelPath::parse(&parsed.src_root, &program.entry)
             .map_err(|reason| CliError::PathEscape {
@@ -1143,6 +1137,13 @@ pub fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<PathBuf, Cl
             reason,
         })?;
         return Ok(contained.resolved().to_path_buf());
+    }
+    // No declared program: `Main.ipe`, else the first exposed module's file.
+    // Fall back to `Main.ipe` (the caller surfaces a clean missing-entry
+    // diagnostic) when the manifest names neither.
+    let main = parsed.src_root.join("Main.ipe");
+    if main.is_file() {
+        return Ok(main);
     }
     if let Some(module) = parsed.exposed_modules.first() {
         let rel: PathBuf = module.split('.').collect();
@@ -1161,12 +1162,11 @@ const TESTS_DIR_NAME: &str = "tests";
 /// A FILE argument is always analysed as itself. It is project-rooted
 /// ([`Self::SourceFile`] or [`Self::TestFile`]) exactly when its canonical path
 /// lies under the governing manifest's canonical `src/` or `tests/` root, and
-/// loose ([`Self::LooseFile`]) otherwise. Only a DIRECTORY argument (or none)
-/// resolves to the project's own entry, [`Self::Project`].
+/// loose ([`Self::LooseFile`]) otherwise. A DIRECTORY argument (or none) names
+/// the project's own entry file, which is then classified exactly like a file
+/// argument — so every form shares one root resolution, the build's `src` root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysisTarget {
-    /// A directory (or omitted) argument: the project's own entry file.
-    Project(PathBuf),
     /// A file no manifest roots, canonicalised like every other file
     /// variant so each diagnostic names it the same way.
     LooseFile(ResolvedPath),
@@ -1191,20 +1191,31 @@ pub enum AnalysisTarget {
 
 /// Resolve a `check`/analysis `<path>` argument to its [`AnalysisTarget`].
 ///
-/// A directory (or no) argument resolves to the project's own entry. A FILE
-/// argument is canonicalised once; the manifest governing that canonical path
-/// is found, and the file is project-rooted only when its canonical path lies
-/// strictly under that manifest's canonical `tests/` or `src/` root.
+/// A directory (or no) argument names the project's own entry
+/// ([`resolve_analysis_entry`]); that entry is then resolved exactly as a file
+/// argument naming it would be, so the directory form analyses the same
+/// `src`-rooted module set the build compiles rather than a closure rooted at
+/// the entry's own directory. A FILE argument is canonicalised once; the
+/// manifest governing that canonical path is found, and the file is
+/// project-rooted only when its canonical path lies strictly under that
+/// manifest's canonical `tests/` or `src/` root.
 ///
 /// # Errors
 /// Same as [`resolve_analysis_entry`] for a directory argument;
-/// [`CliError::Io`] when a file argument cannot be canonicalised (`NotFound`
-/// for a missing file), or a project, `src/`, or existing `tests/` root cannot
-/// be; a manifest's own parse errors for a file under a governing manifest.
+/// [`CliError::Io`] when the file (a named one, or a directory's entry) cannot
+/// be canonicalised (`NotFound` when it is missing), or a project, `src/`, or
+/// existing `tests/` root cannot be; a manifest's own parse errors for a file
+/// under a governing manifest.
 pub fn resolve_analysis_target(path: &Path) -> Result<AnalysisTarget, CliError> {
     if path.is_dir() {
-        return Ok(AnalysisTarget::Project(resolve_analysis_entry(path)?));
+        return resolve_file_target(&resolve_analysis_entry(path)?);
     }
+    resolve_file_target(path)
+}
+
+/// Classify a FILE against the manifest governing its canonical path — the one
+/// root resolution every [`resolve_analysis_target`] form routes through.
+fn resolve_file_target(path: &Path) -> Result<AnalysisTarget, CliError> {
     let file = ResolvedPath::of(path).map_err(|e| io_err(path, e))?;
     let Some(manifest_path) = discover_manifest(file.as_path())? else {
         return Ok(AnalysisTarget::LooseFile(file));
