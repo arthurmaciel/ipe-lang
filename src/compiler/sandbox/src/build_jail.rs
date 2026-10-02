@@ -1427,6 +1427,12 @@ pub(crate) fn untrusted_mount_ancestor(
     Ok(None)
 }
 
+/// How to move the jail directories, which live under `$HOME/.cache/ipe/jail`,
+/// below a home only root can write.
+#[cfg(any(target_os = "freebsd", test))]
+const JAIL_DIR_HOME_HINT: &str = "the jail directories live under $HOME/.cache/ipe/jail, so run \
+     with HOME set to a home only root can write (for example `sudo -H`)";
+
 /// Refuse `path` unless every directory above it, from `/` down, is a
 /// directory only root can rename entries in, judged by `trust`.
 ///
@@ -1458,13 +1464,15 @@ pub(crate) fn require_root_only_ancestors(
             ViewDirTrust::RootOnly => {}
             ViewDirTrust::Writable => {
                 return Err(refuse(format!(
-                    "{} above the jail directory is writable by a user other than root",
+                    "{} above the jail directory is writable by a user other than root; \
+                     {JAIL_DIR_HOME_HINT}",
                     dir.display()
                 )));
             }
             ViewDirTrust::Missing | ViewDirTrust::Unusable => {
                 return Err(refuse(format!(
-                    "{} above the jail directory is not a usable directory",
+                    "{} above the jail directory is not a usable directory; \
+                     {JAIL_DIR_HOME_HINT}",
                     dir.display()
                 )));
             }
@@ -3881,7 +3889,7 @@ mod tests {
                 }
             });
             assert!(
-                matches!(&outcome, Err(RunJailDefect::MountFailed { detail, .. }) if detail.contains("/usr/home/u ")),
+                matches!(&outcome, Err(RunJailDefect::MountFailed { detail, .. }) if detail.contains("/usr/home/u ") && detail.contains(JAIL_DIR_HOME_HINT)),
                 "{refused:?}: {outcome:?}"
             );
         }
