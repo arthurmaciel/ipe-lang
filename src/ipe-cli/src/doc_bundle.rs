@@ -1664,8 +1664,9 @@ mod tests {
     fn json_ref_with_control_chars_parses_and_round_trips() {
         let out = format_ref(DocKind::Module, "k\"\\\n", "a\u{1}b", RefTarget::Json);
         let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
-        assert_eq!(parsed["ref"]["kind"], "module");
-        assert_eq!(parsed["ref"]["key"], "k\"\\\n");
-        assert_eq!(parsed["text"], "a\u{1}b");
+        let field = |pointer: &str| parsed.pointer(pointer).and_then(serde_json::Value::as_str);
+        assert_eq!(field("/ref/kind"), Some("module"));
+        assert_eq!(field("/ref/key"), Some("k\"\\\n"));
+        assert_eq!(field("/text"), Some("a\u{1}b"));
     }
 }
