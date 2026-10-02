@@ -40,7 +40,7 @@ module Ipe.Db.Store exposing
     , index, indexNamed
     , tableName, columnNames, createSql
     , readText, readInt, readBool, readFloat
-    , insert, insertReturning, all, get, delete, findWhere, create
+    , insert, insertReturning, upsert, all, get, delete, findWhere, create
     , allOn, getOn, findWhereOn
     , update, updateWhere, deleteWhere, findBy
     , renameColumn, renameTable, migrations
@@ -163,6 +163,13 @@ type PrimaryKeyDecl
     = NoPk
     | SinglePk String
     | CompositePk String String (List String)
+
+
+-- The validated, non-empty column list an upsert matches a conflict on, under
+-- the store's current column names. Built only from the store's declared key
+-- (`conflictTarget`), so no caller text reaches the `ON CONFLICT` clause.
+type ConflictTarget
+    = ConflictTarget String (List String)
 
 
 -- | A declarative performance index over one or more of the store's columns.
@@ -1934,6 +1941,276 @@ insertReturningNoRowError : Error
 insertReturningNoRowError =
     Error.invalidInput
         "Ipe.Db.Store: insertReturning did not receive a RETURNING row from the database"
+
+
+-- | `upsert conn store row` — insert `row`, or, when a row with the same key
+-- already exists, update that row in place, and return the affected-row count.
+-- One atomic statement (`INSERT … ON CONFLICT (…) DO UPDATE`), so the database
+-- decides insert-or-update and no read-then-write race exists.
+--
+-- The conflict target is the store's declared key, never an argument: the
+-- primary key (every column of a composite key, in declared order) or, for a
+-- store with no primary key, its one `unique` column. Each target column is
+-- resolved to its current name (after any `renameColumn`). These fail with a
+-- typed `Err` before any SQL is sent:
+--
+-- * a store with no primary key and no `unique` column;
+-- * a store with no primary key and several `unique` columns (the target
+--   would be a guess) — declare the identifying column as the primary key;
+-- * an illegal key declaration (its recorded `Err`);
+-- * a target column that is not a valid identifier or not a column of the store;
+-- * a target column the database fills (`serial` / `defaultNow` /
+--   `touchOnUpdate`): a row never carries a value to match, so use `insert`;
+-- * a row whose key value is absent or `NULL` (a `NULL` key never conflicts, so
+--   the row would be duplicated).
+--
+-- On conflict, every non-key column the row supplies is overwritten; `serial` /
+-- `defaultNow` / `touchOnUpdate` columns are omitted from the write and keep
+-- their stored value (a `touchOnUpdate` column is not re-stamped). The count is
+-- `1` for an insert or an in-place update, and `0` only when every non-key
+-- column is DB-filled, leaving nothing to update (an existing row is then kept
+-- as is). A row that conflicts on a unique column other than the target is the
+-- database's typed `Err`, never a silent overwrite. Routes through the audited
+-- `Db.upsertFields`, which re-validates every identifier and binds every value.
+--
+-- Example:
+--
+--     import Ipe.Db as Db exposing (Db)
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Task as Task exposing (Task)
+--     import Ipe.Error exposing (Error)
+--
+--     type alias Setting =
+--         { name : String, value : String }
+--
+--     -- `name` is the primary key: the first call inserts, the next updates.
+--     saveSetting : Db -> Store Setting -> String -> String -> Task Error Int
+--     saveSetting conn store name value =
+--         Store.upsert conn store { name = name, value = value }
+upsert : Db -> Store a -> a -> Task Error Int
+upsert conn store row =
+    case store of
+        Store r ->
+            case conflictTarget store of
+                Err e ->
+                    Task.fail e
+
+                Ok target ->
+                    case DbCodec.codecToBinds r.codec row of
+                        Err e ->
+                            Task.fail e
+
+                        Ok binds ->
+                            case firstUnboundConflictColumn (conflictColumns target) binds of
+                                Just e ->
+                                    Task.fail e
+
+                                Nothing ->
+                                    Db.upsertFields conn
+                                        r.table
+                                        (conflictColumns target)
+                                        (insertFields (liveSpecs store) binds)
+
+
+-- The conflict target of a store, parsed once from its declared key: the key
+-- declaration's recorded `Err` first, then the derivation, then each column's
+-- identifier and declared → current resolution, then the DB-filled refusal.
+conflictTarget : Store a -> Result Error ConflictTarget
+conflictTarget store =
+    case store of
+        Store r ->
+            case keyDeclFault r.pk of
+                Just e ->
+                    Err e
+
+                Nothing ->
+                    declaredConflictTarget r.pk r.specs
+                        |> Result.andThen (resolveConflictTarget (storeView store))
+                        |> Result.andThen (refuseDbFilledTarget (liveSpecs store))
+
+
+-- The declared column names the conflict target names: the primary key, or the
+-- one distinct `unique` column of a store with no primary key.
+declaredConflictTarget : Result Error PrimaryKeyDecl -> List ColumnSpec -> Result Error ConflictTarget
+declaredConflictTarget pk specs =
+    case pk of
+        Err e ->
+            Err e
+
+        Ok (SinglePk col) ->
+            Ok (ConflictTarget col [])
+
+        Ok (CompositePk first second rest) ->
+            Ok (ConflictTarget first (second :: rest))
+
+        Ok NoPk ->
+            case uniqueColumns specs of
+                [] ->
+                    Err noConflictTargetError
+
+                [ only ] ->
+                    Ok (ConflictTarget only [])
+
+                _ :: _ :: _ ->
+                    Err ambiguousConflictTargetError
+
+
+-- The distinct `unique` columns in declaration order (specs are recorded
+-- newest first), each kept at its first occurrence.
+uniqueColumns : List ColumnSpec -> List String
+uniqueColumns specs =
+    List.foldl
+        (\spec seen ->
+            case uniqueSpecColumn spec of
+                Just col ->
+                    if List.member col seen then
+                        seen
+
+                    else
+                        seen ++ [ col ]
+
+                Nothing ->
+                    seen
+        )
+        []
+        (List.reverse specs)
+
+
+uniqueSpecColumn : ColumnSpec -> Maybe String
+uniqueSpecColumn spec =
+    case spec of
+        Unique col ->
+            Just col
+
+        PrimaryKey _ ->
+            Nothing
+
+        Serial _ ->
+            Nothing
+
+        DefaultNow _ ->
+            Nothing
+
+        DefaultText _ _ ->
+            Nothing
+
+        DefaultInt _ _ ->
+            Nothing
+
+        TouchOnUpdate _ ->
+            Nothing
+
+
+-- Parse every declared target column to its current name.
+resolveConflictTarget : ColumnView -> ConflictTarget -> Result Error ConflictTarget
+resolveConflictTarget view target =
+    case target of
+        ConflictTarget first rest ->
+            case resolveConflictColumn view first of
+                Err e ->
+                    Err e
+
+                Ok current ->
+                    Result.map (\currentRest -> ConflictTarget current currentRest)
+                        (resolveConflictColumns view rest)
+
+
+resolveConflictColumns : ColumnView -> List String -> Result Error (List String)
+resolveConflictColumns view names =
+    case names of
+        [] ->
+            Ok []
+
+        name :: rest ->
+            case resolveConflictColumn view name of
+                Err e ->
+                    Err e
+
+                Ok current ->
+                    Result.map (\currentRest -> current :: currentRest)
+                        (resolveConflictColumns view rest)
+
+
+-- One declared target column: a valid plain identifier first (so no refusal
+-- echoes unchecked text), then a declared column of the store, mapped to its
+-- current name. An unknown name fails closed; it never maps to itself.
+resolveConflictColumn : ColumnView -> String -> Result Error String
+resolveConflictColumn view name =
+    if validSqlIdentPlain name then
+        liveName view name
+
+    else
+        Err invalidConflictColumnError
+
+
+-- Refuse a target column the database fills: a row never carries its value.
+refuseDbFilledTarget : List ColumnSpec -> ConflictTarget -> Result Error ConflictTarget
+refuseDbFilledTarget specs target =
+    case List.filter (\col -> dbFilledColumn specs col) (conflictColumns target) of
+        [] ->
+            Ok target
+
+        col :: _ ->
+            Err (dbFilledConflictColumnError col)
+
+
+conflictColumns : ConflictTarget -> List String
+conflictColumns target =
+    case target of
+        ConflictTarget first rest ->
+            first :: rest
+
+
+-- The refusal for the first target column the row's binds leave absent or
+-- `NULL`, or `Nothing` when every target column carries a value.
+firstUnboundConflictColumn : List String -> List ( String, SqlValue ) -> Maybe Error
+firstUnboundConflictColumn cols binds =
+    case cols of
+        [] ->
+            Nothing
+
+        col :: rest ->
+            case bindValue col binds of
+                Nothing ->
+                    Just (missingConflictColumnError col)
+
+                Just value ->
+                    if sqlValueIsNull value then
+                        Just (nullConflictColumnError col)
+
+                    else
+                        firstUnboundConflictColumn rest binds
+
+
+sqlValueIsNull : SqlValue -> Bool
+sqlValueIsNull value =
+    case value of
+        SqlNull _ ->
+            True
+
+        SqlString _ ->
+            False
+
+        SqlInt _ ->
+            False
+
+        SqlFloat _ ->
+            False
+
+        SqlBool _ ->
+            False
+
+        SqlBytes _ ->
+            False
+
+        SqlTime _ ->
+            False
+
+        SqlDecimal _ ->
+            False
+
+        SqlMoney _ ->
+            False
 
 
 -- | `update conn store row` — update the row whose primary key matches `row`'s
@@ -6867,6 +7144,54 @@ missingKeyBindError keyCol =
     Error.invalidInput
         (String.concat
             [ "Ipe.Db.Store: update needs the primary-key column \"", keyCol, "\" in the record's codec projection, but it is absent" ]
+        )
+
+
+noConflictTargetError : Error
+noConflictTargetError =
+    Error.invalidInput
+        "Ipe.Db.Store: upsert requires a declared primary key or unique column to match a conflict on, but this store declares neither — declare the key with Store.primaryKey / Store.compositePrimaryKey2 / Store.compositePrimaryKey3 / Store.compositePrimaryKeyNamed, or mark one column with Store.unique"
+
+
+ambiguousConflictTargetError : Error
+ambiguousConflictTargetError =
+    Error.invalidInput
+        "Ipe.Db.Store: upsert found several unique columns and no primary key, so its conflict target would be a guess — declare the column that identifies a row with Store.primaryKey (or a composite key), or keep a single Store.unique"
+
+
+invalidConflictColumnError : Error
+invalidConflictColumnError =
+    Error.invalidInput
+        "Ipe.Db.Store: upsert refused a conflict-target column whose declared name is not a valid SQL identifier — fix the name given to Store.primaryKeyNamed / Store.uniqueNamed"
+
+
+dbFilledConflictColumnError : String -> Error
+dbFilledConflictColumnError col =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: upsert cannot match a conflict on column \""
+            , col
+            , "\" because the database fills that column (serial / defaultNow / touchOnUpdate), so a row never carries its value — use Store.insert for a store keyed on a DB-filled column"
+            ]
+        )
+
+
+missingConflictColumnError : String -> Error
+missingConflictColumnError col =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: upsert needs the conflict-target column \"", col, "\" in the record's codec projection, but it is absent" ]
+        )
+
+
+nullConflictColumnError : String -> Error
+nullConflictColumnError col =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: upsert refused a NULL key in conflict-target column \""
+            , col
+            , "\" — a NULL never matches a conflict, so the row would be added as a duplicate; give the key a value"
+            ]
         )
 
 
