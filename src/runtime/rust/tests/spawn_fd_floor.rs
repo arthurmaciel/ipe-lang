@@ -17,6 +17,10 @@ use std::time::{Duration, Instant};
 /// Extra argument on the re-executed probe; its presence selects probe mode.
 const EXEC_PROBE_MARKER: &str = "ipe-fd-floor-exec-probe";
 
+/// Line the replacement shell prints once its checks pass, so a probe run that
+/// never reached `exec_naming` (no test matched the filter) cannot pass.
+const EXEC_PROBE_PASSED: &str = "ipe-fd-floor-exec-probe-passed";
+
 /// Ceiling on every child wait in this file.
 const WAIT_CEILING: Duration = Duration::from_secs(10);
 
@@ -163,30 +167,34 @@ fn an_exec_replacement_inherits_only_named() -> std::io::Result<()> {
         named
             .push(named_fd)
             .expect("admit a close-on-exec descriptor");
-        let refused = exec_naming(
-            sh(
-                "[ ! -e /dev/fd/$1 ] && [ -e /dev/fd/$2 ]",
-                &[&leaked_n, &named_n],
-            ),
-            named,
+        let mut replacement = sh(
+            "[ ! -e /dev/fd/$1 ] && [ -e /dev/fd/$2 ] && echo \"$3\"",
+            &[&leaked_n, &named_n, EXEC_PROBE_PASSED],
         );
+        replacement.stdout(Stdio::inherit());
+        let refused = exec_naming(replacement, named);
         drop(leaked);
         return Err(refused);
     }
-    let probe = Command::new(std::env::current_exe().expect("test binary"))
+    let mut probe = Command::new(std::env::current_exe().expect("test binary"))
         .args([
             "an_exec_replacement_inherits_only_named",
             "--exact",
             EXEC_PROBE_MARKER,
         ])
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("re-exec probe");
+    let stdout = probe.stdout.take().expect("piped probe stdout");
+    let status = bounded_wait(probe).expect("wait probe");
+    let mut printed = String::new();
+    std::io::Read::read_to_string(&mut std::io::BufReader::new(stdout), &mut printed)
+        .expect("read probe stdout");
     assert!(
-        bounded_wait(probe).expect("wait probe").success(),
-        "the replacement must hold its named descriptor and no other"
+        status.success() && printed.lines().any(|line| line == EXEC_PROBE_PASSED),
+        "the replacement must run, holding its named descriptor and no other: {printed:?}"
     );
     Ok(())
 }
