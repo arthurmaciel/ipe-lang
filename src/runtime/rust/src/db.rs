@@ -331,25 +331,23 @@ async fn with_recording_txn<T>(
     TXN_CONN.scope(Some((owner, executor)), fut).await
 }
 
-/// True when column `i`'s runtime type is a genuine boolean, so the `bool`
-/// reader must run before the integer reader.
+/// True when column `i`'s driver-reported type is a genuine boolean.
 ///
-/// The decision is keyed on the driver-reported storage type, NOT on a
-/// speculative `try_get::<bool>`. That probe is the bug's generative cause: on
-/// SQLite a `bool` decode succeeds for EVERY integer cell (any non-zero → true),
-/// so a bool-first probe silently stole `qty = 7` and rendered it `"true"`.
+/// The `bool` reader must then run before the integer reader. The decision is
+/// keyed on the driver-reported storage type, NOT on a speculative
+/// `try_get::<bool>`: on SQLite a `bool` decode succeeds for EVERY integer cell
+/// (any non-zero → true), so a bool-first probe would read `qty = 7` as `true`.
 /// Postgres `BOOL` and SQLite `BOOLEAN` report a boolean type name; a SQLite
 /// INTEGER cell reports `INTEGER` (its runtime storage class) even when it was
 /// bound from a Rust `bool` — the driver returns `int64` for those cells.
-fn column_is_boolean(row: &DbRow, i: usize) -> bool {
+fn column_is_boolean<R: Row>(row: &R, i: usize) -> bool {
     row.columns()
         .get(i)
         .map(sqlx::Column::type_info)
-        .map(|ti| {
+        .is_some_and(|ti| {
             let name = ti.name();
             name.eq_ignore_ascii_case("BOOL") || name.eq_ignore_ascii_case("BOOLEAN")
         })
-        .unwrap_or(false)
 }
 
 /// Decode column `i` into a `String` for the untyped `row_to_map` path.
@@ -383,45 +381,104 @@ fn column_to_string(row: &DbRow, i: usize) -> String {
     String::new()
 }
 
-/// Decode column `i` into a `JsonVal` for the typed-decoder path.
+/// The `ColumnDecode` reason [`read_cell`] gives a `NaN` / `±Inf` `REAL` cell.
+const NON_FINITE_REAL: &str = "non-finite REAL (NaN / +Inf / -Inf has no cell value)";
+
+/// The `ColumnDecode` reason [`read_cell`] gives a cell no probe reads.
+const UNSUPPORTED_COLUMN_TYPE: &str = "unsupported column type (not bool/i64/f64/String/bytes)";
+
+/// A finite `f64`, held as the JSON number every finite float has.
 ///
-/// A boolean-typed column reads via `bool` first; every other column reads
-/// numeric-first (i64 → f64) so a SQLite INTEGER is never stolen by the bool
-/// reader (`db_decode_bool` still accepts numeric `0`/`1`, so a SQLite bool
-/// round-trips through its INTEGER storage without loss). `Ok(None)` at any arm
-/// = SQL NULL → `JsonVal::Null`. The final arm returns `Err` for driver types
-/// none of the probes cover; callers surface it as a decode error rather than a
-/// phantom Null.
-fn column_to_json(row: &DbRow, i: usize) -> Result<JsonVal, sqlx::Error> {
+/// The only constructor, [`FiniteF64::new`], refuses `NaN` and `±Inf`, so a cell
+/// float always has a JSON projection and never needs a `Null` fallback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FiniteF64(serde_json::Number);
+
+impl FiniteF64 {
+    /// `Some` for a finite `f`; `None` for `NaN`, `+Inf` and `-Inf`.
+    fn new(f: f64) -> Option<Self> {
+        serde_json::Number::from_f64(f).map(Self)
+    }
+}
+
+/// One database cell as [`read_cell`] reads it; SQL `NULL` is its own arm.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Cell {
+    /// SQL `NULL`.
+    Null,
+    /// A boolean-typed column (`BOOL` / `BOOLEAN`).
+    Bool(bool),
+    /// An integer cell.
+    Int(i64),
+    /// A finite floating-point cell.
+    Float(FiniteF64),
+    /// A text cell, verbatim.
+    Text(String),
+    /// A `BLOB` / `BYTEA` cell.
+    Bytes(Vec<u8>),
+}
+
+impl Cell {
+    /// The cell as the JSON value the typed decoders read.
+    ///
+    /// `Null` is `JsonVal::Null`; bytes become lowercase hex text, the form
+    /// `db_decode_bytes` reads back.
+    fn into_json(self) -> JsonVal {
+        match self {
+            Self::Null => JsonVal::Null,
+            Self::Bool(b) => JsonVal::Bool(b),
+            Self::Int(n) => JsonVal::Number(serde_json::Number::from(n)),
+            Self::Float(FiniteF64(n)) => JsonVal::Number(n),
+            Self::Text(s) => JsonVal::String(s),
+            Self::Bytes(b) => JsonVal::String(hex::encode(b)),
+        }
+    }
+}
+
+/// The column reader: column `i` of an app or external row as a [`Cell`].
+///
+/// Probe order: `bool` (only for a boolean-typed column, see
+/// [`column_is_boolean`]) → `i64` → `f64` → `String` → bytes. `Ok(None)` at a
+/// probe is [`Cell::Null`]; a probe whose type does not match moves to the next.
+/// A `NaN` / `±Inf` `REAL` is `Err(ColumnDecode)` with [`NON_FINITE_REAL`], and a
+/// cell no probe reads is `Err(ColumnDecode)` with [`UNSUPPORTED_COLUMN_TYPE`]:
+/// a cell is never given a default value.
+fn read_cell<R>(row: &R, i: usize) -> Result<Cell, sqlx::Error>
+where
+    R: Row,
+    usize: sqlx::ColumnIndex<R>,
+    for<'a> Option<bool>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<i64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<f64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<String>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<Vec<u8>>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+{
+    let refuse = |reason: &str| sqlx::Error::ColumnDecode {
+        index: i.to_string(),
+        source: reason.into(),
+    };
     if column_is_boolean(row, i)
         && let Ok(opt) = row.try_get::<Option<bool>, _>(i)
     {
-        return Ok(opt.map_or(JsonVal::Null, JsonVal::Bool));
+        return Ok(opt.map_or(Cell::Null, Cell::Bool));
     }
     if let Ok(opt) = row.try_get::<Option<i64>, _>(i) {
-        return Ok(opt.map_or(JsonVal::Null, |n| {
-            JsonVal::Number(serde_json::Number::from(n))
-        }));
+        return Ok(opt.map_or(Cell::Null, Cell::Int));
     }
     if let Ok(opt) = row.try_get::<Option<f64>, _>(i) {
-        return Ok(opt.map_or(JsonVal::Null, |f| {
-            serde_json::Number::from_f64(f).map_or(JsonVal::Null, JsonVal::Number)
-        }));
+        return opt.map_or(Ok(Cell::Null), |f| {
+            FiniteF64::new(f)
+                .map(Cell::Float)
+                .ok_or_else(|| refuse(NON_FINITE_REAL))
+        });
     }
     if let Ok(opt) = row.try_get::<Option<String>, _>(i) {
-        return Ok(opt.map_or(JsonVal::Null, JsonVal::String));
+        return Ok(opt.map_or(Cell::Null, Cell::Text));
     }
-    // BYTEA / BLOB: hex-encode for a lossless, driver-neutral text form
-    // that pairs with `db_decode_bytes`.
     if let Ok(opt) = row.try_get::<Option<Vec<u8>>, _>(i) {
-        return Ok(opt.map_or(JsonVal::Null, |b| JsonVal::String(hex::encode(b))));
+        return Ok(opt.map_or(Cell::Null, Cell::Bytes));
     }
-    // Driver type not covered by any probe — return a decode error so the
-    // caller can surface it instead of silently returning Null.
-    Err(sqlx::Error::ColumnDecode {
-        index: i.to_string(),
-        source: "unsupported column type (not bool/i64/f64/String/bytes)".into(),
-    })
+    Err(refuse(UNSUPPORTED_COLUMN_TYPE))
 }
 
 // needless_range_loop (accepted, cosmetic): the loop indexes by position to pair
@@ -438,25 +495,26 @@ fn row_to_map(row: &DbRow) -> HashMap<String, String> {
     map
 }
 
-/// NULL-preserving row → `JsonVal` bridge for the typed-decoder path.
+/// An app or external row as the `JsonVal::Object` the typed decoders read.
 ///
-/// `row_to_map` (the untyped `db_query` path) collapses SQL NULL → `String::new()`,
-/// making NULL and empty-string indistinguishable. `db_query_decode` and
-/// `db_get_by_id_decode` MUST use this function instead so `db_decode_nullable`
-/// can correctly distinguish NULL from an empty value.
-///
-/// Probe order per column: bool → i64 → f64 → String → bytes-hex.
-/// An unreadable driver type (none of the five probes) surfaces as
-/// `Err(ColumnDecode)` — the caller converts via `ipe_err`, giving a
-/// structural error message rather than a phantom Null.
-#[allow(clippy::needless_range_loop)]
-fn row_to_json(row: &DbRow) -> Result<JsonVal, sqlx::Error> {
+/// Each column goes through [`read_cell`] then [`Cell::into_json`], so SQL
+/// `NULL` stays `JsonVal::Null` (`db_decode_nullable` tells it from an empty
+/// value). An unreadable cell is `Err(ColumnDecode)`; the caller converts it
+/// through `ipe_err`, so the read fails closed.
+fn row_to_json<R>(row: &R) -> Result<JsonVal, sqlx::Error>
+where
+    R: Row,
+    usize: sqlx::ColumnIndex<R>,
+    for<'a> Option<bool>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<i64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<f64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<String>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+    for<'a> Option<Vec<u8>>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
+{
     let cols = row.columns();
     let mut map = serde_json::Map::with_capacity(cols.len());
     for (i, col) in cols.iter().enumerate() {
-        let name = col.name().to_string();
-        let val = column_to_json(row, i)?;
-        map.insert(name, val);
+        map.insert(col.name().to_string(), read_cell(row, i)?.into_json());
     }
     Ok(JsonVal::Object(map))
 }
@@ -737,7 +795,7 @@ pub fn db_decode_decimal<E: From<String> + 'static>(col: String) -> Decoder<E, D
 /// `DbDec.bytes col` — read column `col` as raw bytes (`Vec<u8>`).
 ///
 /// The DB column stores hex-encoded bytes written by `SqlBytes` on the bind
-/// side (via `column_to_json`'s hex encoding). Hex-decodes the string value
+/// side (via [`Cell::into_json`]'s hex encoding). Hex-decodes the string value
 /// back to `Vec<u8>`, closing the `SqlBytes` write-without-read asymmetry.
 ///
 /// Totality: missing column, NULL, or non-hex string → `Err`.
@@ -4353,16 +4411,9 @@ where
     for<'a> Option<String>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
     for<'a> Option<Vec<u8>>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
 {
-    let is_bool = row
-        .columns()
-        .get(i)
-        .map(sqlx::Column::type_info)
-        .map(|ti| {
-            let name = ti.name();
-            name.eq_ignore_ascii_case("BOOL") || name.eq_ignore_ascii_case("BOOLEAN")
-        })
-        .unwrap_or(false);
-    if is_bool && let Ok(opt) = row.try_get::<Option<bool>, _>(i) {
+    if column_is_boolean(row, i)
+        && let Ok(opt) = row.try_get::<Option<bool>, _>(i)
+    {
         return opt.map_or_else(String::new, |b| b.to_string());
     }
     if let Ok(opt) = row.try_get::<Option<i64>, _>(i) {
@@ -4399,75 +4450,6 @@ where
         map.insert(col.name().to_string(), external_column_to_string(row, i));
     }
     map
-}
-
-/// Decode column `i` of an EXTERNAL row into a `JsonVal`, mirroring the app-path
-/// [`column_to_json`] probe order and its NULL-preserving semantics (so
-/// `db_decode_nullable` distinguishes NULL from empty on a foreign row too).
-#[cfg(feature = "db")]
-fn external_column_to_json<R>(row: &R, i: usize) -> Result<JsonVal, sqlx::Error>
-where
-    R: Row,
-    usize: sqlx::ColumnIndex<R>,
-    for<'a> Option<bool>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
-    for<'a> Option<i64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
-    for<'a> Option<f64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
-    for<'a> Option<String>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
-    for<'a> Option<Vec<u8>>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
-{
-    let is_bool = row
-        .columns()
-        .get(i)
-        .map(sqlx::Column::type_info)
-        .map(|ti| {
-            let name = ti.name();
-            name.eq_ignore_ascii_case("BOOL") || name.eq_ignore_ascii_case("BOOLEAN")
-        })
-        .unwrap_or(false);
-    if is_bool && let Ok(opt) = row.try_get::<Option<bool>, _>(i) {
-        return Ok(opt.map_or(JsonVal::Null, JsonVal::Bool));
-    }
-    if let Ok(opt) = row.try_get::<Option<i64>, _>(i) {
-        return Ok(opt.map_or(JsonVal::Null, |n| {
-            JsonVal::Number(serde_json::Number::from(n))
-        }));
-    }
-    if let Ok(opt) = row.try_get::<Option<f64>, _>(i) {
-        return Ok(opt.map_or(JsonVal::Null, |f| {
-            serde_json::Number::from_f64(f).map_or(JsonVal::Null, JsonVal::Number)
-        }));
-    }
-    if let Ok(opt) = row.try_get::<Option<String>, _>(i) {
-        return Ok(opt.map_or(JsonVal::Null, JsonVal::String));
-    }
-    if let Ok(opt) = row.try_get::<Option<Vec<u8>>, _>(i) {
-        return Ok(opt.map_or(JsonVal::Null, |b| JsonVal::String(hex::encode(b))));
-    }
-    Err(sqlx::Error::ColumnDecode {
-        index: i.to_string(),
-        source: "unsupported column type (not bool/i64/f64/String/bytes)".into(),
-    })
-}
-
-/// Decode an EXTERNAL row into the NULL-preserving `JsonVal::Object` the typed
-/// decoder path consumes, mirroring the app-path [`row_to_json`].
-#[cfg(feature = "db")]
-fn external_row_to_json<R>(row: &R) -> Result<JsonVal, sqlx::Error>
-where
-    R: Row,
-    usize: sqlx::ColumnIndex<R>,
-    for<'a> Option<bool>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
-    for<'a> Option<i64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
-    for<'a> Option<f64>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
-    for<'a> Option<String>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
-    for<'a> Option<Vec<u8>>: sqlx::Decode<'a, R::Database> + sqlx::Type<R::Database>,
-{
-    let cols = row.columns();
-    let mut map = serde_json::Map::with_capacity(cols.len());
-    for (i, col) in cols.iter().enumerate() {
-        map.insert(col.name().to_string(), external_column_to_json(row, i)?);
-    }
-    Ok(JsonVal::Object(map))
 }
 
 /// Bind a `SqlParam` onto a query builder for a SPECIFIC external dialect,
@@ -4581,7 +4563,7 @@ pub fn db_conn_query_decode_params<E: Send + From<String> + 'static, A: Send + '
                     q = external_bind_sql_param(q, p);
                 }
                 match q.fetch_all(&pool).await {
-                    Ok(rows) => rows.iter().map(external_row_to_json).collect(),
+                    Ok(rows) => rows.iter().map(row_to_json).collect(),
                     Err(e) => Err(e),
                 }
             }
@@ -4591,7 +4573,7 @@ pub fn db_conn_query_decode_params<E: Send + From<String> + 'static, A: Send + '
                     q = external_bind_sql_param(q, p);
                 }
                 match q.fetch_all(&pool).await {
-                    Ok(rows) => rows.iter().map(external_row_to_json).collect(),
+                    Ok(rows) => rows.iter().map(row_to_json).collect(),
                     Err(e) => Err(e),
                 }
             }
@@ -7409,10 +7391,10 @@ mod tests {
         }
     }
 
-    // ─── RT-DATA-001: row_to_json/column_to_json probe chain ──────────────
+    // ─── RT-DATA-001: row_to_json/read_cell probe chain ──────────────
 
     /// BLOB column written via `SqlBytes` decodes as a hex `JsonVal::String`,
-    /// not `JsonVal::Null`. Exercises the bytes arm of `column_to_json`.
+    /// not `JsonVal::Null`. Exercises the bytes arm of `read_cell`.
     #[tokio::test]
     async fn test_row_to_json_blob_decodes_as_hex() {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -7444,7 +7426,7 @@ mod tests {
     }
 
     /// Bool column decodes as `JsonVal::Bool`, not `JsonVal::Null`. Exercises
-    /// the bool-first probe ordering in `column_to_json`.
+    /// the bool-first probe ordering in `read_cell`.
     #[tokio::test]
     async fn test_row_to_json_bool_column() {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -7466,7 +7448,7 @@ mod tests {
             .await
             .unwrap_or_else(|e| panic!("fetch: {e}"));
         let jv = row_to_json(&row).unwrap_or_else(|e| panic!("row_to_json: {e}"));
-        // On sqlite, BOOLEAN stores as 0/1 INTEGER; column_to_json probes bool
+        // On sqlite, BOOLEAN stores as 0/1 INTEGER; read_cell probes bool
         // first, so we get Bool(true) rather than Number(1).
         match jv.get("active") {
             Some(JsonVal::Bool(b)) => assert!(*b, "expected true"),
@@ -7510,6 +7492,166 @@ mod tests {
             }
             IpeResult::Err(e) => panic!("decode failed: {e:?}"),
         }
+    }
+
+    /// One single-connection in-memory SQLite pool holding a `cells` table with
+    /// one row: every [`read_cell`] case is one column.
+    #[allow(clippy::expect_used)] // test fixture: a failed setup is a failed test
+    async fn cells_pool() -> sqlx::sqlite::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        sqlx::query(
+            "CREATE TABLE cells (nul TEXT, empty TEXT, zero INTEGER, ratio REAL, \
+             bytes BLOB, flag BOOLEAN, pinf REAL, ninf REAL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create cells");
+        sqlx::query("INSERT INTO cells VALUES (NULL, '', 0, 1.5, X'00ff', TRUE, 9e999, -9e999)")
+            .execute(&pool)
+            .await
+            .expect("seed cells");
+        pool
+    }
+
+    /// The `(index, reason)` of a `ColumnDecode` refusal; `None` for any other outcome.
+    fn column_decode_refusal<T>(r: Result<T, sqlx::Error>) -> Option<(String, String)> {
+        match r {
+            Err(sqlx::Error::ColumnDecode { index, source }) => Some((index, source.to_string())),
+            _ => None,
+        }
+    }
+
+    /// `read_cell` keeps SQL NULL as its own arm, reads every storage class to
+    /// its exact cell, and refuses an infinite `REAL` with the typed reason.
+    #[tokio::test]
+    #[allow(clippy::expect_used)] // test fixture: a failed fetch is a failed test
+    async fn read_cell_matrix_keeps_null_and_refuses_non_finite() {
+        let pool = cells_pool().await;
+        let row = sqlx::query("SELECT nul, empty, zero, ratio, bytes, flag, pinf, ninf FROM cells")
+            .fetch_one(&pool)
+            .await
+            .expect("fetch cells");
+        assert_eq!(read_cell(&row, 0).ok(), Some(Cell::Null));
+        assert_eq!(read_cell(&row, 1).ok(), Some(Cell::Text(String::new())));
+        assert_eq!(read_cell(&row, 2).ok(), Some(Cell::Int(0)));
+        assert_eq!(
+            read_cell(&row, 3).ok(),
+            FiniteF64::new(1.5).map(Cell::Float)
+        );
+        assert_eq!(read_cell(&row, 4).ok(), Some(Cell::Bytes(vec![0x00, 0xff])));
+        assert_eq!(read_cell(&row, 5).ok(), Some(Cell::Bool(true)));
+        assert_eq!(
+            column_decode_refusal(read_cell(&row, 6)),
+            Some(("6".to_string(), NON_FINITE_REAL.to_string()))
+        );
+        assert_eq!(
+            column_decode_refusal(read_cell(&row, 7)),
+            Some(("7".to_string(), NON_FINITE_REAL.to_string()))
+        );
+
+        // `into_json` agrees cell by cell.
+        let json: Vec<Option<JsonVal>> = (0..6)
+            .map(|i| read_cell(&row, i).ok().map(Cell::into_json))
+            .collect();
+        assert_eq!(
+            json,
+            vec![
+                Some(JsonVal::Null),
+                Some(serde_json::json!("")),
+                Some(serde_json::json!(0)),
+                Some(serde_json::json!(1.5)),
+                Some(serde_json::json!("00ff")),
+                Some(JsonVal::Bool(true)),
+            ]
+        );
+
+        // The whole-row projection is the same reader: finite columns give the
+        // exact object, and an infinite cell refuses the row at its index.
+        let finite = sqlx::query("SELECT nul, empty, zero, ratio, bytes, flag FROM cells")
+            .fetch_one(&pool)
+            .await
+            .expect("fetch finite cells");
+        assert_eq!(
+            row_to_json(&finite).ok(),
+            Some(serde_json::json!({
+                "nul": null, "empty": "", "zero": 0, "ratio": 1.5, "bytes": "00ff", "flag": true
+            }))
+        );
+        assert_eq!(
+            column_decode_refusal(row_to_json(&row)),
+            Some(("6".to_string(), NON_FINITE_REAL.to_string()))
+        );
+    }
+
+    /// `FiniteF64::new` admits every finite float and refuses `NaN` / `±Inf`.
+    #[test]
+    fn finite_f64_refuses_nan_and_infinities() {
+        assert!(FiniteF64::new(f64::NAN).is_none());
+        assert!(FiniteF64::new(f64::INFINITY).is_none());
+        assert!(FiniteF64::new(f64::NEG_INFINITY).is_none());
+        assert_eq!(
+            FiniteF64::new(-0.0).map(|f| Cell::Float(f).into_json()),
+            Some(serde_json::json!(-0.0))
+        );
+        assert_eq!(
+            FiniteF64::new(f64::MAX).map(|f| Cell::Float(f).into_json()),
+            Some(serde_json::json!(f64::MAX))
+        );
+    }
+
+    /// A stored infinite `REAL` is a typed decode refusal on the app and the
+    /// external decoder paths, never `Nothing` through `db_decode_nullable`;
+    /// the same query over a finite value decodes, so the refusal is the
+    /// non-finite cell and nothing else.
+    #[tokio::test]
+    async fn non_finite_real_refuses_on_both_decoder_paths() {
+        let pool = cells_pool().await;
+        let app = |sql: &str| {
+            db_query_decode_params::<String, IpeMaybe<f64>>(
+                pool.clone(),
+                sql.to_string(),
+                vec![],
+                db_decode_nullable(db_decode_float("x".to_string())),
+            )
+        };
+        assert_eq!(
+            app("SELECT ratio AS x FROM cells").await,
+            IpeResult::Ok(vec![IpeMaybe::Just(1.5)])
+        );
+        assert_eq!(
+            app("SELECT nul AS x FROM cells").await,
+            IpeResult::Ok(vec![IpeMaybe::Nothing])
+        );
+        assert_eq!(
+            app("SELECT pinf AS x FROM cells").await,
+            IpeResult::Err("db: column decode error at index 0".to_string())
+        );
+        assert_eq!(
+            app("SELECT ninf AS x FROM cells").await,
+            IpeResult::Err("db: column decode error at index 0".to_string())
+        );
+
+        let external = |sql: &str| {
+            db_conn_query_decode_params::<String, IpeMaybe<f64>>(
+                ExternalConnection::Sqlite(pool.clone()),
+                sql.to_string(),
+                vec![],
+                db_decode_nullable(db_decode_float("x".to_string())),
+            )
+        };
+        assert_eq!(
+            external("SELECT ratio AS x FROM cells").await,
+            IpeResult::Ok(vec![IpeMaybe::Just(1.5)])
+        );
+        assert_eq!(
+            external("SELECT pinf AS x FROM cells").await,
+            IpeResult::Err("db: column decode error at index 0".to_string())
+        );
     }
 
     #[tokio::test]
