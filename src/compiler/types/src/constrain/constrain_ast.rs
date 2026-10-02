@@ -1,7 +1,8 @@
 use super::{
-    BTreeMap, Builder, DResult, Diagnostic, Feature, FlatType, LowerError, PendingInstantiation,
-    RouteWitnessCheck, RoutedWebCheck, STAGE, SchemeApp, SchemeKey, Span, StdlibKernel, Symbol, Ty,
-    TyBounds, TypeError, VarId, WildcardEntry, canon, canon_type_to_doc, from_canon,
+    BTreeMap, Builder, DResult, Diagnostic, Feature, FlatType, LowerError, ModuleHome,
+    PendingInstantiation, RouteWitnessCheck, RoutedWebCheck, STAGE, SchemeApp, SchemeKey, Span,
+    StdlibKernel, Symbol, Ty, TyBounds, TypeError, VarId, WildcardAnyUse, WildcardEntry, canon,
+    canon_type_to_doc, from_canon,
 };
 
 /// The role a pinned kernel-obligation slot plays in its kernel's scheme.
@@ -108,7 +109,7 @@ impl Builder<'_> {
         // Track which source module this def belongs to so every `regions.insert`
         // in the sub-expression walk uses `(home, span)` as the key, preventing
         // cross-module span collisions after `link::link` merges dep modules.
-        self.current_home = def.home().to_vec();
+        self.current_home = ModuleHome::new(def.home().to_vec());
         match def {
             canon::Def::Typed {
                 name,
@@ -212,7 +213,7 @@ impl Builder<'_> {
                     // path). Keyed by `(current_home, pat.span)` to prevent collisions
                     // across dep modules (see `Builder::regions` doc comment).
                     self.regions
-                        .insert((self.current_home.clone(), pat.span), arg_var);
+                        .insert((self.home()?.into_path(), pat.span), arg_var);
                     cursor = rest;
                 }
                 let ret_ty = self.normalize_annotation_ty(from_canon(cursor), name.span)?;
@@ -226,8 +227,8 @@ impl Builder<'_> {
                 // A typed binding's body expects its annotation return type —
                 // the strongest completion signal: `f : Color; f = ⟨|⟩` offers
                 // `Color`'s constructors first.
-                self.record_expected(body.span, ret_var);
-                self.eq(body.span, body_var, ret_var);
+                self.record_expected(body.span, ret_var)?;
+                self.eq(body.span, body_var, ret_var)?;
                 // A binding whose RETURN annotation is the bare wildcard `any`
                 // severs its body's settled type from every use site (each `any`
                 // occurrence instantiates its own fresh flex). Record the body
@@ -242,7 +243,7 @@ impl Builder<'_> {
                 // tie peels along with the use — so both def forms are recorded.
                 if self.annotation_returns_wildcard_any(&ret_ty) {
                     self.wildcard_any_return_bodies
-                        .insert((self.current_home.clone(), name.value), body_var);
+                        .insert((self.home()?.into_path(), name.value), body_var);
                 }
                 // Record the skolem each annotation variable instantiated to, so
                 // its body-imposed super-type obligations can be read back for
@@ -255,10 +256,10 @@ impl Builder<'_> {
                     }
                 }
                 self.typed_rigids
-                    .push(((self.current_home.clone(), name.value), var_rigids));
+                    .push(((self.home()?.into_path(), name.value), var_rigids));
                 if !wildcards.is_empty() {
                     self.typed_wildcards.push(WildcardEntry {
-                        key: (self.current_home.clone(), name.value),
+                        key: (self.home()?.into_path(), name.value),
                         wildcards,
                         param_counts,
                         bare_params,
@@ -278,8 +279,7 @@ impl Builder<'_> {
                 for pat in patterns {
                     let v = self.flex()?;
                     self.constrain_pattern(&mut local, pat, v)?;
-                    self.regions
-                        .insert((self.current_home.clone(), pat.span), v);
+                    self.regions.insert((self.home()?.into_path(), pat.span), v);
                     param_vars.push(v);
                 }
                 let body_var = self.constrain_expr(&local, body)?;
@@ -304,7 +304,7 @@ impl Builder<'_> {
                         ),
                     });
                 };
-                self.eq(name.span, arrow, shared);
+                self.eq(name.span, arrow, shared)?;
                 Ok(())
             }
         }
@@ -361,8 +361,10 @@ impl Builder<'_> {
         let key = (module.to_vec(), name);
         if let Some(ty) = self.top_level.get(&key).cloned() {
             let (var, vars, wildcards) = self.instantiate_tracked(&ty)?;
+            let use_home = self.home()?;
             self.scheme_apps.push(SchemeApp {
                 home: module.to_vec(),
+                use_home: use_home.clone(),
                 name,
                 vars,
                 wildcards,
@@ -374,11 +376,20 @@ impl Builder<'_> {
             // body — undoing the wildcard severance so the body's real type
             // reaches this use site.
             if self.wildcard_any_return_bindings.contains(&key) {
-                self.wildcard_any_use_results.push((var, key));
+                self.wildcard_any_use_results.push(WildcardAnyUse {
+                    arrow: var,
+                    binding: key,
+                    span,
+                    use_home,
+                });
             }
             Ok(var)
         } else if let Some(v) = self.untyped.get(&key).copied() {
-            if key.0 == self.current_home {
+            if self
+                .current_home
+                .as_ref()
+                .is_some_and(|home| home.path() == key.0.as_slice())
+            {
                 // Same-module: still the one shared monomorphic var — an
                 // untyped binding is monomorphic *within its home module*
                 // (matches the reference's `CLocal` semantics exactly; see
@@ -394,7 +405,7 @@ impl Builder<'_> {
                 self.pending_instantiations.push(PendingInstantiation {
                     source: key,
                     placeholder,
-                    use_home: self.current_home.clone(),
+                    use_home: self.home()?,
                     span,
                 });
                 Ok(placeholder)
@@ -472,7 +483,7 @@ impl Builder<'_> {
                 msg: LowerError::Unsupported(Feature::Kernels),
             })?;
             let s = self.super_var(TyBounds::hof_kernel_result(), span)?;
-            self.eq(span, result_var, s);
+            self.eq(span, result_var, s)?;
         }
         Ok(())
     }
@@ -684,7 +695,7 @@ impl Builder<'_> {
                 // hole this closes; slot 0 cannot drift out of coverage.
                 if let Some(&key_var) = vars.get(&0) {
                     let s = self.super_var(bound, span)?;
-                    self.eq(span, key_var, s);
+                    self.eq(span, key_var, s)?;
                 }
                 // `Set.map : (a -> b) -> Set a -> Set b` — the RESULT element
                 // `b` (raw scheme-var 1) also backs a `BTreeSet<b>`, so it
@@ -703,7 +714,7 @@ impl Builder<'_> {
                         msg: LowerError::Unsupported(Feature::Kernels),
                     })?;
                     let s = self.super_var(bound, span)?;
-                    self.eq(span, res_var, s);
+                    self.eq(span, res_var, s)?;
                 }
                 return Ok(var);
             }
@@ -750,7 +761,7 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let s = self.super_var(TyBounds::sql_param(), span)?;
-                self.eq(span, params_var, s);
+                self.eq(span, params_var, s)?;
                 return Ok(var);
             }
             // `Log.*With : String -> List a -> Task Error ()` — the attr-list
@@ -784,7 +795,7 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let s = self.super_var(TyBounds::interpolable(), span)?;
-                self.eq(span, elem_var, s);
+                self.eq(span, elem_var, s)?;
                 return Ok(var);
             }
             // `Debug.log : String -> a -> a` — the value `a` (shared by the
@@ -811,7 +822,7 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let s = self.super_var(TyBounds::show(), span)?;
-                self.eq(span, value_var, s);
+                self.eq(span, value_var, s)?;
                 return Ok(var);
             }
             // `Web.tea` / `Web.embed` / `Web.appWith` — post-solve routed-Web check.
@@ -873,7 +884,7 @@ impl Builder<'_> {
                     not_found_var,
                     cfg_tail_var,
                     span,
-                    home: self.current_home.clone(),
+                    home: self.home()?,
                 });
                 return Ok(var);
             }
@@ -919,6 +930,7 @@ impl Builder<'_> {
                     builder_var,
                     page_var,
                     span,
+                    home: self.home()?,
                 });
                 return Ok(var);
             }
@@ -976,8 +988,8 @@ impl Builder<'_> {
     /// reference walk.
     pub fn tie_wildcard_any_uses_to_bodies(&mut self) -> DResult<()> {
         let ties = std::mem::take(&mut self.wildcard_any_use_results);
-        for (use_arrow, binding) in ties {
-            let Some(&body_var) = self.wildcard_any_return_bodies.get(&binding) else {
+        for tie in ties {
+            let Some(&body_var) = self.wildcard_any_return_bodies.get(&tie.binding) else {
                 continue;
             };
             // Peel BOTH the use's instantiated arrow and the recorded body to
@@ -986,9 +998,9 @@ impl Builder<'_> {
             // (a def written with parameters) OR the same arrow shape (a
             // point-free def, `alias = view`), so peeling both reaches the
             // matching `any`/`Html` slot regardless of the def form or arity.
-            let use_result = self.peel_arrow_result(use_arrow)?;
+            let use_result = self.peel_arrow_result(tie.arrow)?;
             let body_result = self.peel_arrow_result(body_var)?;
-            self.eq(Span::DUMMY, use_result, body_result);
+            self.eq_at(tie.use_home, tie.span, use_result, body_result);
         }
         Ok(())
     }
