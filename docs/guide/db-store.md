@@ -156,7 +156,8 @@ table is not a runtime check you might forget, it is a value the `…As` functio
 not accept. Scoping every unspecified operation to `never`, and reading absent
 roles/groups/claims as denials, is [security][principles]'s fail-closed rule — with
 no proof the caller is entitled, the reachable outcome is refusal, not access.
-Forcing the owner column to the subject on write, and compiling the owner filter to
+Forcing the owner column to the subject on insert, never rewriting it on update,
+checking every secured write over the row as stored, and compiling the owner filter to
 a bound-param `WHERE`, is [security][principles] again at the SQL boundary: a caller
 can neither forge a row it could not read back nor smuggle a value into the query
 text. And enforcing the filter *in the emitted SQL* — not merely in a post-fetch
