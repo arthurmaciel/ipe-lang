@@ -125,28 +125,14 @@ pub enum OutputFormat {
 /// rule for strings. A command builds its verdict from these and never
 /// hand-writes JSON punctuation.
 pub mod json {
-    use std::fmt::Write as _;
-
-    /// Encode a string as a JSON string literal, escaping the characters JSON
-    /// requires (`"`, `\`, and the C0 control set, with the short escapes for the
-    /// common ones).
+    /// Encode a string as a JSON string literal through the display escaper
+    /// [`ipe_diagnostics::json::string_body`]: `"`, `\`, and every terminal
+    /// hazard (controls, bidi and other format characters) are escaped.
     #[must_use]
     pub fn string(s: &str) -> String {
         let mut out = String::with_capacity(s.len() + 2);
         out.push('"');
-        for c in s.chars() {
-            match c {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\t' => out.push_str("\\t"),
-                c if (c as u32) < 0x20 => {
-                    let _ = write!(out, "\\u{:04x}", c as u32);
-                }
-                c => out.push(c),
-            }
-        }
+        ipe_diagnostics::json::string_body_into(s, &mut out);
         out.push('"');
         out
     }
@@ -2143,6 +2129,13 @@ mod tests {
         );
         // The doc-list array shape is compact — no comma-space.
         assert!(!json::string_array(&["Main", "Ipe.List"]).contains(", "));
+    }
+
+    /// A C1 control or a bidi override reaches a `--json` record escaped, never raw.
+    #[test]
+    fn json_string_escapes_terminal_hazards() {
+        assert_eq!(json::string("\u{9b}"), "\"\\u009b\"");
+        assert_eq!(json::string("a\u{202e}b"), "\"a\\u202eb\"");
     }
 
     // ---- output format ------------------------------------------------------

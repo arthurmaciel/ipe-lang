@@ -4493,11 +4493,10 @@ fn build_search_script(entries: &[SearchEntry]) -> String {
     }
     json_buf.push(']');
 
-    // The JSON is embedded verbatim inside a `<script>` element. Escape `<` as
-    // its `<` JSON form so a value containing `</script>` (or any markup)
-    // cannot break out of the script element — a defence-in-depth measure even
-    // though doc keys/titles are repo-controlled.
-    let json_buf = json_buf.replace('<', "\\u003c");
+    // The JSON is embedded inside a `<script>` element, so a value holding
+    // `</script>` (or any markup) must not close it, even though doc keys and
+    // titles are repo-controlled.
+    let json_buf = ipe_diagnostics::json::script_embed(&json_buf);
 
     SEARCH_SCRIPT_TEMPLATE.replace("ENTRY_INDEX_PLACEHOLDER", &json_buf)
 }
