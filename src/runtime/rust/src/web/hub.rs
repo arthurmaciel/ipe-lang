@@ -978,7 +978,7 @@ async fn open_spill(db_path: &str) -> Option<SqlitePool> {
         // Wait on a WAL writer's lock instead of returning SQLITE_BUSY at once
         // (a spurious empty result), bounded so a wedged writer cannot block the
         // task indefinitely.
-        .busy_timeout(crate::db::SQLITE_BUSY_TIMEOUT);
+        .busy_timeout(crate::system::SQLITE_BUSY_TIMEOUT);
     match SqlitePool::connect_with(opts).await {
         Ok(pool) => Some(pool),
         Err(e) => {

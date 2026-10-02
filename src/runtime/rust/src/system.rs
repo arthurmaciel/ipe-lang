@@ -114,6 +114,18 @@ pub(crate) fn gutter_line(msg: &str, is_terminal: bool) -> String {
     }
 }
 
+/// How long every SQLite connection waits on another connection's lock.
+///
+/// Applied through the connect options, so the driver sets it on each
+/// connection it opens and no pooled connection can carry another value. It
+/// outlasts a full index rebuild holding the write lock; a writer still
+/// waiting past it fails with `SQLITE_BUSY` through its caller's typed error.
+///
+/// It lives here, not in `db`, because `web::hub` and `telemetry_spill` open
+/// SQLite connections in programs whose module set declares no `db`.
+#[cfg(feature = "db")]
+pub(crate) const SQLITE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Format characters that reorder, hide, or break a log line without being control bytes.
 ///
 /// Exactly the Unicode `Cf` (format) category plus the `Zl`/`Zp` line and

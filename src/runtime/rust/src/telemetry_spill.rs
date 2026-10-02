@@ -134,7 +134,7 @@ pub async fn enable_from_env() {
 /// to the hub schema lives here so it's directly testable without the channel.
 /// Open (creating it when absent) the spill file at `path` in WAL mode.
 ///
-/// Every connection carries [`crate::db::SQLITE_BUSY_TIMEOUT`] from its connect
+/// Every connection carries [`crate::system::SQLITE_BUSY_TIMEOUT`] from its connect
 /// options. WAL is the only journal mode that lets the console child read while
 /// this process writes without each blocking the other; the console reader opens
 /// read-write to attach the `-wal`/`-shm` files (`web/hub.rs::open_spill`).
@@ -142,7 +142,7 @@ async fn open_spill_pool(path: &str) -> Result<SqlitePool, sqlx::Error> {
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
-        .busy_timeout(crate::db::SQLITE_BUSY_TIMEOUT);
+        .busy_timeout(crate::system::SQLITE_BUSY_TIMEOUT);
     let pool = SqlitePool::connect_with(options).await?;
     let _ = sqlx::query("PRAGMA journal_mode=WAL").execute(&pool).await;
     Ok(pool)
@@ -356,8 +356,8 @@ mod tests {
             .to_string();
         let _ = std::fs::remove_file(&path);
         let pool = open_spill_pool(&path).await.expect("open spill");
-        let expected =
-            i64::try_from(crate::db::SQLITE_BUSY_TIMEOUT.as_millis()).expect("timeout fits i64");
+        let expected = i64::try_from(crate::system::SQLITE_BUSY_TIMEOUT.as_millis())
+            .expect("timeout fits i64");
         let size = pool.options().get_max_connections();
         let mut held = Vec::new();
         for _ in 0..size {

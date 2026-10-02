@@ -1030,13 +1030,7 @@ fn url_is_cacheable(url: &str) -> bool {
     true
 }
 
-/// How long every SQLite connection waits on another connection's lock.
-///
-/// Applied through the connect options, so the driver sets it on each
-/// connection it opens and no pooled connection can carry another value. It
-/// outlasts a full index rebuild holding the write lock; a writer still
-/// waiting past it fails with `SQLITE_BUSY` through its caller's typed error.
-pub(crate) const SQLITE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+use crate::system::SQLITE_BUSY_TIMEOUT;
 
 /// Upper bound on pooled connections per database. Bounded by default so that
 /// arbitrary user code calling `Db.connect` can NEVER exhaust the database
