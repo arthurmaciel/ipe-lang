@@ -3159,6 +3159,246 @@ fn lower_server_api_path_param_not_identifier() {
     );
 }
 
+/// A routed `Web.tea` app (its Model has a `page` field) over `page_ty`,
+/// with `routes` as the table, `not_found` as `notFound`, and `extra` cfg
+/// fields appended (e.g. `, onNavigate = Navigated`).
+fn routed_fixture(page_ty: &str, routes: &str, not_found: &str, extra: &str) -> String {
+    format!(
+        r#"module Main exposing (main)
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
+{page_ty}
+type Msg = Noop | Navigated Page
+type alias Model = {{ page : Page }}
+init : WebReq -> ( Model, Cmd Msg )
+init _req = ( {{ page = {not_found} }}, Cmd.none )
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model = ( model, Cmd.none )
+view : Model -> Element Msg
+view _model = Ui.text "hi"
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.none
+main =
+    Web.tea
+        {{ init = init, update = update, view = view
+        , subscriptions = subscriptions
+        , routes = {routes}
+        , notFound = {not_found}{extra}
+        }}
+"#
+    )
+}
+
+const ROUTED_PAGES: &str =
+    "type Page = HomePage | APage String | BPage String | NPage Int | SPage String | NewPage";
+
+/// A routed table over [`ROUTED_PAGES`] whose every constructor has a route,
+/// preceded by `head` (the routes under test).
+fn routed_table(head: &str) -> String {
+    format!(
+        "[ {head}Web.route \"/\" HomePage, Web.route \"/za/:x\" APage, \
+         Web.route \"/zb/:x\" BPage, Web.route \"/zn/:n\" NPage, \
+         Web.route \"/zs/:s\" SPage, Web.route \"/znew\" NewPage ]"
+    )
+}
+
+/// Equivalent patterns (same segments up to parameter names, types, and
+/// percent-encoding) that build different pages are refused with IPE-L0157.
+#[test]
+fn lower_routed_equivalent_patterns_are_ambiguous() {
+    for (name, head) in [
+        (
+            "param_names",
+            r#"Web.route "/a/:x" APage, Web.route "/a/:y" BPage, "#,
+        ),
+        (
+            "percent_decoded",
+            r#"Web.route "/a/%41" HomePage, Web.route "/a/A" NewPage, "#,
+        ),
+        (
+            "param_types",
+            r#"Web.route "/a/:n" NPage, Web.route "/a/:s" SPage, "#,
+        ),
+    ] {
+        let src = routed_fixture(ROUTED_PAGES, &routed_table(head), "HomePage", "");
+        assert_rejected(&format!("lower_routed_ambiguous_{name}"), &src, "IPE-L0157");
+    }
+}
+
+/// A route an earlier route always matches first is refused with IPE-L0158:
+/// the same pattern for the same page, or a literal under an earlier
+/// parameter whose decode accepts it (`String` always, `Int` for `7`).
+#[test]
+fn lower_routed_shadowed_route_is_unreachable() {
+    for (name, head) in [
+        (
+            "duplicate",
+            r#"Web.route "/about" NewPage, Web.route "/about" NewPage, "#,
+        ),
+        (
+            "string_param_first",
+            r#"Web.route "/apps/:s" SPage, Web.route "/apps/new" NewPage, "#,
+        ),
+        (
+            "int_param_first",
+            r#"Web.route "/n/:n" NPage, Web.route "/n/7" NewPage, "#,
+        ),
+    ] {
+        let src = routed_fixture(ROUTED_PAGES, &routed_table(head), "HomePage", "");
+        assert_rejected(
+            &format!("lower_routed_unreachable_{name}"),
+            &src,
+            "IPE-L0158",
+        );
+    }
+}
+
+/// A page constructor with no route (here the `notFound` page) is refused
+/// with IPE-L0159.
+#[test]
+fn lower_routed_page_without_route() {
+    let src = routed_fixture(
+        "type Page = HomePage | MissingPage",
+        r#"[ Web.route "/" HomePage ]"#,
+        "MissingPage",
+        "",
+    );
+    assert_rejected("lower_routed_page_without_route", &src, "IPE-L0159");
+}
+
+/// A routed literal segment no URL carries back (empty, `.` or `..`, plain or
+/// percent-encoded) is refused with IPE-L0156: its page could never render.
+#[test]
+fn lower_routed_unrenderable_literal() {
+    for (name, pattern) in [
+        ("empty", "/a//b"),
+        ("dot", "/a/./b"),
+        ("dot_dot_encoded", "/a/%2E%2E"),
+    ] {
+        let src = routed_fixture(
+            "type Page = HomePage | APage",
+            &format!(r#"[ Web.route "/" HomePage, Web.route "{pattern}" APage ]"#),
+            "HomePage",
+            "",
+        );
+        assert_rejected(
+            &format!("lower_routed_unrenderable_literal_{name}"),
+            &src,
+            "IPE-L0156",
+        );
+    }
+}
+
+/// A routed app whose `Model.page` is not a custom type is refused with
+/// IPE-L0161: no constructor can render a page path.
+#[test]
+fn lower_routed_page_not_custom_type() {
+    let src = routed_fixture("type alias Page = String", "[]", "\"home\"", "");
+    assert_rejected("lower_routed_page_not_custom_type", &src, "IPE-L0161");
+}
+
+/// A function page builder (lambda, named, partially applied, let-bound) in a
+/// routed table is refused with IPE-L0123: it has no inverse, so the page's
+/// canonical path cannot be rendered.
+#[test]
+fn lower_routed_function_builders() {
+    for (name, builder, decl) in [
+        ("lambda", r"(\x -> APage x)", ""),
+        (
+            "named",
+            "buildA",
+            "buildA : String -> Page\nbuildA x = APage x\n",
+        ),
+        ("partial", "(PairPage \"k\")", ""),
+    ] {
+        let src = routed_fixture(
+            "type Page = HomePage | APage String | PairPage String String",
+            &format!(
+                r#"[ Web.route "/" HomePage, Web.route "/a/:x" {builder}, Web.route "/p/:a/:b" PairPage ]"#
+            ),
+            "HomePage",
+            "",
+        )
+        .replacen("type Msg", &format!("{decl}type Msg"), 1);
+        assert_rejected(&format!("lower_routed_{name}_builder"), &src, "IPE-L0123");
+    }
+    let let_bound = routed_fixture(
+        "type Page = HomePage | APage String",
+        r#"[ Web.route "/" HomePage, Web.route "/a/:x" b ]"#,
+        "HomePage",
+        "",
+    )
+    .replacen(
+        "main =\n    Web.tea",
+        "main =\n    let b = APage in\n    Web.tea",
+        1,
+    );
+    assert_rejected("lower_routed_let_bound_builder", &let_bound, "IPE-L0123");
+}
+
+/// A routed table that is not a literal list of `Web.route` calls is refused
+/// with IPE-L0160.
+#[test]
+fn lower_routed_computed_table() {
+    let src = routed_fixture(
+        "type Page = HomePage",
+        r#"(List.reverse [ Web.route "/" HomePage ])"#,
+        "HomePage",
+        "",
+    )
+    .replace(
+        "import Ipe.Tea.Web.Sub\n",
+        "import Ipe.Tea.Web.Sub\nimport Ipe.List as List\n",
+    );
+    assert_rejected("lower_routed_computed_table", &src, "IPE-L0160");
+}
+
+/// `onNavigate` in an app whose Model has no `page` field is refused with
+/// IPE-L0162, and an `onNavigate` that is not `Page -> Msg` in a routed app is
+/// a type mismatch (IPE-T0001).
+#[test]
+fn lower_on_navigate_refusals() {
+    let unrouted = web_route_fixture("/posts/:id", "PostPage").replace(
+        "        , notFound = HomePage\n",
+        "        , notFound = HomePage\n        , onNavigate = \\_ -> Noop\n",
+    );
+    assert_rejected("lower_on_navigate_without_page", &unrouted, "IPE-L0162");
+    let mistyped = routed_fixture(
+        "type Page = HomePage",
+        r#"[ Web.route "/" HomePage ]"#,
+        "HomePage",
+        "\n        , onNavigate = Noop",
+    );
+    assert_rejected("type_on_navigate_not_page_to_msg", &mistyped, "IPE-T0001");
+}
+
+/// The contrapositive: aliases, a literal before a parameter, an `Int`
+/// parameter beside a literal, distinct arities, and a typed `onNavigate`
+/// still compile.
+#[test]
+fn well_formed_routed_tables_compile() {
+    let head = concat!(
+        r#"Web.route "/home" HomePage, Web.route "/apps/new" NewPage, "#,
+        r#"Web.route "/apps/:s" SPage, Web.route "/n/:n" NPage, Web.route "/n/latest" NewPage, "#,
+        r#"Web.route "/search" HomePage, Web.route "/search/:q" APage, "#,
+    );
+    assert_compiles(
+        "routed_table_well_formed",
+        &routed_fixture(ROUTED_PAGES, &routed_table(head), "HomePage", ""),
+    );
+    assert_compiles(
+        "routed_on_navigate_well_typed",
+        &routed_fixture(
+            "type Page = HomePage",
+            r#"[ Web.route "/" HomePage ]"#,
+            "HomePage",
+            "\n        , onNavigate = Navigated",
+        ),
+    );
+}
+
 /// The contrapositive: well-formed literal paths still compile.
 #[test]
 fn well_formed_route_paths_compile() {

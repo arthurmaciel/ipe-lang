@@ -794,15 +794,19 @@ fn reconcile_path<Model, Msg>(
     route_matched: &RouteMatched,
     path: &route::DecodedPath,
 ) -> ReconcileOutcome {
-    if !route_matched(path) {
-        return ReconcileOutcome::Unchanged;
-    }
+    // A routed path is queued under its canonical form, so `/items/7/` and
+    // `/items/7` dedupe against one `entered_path`.
+    let key = match route_matched(path) {
+        RouteLookup::Unrouted => return ReconcileOutcome::Unchanged,
+        RouteLookup::Root => path.clone(),
+        RouteLookup::Page(canonical) => canonical.decoded().clone(),
+    };
     let enter_tx = entry
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .enter_tx
         .clone();
-    queue_entry(&enter_tx, path.clone(), EnterMode::Reconcile)
+    queue_entry(&enter_tx, key, EnterMode::Reconcile)
         .map_or(ReconcileOutcome::Refused, ReconcileOutcome::Entering)
 }
 
@@ -818,28 +822,115 @@ fn entry_unavailable() -> axum::response::Response {
         .into_response()
 }
 
-/// Build the routed entry from the route table, the `notFound` page, and the app's emitted `set_page`.
+/// Build the routed entry from the route table, the `notFound` page, the
+/// app's emitted `set_page`, and its page renderer.
 #[cfg(feature = "server")]
-fn routed_entry<Model, Msg, Page, FSetPage>(
+fn routed_entry<Model, Msg, Page, FSetPage, FRender>(
     routes: Arc<Vec<route::Route<Page>>>,
     not_found: Page,
     set_page: FSetPage,
+    render: Arc<FRender>,
 ) -> RouteEntry<Model, Msg>
 where
     Page: Clone + Send + Sync + 'static,
     FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FRender: Fn(&Page) -> Result<route::RoutePath, route::RenderRefusal> + Send + Sync + 'static,
 {
-    Arc::new(move |model, path| route::enter(&routes, &not_found, path, model, &set_page))
+    Arc::new(move |model, path| {
+        route::enter(
+            route::resolve(&routes, path, &*render),
+            &not_found,
+            model,
+            &set_page,
+        )
+    })
+}
+
+/// The route lookup over a route table: a page that renders back is
+/// [`RouteLookup::Page`] with its canonical path; a table with no routes
+/// serves only `/`.
+#[cfg(feature = "server")]
+fn routed_lookup<Page, FRender>(
+    routes: Arc<Vec<route::Route<Page>>>,
+    render: Arc<FRender>,
+) -> RouteMatched
+where
+    Page: Send + Sync + 'static,
+    FRender: Fn(&Page) -> Result<route::RoutePath, route::RenderRefusal> + Send + Sync + 'static,
+{
+    Arc::new(move |path| {
+        if routes.is_empty() {
+            return RouteLookup::single_page(path);
+        }
+        match route::resolve(&routes, path, &*render) {
+            route::Matched::Hit { canonical, .. } => RouteLookup::Page(canonical),
+            route::Matched::Miss => RouteLookup::Unrouted,
+        }
+    })
+}
+
+/// The three routed resolvers every routed builder installs, all over one
+/// route table and one renderer, so the entry, `req.params` and the lookup
+/// agree on which route a path resolves to.
+#[cfg(feature = "server")]
+fn routed_resolvers<Model, Msg, Page, FSetPage, FRender>(
+    routes: Vec<route::Route<Page>>,
+    not_found: Page,
+    set_page: FSetPage,
+    render: FRender,
+) -> (RouteEntry<Model, Msg>, ParamResolver, RouteMatched)
+where
+    Page: Clone + Send + Sync + 'static,
+    FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FRender: Fn(&Page) -> Result<route::RoutePath, route::RenderRefusal> + Send + Sync + 'static,
+{
+    let routes = Arc::new(routes);
+    let render = Arc::new(render);
+    let routes_for_params = Arc::clone(&routes);
+    let route_matched = routed_lookup(Arc::clone(&routes), Arc::clone(&render));
+    let route_entry = routed_entry(routes, not_found, set_page, render);
+    let param_resolver: ParamResolver =
+        Arc::new(move |path| route::match_params(&routes_for_params, path));
+    (route_entry, param_resolver, route_matched)
 }
 /// Boxed param resolver: a decoded GET path → the matched route's
 /// `:name`→value params.
 #[cfg(feature = "server")]
 type ParamResolver = Arc<dyn Fn(&route::DecodedPath) -> crate::dict::IpeDict<String> + Send + Sync>;
-/// Boxed route predicate: does a decoded GET path match a declared route?
-/// Gates the page handler's browser-noise 404 and the
+/// What a decoded GET path is to the page handler.
+#[cfg(feature = "server")]
+#[derive(Clone, Debug)]
+enum RouteLookup {
+    /// Not a page URL: browser noise, or a path no route builds a page for.
+    Unrouted,
+    /// The root of an app with no route table, its one page URL.
+    Root,
+    /// A routed page, and the canonical path that page renders back to.
+    Page(route::RoutePath),
+}
+
+#[cfg(feature = "server")]
+impl RouteLookup {
+    /// The lookup of an app with no route table: only `/` is a page URL.
+    fn single_page(path: &route::DecodedPath) -> Self {
+        if path.is_root() {
+            Self::Root
+        } else {
+            Self::Unrouted
+        }
+    }
+
+    /// Is the path a page URL at all?
+    fn is_routed(&self) -> bool {
+        !matches!(self, Self::Unrouted)
+    }
+}
+
+/// Boxed route lookup: what a decoded GET path is to the page handler.
+/// Gates the page handler's canonical redirect, browser-noise 404 and the
 /// unrouted-GET-against-a-live-session 404 — see `page`.
 #[cfg(feature = "server")]
-type RouteMatched = Arc<dyn Fn(&route::DecodedPath) -> bool + Send + Sync>;
+type RouteMatched = Arc<dyn Fn(&route::DecodedPath) -> RouteLookup + Send + Sync>;
 
 /// Shared axum state: the session store + Arc'd TEA callbacks.
 #[cfg(feature = "server")]
@@ -2053,7 +2144,7 @@ where
             }),
             param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
             // No route table: only `/` is a page URL.
-            route_matched: Arc::new(|path: &route::DecodedPath| path.is_root()),
+            route_matched: Arc::new(RouteLookup::single_page),
             session_count: Arc::new(AtomicUsize::new(0)),
             watch_build_status: Arc::new(Mutex::new(None)),
         };
@@ -2149,7 +2240,7 @@ where
                     cmd: IpeCmd::None,
                 }),
                 param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
-                route_matched: Arc::new(|path: &route::DecodedPath| path.is_root()),
+                route_matched: Arc::new(RouteLookup::single_page),
                 session_count: Arc::new(AtomicUsize::new(0)),
                 watch_build_status: Arc::new(Mutex::new(None)),
             };
@@ -2174,7 +2265,7 @@ where
 /// over the app's handlers (§9).
 #[allow(clippy::too_many_arguments)] // mirrors web_app_routed's routed cfg (callbacks + route table + set_page + store)
 #[cfg(feature = "server")]
-pub fn web_embed_router_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
+pub fn web_embed_router_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage, FRender>(
     init: FInit,
     update: FUpdate,
     view: FView,
@@ -2182,6 +2273,7 @@ pub fn web_embed_router_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, F
     routes: Vec<route::Route<Page>>,
     not_found: Page,
     set_page: FSetPage,
+    render: FRender,
     store_kind: String,
     store_path: String,
     schema_tag: [u8; 32],
@@ -2209,6 +2301,7 @@ where
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
     FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FRender: Fn(&Page) -> Result<route::RoutePath, route::RenderRefusal> + Send + Sync + 'static,
 {
     Box::new(move |prefix: String| {
         Box::pin(async move {
@@ -2224,14 +2317,8 @@ where
             }
             // Routed resolvers — identical construction to `web_app_routed`; only
             // the terminal `build_web_router` (vs `serve_web`) differs.
-            let routes = Arc::new(routes);
-            let routes_for_params = routes.clone();
-            let routes_for_match = routes.clone();
-            let route_entry = routed_entry(routes, not_found, set_page);
-            let param_resolver: ParamResolver =
-                Arc::new(move |path| route::match_params(&routes_for_params, path));
-            let route_matched: RouteMatched =
-                Arc::new(move |path| route::matches_any(&routes_for_match, path));
+            let (route_entry, param_resolver, route_matched) =
+                routed_resolvers(routes, not_found, set_page, render);
             // A mount has no task-error channel, so an unhonourable store config
             // fails closed as a 503-everywhere router (see `web_embed_router`).
             let store = match store::choose_store::<Model, Msg>(
@@ -2343,7 +2430,7 @@ where
 /// by their bounds, so each half owns a copy.
 #[allow(clippy::too_many_arguments)] // mirrors web_app_routed's routed cfg (callbacks + route table + set_page + store)
 #[cfg(feature = "web")]
-pub fn web_embed_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
+pub fn web_embed_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage, FRender>(
     init: FInit,
     update: FUpdate,
     view: FView,
@@ -2351,6 +2438,7 @@ pub fn web_embed_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage
     routes: Vec<route::Route<Page>>,
     not_found: Page,
     set_page: FSetPage,
+    render: FRender,
     store_kind: String,
     store_path: String,
     schema_tag: [u8; 32],
@@ -2378,21 +2466,24 @@ where
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
     FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FRender: Fn(&Page) -> Result<route::RoutePath, route::RenderRefusal> + Send + Sync + 'static,
 {
     let init = Arc::new(init);
     let update = Arc::new(update);
     let view = Arc::new(view);
     let subscriptions = Arc::new(subscriptions);
     let set_page = Arc::new(set_page);
+    let render = Arc::new(render);
     let serve = {
-        let (init, update, view, subscriptions, set_page) = (
+        let (init, update, view, subscriptions, set_page, render) = (
             Arc::clone(&init),
             Arc::clone(&update),
             Arc::clone(&view),
             Arc::clone(&subscriptions),
             Arc::clone(&set_page),
+            Arc::clone(&render),
         );
-        web_app_routed::<crate::error::IpeError, Model, Msg, Page, _, _, _, _, _>(
+        web_app_routed::<crate::error::IpeError, Model, Msg, Page, _, _, _, _, _, _>(
             move |req| (*init)(req),
             move |msg, model| (*update)(msg, model),
             move |model| (*view)(model),
@@ -2400,12 +2491,13 @@ where
             routes.clone(),
             not_found.clone(),
             move |page, model| (*set_page)(page, model),
+            move |page: &Page| (*render)(page),
             store_kind.clone(),
             store_path.clone(),
             schema_tag,
         )
     };
-    let router = web_embed_router_routed::<Model, Msg, Page, _, _, _, _, _>(
+    let router = web_embed_router_routed::<Model, Msg, Page, _, _, _, _, _, _>(
         move |req| (*init)(req),
         move |msg, model| (*update)(msg, model),
         move |model| (*view)(model),
@@ -2413,6 +2505,7 @@ where
         routes,
         not_found,
         move |page, model| (*set_page)(page, model),
+        move |page: &Page| (*render)(page),
         store_kind,
         store_path,
         schema_tag,
@@ -2496,7 +2589,7 @@ fn fail_closed_router(cause: &StartupRefusal) -> axum::Router {
 /// original 6 type params.
 #[allow(clippy::too_many_arguments)]
 #[cfg(feature = "server")]
-pub fn web_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
+pub fn web_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage, FRender>(
     init: FInit,
     update: FUpdate,
     view: FView,
@@ -2504,6 +2597,7 @@ pub fn web_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPag
     routes: Vec<route::Route<Page>>,
     not_found: Page,
     set_page: FSetPage,
+    render: FRender,
     store_kind: String,
     store_path: String,
     schema_tag: [u8; 32],
@@ -2539,20 +2633,15 @@ where
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
     FSetPage: Fn(Page, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FRender: Fn(&Page) -> Result<route::RoutePath, route::RenderRefusal> + Send + Sync + 'static,
 {
     Box::pin(async move {
         // A malformed route pattern refuses to start, never a dead route.
         if let Err(message) = route::refuse_route_table(&routes) {
             return IpeResult::Err(message.into());
         }
-        let routes = Arc::new(routes);
-        let routes_for_params = routes.clone();
-        let routes_for_match = routes.clone();
-        let route_entry = routed_entry(routes, not_found, set_page);
-        let param_resolver: ParamResolver =
-            Arc::new(move |path| route::match_params(&routes_for_params, path));
-        let route_matched: RouteMatched =
-            Arc::new(move |path| route::matches_any(&routes_for_match, path));
+        let (route_entry, param_resolver, route_matched) =
+            routed_resolvers(routes, not_found, set_page, render);
         // Fail-closed on an unhonourable store config (see `web_app`).
         let store = match store::choose_store::<Model, Msg>(
             &store_kind,
@@ -2745,6 +2834,35 @@ mod handlers {
             Ok(url) => url.path,
             Err(rejection) => return rejection.status_and_reason().into_response(),
         };
+        let lookup = (st.route_matched)(&path);
+        // A routed page reached by a path other than the one it renders to (a
+        // trailing `/`, an escape its route decodes, `007` for an `Int` `7`) is
+        // redirected there before any session work, so a session only ever
+        // enters canonical paths.
+        if let RouteLookup::Page(canonical) = &lookup
+            && (method == axum::http::Method::GET || method == axum::http::Method::HEAD)
+        {
+            let Some(base) = route::DecodedPath::parse(&web_base_path())
+                .ok()
+                .and_then(|base| crate::encoding::EncodedBase::encode(&base).ok())
+            else {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "500 base path unusable")
+                    .into_response();
+            };
+            match route::canonical_redirect(&base, uri.path(), uri.query(), canonical) {
+                route::Redirect::Serve => {}
+                route::Redirect::To(target) => {
+                    return (
+                        StatusCode::PERMANENT_REDIRECT,
+                        [(axum::http::header::LOCATION, target.location().clone())],
+                    )
+                        .into_response();
+                }
+                route::Redirect::BadQuery => {
+                    return (StatusCode::BAD_REQUEST, "400 malformed query").into_response();
+                }
+            }
+        }
         // Cookie-based session lifecycle:
         //   * Web hit  → reuse the in-process session; its driver enters this
         //                 GET's path and runs the entry Cmd (no new driver).
@@ -2764,7 +2882,7 @@ mod handlers {
         // serve from the static root) BEFORE any session work — they must
         // never run `init` (double-init race against the real `GET /`) and
         // never touch an existing session (see the routed guards below).
-        let routed = (st.route_matched)(&path);
+        let routed = lookup.is_routed();
         if !routed && is_browser_noise_path(uri.path()) {
             if let Some(resp) = serve_noise_from_static_root(uri.path()).await {
                 return resp;
@@ -4545,6 +4663,10 @@ mod handlers {
     }
 }
 
+/// The documented operator var naming `Ipe.Web`'s listen port.
+#[cfg(feature = "server")]
+const WEB_PORT_ENV: &str = "IPE_WEB_PORT";
+
 /// Shared server setup for `web_app` / `web_app_routed`: nested HTTP
 /// handlers (`page` / `sse_handler` / `event_handler`), router + bind/serve.
 /// The only per-entry difference (the `route_entry`) lives on `state`.
@@ -4638,12 +4760,14 @@ where
         Err(cause) => return IpeResult::Err(cause.to_string().into()),
     };
 
-    // IPE_WEB_PORT: default 8000. Resolved through the shared fail-closed
-    // helper (same precedence as `Ipe.Http.Server`'s `IPE_SERVER_PORT`): a
-    // malformed, out-of-range, or `0` value falls back to 8000, never a
-    // silently OS-chosen ephemeral port.
-    let port: i64 =
-        crate::system::resolve_listen_port(crate::system::read_env_var("IPE_WEB_PORT").ok(), 8000);
+    // Port precedence (shared with `Ipe.Http.Server`): the supervisor's
+    // relocation var > `IPE_WEB_PORT` (operator) > 8000. A malformed env layer
+    // falls through, never to `0`.
+    let resolved = crate::system::listen_port_from_env(
+        (WEB_PORT_ENV, crate::system::read_env_var(WEB_PORT_ENV).ok()),
+        8000,
+    );
+    let port = resolved.port;
     // Honour the same host-bind precedence as the Ipe.Http.Server path
     // (`IPE_HTTP_BIND` > `Host.bind` setting > loopback-unless-production), so
     // an explicit loopback setting is never overridden into all-interfaces.
@@ -4652,14 +4776,7 @@ where
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-            return IpeResult::Err(
-                format!(
-                    "port {port} is already in use — another application is bound to it.\n\
-                     Set a different port with the IPE_WEB_PORT environment variable, e.g.:\n\
-                     IPE_WEB_PORT=8123 ipe run"
-                )
-                .into(),
-            );
+            return IpeResult::Err(resolved.addr_in_use_message().into());
         }
         Err(e) => return IpeResult::Err(format!("Web.tea: bind {addr}: {e}").into()),
     };
@@ -5489,6 +5606,194 @@ mod request_is_https_tests {
 }
 
 #[cfg(all(test, feature = "server"))]
+mod canonical_redirect_handler_tests {
+    //! The page handler redirects a GET/HEAD for a non-canonical spelling of a
+    //! routed page to its canonical path (308) before any session work: no
+    //! cookie, no `init`, a same-origin relative `Location` under the base.
+
+    use super::*;
+    use crate::system::{locked_remove_var, locked_set_var};
+    use crate::web::req::WebReq;
+    use crate::web::route::{RenderArg, RenderRefusal, Route, RoutePath, render_route};
+    use crate::web::store::MemoryStore;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use axum::routing::get;
+    use serde::{Deserialize, Serialize};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tower::ServiceExt; // oneshot
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+    struct Model {
+        page: u8,
+    }
+
+    impl crate::stringify::IpeStringify for Model {
+        fn ipe_show(&self) -> String {
+            format!("Model {{ page: {} }}", self.page)
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum Page {
+        Home,
+        About,
+        Slug(String),
+    }
+
+    fn routes() -> Vec<Route<Page>> {
+        vec![
+            Route::new("/", |_| Some(Page::Home)),
+            Route::new("/about", |_| Some(Page::About)),
+            Route::new("/:slug", |p| p.first().cloned().map(Page::Slug)),
+        ]
+    }
+
+    fn render(page: &Page) -> Result<RoutePath, RenderRefusal> {
+        match page {
+            Page::Home => render_route(&routes(), 0, &[]),
+            Page::About => render_route(&routes(), 1, &[]),
+            Page::Slug(s) => render_route(&routes(), 2, &[RenderArg::Text(s)]),
+        }
+    }
+
+    static INIT_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+    fn init(_req: WebReq) -> (Model, IpeCmd<()>) {
+        INIT_RUNS.fetch_add(1, Ordering::SeqCst);
+        (Model { page: 0 }, IpeCmd::None)
+    }
+    fn update(_msg: (), model: Model) -> (Model, IpeCmd<()>) {
+        (model, IpeCmd::None)
+    }
+    fn view(_model: Model) -> Html<()> {
+        Html::HText(String::new())
+    }
+    fn subs(_model: Model) -> IpeSub<()> {
+        IpeSub::None
+    }
+
+    type Init = fn(WebReq) -> (Model, IpeCmd<()>);
+    type Update = fn((), Model) -> (Model, IpeCmd<()>);
+    type View = fn(Model) -> Html<()>;
+    type Subs = fn(Model) -> IpeSub<()>;
+
+    fn make_router() -> Router {
+        let (route_entry, param_resolver, route_matched) = routed_resolvers(
+            routes(),
+            Page::Home,
+            |_page: Page, model: Model| (model, IpeCmd::None),
+            render,
+        );
+        let state: WebState<Model, (), Init, Update, View, Subs> = WebState {
+            store: Arc::new(MemoryStore::<Model, ()>::new(Duration::from_secs(60)))
+                as Arc<dyn store::SessionStore<Model, ()>>,
+            init: Arc::new(init),
+            update: Arc::new(update),
+            view: Arc::new(view),
+            subs: Arc::new(subs),
+            route_entry,
+            param_resolver,
+            route_matched,
+            session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
+        };
+        Router::new()
+            .fallback(get(handlers::page::<Model, (), Init, Update, View, Subs>))
+            .with_state(state)
+    }
+
+    #[allow(clippy::expect_used)] // test helper: request build and router failure are environment issues
+    async fn send(method: &str, uri: &str) -> axum::response::Response {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .expect("build request");
+        make_router().oneshot(req).await.expect("router responds")
+    }
+
+    fn location(resp: &axum::response::Response) -> Option<String> {
+        resp.headers()
+            .get(header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    }
+
+    #[allow(clippy::expect_used)] // test helper: an in-memory body read cannot fail
+    async fn body_len(resp: axum::response::Response) -> usize {
+        axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("body")
+            .len()
+    }
+
+    /// A 308 carries the canonical `Location`, no cookie and no body, and
+    /// runs no `init`; GET and HEAD agree.
+    #[tokio::test]
+    async fn non_canonical_get_and_head_redirect_before_init() {
+        locked_remove_var("IPE_WEB_BASE_PATH");
+        let before = INIT_RUNS.load(Ordering::SeqCst);
+        for method in ["GET", "HEAD"] {
+            let resp = send(method, "/about/?x=1").await;
+            assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT, "{method}");
+            assert_eq!(
+                location(&resp).as_deref(),
+                Some("/about?x=1"),
+                "{method}: query kept"
+            );
+            assert!(
+                resp.headers().get(header::SET_COOKIE).is_none(),
+                "{method}: a redirect mints no cookie"
+            );
+            assert_eq!(body_len(resp).await, 0, "{method}: a redirect has no body");
+        }
+        assert_eq!(INIT_RUNS.load(Ordering::SeqCst), before, "no init ran");
+    }
+
+    /// The canonical spelling is served, not redirected.
+    #[tokio::test]
+    async fn canonical_get_is_served() {
+        locked_remove_var("IPE_WEB_BASE_PATH");
+        let resp = send("GET", "/about").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(location(&resp).is_none());
+    }
+
+    /// An escape the route decodes redirects to the canonical encoding, and a
+    /// redirect never leaves the origin: `Location` is one `/` then a non-`/`.
+    #[tokio::test]
+    async fn redirect_location_is_same_origin_relative() {
+        locked_remove_var("IPE_WEB_BASE_PATH");
+        let resp = send("GET", "/%2f%2fevil.com").await;
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(location(&resp).as_deref(), Some("/%2F%2Fevil.com"));
+        for raw in ["//evil.com", "/%5c%5cevil.com", "/%2f%2fevil.com", "///"] {
+            let resp = send("GET", raw).await;
+            if let Some(loc) = location(&resp) {
+                let bytes = loc.as_bytes();
+                assert!(
+                    bytes.first() == Some(&b'/') && !matches!(bytes.get(1), Some(b'/' | b'\\')),
+                    "{raw}: Location {loc} must be same-origin relative"
+                );
+            }
+        }
+    }
+
+    /// Under a base path the redirect targets the base plus the canonical path.
+    #[tokio::test]
+    async fn redirect_targets_the_base() {
+        locked_set_var("IPE_WEB_BASE_PATH", "/app");
+        let resp = send("GET", "/about/").await;
+        locked_remove_var("IPE_WEB_BASE_PATH");
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(location(&resp).as_deref(), Some("/app/about"));
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
 mod base_path_tests {
     use super::{
         client_js_path, cookie_name_for, cookie_path_for, normalise_base_path, render_page_full,
@@ -5744,7 +6049,7 @@ mod sse_reconnect_reconcile_tests {
     //! 8. A malformed base path is refused once, when the router is built.
 
     use super::*;
-    use crate::web::route::{Route, matches_any};
+    use crate::web::route::{RenderArg, RenderRefusal, Route, RoutePath, render_route};
     use crate::web::store::MemoryStore;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -5778,6 +6083,14 @@ mod sse_reconnect_reconcile_tests {
         ]
     }
 
+    /// The fixture's page renderer, as the emitter writes one per page type.
+    fn render(page: &TestPage) -> Result<RoutePath, RenderRefusal> {
+        match page {
+            TestPage::Home => render_route(&routes(), 0, &[]),
+            TestPage::Detail(id) => render_route(&routes(), 1, &[RenderArg::Text(id)]),
+        }
+    }
+
     /// The page variant as text, so a test can assert which page a resync ships.
     fn label_view() -> TestView {
         Arc::new(|p| {
@@ -5808,6 +6121,7 @@ mod sse_reconnect_reconcile_tests {
     fn make_session(page: TestPage, entered_path: Option<&str>, view: TestView) -> Fixture {
         let routes_arc = Arc::new(routes());
         let routes_for_match = routes_arc.clone();
+        let render = Arc::new(render);
         let entry_fn_runs = Arc::new(AtomicUsize::new(0));
         let runs = entry_fn_runs.clone();
         let route_entry = routed_entry(
@@ -5817,9 +6131,9 @@ mod sse_reconnect_reconcile_tests {
                 runs.fetch_add(1, Ordering::SeqCst);
                 (p, IpeCmd::None)
             },
+            Arc::clone(&render),
         );
-        let route_matched: RouteMatched =
-            Arc::new(move |path| matches_any(&routes_for_match, path));
+        let route_matched = routed_lookup(routes_for_match, render);
         let model = page.clone();
         let last_view = (view)(model.clone());
         let index = build_index(&last_view);
@@ -5923,6 +6237,20 @@ mod sse_reconnect_reconcile_tests {
             "the entry fn (and so its Cmd) ran once"
         );
         assert_eq!(model_of(&fx.entry), TestPage::Detail("7".into()));
+    }
+
+    /// A reconnect at another spelling of the entered path (`/items/%41` after
+    /// `/items/A`) dedupes against one canonical key and enters nothing.
+    #[tokio::test]
+    async fn reconcile_at_an_alternate_spelling_enters_nothing() {
+        let mut fx = make_session(TestPage::Detail("A".into()), Some("/items/A"), label_view());
+        let (committed, _) = reconnect(&mut fx, "/items/%41", "").await;
+        assert_eq!(committed, 0, "one canonical path, no second entry");
+        assert_eq!(
+            fx.entry_fn_runs.load(Ordering::SeqCst),
+            0,
+            "no entry Cmd ran"
+        );
     }
 
     /// A page GET re-enters even the path the session already entered, so a
@@ -6438,8 +6766,8 @@ mod watch_status_handler_tests {
     fn test_param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
-    fn test_route_matched(p: &crate::web::route::DecodedPath) -> bool {
-        p.is_root()
+    fn test_route_matched(p: &crate::web::route::DecodedPath) -> crate::web::RouteLookup {
+        crate::web::RouteLookup::single_page(p)
     }
 
     fn make_state(store: Arc<TestStore>) -> TestWebState {
@@ -7095,8 +7423,8 @@ mod hot_transition_handler_tests {
     fn test_param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
-    fn test_route_matched(p: &crate::web::route::DecodedPath) -> bool {
-        p.is_root()
+    fn test_route_matched(p: &crate::web::route::DecodedPath) -> crate::web::RouteLookup {
+        crate::web::RouteLookup::single_page(p)
     }
 
     fn make_router() -> Router {
@@ -7332,8 +7660,8 @@ mod hot_init_session_scoping_tests {
         crate::dict::dict_empty()
     }
 
-    fn test_route_matched(p: &crate::web::route::DecodedPath) -> bool {
-        p.is_root()
+    fn test_route_matched(p: &crate::web::route::DecodedPath) -> crate::web::RouteLookup {
+        crate::web::RouteLookup::single_page(p)
     }
 
     // ── Type aliases ─────────────────────────────────────────────────────────
@@ -7600,8 +7928,8 @@ mod hot_msg_handler_tests {
     fn test_param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
-    fn test_route_matched(p: &crate::web::route::DecodedPath) -> bool {
-        p.is_root()
+    fn test_route_matched(p: &crate::web::route::DecodedPath) -> crate::web::RouteLookup {
+        crate::web::RouteLookup::single_page(p)
     }
 
     fn make_router() -> Router {
@@ -7813,8 +8141,8 @@ mod hot_init_handler_tests {
     fn test_param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
-    fn test_route_matched(p: &crate::web::route::DecodedPath) -> bool {
-        p.is_root()
+    fn test_route_matched(p: &crate::web::route::DecodedPath) -> crate::web::RouteLookup {
+        crate::web::RouteLookup::single_page(p)
     }
 
     fn make_router() -> Router {
@@ -8030,8 +8358,8 @@ mod hot_wiring_handler_tests {
     fn test_param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
-    fn test_route_matched(p: &crate::web::route::DecodedPath) -> bool {
-        p.is_root()
+    fn test_route_matched(p: &crate::web::route::DecodedPath) -> crate::web::RouteLookup {
+        crate::web::RouteLookup::single_page(p)
     }
 
     fn make_router() -> Router {
@@ -8220,22 +8548,30 @@ fn utf8_prefix(bytes: &[u8]) -> &str {
     }
 }
 
-#[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(test, feature = "server", not(target_arch = "wasm32")))]
 mod bind_error_tests {
-    /// The port-taken error message must name `IPE_WEB_PORT` and use an 8xxx example port.
+    /// The port-taken refusal names `IPE_WEB_PORT` when the operator or the
+    /// default chose the port, and names no operator var when a supervisor did.
     #[test]
-    fn addr_in_use_message_contains_ipe_web_port_and_example_port() {
-        let port: i64 = 8000;
-        let msg = format!(
-            "port {port} is already in use — another application is bound to it.
-\
-             Set a different port with the IPE_WEB_PORT environment variable, e.g.:
-\
-             IPE_WEB_PORT=8123 ipe run"
+    fn addr_in_use_message_is_keyed_on_the_port_origin() {
+        let resolve = |relocation: Option<&str>, operator: Option<&str>| {
+            crate::system::resolve_listen_port(
+                relocation.map(str::to_owned),
+                (super::WEB_PORT_ENV, operator.map(str::to_owned)),
+                8000,
+            )
+        };
+        for r in [resolve(None, None), resolve(None, Some("9200"))] {
+            let msg = r.addr_in_use_message();
+            assert!(msg.contains("IPE_WEB_PORT=8123 ipe run"), "{msg}");
+        }
+        let relocated = resolve(Some("9100"), Some("9200"));
+        assert_eq!(relocated.port, 9100);
+        let msg = relocated.addr_in_use_message();
+        assert!(
+            !msg.contains("IPE_WEB_PORT") && !msg.contains("IPE_SERVER_PORT"),
+            "{msg}"
         );
-        assert!(msg.contains("IPE_WEB_PORT"), "message names the env var");
-        assert!(msg.contains("8123"), "example port is in the 8xxx range");
     }
 }
 
@@ -8456,8 +8792,8 @@ mod emitted_router_behavior_tests {
     fn param_resolver(_path: &crate::web::route::DecodedPath) -> crate::dict::IpeDict<String> {
         crate::dict::dict_empty()
     }
-    fn route_matched(p: &crate::web::route::DecodedPath) -> bool {
-        p.is_root()
+    fn route_matched(p: &crate::web::route::DecodedPath) -> crate::web::RouteLookup {
+        crate::web::RouteLookup::single_page(p)
     }
 
     fn make_state(store: Arc<Store>) -> State {
@@ -8877,7 +9213,7 @@ mod emitted_router_behavior_tests {
     /// store is chosen or port bound.
     #[test]
     fn standalone_routed_app_refuses_malformed_route_table() {
-        let result = block_on(web_app_routed::<String, Model, Msg, (), _, _, _, _, _>(
+        let result = block_on(web_app_routed::<String, Model, Msg, (), _, _, _, _, _, _>(
             init,
             update,
             view,
@@ -8885,6 +9221,7 @@ mod emitted_router_behavior_tests {
             malformed_routes(),
             (),
             |_page: (), model: Model| (model, IpeCmd::None),
+            |_page: &()| Err(crate::web::route::RenderRefusal::NoRoute),
             "memory".to_string(),
             String::new(),
             [0u8; 32],
@@ -8910,6 +9247,7 @@ mod emitted_router_behavior_tests {
             malformed_routes(),
             (),
             |_page: (), model: Model| (model, IpeCmd::None),
+            |_page: &()| Err(crate::web::route::RenderRefusal::NoRoute),
             "memory".to_string(),
             String::new(),
             [0u8; 32],
@@ -9002,7 +9340,7 @@ mod route_entry_cmd_tests {
 
     use super::*;
     use crate::web::req::WebReq;
-    use crate::web::route::{Route, matches_any};
+    use crate::web::route::{RenderArg, RenderRefusal, Route, RoutePath, render_route};
     use crate::web::store::{MemoryStore, SessionStore, StoreHit};
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header};
@@ -9091,6 +9429,14 @@ mod route_entry_cmd_tests {
         ]
     }
 
+    /// The fixture's page renderer, as the emitter writes one per page type.
+    fn render(page: &Page) -> Result<RoutePath, RenderRefusal> {
+        match page {
+            Page::Home => render_route(&routes(), 0, &[]),
+            Page::Item(id) => render_route(&routes(), 1, &[RenderArg::Text(id)]),
+        }
+    }
+
     type Store = Arc<dyn store::SessionStore<Model, Msg>>;
 
     /// The fixture app's state, its four fns as plain fn pointers.
@@ -9111,16 +9457,17 @@ mod route_entry_cmd_tests {
 
     #[allow(clippy::expect_used)] // test helper: the fixture table and base are well-formed
     fn router(store: Store) -> axum::Router {
-        let routes_for_match = Arc::new(routes());
+        let (route_entry, _, route_matched) =
+            routed_resolvers(routes(), Page::Home, set_page, render);
         let state: FixtureState = WebState {
             store,
             init: Arc::new(init),
             update: Arc::new(update),
             view: Arc::new(view),
             subs: Arc::new(subs),
-            route_entry: routed_entry(Arc::new(routes()), Page::Home, set_page),
+            route_entry,
             param_resolver: Arc::new(|_path| crate::dict::dict_empty()),
-            route_matched: Arc::new(move |path| matches_any(&routes_for_match, path)),
+            route_matched,
             session_count: Arc::new(AtomicUsize::new(0)),
             watch_build_status: Arc::new(Mutex::new(None)),
         };

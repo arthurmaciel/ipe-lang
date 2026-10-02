@@ -30,8 +30,11 @@ use std::sync::Arc;
 
 pub use crate::encoding::DecodedPath;
 use crate::encoding::{
-    DecodeRefusal, ParamName, ParamNameRefusal, ParamNames, decode_path_segment, raw_path_segments,
+    DecodeRefusal, EncodeRefusal, MAX_URL_COMPONENT_LEN, ParamName, ParamNameRefusal, ParamNames,
+    decode_path_segment, encode_path_segment, raw_path_segments,
 };
+#[cfg(feature = "server")]
+use crate::encoding::{EncodedBase, QueryText};
 
 /// One segment of a parsed route pattern.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -240,6 +243,225 @@ pub fn match_route(pattern: &RoutePattern, path: &DecodedPath) -> Option<RoutePa
     Some(RouteParams(params))
 }
 
+/// The first route (declaration order) whose pattern matches `path` AND whose
+/// builder accepts the captured params: its index in `routes` and the built
+/// page.
+///
+/// A route whose pattern matches but whose builder returns `None` is skipped
+/// and matching continues, exactly as for a pattern-level miss.
+pub fn first_built<Page>(routes: &[Route<Page>], path: &DecodedPath) -> Option<(usize, Page)> {
+    routes.iter().enumerate().find_map(|(i, rt)| {
+        let pattern = rt.pattern().ok()?;
+        let params = match_route(pattern, path)?;
+        (rt.build)(params.into_segments()).map(|page| (i, page))
+    })
+}
+
+/// One payload value of a page constructor, as a route param renders it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RenderArg<'a> {
+    Int(i64),
+    Bool(bool),
+    Float(f64),
+    Text(&'a str),
+}
+
+/// Why a page has no URL its own route table reads back to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderRefusal {
+    /// The rendered path is claimed by an earlier route, so it would not
+    /// read back to this page's route.
+    Shadowed,
+    /// A text param is empty, so its segment would vanish from the path.
+    EmptySegment,
+    /// A text param is `.` or `..`, which a client normalizes away.
+    DotSegment,
+    /// A float param is NaN or infinite, which no route param reads back.
+    NonFinite,
+    /// The rendered path is longer than `MAX_URL_COMPONENT_LEN`.
+    TooLong,
+    /// The route index or param count does not fit the table: the emitted
+    /// renderer and the table disagree.
+    NoRoute,
+}
+
+impl std::fmt::Display for RenderRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Shadowed => "the page's path is claimed by an earlier route",
+            Self::EmptySegment => "an empty text cannot be a path segment",
+            Self::DotSegment => "`.` and `..` cannot be path segments",
+            Self::NonFinite => "a NaN or infinite float cannot be a path segment",
+            Self::TooLong => "the page's path is too long",
+            Self::NoRoute => "the page's route is not in the route table",
+        })
+    }
+}
+
+/// A page's canonical path: rendered from its route and proven to read back
+/// to that route. Always starts with `/`, every segment percent-encoded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoutePath {
+    text: String,
+    decoded: DecodedPath,
+}
+
+impl RoutePath {
+    /// The encoded path, starting with `/`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// The path as the route table reads it back.
+    #[must_use]
+    pub fn decoded(&self) -> &DecodedPath {
+        &self.decoded
+    }
+}
+
+/// Render `args` through route `index`'s pattern into the path that reads
+/// back to that route.
+///
+/// # Errors
+///
+/// `Shadowed` when the rendered path is first claimed by another route,
+/// `EmptySegment`/`DotSegment`/`NonFinite`/`TooLong` for a param no segment
+/// carries back, `NoRoute` when `index` or the arg count misses the table.
+pub fn render_route<Page>(
+    routes: &[Route<Page>],
+    index: usize,
+    args: &[RenderArg<'_>],
+) -> Result<RoutePath, RenderRefusal> {
+    let pattern = routes
+        .get(index)
+        .and_then(|rt| rt.pattern().ok())
+        .ok_or(RenderRefusal::NoRoute)?;
+    if pattern.param_names().count() != args.len() {
+        return Err(RenderRefusal::NoRoute);
+    }
+    let mut args = args.iter();
+    let mut text = String::new();
+    for seg in pattern.segments() {
+        let encoded = match seg {
+            PatternSeg::Literal(lit) => encode_path_segment(lit),
+            PatternSeg::Param(_) => match args.next().ok_or(RenderRefusal::NoRoute)? {
+                RenderArg::Int(n) => encode_path_segment(&n.to_string()),
+                RenderArg::Bool(b) => encode_path_segment(if *b { "true" } else { "false" }),
+                RenderArg::Float(x) if !x.is_finite() => return Err(RenderRefusal::NonFinite),
+                RenderArg::Float(x) => encode_path_segment(&x.to_string()),
+                RenderArg::Text(s) => encode_path_segment(s),
+            },
+        }
+        .map_err(|refusal| match refusal {
+            EncodeRefusal::Empty => RenderRefusal::EmptySegment,
+            EncodeRefusal::Dot => RenderRefusal::DotSegment,
+            EncodeRefusal::TooLong { .. } => RenderRefusal::TooLong,
+        })?;
+        text.push('/');
+        text.push_str(encoded.as_str());
+        if text.len() > MAX_URL_COMPONENT_LEN.get() {
+            return Err(RenderRefusal::TooLong);
+        }
+    }
+    if text.is_empty() {
+        text.push('/');
+    }
+    let path = DecodedPath::parse(&text).map_err(|_| RenderRefusal::TooLong)?;
+    match first_built(routes, &path) {
+        Some((j, _)) if j == index => Ok(RoutePath {
+            text,
+            decoded: path,
+        }),
+        _ => Err(RenderRefusal::Shadowed),
+    }
+}
+
+/// A request path resolved against the route table.
+#[derive(Clone, Debug)]
+pub enum Matched<Page> {
+    /// A route built `page`, and `canonical` is the path that page renders to.
+    Hit { page: Page, canonical: RoutePath },
+    /// No route built a page whose path renders back: the `notFound` page.
+    Miss,
+}
+
+/// Resolve `path`: the first route that builds a page, with that page's
+/// canonical path; `Miss` when none builds or the page does not render.
+pub fn resolve<Page>(
+    routes: &[Route<Page>],
+    path: &DecodedPath,
+    render: impl Fn(&Page) -> Result<RoutePath, RenderRefusal>,
+) -> Matched<Page> {
+    match first_built(routes, path) {
+        Some((_, page)) => match render(&page) {
+            Ok(canonical) => Matched::Hit { page, canonical },
+            Err(_) => Matched::Miss,
+        },
+        None => Matched::Miss,
+    }
+}
+
+/// A same-origin `Location` for a non-canonical page path.
+#[cfg(feature = "server")]
+#[derive(Clone, Debug)]
+pub struct CanonicalRedirect {
+    location: axum::http::HeaderValue,
+}
+
+#[cfg(feature = "server")]
+impl CanonicalRedirect {
+    /// The `Location` header value: the base, the canonical path, then the
+    /// request's query unchanged.
+    #[must_use]
+    pub fn location(&self) -> &axum::http::HeaderValue {
+        &self.location
+    }
+}
+
+/// What the page handler does with a GET before it enters the page.
+#[cfg(feature = "server")]
+#[derive(Clone, Debug)]
+pub enum Redirect {
+    /// The request path is canonical: serve it.
+    Serve,
+    /// Redirect (308) to the canonical path.
+    To(CanonicalRedirect),
+    /// The query cannot be carried into a `Location`: refuse the request.
+    BadQuery,
+}
+
+/// Decide whether a matched GET redirects to its canonical path.
+///
+/// `raw_path` is the base-relative request path as sent, compared byte for
+/// byte with the canonical one. The redirect target is always `base` plus a
+/// [`RoutePath`] (every segment encoded, never `//`), so it stays on this
+/// origin whatever the request held.
+#[cfg(feature = "server")]
+pub fn canonical_redirect(
+    base: &EncodedBase,
+    raw_path: &str,
+    raw_query: Option<&str>,
+    canonical: &RoutePath,
+) -> Redirect {
+    if raw_path == canonical.as_str() {
+        return Redirect::Serve;
+    }
+    let mut location = String::from(base.as_str());
+    location.push_str(canonical.as_str());
+    if let Some(raw) = raw_query {
+        let Ok(query) = QueryText::parse(raw) else {
+            return Redirect::BadQuery;
+        };
+        location.push('?');
+        location.push_str(query.as_str());
+    }
+    match axum::http::HeaderValue::from_str(&location) {
+        Ok(location) => Redirect::To(CanonicalRedirect { location }),
+        Err(_) => Redirect::BadQuery,
+    }
+}
+
 /// The first route (declaration order) whose parsed pattern matches `path`,
 /// with its captured params.
 fn first_match<'r, Page>(
@@ -266,9 +488,7 @@ pub fn match_routes<Page: Clone>(
     not_found: &Page,
     path: &DecodedPath,
 ) -> Page {
-    first_match(routes, path)
-        .find_map(|(rt, _, params)| (rt.build)(params.into_segments()))
-        .unwrap_or_else(|| not_found.clone())
+    first_built(routes, path).map_or_else(|| not_found.clone(), |(_, page)| page)
 }
 
 /// Does `path` match ANY declared route? With no
@@ -285,16 +505,20 @@ pub fn matches_any<Page>(routes: &[Route<Page>], path: &DecodedPath) -> bool {
     first_match(routes, path).next().is_some()
 }
 
-/// Name→value params for the first route matching `path` — for `req.params`.
-/// Zips the matched pattern's `:name` segments with the decoded captured
-/// values.
+/// Name→value params of the route that builds `path`'s page — for
+/// `req.params`. The route is [`first_built`]'s, so the params always belong
+/// to the page the request entered, never to an earlier route whose pattern
+/// matched but whose builder refused.
 pub fn match_params<Page>(
     routes: &[Route<Page>],
     path: &DecodedPath,
 ) -> crate::dict::IpeDict<String> {
     use crate::dict::IpeDict;
     let mut d: IpeDict<String> = IpeDict::new();
-    if let Some((_, pattern, values)) = first_match(routes, path).next() {
+    let built = first_built(routes, path).and_then(|(i, _)| routes.get(i));
+    if let Some(pattern) = built.and_then(|rt| rt.pattern().ok())
+        && let Some(values) = match_route(pattern, path)
+    {
         for (n, v) in pattern.param_names().zip(values.into_segments()) {
             d.insert(n.to_owned(), v);
         }
@@ -315,20 +539,24 @@ pub struct Entered<M, C> {
     pub cmd: C,
 }
 
-/// Enter `path`: match it against `routes` and apply the app's entry fn to the matched page.
+/// Enter a resolved path: apply the app's entry fn to the matched page, or to
+/// `not_found` on a miss.
 ///
 /// The single URL-to-model entry every platform shares (server GET, SSE
 /// reconnect, wasm mount, popstate, in-app navigation). The entry fn is the
 /// app's `set_page` (`onNavigate` routed through `update`, or the implicit
 /// `{ model | page }` paired with `Cmd.none`); its Cmd is returned, never dropped.
 pub fn enter<Page: Clone, M, C>(
-    routes: &[Route<Page>],
+    matched: Matched<Page>,
     not_found: &Page,
-    path: &DecodedPath,
     model: M,
     entry: impl Fn(Page, M) -> (M, C),
 ) -> Entered<M, C> {
-    let (model, cmd) = entry(match_routes(routes, not_found, path), model);
+    let page = match matched {
+        Matched::Hit { page, .. } => page,
+        Matched::Miss => not_found.clone(),
+    };
+    let (model, cmd) = entry(page, model);
     Entered { model, cmd }
 }
 
@@ -364,6 +592,251 @@ mod tests {
             Route::new("/apps/:slug", |p| Some(Page::App(p[0].clone()))),
             Route::new("/x/:a/:b", |p| Some(Page::Two(p[0].clone(), p[1].clone()))),
         ]
+    }
+
+    /// The test table's page renderer, as the emitter writes one per page type.
+    fn render(page: &Page) -> Result<RoutePath, RenderRefusal> {
+        let rs = routes();
+        match page {
+            Page::Home => render_route(&rs, 0, &[]),
+            Page::App(slug) => render_route(&rs, 1, &[RenderArg::Text(slug)]),
+            Page::Two(a, b) => render_route(&rs, 2, &[RenderArg::Text(a), RenderArg::Text(b)]),
+            Page::NF => Err(RenderRefusal::NoRoute),
+        }
+    }
+
+    /// The canonical path `path` resolves to; a miss is a test bug.
+    fn canonical_of(path: &str) -> RoutePath {
+        match resolve(&routes(), &dp(path), render) {
+            Matched::Hit { canonical, .. } => canonical,
+            Matched::Miss => panic!("test path {path} must resolve"),
+        }
+    }
+
+    /// Every page renders to a path that resolves back to the same page and
+    /// the same canonical path.
+    #[test]
+    fn render_round_trips_through_resolve() {
+        let pages = [
+            Page::Home,
+            Page::App("foo".into()),
+            Page::App("a b/c?d#e%".into()),
+            Page::App("é".into()),
+            Page::Two("1".into(), "..x".into()),
+        ];
+        for page in pages {
+            let canonical = render(&page).unwrap_or_else(|e| panic!("{page:?} must render: {e}"));
+            match resolve(&routes(), canonical.decoded(), render) {
+                Matched::Hit {
+                    page: back,
+                    canonical: again,
+                } => {
+                    assert_eq!(
+                        back,
+                        page,
+                        "{page:?} must read back from {}",
+                        canonical.as_str()
+                    );
+                    assert_eq!(again, canonical, "a canonical path is its own canonical");
+                }
+                Matched::Miss => panic!("{} must resolve", canonical.as_str()),
+            }
+        }
+        assert_eq!(
+            render(&Page::Home).map(|p| p.as_str().to_owned()),
+            Ok("/".to_owned())
+        );
+    }
+
+    /// Non-canonical spellings of a page resolve to the one canonical path.
+    #[test]
+    fn non_canonical_paths_resolve_to_the_canonical_one() {
+        assert_eq!(canonical_of("/apps/foo/").as_str(), "/apps/foo");
+        assert_eq!(canonical_of("/apps/%41").as_str(), "/apps/A");
+        assert_eq!(canonical_of("/apps/%c3%a9").as_str(), "/apps/%C3%A9");
+        assert_eq!(canonical_of("/").as_str(), "/");
+    }
+
+    /// A page whose path an earlier route claims has no canonical path, and
+    /// a request for it is a miss rather than a redirect loop.
+    #[test]
+    fn shadowed_page_is_refused() {
+        let rs: Vec<Route<Page>> = vec![
+            Route::new("/apps/new", |_| Some(Page::Home)),
+            Route::new("/apps/:slug", |p| p.first().cloned().map(Page::App)),
+        ];
+        assert_eq!(
+            render_route(&rs, 1, &[RenderArg::Text("new")]),
+            Err(RenderRefusal::Shadowed)
+        );
+        assert!(render_route(&rs, 1, &[RenderArg::Text("old")]).is_ok());
+        assert!(render_route(&rs, 0, &[]).is_ok());
+    }
+
+    /// Params no segment carries back are refused, never rendered lossy.
+    #[test]
+    fn unrenderable_params_are_refused() {
+        let rs = routes();
+        assert_eq!(
+            render(&Page::App(String::new())),
+            Err(RenderRefusal::EmptySegment)
+        );
+        assert_eq!(
+            render(&Page::App(".".into())),
+            Err(RenderRefusal::DotSegment)
+        );
+        assert_eq!(
+            render(&Page::App("..".into())),
+            Err(RenderRefusal::DotSegment)
+        );
+        assert_eq!(
+            render_route(&rs, 1, &[RenderArg::Float(f64::NAN)]),
+            Err(RenderRefusal::NonFinite)
+        );
+        assert_eq!(
+            render_route(&rs, 1, &[RenderArg::Float(f64::INFINITY)]),
+            Err(RenderRefusal::NonFinite)
+        );
+        assert_eq!(render_route(&rs, 9, &[]), Err(RenderRefusal::NoRoute));
+        assert_eq!(render_route(&rs, 1, &[]), Err(RenderRefusal::NoRoute));
+        let long = "a".repeat(MAX_URL_COMPONENT_LEN.get());
+        assert_eq!(
+            render_route(&rs, 1, &[RenderArg::Text(&long)]),
+            Err(RenderRefusal::TooLong)
+        );
+    }
+
+    /// A page whose own path does not render back resolves to a miss.
+    #[test]
+    fn unrenderable_page_resolves_to_a_miss() {
+        let rs: Vec<Route<Page>> = vec![Route::new("/apps/:slug", |_| Some(Page::NF))];
+        assert!(matches!(
+            resolve(&rs, &dp("/apps/x"), render),
+            Matched::Miss
+        ));
+    }
+
+    /// `req.params` come from the route that built the page, not from an
+    /// earlier route whose pattern matched but whose builder refused.
+    #[test]
+    fn match_params_follow_the_building_route() {
+        let rs: Vec<Route<Page>> = vec![
+            Route::new("/items/:id", |_| None),
+            Route::new("/items/:key", |p| p.first().cloned().map(Page::App)),
+        ];
+        let params = match_params(&rs, &dp("/items/42"));
+        assert_eq!(params.get("key").map(String::as_str), Some("42"));
+        assert_eq!(params.get("id"), None);
+        assert!(!match_params(&rs, &dp("/nope")).contains_key("key"));
+    }
+
+    #[cfg(feature = "server")]
+    fn base(path: &str) -> EncodedBase {
+        match EncodedBase::encode(&dp(path)) {
+            Ok(b) => b,
+            Err(e) => panic!("test base {path} must encode: {e:?}"),
+        }
+    }
+
+    #[cfg(feature = "server")]
+    fn location_of(redirect: &Redirect) -> String {
+        match redirect {
+            Redirect::To(target) => match target.location().to_str() {
+                Ok(text) => text.to_owned(),
+                Err(e) => panic!("a Location is visible ASCII: {e}"),
+            },
+            other => panic!("expected a redirect, got {other:?}"),
+        }
+    }
+
+    /// A canonical request is served; any other spelling redirects to base
+    /// plus the canonical path, the query carried unchanged.
+    #[cfg(feature = "server")]
+    #[test]
+    fn canonical_redirect_targets_base_plus_canonical() {
+        let canon = canonical_of("/apps/foo/");
+        assert!(matches!(
+            canonical_redirect(&base("/"), "/apps/foo", None, &canon),
+            Redirect::Serve
+        ));
+        let to = canonical_redirect(&base("/"), "/apps/foo/", None, &canon);
+        assert_eq!(location_of(&to), "/apps/foo");
+        let to = canonical_redirect(&base("/m"), "/apps/foo/", Some("x=1&y=%20"), &canon);
+        assert_eq!(location_of(&to), "/m/apps/foo?x=1&y=%20");
+        let home = canonical_of("/");
+        assert_eq!(
+            location_of(&canonical_redirect(&base("/m"), "//", None, &home)),
+            "/m/"
+        );
+    }
+
+    /// A redirect target redirects no further: render(parse(canonical)) is
+    /// the canonical path itself.
+    #[cfg(feature = "server")]
+    #[test]
+    fn canonical_redirect_never_loops() {
+        for raw in ["/apps/foo/", "/apps/%41", "/apps/%c3%a9", "/x/1/2/"] {
+            let canon = canonical_of(raw);
+            let next = canonical_of(canon.as_str());
+            assert_eq!(next, canon, "{raw}: the canonical path is a fixed point");
+            assert!(matches!(
+                canonical_redirect(&base("/"), canon.as_str(), None, &next),
+                Redirect::Serve
+            ));
+        }
+    }
+
+    /// No request path or param can steer the `Location` off this origin.
+    #[cfg(feature = "server")]
+    #[test]
+    fn canonical_redirect_stays_on_origin() {
+        for slug in [
+            "/evil.com",
+            "//evil.com",
+            "\\evil.com",
+            "%2F%2Fevil.com",
+            "http://evil.com",
+        ] {
+            let canon = render(&Page::App(slug.into())).unwrap_or_else(|e| panic!("{slug}: {e}"));
+            let location = location_of(&canonical_redirect(&base("/"), "/other", None, &canon));
+            assert!(location.starts_with("/apps/"), "{slug}: {location}");
+            assert!(
+                !location.contains('\\') && !location.contains("//"),
+                "{slug}: {location}"
+            );
+        }
+        for raw in [
+            "//evil.com",
+            "//evil.com/",
+            "/\\evil.com",
+            "/%2F%2Fevil.com",
+        ] {
+            let Ok(path) = DecodedPath::parse(raw) else {
+                continue;
+            };
+            if let Matched::Hit { canonical, .. } = resolve(&routes(), &path, render) {
+                let location = location_of(&canonical_redirect(&base("/"), raw, None, &canonical));
+                assert!(!location.starts_with("//"), "{raw}: {location}");
+                assert!(!location.contains('\\'), "{raw}: {location}");
+            }
+        }
+    }
+
+    /// A query that cannot be copied into a header byte for byte refuses the
+    /// request instead of redirecting with a mangled or injected query.
+    #[cfg(feature = "server")]
+    #[test]
+    fn canonical_redirect_refuses_a_bad_query() {
+        let canon = canonical_of("/apps/foo");
+        for query in ["a#b", "a\u{1}b", "a\rb", "a b", "%zz", "%4", "é"] {
+            assert!(
+                matches!(
+                    canonical_redirect(&base("/"), "/apps/foo/", Some(query), &canon),
+                    Redirect::BadQuery
+                ),
+                "{query:?} must be refused"
+            );
+        }
     }
 
     #[test]
@@ -624,13 +1097,18 @@ mod tests {
             };
             (count + 1, cmd)
         };
-        let entered = enter(&rs, &Page::NF, &dp("/apps/abc"), 0_u32, entry);
+        let entered = enter(
+            resolve(&rs, &dp("/apps/abc"), render),
+            &Page::NF,
+            0_u32,
+            entry,
+        );
         assert_eq!(entered.model, 1);
         assert_eq!(
             entered.cmd, "load abc",
             "enter must return the entry fn's Cmd for the matched page"
         );
-        let missed = enter(&rs, &Page::NF, &dp("/nope"), 5_u32, entry);
+        let missed = enter(resolve(&rs, &dp("/nope"), render), &Page::NF, 5_u32, entry);
         assert_eq!(missed.model, 6, "an unknown path enters notFound");
         assert_eq!(missed.cmd, "");
     }

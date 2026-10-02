@@ -449,8 +449,13 @@ pub struct RecordUpdate {
 pub struct RoutedWebCheck {
     /// `var(0)` from the `K::WebApp` scheme instantiation — the Model type.
     pub model_var: VarId,
+    /// `var(1)` from the `K::WebApp` scheme instantiation — the `Msg` type.
+    pub msg_var: VarId,
     /// `var(2)` from the `K::WebApp` scheme instantiation — the `notFound` type.
     pub not_found_var: VarId,
+    /// `var(3)` from the `K::WebApp` scheme instantiation — the cfg row tail,
+    /// which absorbs optional fields such as `onNavigate`.
+    pub cfg_tail_var: VarId,
     /// The `Web.tea { … }` call span; used to blame a type mismatch.
     pub span: Span,
     /// The module path owning the call, so a finding at `span` names its file.
