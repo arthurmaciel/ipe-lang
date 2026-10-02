@@ -1,6 +1,5 @@
 module Main exposing (main)
 
-import Ipe.Db as Db
 import Ipe.Error as Error exposing (Error)
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
@@ -19,14 +18,13 @@ import Ipe.Ui.Background as Background
 import Ipe.Ui.Border as Border
 import Ipe.Ui.Font as Font
 import Ipe.Ui.Input as Input
-import Ipe.Time.Timestamp exposing (Timestamp)
-import Lib.Db as LibDb exposing (Decision(..))
+import Lib.Db as LibDb exposing (Decision(..), HistoryCursor(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Token(..))
 import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
-import Lib.Queue as Queue exposing (QueueState(..), UnitPageState(..))
+import Lib.Queue as Queue exposing (HistoryState(..), QueueState(..), UnitPageState(..))
 import Lib.SafeText as SafeText exposing (SafeText)
 import Lib.Settings as Settings
 
@@ -35,19 +33,6 @@ type Page
     = QueuePage
     | HistoryPage
     | UnitPage String
-
-
--- A decided unit as the History page shows it: the review row plus the unit's
--- qualified name resolved from the index db, rendered (Nothing when the unit
--- no longer exists there).
-type alias HistoryRow =
-    { uid : String
-    , bodyHash : String
-    , decision : String
-    , reason : Maybe LibDb.StoredReason
-    , reviewedAt : Timestamp
-    , name : Maybe SafeText
-    }
 
 
 -- `queueCursor` is where the shown queue page starts; a reload after a
@@ -60,8 +45,7 @@ type alias Model =
     , refuseDraft : String
     , refuseError : Maybe Error
     , decisionError : Maybe Error
-    , history : List HistoryRow
-    , historyError : Maybe Error
+    , history : Queue.HistoryState
     , unitPage : Queue.UnitPageState
     , selected : Int
     }
@@ -76,8 +60,7 @@ init req =
       , refuseDraft = ""
       , refuseError = Nothing
       , decisionError = Nothing
-      , history = []
-      , historyError = Nothing
+      , history = HistoryLoading
       , unitPage = UnitLoading
       , selected = 0
       }
@@ -103,7 +86,7 @@ pageFor path =
 pageCmd : String -> Cmd Msg
 pageCmd path =
     if path == "/history" then
-        Cmd.perform loadHistory HistoryLoaded
+        Cmd.perform (Queue.loadHistoryPage HistoryStart) HistoryPageLoaded
 
     else if String.startsWith "/unit/" path then
         Cmd.perform (Queue.loadUnitView (String.dropLeft 6 path)) UnitViewLoaded
@@ -123,7 +106,8 @@ type Msg
     | DecisionSaved String (Result Error ( Index.Attested, Int ))
     | ShowQueue
     | ShowHistory
-    | HistoryLoaded (Result Error (List HistoryRow))
+    | HistoryPageLoaded (Result Error Queue.HistoryPage)
+    | HistoryNext LibDb.HistoryCursor
     | UnitViewLoaded (Result Error (Maybe ( Index.Unit, List Links.Link )))
     | KeyDown String
     | SelectUnit Int
@@ -171,15 +155,13 @@ update msg model =
             ( { model | page = QueuePage }, Cmd.none )
 
         ShowHistory ->
-            ( { model | page = HistoryPage }, Cmd.perform loadHistory HistoryLoaded )
+            ( { model | page = HistoryPage, history = HistoryLoading }, Cmd.perform (Queue.loadHistoryPage HistoryStart) HistoryPageLoaded )
 
-        HistoryLoaded result ->
-            case result of
-                Ok rows ->
-                    ( { model | history = rows, historyError = Nothing }, Cmd.none )
+        HistoryPageLoaded result ->
+            ( { model | history = Queue.historyStateFromResult result }, Cmd.none )
 
-                Err e ->
-                    ( { model | historyError = Just e }, Cmd.none )
+        HistoryNext cursor ->
+            ( { model | history = HistoryLoading }, Cmd.perform (Queue.loadHistoryPage cursor) HistoryPageLoaded )
 
         UnitViewLoaded result ->
             ( { model | unitPage = Queue.unitPageFromResult result }, Cmd.none )
@@ -305,32 +287,6 @@ drainAndReload model attested =
             Queue.loadPage model.queueCursor
         )
         PendingLoaded
-
-
--- Review history: every decided row, newest first, with the unit's qualified
--- name resolved from the index db (Nothing when the unit no longer exists).
-loadHistory : Task Error (List HistoryRow)
-loadHistory =
-    do
-        db <- LibDb.open
-        rows <- LibDb.findDecisions db
-        conn <- Index.openRead
-        Task.sequence (List.map (enrich conn) rows)
-
-
-enrich : Db.Db -> LibDb.ReviewRow -> Task Error HistoryRow
-enrich conn row =
-    Task.map
-        (\name ->
-            { uid = row.uid
-            , bodyHash = row.bodyHash
-            , decision = row.decision
-            , reason = row.reason
-            , reviewedAt = row.reviewedAt
-            , name = name
-            }
-        )
-        (Index.nameFor conn row.uid)
 
 
 header : Model -> Ui.Element Msg
@@ -586,23 +542,39 @@ hintLine =
         (Ui.text "a approve · r refuse · j/k move · g top · 1-5 jump · Enter confirm")
 
 
+-- Every state's text comes from `Queue.historyStatusText`, the function the
+-- tests pin; a loaded page with rows adds its cards and the next-page control.
 historyBody : Model -> Ui.Element Msg
 historyBody model =
-    case model.historyError of
-        Just err ->
-            Ui.text ("History load failed: " ++ SafeText.toString (SafeText.renderForeign (Error.toString err)))
+    case Queue.historyStatusText model.history of
+        Just text ->
+            Ui.text text
 
         Nothing ->
-            if List.isEmpty model.history then
-                Ui.text "No reviews yet."
+            case model.history of
+                HistoryLoaded page ->
+                    Ui.column
+                        [ Ui.width Ui.fill, Ui.spacing 16, Ui.scrollbars ]
+                        (List.map historyCard page.rows ++ [ historyNextButton page.next ])
 
-            else
-                Ui.column
-                    [ Ui.width Ui.fill, Ui.spacing 16, Ui.scrollbars ]
-                    (List.map historyCard model.history)
+                HistoryLoading ->
+                    Ui.none
+
+                HistoryFailed _ ->
+                    Ui.none
 
 
-historyCard : HistoryRow -> Ui.Element Msg
+historyNextButton : Maybe LibDb.HistoryCursor -> Ui.Element Msg
+historyNextButton next =
+    case next of
+        Just cursor ->
+            navButton False "Next page" (HistoryNext cursor)
+
+        Nothing ->
+            Ui.none
+
+
+historyCard : Queue.HistoryRow -> Ui.Element Msg
 historyCard row =
     Ui.column
         [ Ui.width Ui.fill
@@ -635,7 +607,7 @@ historyCard row =
         ]
 
 
-nameOf : HistoryRow -> SafeText
+nameOf : Queue.HistoryRow -> SafeText
 nameOf row =
     case row.name of
         Just n ->

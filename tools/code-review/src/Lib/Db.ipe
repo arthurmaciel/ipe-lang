@@ -1,4 +1,4 @@
-module Lib.Db exposing (Decision(..), Reason, ReviewRow, StoredReason, countDecisions, decidedPairsAfter, findDecision, findDecisions, findLatestForUid, insertDecision, insertDrainCursor, migrate, open, openAt, pairPageSize, parseReason, probe, reasonMaxChars, reasonText, recordDrain, storedReasonText)
+module Lib.Db exposing (Decision(..), Reason, ReviewRow, StoredReason, countDecisions, decidedPairsAfter, findDecision, findLatestForUid, HistoryCursor(..), HistoryRows, historyPage, historyPageSize, insertDecision, insertDrainCursor, migrate, open, openAt, pairPageSize, parseReason, probe, reasonMaxChars, reasonText, recordDrain, storedReasonText)
 
 import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
 import Ipe.Config as Config
@@ -535,16 +535,94 @@ pairOrder =
     " ORDER BY uid, body_hash LIMIT ?"
 
 
--- Every review row, newest first. `Store.all` fetches all rows; the query
--- builder sorts them in Ipê by reviewed_at DESC then uid ASC.
-findDecisions : Db -> Task.Task Error (List ReviewRow)
-findDecisions db =
-    case reviewStore of
-        Err e ->
-            Task.fail e
+-- Where a History page starts: at the newest review, or strictly after the
+-- last row of the page before in the page order (reviewed_at descending,
+-- then uid, then body hash). The order runs over the table's key, so it is
+-- total: no row is skipped or repeated across pages, ties in reviewed_at
+-- included.
+type HistoryCursor
+    = HistoryStart
+    | HistoryAfter Timestamp String String
 
-        Ok store ->
-            Store.query store
-                |> Store.orderDesc "reviewed_at"
-                |> Store.orderAsc "uid"
-                |> Store.toList db
+
+-- One page of review rows in the page order, and the cursor of the page
+-- after it: Nothing when this page is short, so the table holds no more.
+type alias HistoryRows =
+    { rows : List ReviewRow
+    , next : Maybe HistoryCursor
+    }
+
+
+-- The most review rows one History page reads.
+historyPageSize : Int
+historyPageSize =
+    100
+
+
+-- One History page: at most `pageSize` rows from `cursor`, sorted and cut by
+-- SQLite, so a page never reads more than its size whatever the table holds.
+-- Every value is a bound parameter, and every row the table can hold decodes.
+-- A page size below one row is refused.
+historyPage : Db -> Int -> HistoryCursor -> Task.Task Error HistoryRows
+historyPage db pageSize cursor =
+    if pageSize < 1 then
+        Task.fail (Error.invalidInput ("a History page holds at least one review; the page size is " ++ String.fromInt pageSize))
+
+    else
+        Db.queryDecode db (historySql cursor) (historyParams pageSize cursor) historyRowDecoder
+            |> Task.map (\rows -> { rows = rows, next = historyNext pageSize rows })
+
+
+historySql : HistoryCursor -> String
+historySql cursor =
+    case cursor of
+        HistoryStart ->
+            historyColumns ++ historyOrder
+
+        HistoryAfter _ _ _ ->
+            historyColumns ++ " WHERE reviewed_at < ? OR (reviewed_at = ? AND (uid, body_hash) > (?, ?))" ++ historyOrder
+
+
+historyParams : Int -> HistoryCursor -> List SqlValue
+historyParams pageSize cursor =
+    case cursor of
+        HistoryStart ->
+            [ SqlInt pageSize ]
+
+        HistoryAfter at uid bodyHash ->
+            [ SqlTime (Timestamp.toUnixMillis at), SqlTime (Timestamp.toUnixMillis at), SqlString uid, SqlString bodyHash, SqlInt pageSize ]
+
+
+historyColumns : String
+historyColumns =
+    "SELECT uid, body_hash, decision, reason, reviewed_at FROM review"
+
+
+historyOrder : String
+historyOrder =
+    " ORDER BY reviewed_at DESC, uid, body_hash LIMIT ?"
+
+
+-- The cursor after a page: the last row's key when the page is full.
+historyNext : Int -> List ReviewRow -> Maybe HistoryCursor
+historyNext pageSize rows =
+    if List.length rows < pageSize then
+        Nothing
+
+    else
+        Maybe.map (\row -> HistoryAfter row.reviewedAt row.uid row.bodyHash) (List.head (List.reverse rows))
+
+
+historyRowDecoder : Db.Decode.Decoder ReviewRow
+historyRowDecoder =
+    Db.Decode.succeed storedReviewRow
+        |> Db.Decode.required "uid" (Db.Decode.string "uid")
+        |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
+        |> Db.Decode.required "decision" (Db.Decode.string "decision")
+        |> Db.Decode.required "reason" (Db.Decode.nullable (Db.Decode.string "reason"))
+        |> Db.Decode.required "reviewed_at" (Db.Decode.int "reviewed_at")
+
+
+storedReviewRow : String -> String -> String -> Maybe String -> Int -> ReviewRow
+storedReviewRow uid bodyHash decision reason reviewedAt =
+    rowFromStored (makeRow uid bodyHash decision reason (Timestamp.fromUnixMillis reviewedAt))

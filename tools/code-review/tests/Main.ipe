@@ -4,6 +4,7 @@ import Ipe.ByteSize as ByteSize
 import Ipe.Char as Char
 import Ipe.Crypto as Crypto
 import Ipe.Db as Db
+import Ipe.Db.Decode
 import Ipe.Db.Sql as Sql
 import Ipe.Dict as Dict
 import Ipe.Error as Error
@@ -19,13 +20,13 @@ import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.Time.Timestamp as Timestamp
-import Lib.Db as LibDb exposing (Decision(..))
+import Lib.Db as LibDb exposing (Decision(..), HistoryCursor(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
 import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
-import Lib.Queue as Queue exposing (QueueState(..), UnitPageState(..))
+import Lib.Queue as Queue exposing (HistoryState(..), QueueState(..), UnitPageState(..))
 import Lib.RepoPath as RepoPath exposing (PathError(..), Root, RootMap)
 import Lib.SafeText as SafeText
 import Lib.Settings as Settings
@@ -224,6 +225,119 @@ storedBlankReasonDecodes db =
         Task.succeed (storedReasonShown "reason not shown: it is blank" found)
 
 
+-- History pages walked two rows at a time from the start return every row
+-- of the table exactly once, in the order one unpaged query gives — ties in
+-- `reviewed_at`, and one uid at two hashes, included. Red if a page skips or
+-- repeats a row at its edge, or if the walk never pages.
+historyWalkMatchesOrder : Db -> Task.Task Error Bool
+historyWalkMatchesOrder db =
+    let
+        seeded =
+            [ ( "walk-b", "h1", 7 ), ( "walk-a", "h2", 7 ), ( "walk-a", "h1", 7 ), ( "walk-c", "h1", 3 ), ( "walk-c", "h2", 3 ), ( "walk-d", "h1", 9 ), ( "walk-e", "h1", 1 ) ]
+
+        seed ( uid, bodyHash, at ) =
+            Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString uid, SqlString bodyHash, SqlString "refuse", SqlString "r", SqlInt at ]
+
+        keyDecoder =
+            Db.Decode.succeed (\uid bodyHash -> ( uid, bodyHash ))
+                |> Db.Decode.required "uid" (Db.Decode.string "uid")
+                |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
+    in
+    do
+        Task.sequence (List.map seed seeded)
+        walked <- Task.loop 1000 { cursor = HistoryStart, seen = [], pages = 0 } (historyWalkStep db)
+        expected <- Db.queryDecode db "SELECT uid, body_hash FROM review ORDER BY reviewed_at DESC, uid, body_hash" [] keyDecoder
+        Db.exec db "DELETE FROM review WHERE uid LIKE ?" [ SqlString "walk-%" ]
+        Task.succeed
+            (walked.seen
+                == expected
+                && walked.pages
+                > 3
+                && List.filter (\( uid, _ ) -> String.startsWith "walk-" uid) walked.seen
+                == [ ( "walk-d", "h1" ), ( "walk-a", "h1" ), ( "walk-a", "h2" ), ( "walk-b", "h1" ), ( "walk-c", "h1" ), ( "walk-c", "h2" ), ( "walk-e", "h1" ) ]
+            )
+
+
+-- The state one History walk step carries: where the next page starts, the
+-- keys read so far, and how many pages were read.
+type alias HistoryWalk =
+    { cursor : LibDb.HistoryCursor
+    , seen : List ( String, String )
+    , pages : Int
+    }
+
+
+historyWalkStep : Db -> HistoryWalk -> Task.Task Error (Task.Step HistoryWalk HistoryWalk)
+historyWalkStep db state =
+    do
+        page <- LibDb.historyPage db 2 state.cursor
+        let
+            next =
+                { cursor = state.cursor
+                , seen = state.seen ++ List.map (\row -> ( row.uid, row.bodyHash )) page.rows
+                , pages = state.pages + 1
+                }
+        in
+        case page.next of
+            Nothing ->
+                Task.succeed (Task.Done next)
+
+            Just cursor ->
+                Task.succeed (Task.Continue { next | cursor = cursor })
+
+
+isLastPage : Maybe LibDb.HistoryCursor -> Bool
+isLastPage next =
+    case next of
+        Nothing ->
+            True
+
+        Just _ ->
+            False
+
+
+-- A History page of no rows, or fewer, is refused as invalid input before
+-- any read.
+historyPageSizeRefused : Db -> Task.Task Error Bool
+historyPageSizeRefused db =
+    let
+        refused size =
+            LibDb.historyPage db size HistoryStart
+                |> Task.map (\_ -> False)
+                |> Task.onError (\e -> Task.succeed (Error.kind e == Error.kind (Error.invalidInput "")))
+    in
+    do
+        zero <- refused 0
+        negative <- refused (-1)
+        one <- LibDb.historyPage db 1 HistoryStart |> Task.map (\page -> List.length page.rows <= 1)
+        Task.succeed (zero && negative && one)
+
+
+-- Each History state has its own text: a load in flight or a failed load
+-- never reads as an empty history, and an empty later page never reads as
+-- "no reviews yet".
+historyStateTextsDistinct : Bool
+historyStateTextsDistinct =
+    let
+        boom =
+            Error.unexpected "boom"
+
+        row =
+            { uid = "u-h", bodyHash = "h", decision = "approve", reason = Nothing, reviewedAt = Timestamp.fromUnixMillis 0, name = Nothing }
+
+        later =
+            HistoryAfter (Timestamp.fromUnixMillis 0) "u-h" "h"
+    in
+    List.all identity
+        [ Queue.historyStatusText HistoryLoading == Just "Loading history…"
+        , Queue.historyStatusText (HistoryFailed boom) == Just ("History load failed: " ++ Error.toString boom)
+        , Queue.historyStatusText (HistoryLoaded { rows = [], at = HistoryStart, next = Nothing }) == Just "No reviews yet."
+        , Queue.historyStatusText (HistoryLoaded { rows = [], at = later, next = Nothing }) == Just "No more reviews."
+        , Queue.historyStatusText (HistoryLoaded { rows = [ row ], at = HistoryStart, next = Nothing }) == Nothing
+        , Queue.historyStatusText (HistoryLoaded { rows = [ row ], at = later, next = Just later }) == Nothing
+        ]
+
+
 -- ── end stored rows ─────────────────────────────────────────────────────
 
 
@@ -236,6 +350,9 @@ allChecks db =
         , Task.map (\ok -> ( "refusal reason is non-blank and bounded", ok )) (reasonBounded db)
         , Task.map (\ok -> ( "a stored over-long reason decodes and shows its length", ok )) (storedOverlongReasonDecodes db)
         , Task.map (\ok -> ( "a stored blank reason decodes as blank", ok )) (storedBlankReasonDecodes db)
+        , Task.map (\ok -> ( "history pages walk every row once in order", ok )) (historyWalkMatchesOrder db)
+        , Task.map (\ok -> ( "a history page below one row is refused", ok )) (historyPageSizeRefused db)
+        , Task.succeed ( "history state texts distinguish loading/empty/failed/loaded", historyStateTextsDistinct )
         , Task.map (\ok -> ( "decision roundtrip", ok )) (decisionRoundtrip db)
         , Task.succeed
             ( "formatReviewedAt renders UTC"
@@ -2446,8 +2563,8 @@ countDrainRows db uid bodyHash =
 
 -- ── review history ──────────────────────────────────────────────────────
 --
--- Two decisions on a scratch review db must come back through findDecisions
--- with their columns in order (descending reviewed_at, then uid).
+-- Two decisions on a scratch review db must come back on the first History
+-- page with their columns, and that short page is the last one.
 historyRoundtrip : Task.Task Error Bool
 historyRoundtrip =
     let
@@ -2469,10 +2586,15 @@ historyRoundtrip =
             )
         |> Task.andThen
             (\db ->
-                LibDb.findDecisions db
+                LibDb.historyPage db LibDb.historyPageSize HistoryStart
                     |> Task.map
-                        (\rows ->
-                            List.length rows
+                        (\page ->
+                            let
+                                rows =
+                                    page.rows
+                            in
+                            isLastPage page.next
+                                && List.length rows
                                 == 2
                                 && List.member ( "u-a", "approve" ) (List.map (\r -> ( r.uid, r.decision )) rows)
                                 && List.member ( "u-b", "refuse" ) (List.map (\r -> ( r.uid, r.decision )) rows)
