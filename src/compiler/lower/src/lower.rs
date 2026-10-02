@@ -25719,7 +25719,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ServerQueryParam
                 | KernelFn::ServerHeader
                 | KernelFn::ServerGetCookie
-                // `Server.cookie : String -> String -> Cookie`
+                // `Server.cookie : String -> String -> Result Error Cookie`
                 | KernelFn::ServerCookieNew
                 // `Server.withCookie : Cookie -> Response -> Response`
                 | KernelFn::ServerWithCookie
@@ -25806,7 +25806,7 @@ impl<'a> Lowerer<'a> {
                 // `required : String -> Decoder a -> Decoder (a -> b) -> Decoder b`
                 | KernelFn::DbDecRequired
                 // ── Server arity-3 ───────────────────────────────────────
-                // `Server.withHeader : String -> String -> Response -> Response`
+                // `Server.withHeader : String -> String -> Response -> Result Error Response`
                 | KernelFn::ServerWithHeader
                 // `Server.getAuthed/postAuthed/putAuthed/deleteAuthed :
                 //     String -> AuthConfig

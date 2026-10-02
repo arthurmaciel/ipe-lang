@@ -24,16 +24,16 @@ pub fn web_req(
                 .or_insert_with(|| val.to_string());
         }
     }
+    // Decoded through the one request-cookie parser, first value wins, so
+    // `req.cookies` agrees with `Server.getCookie` and the session reader.
     let mut cookies: IpeDict<String> = IpeDict::new();
-    if let Some(c) = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
+    for (name, value) in headers
+        .get_all(axum::http::header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(crate::server::request_cookies)
     {
-        for pair in c.split(';') {
-            if let Some((k, v)) = pair.trim().split_once('=') {
-                cookies.insert(k.trim().to_string(), v.trim().to_string());
-            }
-        }
+        cookies.entry(name).or_insert(value);
     }
     WebReq {
         path: uri.path().to_string(),

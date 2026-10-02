@@ -408,7 +408,8 @@ fn unauthorized() -> ServerResponse {
 /// security attributes of the original session cookie: `__Host-`/Secure,
 /// `Path=/`, `HttpOnly`, and `SameSite`. The cookie name must be the same name
 /// that the request carried the token under so the browser replaces the existing
-/// cookie entry rather than creating a duplicate.
+/// cookie entry rather than creating a duplicate. An empty name has no
+/// `CookieName`, so it gives `None`; a request never carries such a cookie.
 ///
 /// `is_https` must be pre-captured from the incoming request's headers
 /// BEFORE the request is moved into the handler — mirrors the combined gate
@@ -419,7 +420,7 @@ fn reissue_set_cookie(
     token: &str,
     slide_window_secs: u64,
     is_https: bool,
-) -> SetCookie {
+) -> Option<SetCookie> {
     // The cookie-security signal lives in `web::csrf` for a program that emits the
     // web surface; a server-only program (no `web` module) falls back to the
     // production-env signal. `feature = "web"` is the exact condition under which
@@ -441,8 +442,8 @@ fn reissue_set_cookie(
     } else {
         SameSite::Lax
     };
-    SetCookie::new(
-        &CookieName::encode(cookie_name),
+    Some(SetCookie::new(
+        &CookieName::parse(cookie_name)?,
         &CookieValue::encode(token),
         CookieAttributes {
             path: CookiePath::root(),
@@ -451,7 +452,7 @@ fn reissue_set_cookie(
             secure,
             max_age_secs: Some(slide_window_secs),
         },
-    )
+    ))
 }
 
 #[cfg(feature = "jwt")]
@@ -529,56 +530,54 @@ where
 
             // Sliding re-issue — cookie-source only (bearer tokens are API
             // credentials; the client manages re-issue itself via re-auth).
-            let reissue_cookie: Option<SetCookie> =
-                if let TokenSource::Cookie(ref name) = cfg.source {
-                    if let Some(ctx) = crate::auth::reissue_context_from_claims(&claims) {
-                        let slide_window_secs = crate::app_config::resolve_auth_slide_window();
-                        let slide_i64 = i64::try_from(slide_window_secs).unwrap_or(i64::MAX);
-                        let now = crate::jwt::now_unix_seconds();
-                        // Throttle: re-issue only once past exp - slide_window/2.
-                        // Parse exp from the verified claims string representation.
-                        let past_threshold = claims
-                            .get("exp")
-                            .and_then(|s| s.parse::<i64>().ok())
-                            .map(|exp| now > exp.saturating_sub(slide_i64 / 2))
-                            .unwrap_or(false);
-                        if past_threshold && now < ctx.cap {
-                            // Extra claims to carry into the re-issued token (all
-                            // verified claims except the time anchors and subject —
-                            // those come from the ReissueContext).
-                            let extra: HashMap<String, String> = claims
-                                .iter()
-                                .filter(|(k, _)| {
-                                    // Time anchors and session-identity fields come from
-                                    // ReissueContext verbatim; skip them in extra_claims.
-                                    *k != "exp"
-                                        && *k != "iat"
-                                        && *k != "cap"
-                                        && *k != "jti"
-                                        && *k != "sub"
-                                })
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect();
-                            match crate::auth::auth_reissue_token::<String>(
-                                &secret, &ctx, extra, slide_i64,
-                            ) {
-                                Some(IpeResult::Ok(new_token)) => Some(reissue_set_cookie(
-                                    name,
-                                    &new_token,
-                                    slide_window_secs,
-                                    is_https,
-                                )),
-                                _ => None,
+            let reissue_cookie: Option<SetCookie> = if let TokenSource::Cookie(ref name) =
+                cfg.source
+            {
+                if let Some(ctx) = crate::auth::reissue_context_from_claims(&claims) {
+                    let slide_window_secs = crate::app_config::resolve_auth_slide_window();
+                    let slide_i64 = i64::try_from(slide_window_secs).unwrap_or(i64::MAX);
+                    let now = crate::jwt::now_unix_seconds();
+                    // Throttle: re-issue only once past exp - slide_window/2.
+                    // Parse exp from the verified claims string representation.
+                    let past_threshold = claims
+                        .get("exp")
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .map(|exp| now > exp.saturating_sub(slide_i64 / 2))
+                        .unwrap_or(false);
+                    if past_threshold && now < ctx.cap {
+                        // Extra claims to carry into the re-issued token (all
+                        // verified claims except the time anchors and subject —
+                        // those come from the ReissueContext).
+                        let extra: HashMap<String, String> = claims
+                            .iter()
+                            .filter(|(k, _)| {
+                                // Time anchors and session-identity fields come from
+                                // ReissueContext verbatim; skip them in extra_claims.
+                                *k != "exp"
+                                    && *k != "iat"
+                                    && *k != "cap"
+                                    && *k != "jti"
+                                    && *k != "sub"
+                            })
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        match crate::auth::auth_reissue_token::<String>(
+                            &secret, &ctx, extra, slide_i64,
+                        ) {
+                            Some(IpeResult::Ok(new_token)) => {
+                                reissue_set_cookie(name, &new_token, slide_window_secs, is_https)
                             }
-                        } else {
-                            None
+                            _ => None,
                         }
                     } else {
                         None
                     }
                 } else {
                     None
-                };
+                }
+            } else {
+                None
+            };
 
             let mut resp = handler(req, principal).await;
             // Attach the re-issue cookie when warranted. The handler returns an
@@ -670,16 +669,97 @@ pub fn server_with_status(status: i64, mut r: ServerResponse) -> ServerResponse 
     r.status = status;
     r
 }
-pub fn server_with_header(k: String, v: String, mut r: ServerResponse) -> ServerResponse {
-    r.headers.insert(k, v);
-    r
+/// Why a response header has no representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeaderRefusal {
+    /// The name is not an RFC 7230 `token`.
+    Name,
+    /// The value holds a control byte (CR, LF, NUL, ...) or a non-ASCII byte.
+    Value,
+    /// `Set-Cookie`, in any case: every cookie line is built by `SetCookie`.
+    SetCookie,
 }
-/// Ipê `redirect : String -> Response` — a 302 to `location`. Matches the Ipê
-/// kernel's one-arg contract and  `Server_redirectT` (status is hardcoded,
-/// not a parameter; use `withStatus` to override).
+
+impl HeaderRefusal {
+    /// The refusal as the `Server.withHeader` error message; it never echoes the input.
+    const fn message(self) -> &'static str {
+        match self {
+            Self::Name => "Server.withHeader: the header name is not an HTTP token",
+            Self::Value => {
+                "Server.withHeader: the header value holds a control character (such as CR or LF) or a non-ASCII character"
+            }
+            Self::SetCookie => {
+                "Server.withHeader: `Set-Cookie` is not a raw header; set a cookie with `Server.withCookie` and `Server.cookie`"
+            }
+        }
+    }
+}
+
+/// Parse one response header into its typed name and value.
+///
+/// `Set-Cookie` in any case is refused, so a cookie line is only ever the one
+/// `SetCookie` builds from typed parts.
+fn parse_response_header(
+    name: &str,
+    value: &str,
+) -> Result<(axum::http::HeaderName, axum::http::HeaderValue), HeaderRefusal> {
+    let name =
+        axum::http::HeaderName::from_bytes(name.as_bytes()).map_err(|_| HeaderRefusal::Name)?;
+    if name == axum::http::header::SET_COOKIE {
+        return Err(HeaderRefusal::SetCookie);
+    }
+    let value = axum::http::HeaderValue::from_str(value).map_err(|_| HeaderRefusal::Value)?;
+    Ok((name, value))
+}
+
+/// `Server.withHeader : String -> String -> Response -> Result Error Response`.
+///
+/// The header enters the response only when its name is a `token` other than
+/// `Set-Cookie` and its value a visible-ASCII header value; any other header is
+/// an `InvalidInput` error.
+#[must_use]
+pub fn server_with_header(
+    k: String,
+    v: String,
+    mut r: ServerResponse,
+) -> IpeResult<IpeError, ServerResponse> {
+    match parse_response_header(&k, &v) {
+        Ok(_) => {
+            r.headers.insert(k, v);
+            IpeResult::Ok(r)
+        }
+        Err(refusal) => IpeResult::Err(IpeError::invalid_input(refusal.message().to_owned())),
+    }
+}
+
+/// Bytes a `Location` value never holds raw.
+///
+/// CTLs, space, non-ASCII (always encoded by `utf8_percent_encode`) and the
+/// ASCII characters RFC 3986 neither reserves nor leaves unreserved. `%` and
+/// every reserved character are kept, so an already-encoded URI is unchanged.
+const LOCATION_ESCAPE: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'<')
+    .add(b'>')
+    .add(b'\\')
+    .add(b'^')
+    .add(b'`')
+    .add(b'{')
+    .add(b'|')
+    .add(b'}');
+
+/// Ipê `redirect : String -> Response` — a 302 to `location`.
+///
+/// `location` is percent-encoded into a visible-ASCII URI reference, so every
+/// redirect is a valid response. The status is fixed; `withStatus` overrides it.
+#[must_use]
 pub fn server_redirect(location: String) -> ServerResponse {
     let mut r = resp(302, String::new(), "text/plain");
-    r.headers.insert("Location".to_string(), location);
+    r.headers.insert(
+        "Location".to_string(),
+        percent_encoding::utf8_percent_encode(&location, LOCATION_ESCAPE).to_string(),
+    );
     r
 }
 
@@ -710,6 +790,11 @@ pub fn server_header(name: String, req: ServerRequest) -> IpeMaybe<String> {
         None => IpeMaybe::Nothing,
     }
 }
+/// `Server.getCookie name req` — the decoded value of the cookie `name`.
+///
+/// `req.cookies` holds only pairs whose wire name is the encoding of their
+/// decoded name and whose value decodes, so this matches exactly the cookie
+/// `Server.cookie name` writes.
 pub fn server_get_cookie(name: String, req: ServerRequest) -> IpeMaybe<String> {
     match req.cookies.get(&name) {
         Some(v) => IpeMaybe::Just(v.clone()),
@@ -734,27 +819,37 @@ pub fn server_method(req: ServerRequest) -> String {
 // ─── cookies ──────────────────────────────────────────────────────────────
 
 pub use cookie_octets::{
-    CookieAttributes, CookieName, CookiePath, CookieValue, SameSite, SetCookie,
+    CookieAttributes, CookieName, CookiePath, CookieValue, RuntimeCookie, SameSite, SetCookie,
+    request_cookies,
 };
 
 /// RFC 6265 cookie grammar, held in types.
 ///
 /// A cookie name holds only `token` bytes and a value only `cookie-octet`
-/// bytes; every other byte (non-ASCII, a CTL including CR/LF, `;`, `,`,
+/// bytes; every other byte (non-ASCII, a CTL including CR/LF, `%`, `;`, `,`,
 /// whitespace, `"`, `\`) is percent-encoded as `%XX` when the type is built.
-/// A [`SetCookie`] line is assembled only from those types and a typed
-/// attribute set, so every `Set-Cookie` value the server emits is a valid
-/// header value and carries no attribute or line the caller supplied.
+/// `%` itself is always encoded, so the encoding is injective and `decode`
+/// inverts it exactly. A [`SetCookie`] line is assembled only from those types
+/// and a typed attribute set, so every `Set-Cookie` value the server emits is a
+/// valid header value and carries no attribute or line the caller supplied.
 mod cookie_octets {
     use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 
-    /// Bytes outside RFC 6265 `cookie-octet`: CTLs, space, `"`, `,`, `;`, `\`.
+    /// Bytes outside RFC 6265 `cookie-octet`, plus `%`.
     ///
-    /// Non-ASCII bytes are always encoded by `utf8_percent_encode`.
-    const NOT_COOKIE_OCTET: &AsciiSet =
-        &CONTROLS.add(b' ').add(b'"').add(b',').add(b';').add(b'\\');
+    /// CTLs, space, `"`, `%`, `,`, `;` and `\`; non-ASCII bytes are always
+    /// encoded by `utf8_percent_encode`.
+    const NOT_COOKIE_OCTET: &AsciiSet = &CONTROLS
+        .add(b' ')
+        .add(b'"')
+        .add(b'%')
+        .add(b',')
+        .add(b';')
+        .add(b'\\');
 
-    /// Bytes outside RFC 7230 `token`: the `cookie-octet` exclusions plus the separators.
+    /// Bytes outside RFC 7230 `token`, plus `%`.
+    ///
+    /// The `cookie-octet` exclusions plus the `token` separators.
     const NOT_TOKEN: &AsciiSet = &NOT_COOKIE_OCTET
         .add(b'(')
         .add(b')')
@@ -773,34 +868,94 @@ mod cookie_octets {
     /// Bytes outside RFC 6265 `av-octet` (a `Path` attribute value): CTLs and `;`.
     const NOT_AV_OCTET: &AsciiSet = &CONTROLS.add(b';');
 
-    /// A cookie name made only of RFC 6265 `token` bytes.
+    /// The fixed base of a cookie name the runtime itself sets.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum RuntimeCookie {
+        /// `ipe_csrf`: the `Middleware.withCsrf` cookie outside production.
+        ServerCsrf,
+        /// `__ipe_csrf`: the `Ipe.Web` CSRF cookie when cookies are not `Secure`.
+        WebCsrf,
+        /// `__Host-ipe_csrf`: a CSRF cookie when cookies are `Secure`.
+        HostCsrf,
+        /// `ipe_sid`: the `Ipe.Web` session cookie.
+        Session,
+        /// `__Host-ipe_sid`: the root `Ipe.Web` session cookie when cookies are `Secure`.
+        HostSession,
+    }
+
+    impl RuntimeCookie {
+        const fn base(self) -> &'static str {
+            match self {
+                Self::ServerCsrf => "ipe_csrf",
+                Self::WebCsrf => "__ipe_csrf",
+                Self::HostCsrf => "__Host-ipe_csrf",
+                Self::Session => "ipe_sid",
+                Self::HostSession => "__Host-ipe_sid",
+            }
+        }
+    }
+
+    /// A non-empty cookie name: the program's text and its `token` wire form.
+    ///
+    /// The wire form is an injective function of the text, so two names are
+    /// equal exactly when their texts are.
     #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct CookieName(String);
+    pub struct CookieName {
+        text: String,
+        wire: String,
+    }
 
     impl CookieName {
         /// Parse `raw`, percent-encoding every byte that is not a `token` byte.
         ///
-        /// A name already made of `token` bytes is kept byte-for-byte.
+        /// An empty name has no representation: a `Set-Cookie` line starting
+        /// with `=` is a nameless cookie a browser sends back as a bare value,
+        /// which a server reads as some other cookie.
         #[must_use]
-        pub fn encode(raw: &str) -> Self {
-            Self(utf8_percent_encode(raw, NOT_TOKEN).to_string())
+        pub fn parse(raw: &str) -> Option<Self> {
+            (!raw.is_empty()).then(|| Self {
+                text: raw.to_owned(),
+                wire: utf8_percent_encode(raw, NOT_TOKEN).to_string(),
+            })
         }
 
-        /// The encoded name.
+        /// The name of a runtime cookie: `base` followed by `suffix`.
+        ///
+        /// Non-empty by construction, since every base is.
+        #[must_use]
+        pub fn runtime(base: RuntimeCookie, suffix: &str) -> Self {
+            let text = format!("{}{suffix}", base.base());
+            let wire = utf8_percent_encode(&text, NOT_TOKEN).to_string();
+            Self { text, wire }
+        }
+
+        /// The name as the program wrote it.
+        #[must_use]
+        pub fn text(&self) -> &str {
+            &self.text
+        }
+
+        /// The encoded name sent on the wire.
         #[must_use]
         pub fn as_str(&self) -> &str {
-            &self.0
+            &self.wire
         }
     }
 
-    /// A cookie value made only of RFC 6265 `cookie-octet` bytes.
+    impl std::fmt::Display for CookieName {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.wire)
+        }
+    }
+
+    /// A cookie value made only of RFC 6265 `cookie-octet` bytes other than `%`.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct CookieValue(String);
 
     impl CookieValue {
-        /// Parse `raw`, percent-encoding every byte that is not a `cookie-octet`.
+        /// Parse `raw`, percent-encoding `%` and every byte that is not a `cookie-octet`.
         ///
-        /// A value already made of `cookie-octet` bytes is kept byte-for-byte.
+        /// A value made of the other `cookie-octet` bytes is kept byte-for-byte.
         #[must_use]
         pub fn encode(raw: &str) -> Self {
             Self(utf8_percent_encode(raw, NOT_COOKIE_OCTET).to_string())
@@ -811,6 +966,52 @@ mod cookie_octets {
         pub fn as_str(&self) -> &str {
             &self.0
         }
+    }
+
+    /// The value of one hexadecimal digit byte.
+    fn hex_digit(b: u8) -> Option<u8> {
+        char::from(b)
+            .to_digit(16)
+            .and_then(|d| u8::try_from(d).ok())
+    }
+
+    /// Invert the cookie percent-encoding of `wire`.
+    ///
+    /// A `%` not followed by two hex digits, or bytes that are not UTF-8, have
+    /// no decoding: the result is `None`, never a lossy replacement.
+    #[must_use]
+    pub fn decode(wire: &str) -> Option<String> {
+        let mut out = Vec::with_capacity(wire.len());
+        let mut bytes = wire.bytes();
+        while let Some(b) = bytes.next() {
+            if b == b'%' {
+                let hi = bytes.next().and_then(hex_digit)?;
+                let lo = bytes.next().and_then(hex_digit)?;
+                out.push(hi.checked_mul(16)?.checked_add(lo)?);
+            } else {
+                out.push(b);
+            }
+        }
+        String::from_utf8(out).ok()
+    }
+
+    /// The decoded `(name, value)` pairs of one `Cookie` request header.
+    ///
+    /// A pair is kept only when its wire name is exactly the encoding of a
+    /// non-empty name, so a lookup by name matches only what `SetCookie`
+    /// would have written for it, and when its value decodes. Every other pair
+    /// is skipped. Each name is the program's text.
+    pub fn request_cookies(header: &str) -> impl Iterator<Item = (String, String)> + '_ {
+        header.split(';').filter_map(|pair| {
+            let (wire_name, wire_value) = pair.split_once('=')?;
+            let wire_name = wire_name.trim();
+            let name = CookieName::parse(&decode(wire_name)?)?;
+            if name.as_str() != wire_name {
+                return None;
+            }
+            let value = decode(wire_value.trim())?;
+            Some((name.text, value))
+        })
     }
 
     /// The `SameSite` attribute of a `Set-Cookie` line.
@@ -928,12 +1129,20 @@ mod cookie_octets {
     }
 }
 
-/// `Server.cookie name value` — parses both fields into their cookie grammar.
+/// `Server.cookie : String -> String -> Result Error Cookie`.
+///
+/// Parses both fields into their cookie grammar; an empty name is an
+/// `InvalidInput` error, so a `Cookie` always carries a non-empty name.
 #[must_use]
-pub fn server_cookie(name: String, value: String) -> ServerCookie {
-    ServerCookie {
-        name: CookieName::encode(&name),
-        value: CookieValue::encode(&value),
+pub fn server_cookie(name: String, value: String) -> IpeResult<IpeError, ServerCookie> {
+    match CookieName::parse(&name) {
+        Some(name) => IpeResult::Ok(ServerCookie {
+            name,
+            value: CookieValue::encode(&value),
+        }),
+        None => IpeResult::Err(IpeError::invalid_input(
+            "Server.cookie: a cookie name must not be empty".to_owned(),
+        )),
     }
 }
 
@@ -1111,13 +1320,24 @@ pub(crate) fn strict_serve_dir(
     )
 }
 
+/// Add the decoded cookies of one `Cookie` header to `out`; the first value of a name wins.
 fn parse_cookies(header: &str, out: &mut HashMap<String, String>) {
-    for c in header.split(';') {
-        let c = c.trim();
-        if let Some((k, v)) = c.split_once('=') {
-            out.insert(k.trim().to_string(), v.trim().to_string());
-        }
+    for (name, value) in request_cookies(header) {
+        out.entry(name).or_insert(value);
     }
+}
+
+/// The decoded value of the request cookie `name`, read from every `Cookie` header.
+///
+/// The first value of `name` wins, as in `parse_cookies`.
+#[must_use]
+pub fn request_cookie(headers: &axum::http::HeaderMap, name: &CookieName) -> Option<String> {
+    headers
+        .get_all(axum::http::header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(request_cookies)
+        .find_map(|(k, v)| (k == name.text()).then_some(v))
 }
 
 /// Build the Ipê `ServerRequest` from the axum request.
@@ -1261,8 +1481,14 @@ fn to_axum_response(r: ServerResponse) -> axum::response::Response {
     if !r.contentType.is_empty() && !has_ct_header {
         builder = builder.header("content-type", r.contentType.clone());
     }
+    // Every header is parsed again here, whatever built it: a `Response`
+    // record update can carry headers `Server.withHeader` never saw. A header
+    // with no representation (CR/LF, non-token name, `Set-Cookie`) answers 500.
     for (k, v) in &r.headers {
-        builder = builder.header(k.as_str(), v.as_str());
+        let Ok((name, value)) = parse_response_header(k, v) else {
+            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        builder = builder.header(name, value);
     }
     // Multiple Set-Cookie response headers (RFC 6265 §4.1 forbids comma-folding
     // them into one line) — kept in a dedicated Vec (see `ServerResponse.cookies`)
@@ -2636,12 +2862,13 @@ fn request_is_https(headers: &HashMap<String, String>) -> bool {
 /// spuriously fail whenever proxy-scheme detection flips between requests.
 /// Only the `Secure` ATTRIBUTE (`csrf_set_cookie_value`) becomes
 /// request-scoped.
-fn csrf_cookie_name() -> &'static str {
-    if crate::telemetry::production_from_env() {
-        "__Host-ipe_csrf"
+fn csrf_cookie_name() -> CookieName {
+    let base = if crate::telemetry::production_from_env() {
+        RuntimeCookie::HostCsrf
     } else {
-        "ipe_csrf"
-    }
+        RuntimeCookie::ServerCsrf
+    };
+    CookieName::runtime(base, "")
 }
 
 /// 64 lowercase-hex chars (two concatenated UUIDv4s, ~244 combined random
@@ -2700,7 +2927,7 @@ pub fn csrf_pair_valid(cookie_tok: &str, header_tok: &str) -> bool {
 /// only the pre-captured bool survives.
 fn csrf_set_cookie_value(token: &str, request_is_https: bool) -> SetCookie {
     SetCookie::new(
-        &CookieName::encode(csrf_cookie_name()),
+        &csrf_cookie_name(),
         &CookieValue::encode(token),
         CookieAttributes {
             path: CookiePath::root(),
@@ -2733,7 +2960,7 @@ where
             "GET" | "HEAD" | "OPTIONS"
         );
         let cookie_name = csrf_cookie_name();
-        let existing = req.cookies.get(cookie_name).cloned();
+        let existing = req.cookies.get(cookie_name.text()).cloned();
         let token = existing
             .clone()
             .filter(|t| csrf_token_well_formed(t))
@@ -3720,8 +3947,8 @@ mod tests {
     #[tokio::test]
     async fn two_set_cookie_headers_both_survive() {
         let mut r = server_text("ok".to_string());
-        r = server_with_cookie(server_cookie("a".into(), "1".into()), r);
-        r = server_with_cookie(server_cookie("b".into(), "2".into()), r);
+        r = server_with_cookie(cookie("a", "1"), r);
+        r = server_with_cookie(cookie("b", "2"), r);
         let resp = to_axum_response(r);
         let cookies: Vec<_> = resp
             .headers()
@@ -3729,6 +3956,32 @@ mod tests {
             .iter()
             .collect();
         assert_eq!(cookies.len(), 2, "both Set-Cookie lines must survive");
+    }
+
+    /// The cookie `Server.cookie name value` builds for a non-empty `name`.
+    #[allow(clippy::expect_used)] // fixture: every caller passes a non-empty name
+    fn cookie(name: &str, value: &str) -> ServerCookie {
+        let built = match server_cookie(name.to_owned(), value.to_owned()) {
+            IpeResult::Ok(c) => Some(c),
+            IpeResult::Err(_) => None,
+        };
+        built.expect("a non-empty cookie name")
+    }
+
+    /// The parsed cookie name for a non-empty `raw`.
+    #[allow(clippy::expect_used)] // fixture: every caller passes a non-empty name
+    fn parsed_name(raw: &str) -> CookieName {
+        CookieName::parse(raw).expect("a non-empty cookie name")
+    }
+
+    /// The `Set-Cookie` lines of `r` once it is an HTTP response.
+    fn set_cookie_lines(r: ServerResponse) -> Vec<String> {
+        to_axum_response(r)
+            .headers()
+            .get_all(axum::http::header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok().map(str::to_owned))
+            .collect()
     }
 
     /// RFC 6265 `cookie-octet`, written out independently of the encoder's set.
@@ -3771,6 +4024,8 @@ mod tests {
             ("a\r\nSet-Cookie: x=y", "a%0D%0ASet-Cookie:%20x=y"),
             ("\u{7f}", "%7F"),
             ("😀", "%F0%9F%98%80"),
+            ("%", "%25"),
+            ("%41", "%2541"),
         ] {
             assert_eq!(CookieValue::encode(raw).as_str(), encoded, "value {raw:?}");
         }
@@ -3779,7 +4034,7 @@ mod tests {
     #[test]
     fn cookie_value_keeps_cookie_octets_byte_for_byte() {
         let octets: String = (0u8..=0x7F)
-            .filter(|&b| is_cookie_octet(b))
+            .filter(|&b| is_cookie_octet(b) && b != b'%')
             .map(char::from)
             .collect();
         assert_eq!(CookieValue::encode(&octets).as_str(), octets);
@@ -3794,14 +4049,17 @@ mod tests {
             ("a b", "a%20b"),
             ("a;b", "a%3Bb"),
             ("(x)", "%28x%29"),
+            ("%", "%25"),
+            ("s%69d", "s%2569d"),
         ] {
-            assert_eq!(CookieName::encode(raw).as_str(), encoded, "name {raw:?}");
+            assert_eq!(parsed_name(raw).as_str(), encoded, "name {raw:?}");
+            assert_eq!(parsed_name(raw).text(), raw, "name {raw:?}");
         }
         let tchars: String = (0u8..=0x7F)
-            .filter(|&b| is_tchar(b))
+            .filter(|&b| is_tchar(b) && b != b'%')
             .map(char::from)
             .collect();
-        assert_eq!(CookieName::encode(&tchars).as_str(), tchars);
+        assert_eq!(parsed_name(&tchars).as_str(), tchars);
     }
 
     /// Every ASCII byte and non-ASCII text, in name and value, yields a line of
@@ -3811,7 +4069,7 @@ mod tests {
         let mut inputs: Vec<String> = (0u8..=0x7F).map(|b| char::from(b).to_string()).collect();
         inputs.extend(["é".to_owned(), "\u{2028}".to_owned(), "日本".to_owned()]);
         for raw in &inputs {
-            let name = CookieName::encode(raw);
+            let name = parsed_name(raw);
             let value = CookieValue::encode(raw);
             assert!(name.as_str().bytes().all(is_tchar), "name {raw:?}");
             assert!(value.as_str().bytes().all(is_cookie_octet), "value {raw:?}");
@@ -3843,7 +4101,7 @@ mod tests {
     #[tokio::test]
     async fn with_cookie_non_cookie_octet_value_keeps_the_response() {
         let r = server_with_cookie(
-            server_cookie("sid".into(), "é; a, b \"c\"".into()),
+            cookie("sid", "é; a, b \"c\""),
             server_text("ok".to_string()),
         );
         let resp = to_axum_response(r);
@@ -3869,7 +4127,7 @@ mod tests {
     #[test]
     fn same_site_none_always_renders_secure() {
         let line = SetCookie::new(
-            &CookieName::encode("sid"),
+            &parsed_name("sid"),
             &CookieValue::encode("v"),
             CookieAttributes {
                 path: CookiePath::root(),
@@ -3884,7 +4142,7 @@ mod tests {
             "sid=v; Path=/; HttpOnly; SameSite=None; Secure"
         );
         let lax = SetCookie::new(
-            &CookieName::encode("sid"),
+            &parsed_name("sid"),
             &CookieValue::encode("v"),
             CookieAttributes {
                 path: CookiePath::root(),
@@ -3914,7 +4172,7 @@ mod tests {
             assert_eq!(CookiePath::encode(raw).as_str(), encoded, "path {raw:?}");
         }
         let line = SetCookie::new(
-            &CookieName::encode("sid"),
+            &parsed_name("sid"),
             &CookieValue::encode("v"),
             CookieAttributes {
                 path: CookiePath::encode("/a;Domain=evil.example\r\nX: y"),
@@ -3935,10 +4193,234 @@ mod tests {
         );
     }
 
+    /// An empty cookie name is an `InvalidInput` error, so no `Set-Cookie`
+    /// line starts with `=`.
+    #[tokio::test]
+    async fn with_cookie_never_emits_nameless_line() {
+        assert!(matches!(
+            server_cookie(String::new(), "a=b".into()),
+            IpeResult::Err(IpeError::Error(IpeErrorKind::InvalidInput, _))
+        ));
+        let mut names: Vec<String> = (0u8..=0x7F).map(|b| char::from(b).to_string()).collect();
+        names.extend(["=".to_owned(), " ".to_owned(), "é".to_owned()]);
+        for raw in &names {
+            let lines = set_cookie_lines(server_with_cookie(
+                cookie(raw, "v"),
+                server_text("ok".to_owned()),
+            ));
+            assert_eq!(lines.len(), 1, "name {raw:?}: {lines:?}");
+            for line in &lines {
+                assert!(!line.starts_with('='), "name {raw:?}: {line}");
+                let Some((wire, _)) = line.split_once('=') else {
+                    return;
+                };
+                assert!(!wire.is_empty(), "name {raw:?}: {line}");
+                assert!(wire.bytes().all(is_tchar), "name {raw:?}: {line}");
+            }
+        }
+    }
+
+    /// Any name and value `Server.cookie` writes reads back unchanged through
+    /// the request parser and `Server.getCookie`.
+    #[tokio::test]
+    async fn cookie_round_trips_through_get_cookie() {
+        let mut texts: Vec<String> = (0u8..=0x7F).map(|b| char::from(b).to_string()).collect();
+        texts.extend(
+            [
+                "%41", "%", "%%", "%ZZ", "é", "日本", "my sid", "\u{2028}", "😀", "a=b; c",
+            ]
+            .map(str::to_owned),
+        );
+        for name in &texts {
+            for value in [name.as_str(), "", "%41", "é;%"] {
+                let lines = set_cookie_lines(server_with_cookie(
+                    cookie(name, value),
+                    server_text("ok".to_owned()),
+                ));
+                assert_eq!(lines.len(), 1, "name {name:?}: {lines:?}");
+                let Some((pair, _)) = lines.first().and_then(|l| l.split_once(';')) else {
+                    return;
+                };
+                let mut jar = HashMap::new();
+                parse_cookies(&format!("other=1; {pair}"), &mut jar);
+                let req = mk_req("GET", jar, HashMap::new());
+                assert_eq!(
+                    server_get_cookie(name.clone(), req),
+                    IpeMaybe::Just(value.to_owned()),
+                    "name {name:?} value {value:?} via {pair:?}"
+                );
+            }
+        }
+    }
+
+    /// A `%` without two hex digits, or bytes that are not UTF-8, have no
+    /// decoding: the cookie is absent, never a lossy value.
+    #[test]
+    fn undecodable_cookie_is_nothing() {
+        for wire in ["%ZZ", "%C3", "%FF%FE", "%4", "%", "a%G1"] {
+            assert_eq!(cookie_octets::decode(wire), None, "wire {wire:?}");
+        }
+        assert_eq!(cookie_octets::decode("%C3%A9%25"), Some("é%".to_owned()));
+        let mut jar = HashMap::new();
+        parse_cookies("a=%ZZ; b=%C3; c=%FF%FE; d=%4; e=ok; =v; s%69d=v", &mut jar);
+        assert_eq!(jar.len(), 1, "{jar:?}");
+        assert_eq!(jar.get("e").map(String::as_str), Some("ok"));
+        for name in ["a", "b", "c", "d", "", "sid", "s%69d"] {
+            let req = mk_req("GET", jar.clone(), HashMap::new());
+            assert_eq!(
+                server_get_cookie(name.to_owned(), req),
+                IpeMaybe::Nothing,
+                "name {name:?}"
+            );
+        }
+    }
+
+    /// Every header lookup keys on the encoded name: a lookup by `ipe_sid`
+    /// never matches a cookie whose wire name only decodes to it.
+    #[test]
+    fn request_cookie_keys_on_the_encoded_name() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.append(
+            axum::http::header::COOKIE,
+            axum::http::HeaderValue::from_static("ipe%5Fsid=forged; my%20sid=a%3Bb"),
+        );
+        headers.append(
+            axum::http::header::COOKIE,
+            axum::http::HeaderValue::from_static("ipe_sid=real; ipe_sid=second"),
+        );
+        assert_eq!(
+            request_cookie(&headers, &parsed_name("ipe_sid")),
+            Some("real".to_owned())
+        );
+        assert_eq!(
+            request_cookie(&headers, &parsed_name("my sid")),
+            Some("a;b".to_owned())
+        );
+        assert_eq!(request_cookie(&headers, &parsed_name("ipe%5Fsid")), None);
+    }
+
+    /// The `InvalidInput` message of a refused `Server.withHeader`, or `None`
+    /// when the header was accepted.
+    fn with_header_refusal(name: &str, value: &str) -> Option<String> {
+        match server_with_header(
+            name.to_owned(),
+            value.to_owned(),
+            server_text("ok".to_owned()),
+        ) {
+            IpeResult::Ok(_) => None,
+            IpeResult::Err(IpeError::Error(IpeErrorKind::InvalidInput, info)) => Some(info.message),
+            IpeResult::Err(IpeError::Error(_, info)) => {
+                Some(format!("wrong kind: {}", info.message))
+            }
+        }
+    }
+
+    /// A header value with CR/LF, a name that is not a `token`, and
+    /// `Set-Cookie` in any case are refused; a valid header is kept.
+    #[tokio::test]
+    async fn with_header_refuses_unrepresentable_headers() {
+        for (name, value) in [
+            ("X-Ok", "a\r\nSet-Cookie: x=y"),
+            ("X-Ok", "a\nb"),
+            ("X-Ok", "caf\u{e9}"),
+            ("X Bad", "v"),
+            ("X-Bad:", "v"),
+            ("", "v"),
+        ] {
+            let refusal = with_header_refusal(name, value);
+            assert!(
+                refusal
+                    .as_deref()
+                    .is_some_and(|m| m.starts_with("Server.withHeader:")),
+                "{name:?}: {value:?} -> {refusal:?}"
+            );
+        }
+        for name in ["Set-Cookie", "set-cookie", "SET-COOKIE"] {
+            let refusal = with_header_refusal(name, "sid=1");
+            assert!(
+                refusal
+                    .as_deref()
+                    .is_some_and(|m| m.contains("Server.withCookie")),
+                "{name:?} -> {refusal:?}"
+            );
+        }
+        assert_eq!(with_header_refusal("X-Frame-Options", "DENY"), None);
+        let IpeResult::Ok(r) = server_with_header(
+            "X-Frame-Options".to_owned(),
+            "DENY".to_owned(),
+            server_text("ok".to_owned()),
+        ) else {
+            return;
+        };
+        let resp = to_axum_response(r);
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get("x-frame-options")
+                .and_then(|v| v.to_str().ok()),
+            Some("DENY")
+        );
+    }
+
+    /// A raw header a `Response` record update carries past `withHeader` is
+    /// parsed again: a `Set-Cookie` or CR/LF header answers 500, never a line.
+    #[tokio::test]
+    async fn to_axum_response_refuses_a_raw_unrepresentable_header() {
+        for (name, value) in [
+            ("Set-Cookie", "sid=forged; Path=/"),
+            ("set-cookie", "sid=forged"),
+            ("X-Ok", "a\r\nSet-Cookie: sid=forged"),
+            ("X Bad", "v"),
+        ] {
+            let mut r = server_text("ok".to_owned());
+            r.headers.insert(name.to_owned(), value.to_owned());
+            let resp = to_axum_response(r);
+            assert_eq!(
+                resp.status(),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "{name:?}: {value:?}"
+            );
+            assert!(
+                resp.headers().get(axum::http::header::SET_COOKIE).is_none(),
+                "{name:?}: {value:?}"
+            );
+        }
+    }
+
+    /// `redirect` percent-encodes CTLs, space, non-ASCII and the characters
+    /// RFC 3986 neither reserves nor leaves unreserved; reserved characters
+    /// and existing `%XX` escapes are kept.
+    #[tokio::test]
+    async fn redirect_location_is_percent_encoded() {
+        for (raw, location) in [
+            ("/a b/caf\u{e9}?q=1&r=[x]#f", "/a%20b/caf%C3%A9?q=1&r=[x]#f"),
+            ("/%41", "/%41"),
+            ("/a\r\nSet-Cookie: x=y", "/a%0D%0ASet-Cookie:%20x=y"),
+            (
+                "https://e.example/p?x=\"<{|}>\"",
+                "https://e.example/p?x=%22%3C%7B%7C%7D%3E%22",
+            ),
+            ("/\u{65e5}", "/%E6%97%A5"),
+        ] {
+            let resp = to_axum_response(server_redirect(raw.to_owned()));
+            assert_eq!(resp.status(), axum::http::StatusCode::FOUND, "{raw:?}");
+            assert_eq!(
+                resp.headers()
+                    .get(axum::http::header::LOCATION)
+                    .and_then(|v| v.to_str().ok()),
+                Some(location),
+                "{raw:?}"
+            );
+        }
+    }
+
     #[cfg(feature = "jwt")]
     #[test]
     fn reissue_set_cookie_encodes_name_and_token() {
-        let line = reissue_set_cookie("my sid", "t;ok", 1800, false);
+        assert!(reissue_set_cookie("", "tok", 1800, false).is_none());
+        let Some(line) = reissue_set_cookie("my sid", "t;ok", 1800, false) else {
+            return;
+        };
         assert!(
             line.starts_with("my%20sid=t%3Bok; Path=/; HttpOnly; SameSite="),
             "{line}"
@@ -4415,14 +4897,14 @@ mod tests {
             crate::system::locked_remove_var("IPE_ENV");
 
             // is_https=true, cookies_secure()=false → Secure must fire.
-            let c_https = reissue_set_cookie("ipe_sid", "tok", 1800, true);
+            let c_https = reissue_set_cookie("ipe_sid", "tok", 1800, true).unwrap();
             assert!(
                 c_https.contains("; Secure"),
                 "reissue behind TLS proxy must carry Secure: {c_https}"
             );
 
             // is_https=false, cookies_secure()=false → no Secure (dev default).
-            let c_plain = reissue_set_cookie("ipe_sid", "tok", 1800, false);
+            let c_plain = reissue_set_cookie("ipe_sid", "tok", 1800, false).unwrap();
             assert!(
                 !c_plain.contains("; Secure"),
                 "reissue over plain HTTP in dev must NOT carry Secure: {c_plain}"
@@ -4446,7 +4928,7 @@ mod tests {
             let is_https = request_is_https_with_trust(&headers, true);
             assert!(is_https, "trusted HTTPS header must be detected");
 
-            let cookie = reissue_set_cookie("ipe_sid", "tok", 1800, is_https);
+            let cookie = reissue_set_cookie("ipe_sid", "tok", 1800, is_https).unwrap();
             assert!(
                 cookie.contains("; Secure"),
                 "reissue with HTTPS proxy signal must carry Secure: {cookie}"
@@ -4463,7 +4945,7 @@ mod tests {
             let is_https = request_is_https_with_trust(&headers, false);
             assert!(!is_https);
 
-            let cookie = reissue_set_cookie("ipe_sid", "tok", 1800, is_https);
+            let cookie = reissue_set_cookie("ipe_sid", "tok", 1800, is_https).unwrap();
             assert!(
                 !cookie.contains("; Secure"),
                 "reissue over plain HTTP must NOT carry Secure: {cookie}"

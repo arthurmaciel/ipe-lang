@@ -974,8 +974,9 @@ pub fn html_on_raw_fixed_<M>(_name: String, _msg: M) -> Attribute<M> {
 
 /// `Ffi.callPure "htmlEscapeText"` — HTML-escape a string for text content.
 ///
-/// Escapes exactly `&` `<` `>` `'` (as `&amp;` `&lt;` `&gt;` `&#39;`) and
-/// leaves `"` raw, so the output is safe only as element text content. A
+/// Escapes exactly `&` `<` `>` `'`, each to the entity the `crate::escape`
+/// text form names, and leaves `"` raw, so the output is safe only as element
+/// text content. A
 /// double-quoted attribute value needs [`html_escape_attr_`], which also
 /// escapes `"`. Routes through render's escaper, so the set cannot drift.
 #[must_use]
@@ -1263,23 +1264,27 @@ mod tests {
     }
 
     /// The text kernel escapes exactly `& < > '` and leaves `"` raw; the attr
-    /// kernel adds `"`, the one byte that separates the two contexts.
+    /// kernel adds `"`, the one byte that separates the two contexts. Each
+    /// writes the owner's bytes; `crate::escape` pins the entities themselves.
     #[test]
     fn escape_kernels_pin_their_escaped_sets() {
-        assert_eq!(
-            html_escape_text_("&<>'\"".to_string()),
-            "&amp;&lt;&gt;&#39;\""
-        );
-        assert_eq!(
-            html_escape_attr_("&<>'\"".to_string()),
-            "&amp;&lt;&gt;&#39;&#34;"
-        );
-        let untouched: String = (0x20u8..=0x7E)
-            .map(char::from)
-            .filter(|c| !matches!(c, '&' | '<' | '>' | '\'' | '"'))
-            .collect();
-        assert_eq!(html_escape_text_(untouched.clone()), untouched);
-        assert_eq!(html_escape_attr_(untouched.clone()), untouched);
+        for c in (0x20u8..=0x7E).map(char::from) {
+            let raw = c.to_string();
+            let text = html_escape_text_(raw.clone());
+            let attr = html_escape_attr_(raw.clone());
+            assert_eq!(text, crate::escape::html_text(&raw), "{c:?}");
+            assert_eq!(attr, crate::escape::html_attr(&raw), "{c:?}");
+            assert_eq!(
+                text != raw,
+                matches!(c, '&' | '<' | '>' | '\''),
+                "text kernel on {c:?}"
+            );
+            assert_eq!(
+                attr != raw,
+                matches!(c, '&' | '<' | '>' | '\'' | '"'),
+                "attr kernel on {c:?}"
+            );
+        }
     }
 
     #[test]

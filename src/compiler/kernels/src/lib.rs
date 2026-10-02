@@ -10381,8 +10381,12 @@ impl StdlibKernel {
         // Server (route/cookie only — non-record arms).
         const STRING_TO_STRING_TO_ROUTE: TyShape =
             TyShape::Fun(&STRING, &TyShape::Fun(&STRING, &SERVER_ROUTE));
-        const STRING_TO_STRING_TO_COOKIE: TyShape =
-            TyShape::Fun(&STRING, &TyShape::Fun(&STRING, &SERVER_COOKIE));
+        // `Server.cookie : String -> String -> Result Error Cookie` (an empty
+        // name is an `Error`).
+        const RESULT_ERROR_COOKIE: TyShape =
+            TyShape::Con(BuiltinTag::Result, &[ERROR, SERVER_COOKIE]);
+        const STRING_TO_STRING_TO_RESULT_COOKIE: TyShape =
+            TyShape::Fun(&STRING, &TyShape::Fun(&STRING, &RESULT_ERROR_COOKIE));
         const REQ_TO_STRING: TyShape = TyShape::Fun(&SERVER_REQUEST, &STRING);
         const STRING_TO_REQ_TO_MAYBE_STRING: TyShape =
             TyShape::Fun(&STRING, &TyShape::Fun(&SERVER_REQUEST, &MAYBE_STRING));
@@ -11396,9 +11400,17 @@ impl StdlibKernel {
         const STRING_TO_RESPONSE: TyShape = TyShape::Fun(&STRING, &SERVER_RESPONSE);
         const RESPONSE_TO_RESPONSE: TyShape = TyShape::Fun(&SERVER_RESPONSE, &SERVER_RESPONSE);
         const SERVER_WITH_STATUS: TyShape = TyShape::Fun(&INT, &RESPONSE_TO_RESPONSE);
-        const STRING_TO_RESPONSE_TO_RESPONSE: TyShape =
-            TyShape::Fun(&STRING, &RESPONSE_TO_RESPONSE);
-        const SERVER_WITH_HEADER: TyShape = TyShape::Fun(&STRING, &STRING_TO_RESPONSE_TO_RESPONSE);
+        // `Server.withHeader : String -> String -> Response -> Result Error Response`
+        // (a name or value with no header representation is an `Error`).
+        const RESULT_ERROR_RESPONSE: TyShape =
+            TyShape::Con(BuiltinTag::Result, &[ERROR, SERVER_RESPONSE]);
+        const SERVER_WITH_HEADER: TyShape = TyShape::Fun(
+            &STRING,
+            &TyShape::Fun(
+                &STRING,
+                &TyShape::Fun(&SERVER_RESPONSE, &RESULT_ERROR_RESPONSE),
+            ),
+        );
         // Server withCookie : Cookie -> Response -> Response.
         const SERVER_WITH_COOKIE: TyShape = TyShape::Fun(&SERVER_COOKIE, &RESPONSE_TO_RESPONSE);
         // Middleware — every wrapper is a `Handler -> Handler` transform over the
@@ -12475,7 +12487,7 @@ impl StdlibKernel {
 
             // ── Server (non-record route/cookie arms). ──
             Self::ServerStatic => Some(&STRING_TO_STRING_TO_ROUTE),
-            Self::ServerCookieNew => Some(&STRING_TO_STRING_TO_COOKIE),
+            Self::ServerCookieNew => Some(&STRING_TO_STRING_TO_RESULT_COOKIE),
             Self::ServerBody | Self::ServerPath | Self::ServerMethod => Some(&REQ_TO_STRING),
             Self::ServerParam
             | Self::ServerQueryParam

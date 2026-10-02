@@ -1434,19 +1434,21 @@ fn normalise_base_path(raw: &str) -> String {
 /// (`__Host-` requires Secure, which a browser drops over `http://`). A sub-app
 /// (Path != `/`) can never use `__Host-`, so it keeps the base-scoped name.
 #[cfg(feature = "server")]
-fn cookie_name_for(base: &str) -> String {
+fn cookie_name_for(base: &str) -> crate::server::CookieName {
+    use crate::server::{CookieName, RuntimeCookie};
     if base.is_empty() {
-        if csrf::cookies_secure() {
-            "__Host-ipe_sid".to_string()
+        let root = if csrf::cookies_secure() {
+            RuntimeCookie::HostSession
         } else {
-            "ipe_sid".to_string()
-        }
+            RuntimeCookie::Session
+        };
+        CookieName::runtime(root, "")
     } else {
         let suffix: String = base
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
             .collect();
-        format!("ipe_sid{suffix}")
+        CookieName::runtime(RuntimeCookie::Session, &suffix)
     }
 }
 
@@ -1477,7 +1479,7 @@ pub(super) fn web_base_path() -> String {
 /// The active session cookie name (read AND write must agree, so both
 /// `page_response` and `sid_from_cookie` route through this).
 #[cfg(feature = "server")]
-fn session_cookie_name() -> String {
+fn session_cookie_name() -> crate::server::CookieName {
     cookie_name_for(&web_base_path())
 }
 
@@ -1493,11 +1495,9 @@ fn cookie_path() -> String {
 /// framed cross-origin, else `Lax`.
 #[cfg(feature = "server")]
 fn session_set_cookie(sid: &str, headers: &axum::http::HeaderMap) -> crate::server::SetCookie {
-    use crate::server::{
-        CookieAttributes, CookieName, CookiePath, CookieValue, SameSite, SetCookie,
-    };
+    use crate::server::{CookieAttributes, CookiePath, CookieValue, SameSite, SetCookie};
     SetCookie::new(
-        &CookieName::encode(&session_cookie_name()),
+        &session_cookie_name(),
         &CookieValue::encode(sid),
         CookieAttributes {
             path: CookiePath::encode(&cookie_path()),
@@ -5219,17 +5219,7 @@ where
 /// never the parent's `ipe_sid`.
 #[cfg(feature = "server")]
 fn sid_from_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
-    let name = session_cookie_name();
-    let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
-    for c in raw.split(';') {
-        let c = c.trim();
-        if let Some((k, v)) = c.split_once('=')
-            && k.trim() == name
-        {
-            return Some(v.trim().to_string());
-        }
-    }
-    None
+    crate::server::request_cookie(headers, &session_cookie_name())
 }
 
 // The Ipe.Html `Ffi.callPure "htmlXxx"` kernel wrappers (html_render_,
@@ -5806,10 +5796,13 @@ mod base_path_tests {
     fn cookie_name_is_ipe_sid_at_root_distinct_under_base() {
         // Dev posture: the root cookie keeps its plain-http name.
         crate::system::locked_set_var("ENV", "dev");
-        assert_eq!(cookie_name_for(""), "ipe_sid");
+        assert_eq!(cookie_name_for("").text(), "ipe_sid");
         // Distinct from the parent's `ipe_sid` so the proxied child can't clobber it.
-        assert_eq!(cookie_name_for("/_ipe/console"), "ipe_sid__ipe_console");
-        assert_ne!(cookie_name_for("/_ipe/console"), "ipe_sid");
+        assert_eq!(
+            cookie_name_for("/_ipe/console").text(),
+            "ipe_sid__ipe_console"
+        );
+        assert_ne!(cookie_name_for("/_ipe/console").text(), "ipe_sid");
     }
 
     #[test]
