@@ -534,8 +534,20 @@ mod windows_jail {
         let job = create_job(profile)?;
 
         // 5. The scrubbed environment block (never inherit the launcher's).
+        //    Bisect probe: `IPE_PROBE_JAIL_VARIANT` selects which launch data
+        //    varies (profile variables, plain spelling of the scratch, or both).
+        let variant = ProbeVariant::from_host()?;
+        let launch_tmp = if variant.plain_spelling() {
+            plain_spelling(scoped_tmp)
+        } else {
+            scoped_tmp.to_path_buf()
+        };
         let host_env = crate::host_env::granted;
-        let env_block = env_block_utf16(profile, scoped_tmp, &host_env);
+        let env_block = if variant.profile_vars() {
+            probe_env_block_with_profile_vars(profile, &launch_tmp, &host_env)
+        } else {
+            env_block_utf16(profile, &launch_tmp, &host_env)
+        };
 
         // 6. CreateProcess suspended, with the AppContainer security-capabilities
         //    attribute and the scrubbed environment. The child's current directory
@@ -549,7 +561,7 @@ mod windows_jail {
         let child = create_suspended_appcontainer_process(
             app,
             app_args,
-            scoped_tmp,
+            &launch_tmp,
             &container,
             &mut capabilities,
             &env_block,
@@ -570,6 +582,86 @@ mod windows_jail {
         drop(capabilities);
         container.delete();
         Ok(code)
+    }
+
+    /// Which launch data the bisect probe varies.
+    #[derive(Clone, Copy)]
+    enum ProbeVariant {
+        Baseline,
+        ProfileVars,
+        PlainSpelling,
+        Both,
+    }
+
+    impl ProbeVariant {
+        /// The variant `IPE_PROBE_JAIL_VARIANT` names; unset is `Baseline`, an unknown name refuses.
+        fn from_host() -> Result<Self, RunJailDefect> {
+            let Some(raw) = crate::host_env::granted("IPE_PROBE_JAIL_VARIANT") else {
+                return Ok(Self::Baseline);
+            };
+            match raw.to_str() {
+                Some("baseline") => Ok(Self::Baseline),
+                Some("profile") => Ok(Self::ProfileVars),
+                Some("plain") => Ok(Self::PlainSpelling),
+                Some("both") => Ok(Self::Both),
+                _ => Err(RunJailDefect::Spawn {
+                    detail: format!("unknown IPE_PROBE_JAIL_VARIANT `{}`", raw.display()),
+                }),
+            }
+        }
+
+        const fn profile_vars(self) -> bool {
+            matches!(self, Self::ProfileVars | Self::Both)
+        }
+
+        const fn plain_spelling(self) -> bool {
+            matches!(self, Self::PlainSpelling | Self::Both)
+        }
+    }
+
+    /// The profile variables AppContainer process creation is suspected to read.
+    const PROBE_PROFILE_VARS: [&str; 5] = [
+        "LOCALAPPDATA",
+        "USERPROFILE",
+        "APPDATA",
+        "HOMEDRIVE",
+        "HOMEPATH",
+    ];
+
+    /// The scrubbed block plus the host's profile variables, re-sorted and deduplicated.
+    fn probe_env_block_with_profile_vars(
+        profile: &SandboxProfile,
+        scoped_tmp: &Path,
+        host_env: &dyn Fn(&str) -> Option<OsString>,
+    ) -> Vec<u16> {
+        let mut pairs = windows_scrubbed_env(profile, scoped_tmp, host_env);
+        for name in PROBE_PROFILE_VARS {
+            if let Some(value) = host_env(name) {
+                pairs.push((OsString::from(name), value));
+            }
+        }
+        pairs.sort_by_key(|(name, _)| super::env_name_collation_key(name));
+        pairs.dedup_by_key(|(name, _)| super::env_name_collation_key(name));
+        super::env_block_from_pairs(&pairs)
+    }
+
+    /// `path` without its verbatim `\\?\` prefix when it is a verbatim drive path, else unchanged.
+    fn plain_spelling(path: &Path) -> std::path::PathBuf {
+        let Some(text) = path.to_str() else {
+            return path.to_path_buf();
+        };
+        let Some(rest) = text.strip_prefix(r"\\?\") else {
+            return path.to_path_buf();
+        };
+        let bytes = rest.as_bytes();
+        let is_drive = bytes.first().is_some_and(u8::is_ascii_alphabetic)
+            && bytes.get(1) == Some(&b':')
+            && bytes.get(2) == Some(&b'\\');
+        if is_drive {
+            std::path::PathBuf::from(rest)
+        } else {
+            path.to_path_buf()
+        }
     }
 
     /// A per-run AppContainer name: unique enough that concurrent `ipe run`

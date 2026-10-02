@@ -258,6 +258,7 @@ jobs:
   # Windows on every code change; the Windows test suites do not run in CI.
   windows-check:
     runs-on: windows-latest
+    timeout-minutes: 90
     needs: changes
     if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     steps:
@@ -266,7 +267,69 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo check --locked -p ipe --all-targets
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
+        with:
+          tool: nextest
+      - name: Build jail e2e tests
+        shell: bash
+        env:
+          IPE_E2E: '1'
+        run: cargo nextest run --locked --profile ci -p ipe_sandbox --test build_jail_windows_e2e --test run_jail_windows_e2e --no-run
+      - name: Write jail variant runner
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/jail-variant.sh" <<'SH'
+          v="$1"
+          log="jail-$v.log"
+          filter='binary(build_jail_windows_e2e) | test(=a_non_allowlisted_env_var_is_absent_from_the_jailed_child_but_present_under_control)'
+          cargo nextest run --locked --profile ci --no-fail-fast --color never -p ipe_sandbox --test build_jail_windows_e2e --test run_jail_windows_e2e -E "$filter" 2>&1 | tee "$log"
+          rc=${PIPESTATUS[0]}
+          err=$(grep -oE 'GetLastError = [0-9]+' "$log" | sed 's/GetLastError = //' | sort -u | paste -sd, -)
+          [ -n "$err" ] || err=none
+          result=pass
+          [ "$rc" -eq 0 ] || result=fail
+          grep -E '^ *(PASS|FAIL) ' "$log" | awk -v v="$v" '{print "VARIANT=" v " TEST=" $NF " RESULT=" tolower($1)}' | tee -a "$RUNNER_TEMP/jail-summary.txt"
+          echo "VARIANT=$v RESULT=$result err=$err" | tee -a "$RUNNER_TEMP/jail-summary.txt"
+          exit "$rc"
+          SH
+      - name: Jail variant baseline
+        id: jail-baseline
+        continue-on-error: true
+        shell: bash
+        env:
+          IPE_E2E: '1'
+          IPE_PROBE_JAIL_VARIANT: baseline
+        run: bash "$RUNNER_TEMP/jail-variant.sh" baseline
+      - name: Jail variant profile
+        id: jail-profile
+        continue-on-error: true
+        shell: bash
+        env:
+          IPE_E2E: '1'
+          IPE_PROBE_JAIL_VARIANT: profile
+        run: bash "$RUNNER_TEMP/jail-variant.sh" profile
+      - name: Jail variant plain
+        id: jail-plain
+        continue-on-error: true
+        shell: bash
+        env:
+          IPE_E2E: '1'
+          IPE_PROBE_JAIL_VARIANT: plain
+        run: bash "$RUNNER_TEMP/jail-variant.sh" plain
+      - name: Jail variant both
+        id: jail-both
+        continue-on-error: true
+        shell: bash
+        env:
+          IPE_E2E: '1'
+          IPE_PROBE_JAIL_VARIANT: both
+        run: bash "$RUNNER_TEMP/jail-variant.sh" both
+      - name: Jail variant verdict
+        if: always()
+        shell: bash
+        run: |
+          cat "$RUNNER_TEMP/jail-summary.txt" || true
+          echo "baseline=${{ steps.jail-baseline.outcome }} profile=${{ steps.jail-profile.outcome }} plain=${{ steps.jail-plain.outcome }} both=${{ steps.jail-both.outcome }}"
 
   # No compiler-internal jargon or raw Rust types leak into user-facing text
   # (rendered diagnostic goldens + `ipe explain` pages). Pure git + ripgrep, no
