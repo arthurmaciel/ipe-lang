@@ -2747,11 +2747,11 @@ fn noise_candidate(
     regime: crate::path_core::Regime,
 ) -> Option<(std::path::PathBuf, &'static str)> {
     let crate::server::StaticRequest::File(rel) =
-        crate::server::static_request(uri_path, std::path::Path::new(dir), regime)?
+        crate::server::static_request(uri_path, std::path::Path::new(dir), regime).ok()?
     else {
         return None;
     };
-    let candidate = std::path::PathBuf::from(crate::path::join_rel(dir, &rel, regime).ok()?);
+    let candidate = std::path::PathBuf::from(crate::path::join_rel(dir, &rel).ok()?);
     let mime = static_noise_mime(rel.last().rsplit('.').next().unwrap_or(""));
     Some((candidate, mime))
 }
@@ -5171,8 +5171,9 @@ where
     // package.ipe `[web] static` (baked as IPE_WEB_STATIC_DIR) → serve files at
     // /static/* via ServeDir. MUST be added before the `/*path` page catch-all
     // so a /static/<file> request hits ServeDir, not the page handler (which
-    // would return HTML). ServeDir blocks `..` path traversal by construction
-    // (percent-decodes first, so `%2e%2e` is caught too). NOTE: like
+    // would return HTML). `strict_serve_dir` parses each request path through
+    // `server::static_request` (decoded once, every segment a plain name under
+    // the host regime, the join re-checked) before `ServeDir` reads it. NOTE: like
     // http.FileServer it FOLLOWS symlinks inside the dir — the dir is
     // author-controlled (package.ipe [web] static), so that is the intended
     // contract, NOT a confinement guarantee. Absent/empty → no static mount.

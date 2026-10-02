@@ -642,13 +642,17 @@ pub enum RelPathRefusal {
 ///
 /// Built only by [`RelPath::from_segments`], so holding one proves that no
 /// segment can climb, re-anchor, name a device or alias another entry under
-/// that regime. The text joins the segments with the regime's separator.
+/// that regime. The text joins the segments with the regime's separator, and
+/// the path keeps the regime it was judged under, so a join can never re-read
+/// it under another.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RelPath {
     /// The segments joined with the regime's separator; never empty.
     text: String,
     /// The byte offset where the last segment starts.
     last_start: usize,
+    /// The regime every segment was judged under.
+    regime: Regime,
 }
 
 impl RelPath {
@@ -689,7 +693,11 @@ impl RelPath {
             text.push_str(seg);
         }
         last_start
-            .map(|last_start| Self { text, last_start })
+            .map(|last_start| Self {
+                text,
+                last_start,
+                regime,
+            })
             .ok_or(RelPathRefusal::Empty)
     }
 
@@ -697,6 +705,12 @@ impl RelPath {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.text
+    }
+
+    /// The regime every segment was judged under.
+    #[must_use]
+    pub const fn regime(&self) -> Regime {
+        self.regime
     }
 
     /// The last segment (the entry's own name).
@@ -1139,6 +1153,7 @@ mod tests {
         let ok = RelPath::from_segments(["a", "b.css"], Regime::Windows);
         assert_eq!(ok.as_ref().map(RelPath::as_str), Ok("a\\b.css"));
         assert_eq!(ok.as_ref().map(RelPath::last), Ok("b.css"));
+        assert_eq!(ok.as_ref().map(RelPath::regime), Ok(Regime::Windows));
     }
 
     #[test]

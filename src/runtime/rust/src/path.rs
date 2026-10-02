@@ -618,7 +618,8 @@ fn under_with(r: &str, c: &str, regime: Regime) -> Result<String, PathRefusal> {
     join_beneath(JoinOp::Under, r, c, regime)
 }
 
-/// Join the parsed request path `rel` beneath the served directory `root`.
+/// Join the parsed request path `rel` beneath the served directory `root`,
+/// under the regime `rel` was parsed under.
 ///
 /// The post-join boundary of a static-file mount: `rel` already passed the
 /// per-element parse, and [`join_beneath`] re-runs the raw child scan, the
@@ -628,8 +629,8 @@ fn under_with(r: &str, c: &str, regime: Regime) -> Result<String, PathRefusal> {
 ///
 /// The [`PathRefusal`] of the join, naming the static file request.
 #[cfg(feature = "server")]
-pub(crate) fn join_rel(root: &str, rel: &RelPath, regime: Regime) -> Result<String, PathRefusal> {
-    join_beneath(JoinOp::Static, root, rel.as_str(), regime)
+pub(crate) fn join_rel(root: &str, rel: &RelPath) -> Result<String, PathRefusal> {
+    join_beneath(JoinOp::Static, root, rel.as_str(), rel.regime())
 }
 
 /// Join `child` beneath `root` under a separator regime on behalf of `op`.
@@ -1623,6 +1624,22 @@ mod tests {
                 child: "a.".to_string(),
                 why: ChildRefusal::Element(ElementRefusal::StrippedTail),
             })
+        );
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn join_rel_joins_under_the_regime_the_path_was_parsed_under() {
+        let win = RelPath::from_segments(["a", "b.css"], Regime::Windows).expect("windows rel");
+        assert_eq!(
+            join_rel("C:\\site", &win).as_deref(),
+            Ok("C:\\site\\a\\b.css")
+        );
+        // A Unix name holding `\` stays one element under the Unix regime.
+        let unix = RelPath::from_segments(["a\\b"], Regime::Unix).expect("unix rel");
+        assert_eq!(
+            join_rel("/srv/site", &unix).as_deref(),
+            Ok("/srv/site/a\\b")
         );
     }
 
