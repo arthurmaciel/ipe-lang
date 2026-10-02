@@ -1,34 +1,80 @@
-module Lib.Db exposing (Decision(..), ReviewRow, findDecision, findDecisions, findLatestForUid, insertDecision, insertDrainCursor, migrate, open, openAt, recordDrain)
+module Lib.Db exposing (Decision(..), Reason, ReviewRow, countDecisions, decidedPairsAfter, findDecision, findDecisions, findLatestForUid, insertDecision, insertDrainCursor, migrate, open, openAt, pairPageSize, parseReason, probe, reasonMaxChars, reasonText, recordDrain)
 
 import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
 import Ipe.Config as Config
 import Ipe.Db as Db
+import Ipe.Db.Decode
 import Ipe.Db.Store as Store exposing (Store)
 import Ipe.Error as Error
 import Ipe.Json.Encode as Encode
 import Ipe.List as List
+import Ipe.Maybe as Maybe
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Task as Task
 import Ipe.Time as Time
 import Ipe.Time.Timestamp as Timestamp exposing (Timestamp)
+import Lib.SafeText as SafeText exposing (SafeText)
 import Lib.Settings as Settings exposing (DbLocation)
 import Migrations exposing (all)
 
 
 type Decision
     = Approved
-    | Refused String
+    | Refused Reason
+
+
+-- Why a unit was refused: non-blank and at most `reasonMaxChars` characters.
+-- Opaque: built only by `parseReason`, the one decode point for the
+-- reviewer's text and for a stored reason, so an empty or unbounded reason
+-- has no representation. It is shown only through `reasonText`.
+type Reason
+    = Reason String
+
+
+-- The longest refusal reason, in characters.
+reasonMaxChars : Int
+reasonMaxChars =
+    500
+
+
+parseReason : String -> Result Error Reason
+parseReason raw =
+    if String.isEmpty (String.trim raw) then
+        Err (Error.invalidInput "a refusal needs a reason")
+
+    else if String.length raw > reasonMaxChars then
+        Err (Error.invalidInput ("a refusal reason is at most " ++ String.fromInt reasonMaxChars ++ " characters; this one has " ++ String.fromInt (String.length raw)))
+
+    else
+        Ok (Reason raw)
+
+
+-- A reason as it may be shown, with every control and bidi character escaped.
+reasonText : Reason -> SafeText
+reasonText reason =
+    SafeText.renderForeign (reasonString reason)
+
+
+reasonString : Reason -> String
+reasonString reason =
+    case reason of
+        Reason r ->
+            r
 
 
 -- One row of the review table. `reviewedAt` is a typed instant — a moment in
 -- time, not a bare count — so it can only be built from and read as a
--- `Timestamp`, never swapped for a plain `Int`.
+-- `Timestamp`, never swapped for a plain `Int`. `reason` is `Just` exactly
+-- for a refusal: a stored refusal's reason is parsed by `parseReason` like a
+-- new one, so a row breaking its bound fails to decode, and an approval's
+-- reason column is never read (the store's plain read returns SQL NULL as
+-- `""`, which must not stand for a reason).
 type alias ReviewRow =
     { uid : String
     , bodyHash : String
     , decision : String
-    , reason : Maybe String
+    , reason : Maybe Reason
     , reviewedAt : Timestamp
     }
 
@@ -47,7 +93,7 @@ reviewCodec =
                     , ( "reason"
                       , case row.reason of
                             Just r ->
-                                Encode.string r
+                                Encode.string (reasonString r)
 
                             Nothing ->
                                 Encode.null
@@ -62,6 +108,7 @@ reviewCodec =
                     (Config.field "decision" Config.string)
                     (Config.field "reason" (Config.nullable Config.string))
                     (Config.field "reviewed_at" (Config.map Timestamp.fromUnixMillis Config.int))
+                    |> Config.andThen parseRow
         , shp =
             SRecord
                 [ ( "uid", CText )
@@ -73,7 +120,17 @@ reviewCodec =
         }
 
 
-makeRow : String -> String -> String -> Maybe String -> Timestamp -> ReviewRow
+-- A stored row as read, before its reason is parsed.
+type alias StoredRow =
+    { uid : String
+    , bodyHash : String
+    , decision : String
+    , reason : Maybe String
+    , reviewedAt : Timestamp
+    }
+
+
+makeRow : String -> String -> String -> Maybe String -> Timestamp -> StoredRow
 makeRow uid bodyHash decision reason reviewedAt =
     { uid = uid
     , bodyHash = bodyHash
@@ -81,6 +138,48 @@ makeRow uid bodyHash decision reason reviewedAt =
     , reason = reason
     , reviewedAt = reviewedAt
     }
+
+
+parseRow : StoredRow -> Config.Decoder ReviewRow
+parseRow stored =
+    let
+        row reason =
+            Config.succeed
+                { uid = stored.uid
+                , bodyHash = stored.bodyHash
+                , decision = stored.decision
+                , reason = reason
+                , reviewedAt = stored.reviewedAt
+                }
+    in
+    if stored.decision == "refuse" then
+        case parseReason (Maybe.withDefault "" stored.reason) of
+            Ok reason ->
+                row (Just reason)
+
+            Err e ->
+                Config.fail (storedReasonRefusal stored e)
+
+    else
+        row Nothing
+
+
+-- A stored refusal whose reason breaks the bound fails every read of the
+-- table, so the message names the row (its uid is database text, rendered)
+-- and the one fix.
+storedReasonRefusal : StoredRow -> Error -> String
+storedReasonRefusal stored e =
+    SafeText.toString
+        (SafeText.concat
+            [ SafeText.literal "the stored refusal of unit "
+            , SafeText.quoted stored.uid
+            , SafeText.literal " at hash "
+            , SafeText.quoted stored.bodyHash
+            , SafeText.literal " has an invalid reason ("
+            , SafeText.render (Error.message e)
+            , SafeText.literal "); shorten that row's reason in the review database, or delete the row to review the unit again"
+            ]
+        )
 
 
 -- The typed store for the review table. `fromCodec` validates every column
@@ -92,6 +191,19 @@ reviewStore : Result Error (Store ReviewRow)
 reviewStore =
     Store.fromCodec "review" reviewCodec
         |> Result.map (\draft -> Store.public (Store.compositePrimaryKey2 .uid .bodyHash draft))
+
+
+-- The startup check of `IPE_REVIEW_DB`: the review database is opened
+-- (created when absent) and migrated, so an unwritable location stops the
+-- server before it listens, naming the variable and the file.
+probe : DbLocation -> Task.Task Error ()
+probe loc =
+    (do
+        db <- openAt loc
+        migrate db
+        Task.succeed ()
+    )
+        |> Task.mapError (Settings.openFailure "IPE_REVIEW_DB" (SafeText.literal "point IPE_REVIEW_DB at a writable SQLite file") loc)
 
 
 -- The review database from `IPE_REVIEW_DB`, opened and migrated.
@@ -116,18 +228,11 @@ migrate db =
     Db.migrate db all
 
 
+-- A refusal's reason is already a parsed `Reason`, so every decision that
+-- reaches the store is well formed.
 insertDecision : Db -> String -> String -> Decision -> Task.Task Error Int
 insertDecision db uid bodyHash decision =
-    case decision of
-        Refused r ->
-            if String.length (String.trim r) == 0 then
-                Task.fail (Error.invalidInput "a refused review needs a non-empty reason")
-
-            else
-                insertIfAbsent db uid bodyHash decision
-
-        Approved ->
-            insertIfAbsent db uid bodyHash decision
+    insertIfAbsent db uid bodyHash decision
 
 
 -- A duplicate (uid, body_hash) pair is a no-op: the first review wins and
@@ -356,6 +461,68 @@ retryRefresh db store cursor insertError =
 
         else
             Task.succeed updated
+
+
+countDecoder : Db.Decode.Decoder Int
+countDecoder =
+    Db.Decode.succeed (\n -> n)
+        |> Db.Decode.required "total" (Db.Decode.int "total")
+
+
+-- How many decisions the review table holds, counted by SQLite without
+-- decoding a row, so a row whose stored reason no longer parses still
+-- counts. A count query that yields anything but one row is a failed read,
+-- never a zero.
+countDecisions : Db -> Task.Task Error Int
+countDecisions db =
+    do
+        rows <- Db.queryDecode db "SELECT COUNT(*) AS total FROM review" [] countDecoder
+        case rows of
+            [ n ] ->
+                Task.succeed n
+
+            _ ->
+                Task.fail (Error.unexpected "COUNT(*) over review did not return exactly one row")
+
+
+-- The most decided pairs one page of a progress rebuild reads.
+pairPageSize : Int
+pairPageSize =
+    200
+
+
+pairDecoder : Db.Decode.Decoder ( String, String )
+pairDecoder =
+    Db.Decode.succeed (\uid bodyHash -> ( uid, bodyHash ))
+        |> Db.Decode.required "uid" (Db.Decode.string "uid")
+        |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
+
+
+-- One page of decided (uid, body_hash) pairs in key order, strictly after
+-- `cursor` (from the first pair when Nothing), at most `pageSize` of them.
+-- Only the two key columns are read, so no reason is parsed; every value is
+-- a bound parameter. The caller passes a positive `pageSize`.
+decidedPairsAfter : Db -> Int -> Maybe ( String, String ) -> Task.Task Error (List ( String, String ))
+decidedPairsAfter db pageSize cursor =
+    case cursor of
+        Nothing ->
+            Db.queryDecode db (pairColumns ++ pairOrder) [ SqlInt pageSize ] pairDecoder
+
+        Just ( uid, bodyHash ) ->
+            Db.queryDecode db
+                (pairColumns ++ " WHERE (uid, body_hash) > (?, ?)" ++ pairOrder)
+                [ SqlString uid, SqlString bodyHash, SqlInt pageSize ]
+                pairDecoder
+
+
+pairColumns : String
+pairColumns =
+    "SELECT uid, body_hash FROM review"
+
+
+pairOrder : String
+pairOrder =
+    " ORDER BY uid, body_hash LIMIT ?"
 
 
 -- Every review row, newest first. `Store.all` fetches all rows; the query

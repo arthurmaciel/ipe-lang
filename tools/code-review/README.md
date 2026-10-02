@@ -23,9 +23,11 @@ See `tools/ipe-index/README.md` for that tool.
 
 ## Configuration
 
-Two environment variables are **required**. `main` parses both at startup and
-exits with an actionable message if either is unset or unusable, so a
-misconfigured run fails closed rather than opening a wrong-path database or
+The app reads three environment variables: two are **required** and one is
+optional. `main` parses all three at startup, then opens and probes each
+location before it listens, and exits non-zero with a message naming the
+variable if any is unset or unusable. A misconfigured run fails closed rather
+than serving a page that later fails, opening a wrong-path database, or
 joining a stored path outside the repo:
 
 | Variable         | Meaning                                                       |
@@ -40,7 +42,14 @@ percent-encoded `sqlite://` URL. A `sqlite://` URL must carry no `?` query and
 must name a database: the app appends the open mode itself. A `sqlite:` or
 `file:` value without `//` is refused. A refused database location is reported
 by variable name only, never by value, since a mistyped URL can carry a
-password.
+password. Each refusal states one fix.
+
+The startup probes: the index DB is opened read-only and every column a queue
+page reads is selected, so a missing file or a database that is not an
+`ipe-index` index stops startup; the review DB is opened (created when absent)
+and migrated; the root must be an existing directory. A probe failure names
+the variable and the resolved file, which is a plain absolute path once
+parsed.
 
 `IPE_INDEX_ROOT` binds the repo tag `ipe`, the tag of `ipe-index`'s default
 `--repo ipe:.`. A unit stored under any other tag (an index built with a second
@@ -60,8 +69,30 @@ shown on stderr or the page has every control, line-separator and bidi
 character spelled as a visible escape (`\n`, `\r`, `\t`, `\u{1b}`, `\u{202e}`),
 so index or env text cannot rewrite the terminal or reorder a displayed path.
 
+The page applies the same escapes to everything it shows from the index or
+the review DB: a unit's path, name, qualified name, kind, facing and purpose
+are escaped once, where the row is decoded; each source token, link label and
+refusal reason is escaped as it is rendered. A source line carrying bidi
+overrides therefore shows each one as `\u{202e}`-style text instead of
+rendering reordered (Trojan Source). `\` and `"` are shown as written.
+
+A refusal needs a reason of at most 500 characters; a blank or longer one is
+refused before anything is saved.
+
+The progress counter in the header counts the units whose current body hash
+has a decision, out of the units decided or still queued. Each queue load
+reads it as one SQL aggregate over the index's `reviewed` table, the app's
+copy of its decided `(uid, body_hash)` pairs, so a load costs the same however
+large the index or the review history grows. Deciding a unit raises the first
+number and leaves the second unchanged, and a reload or a second tab shows the
+same numbers. Each load also compares the copy's row count with the review
+DB's; on a mismatch (a decision whose drain failed, a rebuilt index file, a
+deleted review row) it rebuilds the copy from the review DB before counting,
+and startup always rebuilds it once.
+
 The index DB is opened read-only for listing and read-write (never created) only
-to delete a consumed `change_queue` row. The app creates and owns the review DB.
+to drain a decided unit: in one transaction its pair enters `reviewed` and its
+consumed `change_queue` row is deleted. The app creates and owns the review DB.
 
 ## Running
 

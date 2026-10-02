@@ -36,18 +36,27 @@ pub use resolve::{
     is_user_type_declaration_forbidden, to_snake_case,
 };
 
-/// A type alias exported by a module in its raw (unresolved) source form.
+/// A type alias exported by a module, resolved in the defining module's scope.
 ///
-/// Carried in [`ModuleExports`] so importing modules can inject it into their
-/// own alias table and expand it there. Fields mirror the private `AliasDef`
-/// in `resolve.rs`; the public counterpart lets the multi-module driver pass
-/// exports across the boundary without exposing resolver internals.
+/// The body is canonicalised once, where the alias is declared, against that
+/// module's own imports; an importer substitutes its type arguments for
+/// `param_slots` and never re-resolves alias source text, so an alias's private
+/// imports never leak into (or get captured by) an importer's scope.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ExportedAlias {
-    /// Declared type-parameter names, in source order.
-    pub params: Vec<Symbol>,
-    /// The right-hand-side of the `type alias` declaration, kept unresolved.
-    pub body: ipe_syntax::TypeAnnotation,
+    /// The path of the module that declares the alias. Two imports bringing the
+    /// same bare alias name from different homes are ambiguous at a bare use.
+    pub home: Vec<Symbol>,
+    /// The variable standing for each declared parameter in `body`, in source
+    /// order. Each slot is a symbol no source type variable can spell, so a
+    /// substitution never captures a variable the body leaves free.
+    pub param_slots: Vec<Symbol>,
+    /// The fully expanded right-hand side of the `type alias` declaration.
+    pub body: ast::Type,
+    /// Type variables the body leaves free; a use site's binding quantifies them.
+    pub free_vars: BTreeSet<Symbol>,
+    /// Whether the declared right-hand side is a `{ … }` record literal.
+    pub literal_record: bool,
 }
 
 /// The public exports of a canonicalised module: the names and resolved
@@ -70,24 +79,6 @@ pub struct ModuleExports {
     pub ctors: BTreeMap<Symbol, CtorHome>,
     /// Exported type aliases by name.
     pub aliases: BTreeMap<Symbol, ExportedAlias>,
-    /// The complete set of type names in scope after this module was
-    /// canonicalised, mapped to their home module path.  Includes all types
-    /// imported from dep modules PLUS the module's own union ADTs.
-    ///
-    /// Stored here so importing modules can use it when expanding alias bodies
-    /// that reference types from this module's own dep scope — without having
-    /// to re-import those deps themselves.  See [`AliasDef::dep_scope_types`]
-    /// in `ipe_canon::resolve`.
-    pub scope_types: BTreeMap<Symbol, Vec<Symbol>>,
-    /// The complete set of type *aliases* in scope after this module was
-    /// canonicalised — own local aliases PLUS aliases injected from dep modules.
-    ///
-    /// Parallel to `scope_types` but for aliases.  Importing modules that
-    /// expand an alias body whose fields reference ALIAS types from THIS
-    /// module's own dep scope need access to those alias definitions — otherwise
-    /// e.g. `Piece` (a record-alias from `Chess.Piece`) would be invisible when
-    /// an importer of `State` expands `Model`'s body.
-    pub scope_aliases: BTreeMap<Symbol, ExportedAlias>,
     /// Exported Stage-4 kernel aliases: value names whose binding is
     /// `f = Kernel.kernel "Module_function"`, mapped to the resolved kernel target
     /// `(StdlibKernel, module, function)`.

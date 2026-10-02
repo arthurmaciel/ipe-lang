@@ -3425,7 +3425,9 @@ pub fn db_find_where<E: Send + From<String> + 'static>(
 
 /// `Db.findWhereMasked : Db -> String -> List SqlFragment -> SqlFragment
 ///                        -> Decoder a -> Task Error (List a)` — the
-/// NULL-preserving projected read the secured row-masking path routes through.
+/// NULL-preserving projected read every codec-decoded `Ipe.Db.Store` app read
+/// routes through (unmasked: each projection a plain column; secured: some
+/// projections masked).
 ///
 /// It is `db_find_where`'s column-masking counterpart. Where `db_find_where`
 /// emits `SELECT * … ` and returns cells via `row_to_map` (which collapses SQL

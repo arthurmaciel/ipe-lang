@@ -10,10 +10,10 @@
 //!    a silent wrong-code bug. `CtorHome { index, arity }` must punch through.
 //!
 //! 2. **Transitive alias-body edit** — grand-dep C changes a record alias `P`
-//!    that dep A re-surfaces through `scope_aliases` inside its own exported
-//!    alias `M`. Importer B (which imports ONLY A) expands `M` and therefore
-//!    reads `P`'s body out of A's interface. If `scope_aliases` were missing
-//!    from the `PartialEq` projection, B would keep a stale expansion.
+//!    that dep A uses inside its own exported alias `M`. A exports `M` already
+//!    expanded in its own scope, so `P`'s body is part of A's interface, and
+//!    importer B (which imports ONLY A) reads it from there. If that expansion
+//!    were missing from the `PartialEq` projection, B would keep a stale one.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -136,10 +136,10 @@ const MID_DEP_A: &str =
 const GRAND_IMPORTER_B: &str =
     "module B exposing (f)\n\nimport A exposing (M)\n\nf : M -> Int\nf m = m.p.x\n";
 
-/// Grand-dep alias-body edit: C widens `P`; A's own EXPORTED alias `M`'s raw
-/// body (`{ p : P }`) is unchanged, so if the interface projection dropped
-/// `scope_aliases` (the channel importers use to expand `P` inside `M`),
-/// A's interface would backdate and B would keep a stale expansion of `M`.
+/// Grand-dep alias-body edit: C widens `P`; A's own EXPORTED alias `M`'s source
+/// body (`{ p : P }`) is unchanged, so if the interface carried that source
+/// rather than `M`'s expansion in A's scope, A's interface would backdate and B
+/// would keep a stale expansion of `M`.
 #[test]
 fn transitive_alias_body_edit_reaches_grand_importer() {
     let (mut db, log) = logged_db();
@@ -162,7 +162,7 @@ fn transitive_alias_body_edit_reaches_grand_importer() {
     assert_ne!(
         before_a_iface, after_a_iface,
         "UNDER-INVALIDATION: widening grand-dep C's alias `P` must change A's \
-         interface (A re-surfaces `P` via scope_aliases; importers expand it)"
+         interface (A exports `M` with `P` expanded in its own scope)"
     );
 
     assert!(canonicalize(&db, root, b).is_ok());

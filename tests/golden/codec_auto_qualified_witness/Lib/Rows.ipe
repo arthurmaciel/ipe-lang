@@ -1,0 +1,9 @@
+module Lib.Rows exposing ( User )
+
+-- The record alias the entry module's witness names only through a qualifier.
+
+
+type alias User =
+    { id : Int
+    , email : String
+    }
