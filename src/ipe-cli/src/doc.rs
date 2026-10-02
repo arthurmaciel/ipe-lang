@@ -4493,11 +4493,10 @@ fn build_search_script(entries: &[SearchEntry]) -> String {
     }
     json_buf.push(']');
 
-    // The JSON is embedded verbatim inside a `<script>` element. Escape `<` as
-    // its `<` JSON form so a value containing `</script>` (or any markup)
-    // cannot break out of the script element — a defence-in-depth measure even
-    // though doc keys/titles are repo-controlled.
-    let json_buf = json_buf.replace('<', "\\u003c");
+    // The JSON is embedded inside a `<script>` element, so a value holding
+    // `</script>` (or any markup) must not close it, even though doc keys and
+    // titles are repo-controlled.
+    let json_buf = ipe_diagnostics::json::script_embed(&json_buf);
 
     SEARCH_SCRIPT_TEMPLATE.replace("ENTRY_INDEX_PLACEHOLDER", &json_buf)
 }
@@ -5247,6 +5246,36 @@ fn open_in_browser(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A search entry holding `</script>`, `<!--`, `&` or U+2028 reaches the
+    /// embedded index escaped, and the index still decodes to the entry.
+    #[test]
+    fn search_script_index_holds_no_script_breaking_character() {
+        let title = "a</script><!--&\u{2028}\u{2029}b";
+        let script = build_search_script(&[SearchEntry {
+            kind: "symbol",
+            key: "Main.x".to_owned(),
+            title: title.to_owned(),
+            href: "Main.html#x".to_owned(),
+        }]);
+        let index = script
+            .split_once("var INDEX = ")
+            .and_then(|(_, rest)| rest.split_once(";\n"))
+            .map(|(index, _)| index)
+            .expect("the index assignment");
+        for raw in ['<', '>', '&', '\u{2028}', '\u{2029}'] {
+            assert!(
+                !index.contains(raw),
+                "{raw:?} reached the index raw: {index}"
+            );
+        }
+        let parsed: serde_json::Value = serde_json::from_str(index).expect("valid JSON");
+        let decoded = parsed
+            .get(0)
+            .and_then(|entry| entry.get("title"))
+            .and_then(serde_json::Value::as_str);
+        assert_eq!(decoded, Some(title));
+    }
 
     /// The Diagnostics page explains every code letter, from the family table.
     #[test]

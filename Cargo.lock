@@ -3246,6 +3246,7 @@ version = "0.3.5"
 dependencies = [
  "ipe_env",
  "ipe_path_core",
+ "serde_json",
  "unicode-general-category",
  "unicode-width",
 ]
