@@ -48,7 +48,9 @@ import TestSupport exposing
     , execIndex
     , execIndexUnchecked
     , Scratch
-    , scratchAt
+    , freshScratch
+    , freshDir
+    , check
     , indexSchemaStatements
     , execIndexSchema
     , seedIndexDb
@@ -88,10 +90,12 @@ import TestSupport exposing
 -- root is read; the page itself still loads.
 traversalPathsRejected : Task.Task Error Bool
 traversalPathsRejected =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b3-traversal"
-    in
+    freshDir "ipe-index-b3-traversal" |> Task.andThen traversalPathsRejectedIn
+
+
+
+traversalPathsRejectedIn : String -> Task.Task Error Bool
+traversalPathsRejectedIn base =
     Task.fromResult (Path.fromString (base ++ "/index.db"))
         |> Task.andThen File.remove
         |> Task.onError (\_ -> Task.succeed ())
@@ -632,10 +636,12 @@ rootRefused raw reason =
 -- Blank, missing, and non-directory roots stop at the parse.
 badRootsRefused : Task.Task Error Bool
 badRootsRefused =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-root-refusals"
-    in
+    freshDir "ipe-review-root-refusals" |> Task.andThen badRootsRefusedIn
+
+
+
+badRootsRefusedIn : String -> Task.Task Error Bool
+badRootsRefusedIn base =
     do
         dir <- Task.fromResult (Path.fromString base)
         File.mkdirAll dir
@@ -653,10 +659,13 @@ badRootsRefused =
 -- directory: the queue loads and every source slice reads from under the root.
 relativeRootLoadsQueue : Task.Task Error Bool
 relativeRootLoadsQueue =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-relative-root"
+    freshDir "ipe-index-relative-root" |> Task.andThen relativeRootLoadsQueueIn
 
+
+
+relativeRootLoadsQueueIn : String -> Task.Task Error Bool
+relativeRootLoadsQueueIn base =
+    let
         repo =
             base ++ "/repo"
 
@@ -674,20 +683,20 @@ relativeRootLoadsQueue =
         Task.succeed (checkUnits r.total r.units)
 
 
-checks : Db -> Task.Task Error (List ( String, Bool ))
-checks _ =
+checks : Task.Task Error (List ( String, Bool ))
+checks =
     Task.sequence
-        [ Task.map (\ok -> ( "traversal paths rejected", ok )) traversalPathsRejected
-        , Task.map (\ok -> ( "stored paths outside the root refused", ok )) storedPathRefusals
-        , Task.map (\ok -> ( "relative root resolves against the working directory", ok )) relativeRootAccepted
-        , Task.map (\ok -> ( "stored path under an unbound tag refused", ok )) unknownTagRefused
-        , Task.map (\ok -> ( "each tag joins under its own root", ok )) tagSelectsItsRoot
-        , Task.map (\ok -> ( "tag grammar matches the index writer", ok )) tagGrammarMatchesWriter
-        , Task.map (\ok -> ( "empty and duplicate-tag root maps refused", ok )) rootMapRefusals
-        , Task.map (\ok -> ( "root refusal escapes the env value", ok )) rootRefusalEscapesEnv
-        , Task.map (\ok -> ( "every path refusal describes itself without raw hazards", ok )) diagnosticsNeverRaw
+        [ check "traversal paths rejected" traversalPathsRejected
+        , check "stored paths outside the root refused" storedPathRefusals
+        , check "relative root resolves against the working directory" relativeRootAccepted
+        , check "stored path under an unbound tag refused" unknownTagRefused
+        , check "each tag joins under its own root" tagSelectsItsRoot
+        , check "tag grammar matches the index writer" tagGrammarMatchesWriter
+        , check "empty and duplicate-tag root maps refused" rootMapRefusals
+        , check "root refusal escapes the env value" rootRefusalEscapesEnv
+        , check "every path refusal describes itself without raw hazards" diagnosticsNeverRaw
         , Task.succeed ( "describe escapes the stored path", describeEscapesStoredPath )
-        , Task.map (\ok -> ( "blank, missing and non-directory roots refused", ok )) badRootsRefused
-        , Task.map (\ok -> ( "relative root loads the queue", ok )) relativeRootLoadsQueue
-        , Task.map (\ok -> ( "tag grammar matches the shared ipe-index tag vectors", ok )) tagGrammarMatchesVectors
+        , check "blank, missing and non-directory roots refused" badRootsRefused
+        , check "relative root loads the queue" relativeRootLoadsQueue
+        , check "tag grammar matches the shared ipe-index tag vectors" tagGrammarMatchesVectors
         ]

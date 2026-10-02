@@ -48,7 +48,9 @@ import TestSupport exposing
     , execIndex
     , execIndexUnchecked
     , Scratch
-    , scratchAt
+    , freshScratch
+    , freshDir
+    , check
     , indexSchemaStatements
     , execIndexSchema
     , seedIndexDb
@@ -90,11 +92,8 @@ import TestSupport exposing
 -- `u-a` holds afterwards.
 decideAfter : String -> (Scratch -> Task.Task Error ()) -> (Scratch -> Task.Task Error ()) -> Decision -> Task.Task Error { conflict : Bool, rows : Int }
 decideAfter name prepare mutate decision =
-    let
-        at =
-            scratchAt name
-    in
     do
+        at <- freshScratch name
         removeFileIfAny at.indexDb
         removeFileIfAny at.reviewDb
         seedIndex at.indexDb at.repo
@@ -148,11 +147,8 @@ driftLib at =
 -- The control: an unchanged shown unit is decided under its attested hash.
 decideRecordsShownHash : Task.Task Error Bool
 decideRecordsShownHash =
-    let
-        at =
-            scratchAt "ipe-index-decide-ok"
-    in
     do
+        at <- freshScratch "ipe-index-decide-ok"
         removeFileIfAny at.indexDb
         removeFileIfAny at.reviewDb
         seedIndex at.indexDb at.repo
@@ -231,10 +227,13 @@ staleRefuseAlsoRefused =
 -- `enqueued_at` included, and the last page has no next cursor.
 pagesCoverQueueOnce : Task.Task Error Bool
 pagesCoverQueueOnce =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-queue-pages"
+    freshDir "ipe-index-queue-pages" |> Task.andThen pagesCoverQueueOnceIn
 
+
+
+pagesCoverQueueOnceIn : String -> Task.Task Error Bool
+pagesCoverQueueOnceIn base =
+    let
         repo =
             base ++ "/repo"
 
@@ -300,10 +299,13 @@ distinctUids units =
 -- A `deleted` change_queue row is neither listed nor counted.
 deletedRowsNotQueued : Task.Task Error Bool
 deletedRowsNotQueued =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-queue-deleted"
+    freshDir "ipe-index-queue-deleted" |> Task.andThen deletedRowsNotQueuedIn
 
+
+
+deletedRowsNotQueuedIn : String -> Task.Task Error Bool
+deletedRowsNotQueuedIn base =
+    let
         repo =
             base ++ "/repo"
 
@@ -331,10 +333,13 @@ deletedRowsNotQueued =
 -- missing index database is `Failed`, never an empty `Loaded`.
 dbSizeAndMissingDb : Task.Task Error Bool
 dbSizeAndMissingDb =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-queue-size"
+    freshDir "ipe-index-queue-size" |> Task.andThen dbSizeAndMissingDbIn
 
+
+
+dbSizeAndMissingDbIn : String -> Task.Task Error Bool
+dbSizeAndMissingDbIn base =
+    let
         repo =
             base ++ "/repo"
 
@@ -488,9 +493,6 @@ drainKeepsRequeuedChange =
 unitPageStatesDistinct : Task.Task Error Bool
 unitPageStatesDistinct =
     let
-        at =
-            scratchAt "ipe-index-unit-page-states"
-
         pageTexts =
             List.filterMap Queue.unitPageStatusText [ UnitLoading, UnitNotFound, UnitFailed (Error.conflict "boom") ]
 
@@ -503,6 +505,7 @@ unitPageStatesDistinct =
                 ]
     in
     do
+        at <- freshScratch "ipe-index-unit-page-states"
         removeFileIfAny at.indexDb
         seedIndex at.indexDb at.repo
         loaded <- Queue.loadUnitView "no-such-uid"
@@ -555,11 +558,8 @@ requeueB at =
 -- and `totalAfter` are the queue counts around the drain.
 drainAfter : String -> (Scratch -> Task.Task Error ()) -> Task.Task Error DrainOutcome
 drainAfter name mutate =
-    let
-        at =
-            scratchAt name
-    in
     do
+        at <- freshScratch name
         removeFileIfAny at.indexDb
         removeFileIfAny at.reviewDb
         seedIndex at.indexDb at.repo
@@ -621,10 +621,13 @@ drainDecided db totalBefore decided =
 -- shown units.
 changeReenqueue : Task.Task Error Bool
 changeReenqueue =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b8-reenqueue"
+    freshDir "ipe-index-b8-reenqueue" |> Task.andThen changeReenqueueIn
 
+
+
+changeReenqueueIn : String -> Task.Task Error Bool
+changeReenqueueIn base =
+    let
         repo =
             base ++ "/repo"
 
@@ -954,13 +957,11 @@ cleanupProgressScratch at =
 progressCountsDecidedPairs : Task.Task Error Bool
 progressCountsDecidedPairs =
     let
-        at =
-            scratchAt "ipe-index-progress-pairs"
-
         pairs =
             [ ( "a", "ha" ), ( "c", "hc" ), ( "x", "hx" ), ( "a", "bc" ) ]
     in
     do
+        at <- freshScratch "ipe-index-progress-pairs"
         db <- seedProgressScratch at
         execIndex at.indexDb "DELETE FROM units" []
         execIndex at.indexDb "DELETE FROM change_queue" []
@@ -980,11 +981,8 @@ progressCountsDecidedPairs =
 
 progressStableAcrossDrain : Task.Task Error Bool
 progressStableAcrossDrain =
-    let
-        at =
-            scratchAt "ipe-index-progress"
-    in
     do
+        at <- freshScratch "ipe-index-progress"
         removeFileIfAny at.indexDb
         removeFileIfAny at.reviewDb
         seedIndex at.indexDb at.repo
@@ -1065,11 +1063,8 @@ currentProgressOf =
 -- current body hash.
 rehashedUnitLeavesReviewed : Task.Task Error Bool
 rehashedUnitLeavesReviewed =
-    let
-        at =
-            scratchAt "ipe-index-progress-rehash"
-    in
     do
+        at <- freshScratch "ipe-index-progress-rehash"
         d <- decideAndDrainA at
         execIndex at.indexDb "UPDATE units SET body_hash = ? WHERE uid = ?" [ SqlString "h2", SqlString "u-a" ]
         execIndex at.indexDb "INSERT INTO change_queue VALUES (?,?,?,?,?,?)" [ SqlString "u-a", SqlString "modified", SqlString (Index.attest viewA), SqlString "h2", SqlString "sha-h2", SqlInt 9 ]
@@ -1088,11 +1083,8 @@ rehashedUnitLeavesReviewed =
 -- with `units`.
 removedUnitReturnsReviewed : Task.Task Error Bool
 removedUnitReturnsReviewed =
-    let
-        at =
-            scratchAt "ipe-index-progress-removed"
-    in
     do
+        at <- freshScratch "ipe-index-progress-removed"
         d <- decideAndDrainA at
         execIndex at.indexDb "CREATE TABLE units_kept AS SELECT * FROM units WHERE uid = 'u-a'" []
         execIndex at.indexDb "DELETE FROM units WHERE uid = 'u-a'" []
@@ -1113,11 +1105,8 @@ removedUnitReturnsReviewed =
 -- 0), or if the rebuild only copies pairs (the queue keeps the row).
 undrainedDecisionHealedOnLoad : Task.Task Error Bool
 undrainedDecisionHealedOnLoad =
-    let
-        at =
-            scratchAt "ipe-index-progress-undrained"
-    in
     do
+        at <- freshScratch "ipe-index-progress-undrained"
         db <- seedProgressScratch at
         execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
         pendingBefore <- Index.countPending
@@ -1137,11 +1126,8 @@ undrainedDecisionHealedOnLoad =
 -- dropped by the load's rebuild. Red if the rebuild only inserts.
 foreignMirrorRowDropped : Task.Task Error Bool
 foreignMirrorRowDropped =
-    let
-        at =
-            scratchAt "ipe-index-progress-foreign"
-    in
     do
+        at <- freshScratch "ipe-index-progress-foreign"
         seedProgressScratch at
         execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
         mirrorPair at.indexDb "u-a" (Index.attest viewA)
@@ -1157,11 +1143,8 @@ foreignMirrorRowDropped =
 -- once. Red with a plain `INSERT` (the second drain fails on the key).
 secondDecisionOfPairCountsOnce : Task.Task Error Bool
 secondDecisionOfPairCountsOnce =
-    let
-        at =
-            scratchAt "ipe-index-progress-twice"
-    in
     do
+        at <- freshScratch "ipe-index-progress-twice"
         d <- decideAndDrainA at
         found <- Index.loadUnitByUid "u-a"
         again <-
@@ -1191,11 +1174,8 @@ secondDecisionOfPairCountsOnce =
 -- the delete runs first outside the transaction.
 drainIsAtomic : Task.Task Error Bool
 drainIsAtomic =
-    let
-        at =
-            scratchAt "ipe-index-progress-atomic"
-    in
     do
+        at <- freshScratch "ipe-index-progress-atomic"
         db <- seedProgressScratch at
         execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
         page <- Queue.loadPage Index.Start
@@ -1216,11 +1196,8 @@ drainIsAtomic =
 -- `IPE_INDEX_DB` and the rebuild fix. Red if the probe stops reading it.
 probeRefusesIndexWithoutReviewed : Task.Task Error Bool
 probeRefusesIndexWithoutReviewed =
-    let
-        at =
-            scratchAt "ipe-index-probe-reviewed"
-    in
     do
+        at <- freshScratch "ipe-index-probe-reviewed"
         removeFileIfAny at.indexDb
         seedIndex at.indexDb at.repo
         execIndex at.indexDb "DROP TABLE reviewed" []
@@ -1237,13 +1214,11 @@ probeRefusesIndexWithoutReviewed =
 resyncStopsAtCeiling : Task.Task Error Bool
 resyncStopsAtCeiling =
     let
-        at =
-            scratchAt "ipe-index-progress-ceiling"
-
         decisions =
             LibDb.pairPageSize + 1
     in
     do
+        at <- freshScratch "ipe-index-progress-ceiling"
         db <- seedProgressScratch at
         List.range 1 decisions
             |> List.map (\i -> insertReviewRow db ("p-" ++ String.fromInt i) "hp")
@@ -1278,9 +1253,6 @@ resyncStopsAtCeiling =
 resyncAtDeepestCeiling : Task.Task Error Bool
 resyncAtDeepestCeiling =
     let
-        at =
-            scratchAt "ipe-index-progress-deepest"
-
         bound =
             { pageSize = 1, pageCeiling = Queue.resyncPageCeiling }
 
@@ -1290,6 +1262,7 @@ resyncAtDeepestCeiling =
                 |> Task.sequence
     in
     do
+        at <- freshScratch "ipe-index-progress-deepest"
         db <- seedProgressScratch at
         seed 1 Queue.resyncPageCeiling db
         copied <- Queue.resyncReviewedWithin bound db
@@ -1313,15 +1286,13 @@ resyncAtDeepestCeiling =
 resyncRefusesEmptyBound : Task.Task Error Bool
 resyncRefusesEmptyBound =
     let
-        at =
-            scratchAt "ipe-index-progress-empty-bound"
-
         attempt bound db =
             Queue.resyncReviewedWithin bound db
                 |> Task.map (\_ -> False)
                 |> Task.onError (\_ -> Task.succeed True)
     in
     do
+        at <- freshScratch "ipe-index-progress-empty-bound"
         db <- seedProgressScratch at
         insertReviewRow db "e-1" "he"
         mirrorPair at.indexDb "pre" "hp"
@@ -1338,11 +1309,8 @@ resyncRefusesEmptyBound =
 -- full-row decode.
 progressIgnoresUndecodableReason : Task.Task Error Bool
 progressIgnoresUndecodableReason =
-    let
-        at =
-            scratchAt "ipe-index-progress-bad-reason"
-    in
     do
+        at <- freshScratch "ipe-index-progress-bad-reason"
         db <- seedProgressScratch at
         Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString "u-del", SqlString "hashC", SqlString "refuse", SqlString (String.repeat (LibDb.reasonMaxChars + 1) "x"), SqlInt 0 ]
         result <-
@@ -1360,13 +1328,11 @@ progressIgnoresUndecodableReason =
 resyncSucceedsAtSixThousandPages : Task.Task Error Bool
 resyncSucceedsAtSixThousandPages =
     let
-        at =
-            scratchAt "ipe-index-progress-6000"
-
         bound =
             { pageSize = 1, pageCeiling = 6000 }
     in
     do
+        at <- freshScratch "ipe-index-progress-6000"
         db <- seedProgressScratch at
         List.range 1 6000
             |> List.map (\i -> insertReviewRow db ("s-" ++ String.fromInt i) "hs")
@@ -1384,13 +1350,11 @@ resyncSucceedsAtSixThousandPages =
 resyncRefusesSixThousandAndOnePages : Task.Task Error Bool
 resyncRefusesSixThousandAndOnePages =
     let
-        at =
-            scratchAt "ipe-index-progress-6001"
-
         bound =
             { pageSize = 1, pageCeiling = 6000 }
     in
     do
+        at <- freshScratch "ipe-index-progress-6001"
         db <- seedProgressScratch at
         List.range 1 6001
             |> List.map (\i -> insertReviewRow db ("t-" ++ String.fromInt i) "ht")
@@ -1411,9 +1375,6 @@ resyncRefusesSixThousandAndOnePages =
 resyncSucceedsAtExactCeilingTimesPageSize : Task.Task Error Bool
 resyncSucceedsAtExactCeilingTimesPageSize =
     let
-        at =
-            scratchAt "ipe-index-progress-exact"
-
         bound =
             { pageSize = 3, pageCeiling = 2000 }
 
@@ -1421,6 +1382,7 @@ resyncSucceedsAtExactCeilingTimesPageSize =
             bound.pageCeiling * bound.pageSize
     in
     do
+        at <- freshScratch "ipe-index-progress-exact"
         db <- seedProgressScratch at
         List.range 1 total
             |> List.map (\i -> insertReviewRow db ("x-" ++ String.fromInt i) "hx")
@@ -1439,13 +1401,11 @@ resyncSucceedsAtExactCeilingTimesPageSize =
 resyncRefusesMaxIntCeiling : Task.Task Error Bool
 resyncRefusesMaxIntCeiling =
     let
-        at =
-            scratchAt "ipe-index-progress-maxint"
-
         bound =
             { pageSize = 1, pageCeiling = 9223372036854775807 }
     in
     do
+        at <- freshScratch "ipe-index-progress-maxint"
         db <- seedProgressScratch at
         refusal <-
             Queue.resyncReviewedWithin bound db
@@ -1459,37 +1419,37 @@ resyncRefusesMaxIntCeiling =
             )
 
 
-checks : Db -> Task.Task Error (List ( String, Bool ))
-checks _ =
+checks : Task.Task Error (List ( String, Bool ))
+checks =
     Task.sequence
-        [ Task.map (\ok -> ( "decided unit drained from queue", ok )) drainFlow
-        , Task.map (\ok -> ( "re-queued change survives the drain", ok )) drainKeepsRequeuedChange
-        , Task.map (\ok -> ( "unit page states are distinct", ok )) unitPageStatesDistinct
-        , Task.map (\ok -> ( "queue pages bound to pageSize and cover the queue once", ok )) pagesCoverQueueOnce
-        , Task.map (\ok -> ( "deleted queue rows neither listed nor counted", ok )) deletedRowsNotQueued
-        , Task.map (\ok -> ( "db size positive, missing index db fails the queue", ok )) dbSizeAndMissingDb
-        , Task.map (\ok -> ( "changed unit resurfaced at head, unchanged stays hidden", ok )) changeReenqueue
-        , Task.map (\ok -> ( "a shown unit is decided under its attested hash", ok )) decideRecordsShownHash
-        , Task.map (\ok -> ( "a decision after the file drifted is refused", ok )) approveRefusedAfterDrift
-        , Task.map (\ok -> ( "a decision after a re-index is refused", ok )) approveRefusedAfterReindex
-        , Task.map (\ok -> ( "a decision on a unit gone from the index is refused", ok )) approveRefusedAfterUnitDeleted
-        , Task.map (\ok -> ( "a stale unit cannot be refused either", ok )) staleRefuseAlsoRefused
+        [ check "decided unit drained from queue" drainFlow
+        , check "re-queued change survives the drain" drainKeepsRequeuedChange
+        , check "unit page states are distinct" unitPageStatesDistinct
+        , check "queue pages bound to pageSize and cover the queue once" pagesCoverQueueOnce
+        , check "deleted queue rows neither listed nor counted" deletedRowsNotQueued
+        , check "db size positive, missing index db fails the queue" dbSizeAndMissingDb
+        , check "changed unit resurfaced at head, unchanged stays hidden" changeReenqueue
+        , check "a shown unit is decided under its attested hash" decideRecordsShownHash
+        , check "a decision after the file drifted is refused" approveRefusedAfterDrift
+        , check "a decision after a re-index is refused" approveRefusedAfterReindex
+        , check "a decision on a unit gone from the index is refused" approveRefusedAfterUnitDeleted
+        , check "a stale unit cannot be refused either" staleRefuseAlsoRefused
         , Task.succeed ( "queue state texts distinguish loading/empty/failed/loaded", queueStateTextsDistinct )
-        , Task.map (\ok -> ( "progress counts decided pairs over decided-or-queued units", ok )) progressCountsDecidedPairs
-        , Task.map (\ok -> ( "progress total holds while the queue drains", ok )) progressStableAcrossDrain
-        , Task.map (\ok -> ( "a re-hashed unit leaves reviewed and stays counted", ok )) rehashedUnitLeavesReviewed
-        , Task.map (\ok -> ( "a removed unit leaves progress and returns when re-added", ok )) removedUnitReturnsReviewed
-        , Task.map (\ok -> ( "an undrained decision is counted and drained on load", ok )) undrainedDecisionHealedOnLoad
-        , Task.map (\ok -> ( "a copy row the review db lacks is dropped on load", ok )) foreignMirrorRowDropped
-        , Task.map (\ok -> ( "a pair decided and drained twice counts once", ok )) secondDecisionOfPairCountsOnce
-        , Task.map (\ok -> ( "a failed drain keeps the queue row", ok )) drainIsAtomic
-        , Task.map (\ok -> ( "an index without the reviewed table fails the probe", ok )) probeRefusesIndexWithoutReviewed
-        , Task.map (\ok -> ( "a progress rebuild stops at its page ceiling and rolls back", ok )) resyncStopsAtCeiling
-        , Task.map (\ok -> ( "a progress rebuild at the deepest allowed page count copies, one past it is refused", ok )) resyncAtDeepestCeiling
-        , Task.map (\ok -> ( "a progress rebuild refuses a bound below one pair or one page", ok )) resyncRefusesEmptyBound
-        , Task.map (\ok -> ( "progress counts a refusal whose reason no longer parses", ok )) progressIgnoresUndecodableReason
-        , Task.map (\ok -> ( "a progress rebuild succeeds over 6,000 one-pair pages", ok )) resyncSucceedsAtSixThousandPages
-        , Task.map (\ok -> ( "a progress rebuild refuses one pair past a 6,000-page ceiling", ok )) resyncRefusesSixThousandAndOnePages
-        , Task.map (\ok -> ( "a progress rebuild succeeds at exactly ceiling times page size", ok )) resyncSucceedsAtExactCeilingTimesPageSize
-        , Task.map (\ok -> ( "a progress rebuild refuses a page ceiling that wraps past Int.max", ok )) resyncRefusesMaxIntCeiling
+        , check "progress counts decided pairs over decided-or-queued units" progressCountsDecidedPairs
+        , check "progress total holds while the queue drains" progressStableAcrossDrain
+        , check "a re-hashed unit leaves reviewed and stays counted" rehashedUnitLeavesReviewed
+        , check "a removed unit leaves progress and returns when re-added" removedUnitReturnsReviewed
+        , check "an undrained decision is counted and drained on load" undrainedDecisionHealedOnLoad
+        , check "a copy row the review db lacks is dropped on load" foreignMirrorRowDropped
+        , check "a pair decided and drained twice counts once" secondDecisionOfPairCountsOnce
+        , check "a failed drain keeps the queue row" drainIsAtomic
+        , check "an index without the reviewed table fails the probe" probeRefusesIndexWithoutReviewed
+        , check "a progress rebuild stops at its page ceiling and rolls back" resyncStopsAtCeiling
+        , check "a progress rebuild at the deepest allowed page count copies, one past it is refused" resyncAtDeepestCeiling
+        , check "a progress rebuild refuses a bound below one pair or one page" resyncRefusesEmptyBound
+        , check "progress counts a refusal whose reason no longer parses" progressIgnoresUndecodableReason
+        , check "a progress rebuild succeeds over 6,000 one-pair pages" resyncSucceedsAtSixThousandPages
+        , check "a progress rebuild refuses one pair past a 6,000-page ceiling" resyncRefusesSixThousandAndOnePages
+        , check "a progress rebuild succeeds at exactly ceiling times page size" resyncSucceedsAtExactCeilingTimesPageSize
+        , check "a progress rebuild refuses a page ceiling that wraps past Int.max" resyncRefusesMaxIntCeiling
         ]

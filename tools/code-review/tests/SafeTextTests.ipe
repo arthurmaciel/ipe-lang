@@ -48,7 +48,9 @@ import TestSupport exposing
     , execIndex
     , execIndexUnchecked
     , Scratch
-    , scratchAt
+    , freshScratch
+    , freshDir
+    , check
     , indexSchemaStatements
     , execIndexSchema
     , seedIndexDb
@@ -303,11 +305,8 @@ rlo =
 
 indexTextRendered : Task.Task Error Bool
 indexTextRendered =
-    let
-        at =
-            scratchAt "ipe-index-safe-text"
-    in
     do
+        at <- freshScratch "ipe-index-safe-text"
         removeFileIfAny at.indexDb
         seedIndex at.indexDb at.repo
         execIndexUnchecked at.indexDb
@@ -367,8 +366,8 @@ sourceTokensRendered =
         == [ "→ Lib.\\u{202e}x" ]
 
 
-checks : Db -> Task.Task Error (List ( String, Bool ))
-checks _ =
+checks : Task.Task Error (List ( String, Bool ))
+checks =
     Task.sequence
         [ Task.succeed ( "safe text escapes the log set and passes each display-set neighbour", safeTextHazardTable )
         , Task.succeed ( "every invisible code point class renders as an escape", invisibleCodepointsRendered )
@@ -376,8 +375,8 @@ checks _ =
         , Task.succeed ( "a literal backslash cannot forge an escape", backslashCannotForge )
         , Task.succeed ( "a quote cannot forge a quoted boundary", quoteCannotForgeBoundary )
         , Task.succeed ( "queue failure line escapes its error", sinkRendersEscape )
-        , Task.map (\ok -> ( "index text is rendered at the decode point", ok )) indexTextRendered
+        , check "index text is rendered at the decode point" indexTextRendered
         , Task.succeed ( "source tokens and link labels render bidi visibly", sourceTokensRendered )
-        , Task.map (\ok -> ( "the hazard set equals the shared display-hazard vectors", ok )) hazardSetMatchesVectors
-        , Task.map (\ok -> ( "every runtime log hazard is a display hazard", ok )) logHazardsAreDisplayHazards
+        , check "the hazard set equals the shared display-hazard vectors" hazardSetMatchesVectors
+        , check "every runtime log hazard is a display hazard" logHazardsAreDisplayHazards
         ]

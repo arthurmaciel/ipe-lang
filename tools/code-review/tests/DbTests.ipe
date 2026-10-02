@@ -48,7 +48,10 @@ import TestSupport exposing
     , execIndex
     , execIndexUnchecked
     , Scratch
-    , scratchAt
+    , freshScratch
+    , freshDir
+    , check
+    , onFreshReview
     , indexSchemaStatements
     , execIndexSchema
     , seedIndexDb
@@ -412,10 +415,13 @@ loadTicketsSettleLatest =
 -- SQLite's read-only result code (`SQLITE_READONLY`, 8).
 failedWritesKeepTheirError : Task.Task Error Bool
 failedWritesKeepTheirError =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-failed-writes"
+    freshDir "ipe-review-failed-writes" |> Task.andThen failedWritesKeepTheirErrorIn
 
+
+
+failedWritesKeepTheirErrorIn : String -> Task.Task Error Bool
+failedWritesKeepTheirErrorIn base =
+    let
         dbPath =
             base ++ "/review.db"
 
@@ -450,10 +456,13 @@ failedWritesKeepTheirError =
 -- written instead of failing, leaving the pair with exactly one row.
 lostCursorInsertRefreshes : Task.Task Error Bool
 lostCursorInsertRefreshes =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-lost-insert"
+    freshDir "ipe-review-lost-insert" |> Task.andThen lostCursorInsertRefreshesIn
 
+
+
+lostCursorInsertRefreshesIn : String -> Task.Task Error Bool
+lostCursorInsertRefreshesIn base =
+    let
         dbPath =
             base ++ "/review.db"
     in
@@ -480,10 +489,13 @@ lostCursorInsertRefreshes =
 -- not the primary key's 1555).
 blockedCursorInsertKeepsItsError : Task.Task Error Bool
 blockedCursorInsertKeepsItsError =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-blocked-insert"
+    freshDir "ipe-review-blocked-insert" |> Task.andThen blockedCursorInsertKeepsItsErrorIn
 
+
+
+blockedCursorInsertKeepsItsErrorIn : String -> Task.Task Error Bool
+blockedCursorInsertKeepsItsErrorIn base =
+    let
         dbPath =
             base ++ "/review.db"
     in
@@ -535,10 +547,13 @@ hasDecision m =
 -- page with their columns, and that short page is the last one.
 historyRoundtrip : Task.Task Error Bool
 historyRoundtrip =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b6-history"
+    freshDir "ipe-index-b6-history" |> Task.andThen historyRoundtripIn
 
+
+
+historyRoundtripIn : String -> Task.Task Error Bool
+historyRoundtripIn base =
+    let
         reviewDb =
             base ++ "/review.db"
     in
@@ -585,21 +600,21 @@ insertBoth db =
         |> Task.andThen (\_ -> refuse "too big" |> Task.andThen (LibDb.insertDecision db "u-b" "hashB"))
 
 
-checks : Db -> Task.Task Error (List ( String, Bool ))
-checks db =
+checks : Task.Task Error (List ( String, Bool ))
+checks =
     Task.sequence
-        [ Task.map (\ok -> ( "0001+0002 create tables", ok )) (bothTablesExist db)
-        , Task.map (\ok -> ( "re-migrate idempotent", ok )) (idempotent db)
-        , Task.map (\ok -> ( "duplicate (uid,body_hash) no-op", ok )) (duplicateInsertIsNoop db)
-        , Task.map (\ok -> ( "refusal reason is non-blank and bounded", ok )) (reasonBounded db)
-        , Task.map (\ok -> ( "a stored over-long reason decodes and shows its length", ok )) (storedOverlongReasonDecodes db)
-        , Task.map (\ok -> ( "a stored blank reason decodes as blank", ok )) (storedBlankReasonDecodes db)
-        , Task.map (\ok -> ( "history pages walk every row once in order", ok )) (historyWalkMatchesOrder db)
-        , Task.map (\ok -> ( "a history page below one row is refused", ok )) (historyPageSizeRefused db)
-        , Task.map (\ok -> ( "history pages read in index order", ok )) (historyPagesUseIndex db)
+        [ check "0001+0002 create tables" (onFreshReview "ipe-review-bothTablesExist" bothTablesExist)
+        , check "re-migrate idempotent" (onFreshReview "ipe-review-idempotent" idempotent)
+        , check "duplicate (uid,body_hash) no-op" (onFreshReview "ipe-review-duplicateInsertIsNoop" duplicateInsertIsNoop)
+        , check "refusal reason is non-blank and bounded" (onFreshReview "ipe-review-reasonBounded" reasonBounded)
+        , check "a stored over-long reason decodes and shows its length" (onFreshReview "ipe-review-storedOverlongReasonDecodes" storedOverlongReasonDecodes)
+        , check "a stored blank reason decodes as blank" (onFreshReview "ipe-review-storedBlankReasonDecodes" storedBlankReasonDecodes)
+        , check "history pages walk every row once in order" (onFreshReview "ipe-review-historyWalkMatchesOrder" historyWalkMatchesOrder)
+        , check "a history page below one row is refused" (onFreshReview "ipe-review-historyPageSizeRefused" historyPageSizeRefused)
+        , check "history pages read in index order" (onFreshReview "ipe-review-historyPagesUseIndex" historyPagesUseIndex)
         , Task.succeed ( "only the latest load settles a page slot", loadTicketsSettleLatest )
         , Task.succeed ( "history state texts distinguish loading/empty/failed/loaded", historyStateTextsDistinct )
-        , Task.map (\ok -> ( "decision roundtrip", ok )) (decisionRoundtrip db)
+        , check "decision roundtrip" (onFreshReview "ipe-review-decisionRoundtrip" decisionRoundtrip)
         , Task.succeed
             ( "history shows the digest, not the scheme"
             , shortHashShown "sha256:0123456789abcdef"
@@ -618,8 +633,8 @@ checks db =
                 && shortHashShown ("dead" ++ codeText 8294 ++ "beef")
                 == "dead\\u{2066}bee"
             )
-        , Task.map (\ok -> ( "review history roundtrip", ok )) historyRoundtrip
-        , Task.map (\ok -> ( "failed writes keep their error", ok )) failedWritesKeepTheirError
-        , Task.map (\ok -> ( "cursor insert that lost the race refreshes the winner", ok )) lostCursorInsertRefreshes
-        , Task.map (\ok -> ( "cursor insert failing off the key keeps its error", ok )) blockedCursorInsertKeepsItsError
+        , check "review history roundtrip" historyRoundtrip
+        , check "failed writes keep their error" failedWritesKeepTheirError
+        , check "cursor insert that lost the race refreshes the winner" lostCursorInsertRefreshes
+        , check "cursor insert failing off the key keeps its error" blockedCursorInsertKeepsItsError
         ]

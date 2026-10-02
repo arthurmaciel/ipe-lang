@@ -48,7 +48,9 @@ import TestSupport exposing
     , execIndex
     , execIndexUnchecked
     , Scratch
-    , scratchAt
+    , freshScratch
+    , freshDir
+    , check
     , indexSchemaStatements
     , execIndexSchema
     , seedIndexDb
@@ -250,11 +252,8 @@ filePathsEncodeUrlSpecials =
 -- or stops naming the variable.
 probesNameTheirVariable : Task.Task Error Bool
 probesNameTheirVariable =
-    let
-        at =
-            scratchAt "ipe-index-probe"
-    in
     do
+        at <- freshScratch "ipe-index-probe"
         removeFileIfAny at.indexDb
         seedIndex at.indexDb at.repo
         good <- probeMessage (Settings.indexSettings |> Task.andThen Index.probe)
@@ -349,13 +348,13 @@ dbRefusalsStateOneFix =
             )
 
 
-checks : Db -> Task.Task Error (List ( String, Bool ))
-checks _ =
+checks : Task.Task Error (List ( String, Bool ))
+checks =
     Task.sequence
         [ Task.succeed ( "db file paths escape url specials", filePathsEncodeUrlSpecials )
-        , Task.map (\ok -> ( "index db refusal names only the variable", ok )) dbRefusalNamesOnlyVariable
-        , Task.map (\ok -> ( "unusable index db locations refused", ok )) badIndexDbRefused
-        , Task.map (\ok -> ( "db urls carry only the app's open mode", ok )) dbUrlsCarryAppMode
-        , Task.map (\ok -> ( "each db refusal states one fix", ok )) dbRefusalsStateOneFix
-        , Task.map (\ok -> ( "startup probes name the variable and the file", ok )) probesNameTheirVariable
+        , check "index db refusal names only the variable" dbRefusalNamesOnlyVariable
+        , check "unusable index db locations refused" badIndexDbRefused
+        , check "db urls carry only the app's open mode" dbUrlsCarryAppMode
+        , check "each db refusal states one fix" dbRefusalsStateOneFix
+        , check "startup probes name the variable and the file" probesNameTheirVariable
         ]
