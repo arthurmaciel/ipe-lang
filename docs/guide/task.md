@@ -210,7 +210,7 @@ attempt budget, stated once as the limit argument instead of hand-rolled as a
 counter threaded through the step.
 
 **The anti-pattern it replaces: a function that calls itself inside `andThen`.**
-Before `Task.loop`, the only way to repeat a step was a function calling itself
+Without `Task.loop`, the way to repeat a step is a function calling itself
 through `andThen`:
 
 ```ipe
