@@ -39,36 +39,6 @@ pub const fn op_str(op: BinOp) -> &'static str {
     }
 }
 
-/// Render an `f64` as a Rust literal that is guaranteed to TYPE as `f64`.
-///
-/// Rust's default `f64` Display drops the decimal point for a whole number
-/// (`3.0` prints as `3`), and a bare `3` types as an integer — so a whole-number
-/// float literal must keep (or regain) a decimal point. The shortest round-trip
-/// Display is used (so the emitted literal parses back to the same bit pattern),
-/// and `.0` is appended only when the rendering carries no `.`/`e` exponent
-/// marker. A non-finite value (an over-range lexeme reads back as `inf`) can have
-/// no decimal literal, so it renders through the `f64` associated constants,
-/// keeping the emission total and valid Rust.
-pub fn float_literal(f: f64) -> String {
-    if f.is_nan() {
-        return "f64::NAN".to_owned();
-    }
-    if f.is_infinite() {
-        return if f < 0.0 {
-            "f64::NEG_INFINITY"
-        } else {
-            "f64::INFINITY"
-        }
-        .to_owned();
-    }
-    let s = format!("{f}");
-    if s.bytes().any(|b| b == b'.' || b == b'e' || b == b'E') {
-        s
-    } else {
-        format!("{s}.0")
-    }
-}
-
 /// Resolve an FFI wrapper symbol to its fully-qualified `crate::ffi::<name>`
 /// path, rejecting any resolved string that is not a legal Rust identifier.
 ///
