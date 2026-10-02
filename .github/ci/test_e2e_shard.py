@@ -67,6 +67,21 @@ class SelectionTest(unittest.TestCase):
         last = es.selection(es.SHARDS)
         self.assertEqual(last, ["-E", f"not ({es.HEAVY})", "--partition", f"count:{es.LIGHT_SHARDS}/{es.LIGHT_SHARDS}"])
 
+    def test_heavy_set_equals_every_nextest_heavy_group_filter(self) -> None:
+        # `HEAVY` and each `heavy-server-e2e` override filter in
+        # `.config/nextest.toml` name the same binaries: a binary in only one
+        # of them either runs unserialized on a heavy shard or serialized on a
+        # light one.
+        import re
+
+        with open(os.path.join(REPO, ".config", "nextest.toml"), encoding="utf-8") as f:
+            toml = f.read()
+        heavy = set(re.findall(r"binary\(([A-Za-z0-9_]+)\)", es.HEAVY))
+        filters = re.findall(r"filter = '([^']*)'\ntest-group = 'heavy-server-e2e'", toml)
+        self.assertGreaterEqual(len(filters), 2, "a ci and a default heavy-server-e2e override")
+        for flt in filters:
+            self.assertEqual(set(re.findall(r"binary\(([A-Za-z0-9_]+)\)", flt)), heavy)
+
     def test_every_shard_has_a_selection(self) -> None:
         for k in range(1, es.SHARDS + 1):
             self.assertEqual(len(es.selection(k)), 4)
