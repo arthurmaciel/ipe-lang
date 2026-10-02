@@ -12,8 +12,9 @@
 mod layout;
 mod lexer;
 mod parser;
+mod surface;
 
-use ipe_diagnostics::{DResult, Span};
+use ipe_diagnostics::{DResult, Span, TokenKind};
 use ipe_intern::Interner;
 use ipe_syntax::{Module, TypeAnnotation};
 
@@ -69,7 +70,49 @@ pub fn try_literal_source_spans(src: &str) -> Option<Vec<Span>> {
     )
 }
 
-pub use lexer::{KEYWORDS, is_ident_continue, is_ident_start};
+/// What a lexed token is, as [`try_source_tokens`] reports it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TokenClass {
+    /// A token of the program, by its payload-free kind.
+    Code(TokenKind),
+    /// A `{-| … -}` doc comment: lexed as a token, but source trivia to a printer.
+    DocComment,
+}
+
+/// One lexed token: its byte span and its class.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SourceToken {
+    /// The token's byte range in the source.
+    pub span: Span,
+    /// Whether the token is code or a doc comment.
+    pub class: TokenClass,
+}
+
+/// Every token of `src` in source order, or `None` when `src` does not lex.
+///
+/// The bytes between consecutive tokens are exactly the lexer's trivia —
+/// whitespace, `--` line comments and `{- -}` block comments — so a consumer
+/// that recovers comments from those gaps agrees with the lexer on what is a
+/// comment and what is literal content.
+#[must_use]
+pub fn try_source_tokens(src: &str) -> Option<Vec<SourceToken>> {
+    let tokens = lexer::lex(src).ok()?;
+    Some(
+        tokens
+            .iter()
+            .map(|t| SourceToken {
+                span: t.span,
+                class: match &t.kind {
+                    lexer::Tok::DocComment(_) => TokenClass::DocComment,
+                    kind => TokenClass::Code(parser::tok_kind(kind)),
+                },
+            })
+            .collect(),
+    )
+}
+
+pub use lexer::{KEYWORDS, LiteralQuote, is_ident_continue, is_ident_start, literal_source};
+pub use surface::{field_accessor, let_function, negation};
 
 /// Return `true` when `s` is a reserved keyword.
 ///

@@ -543,12 +543,25 @@ nodes regardless of position.
 ### URL routing + history
 
 `routes` maps URL paths to Page values. Runtime matches incoming URLs in
-declaration order, captures `:param` segments, constructs Page w/ captured
-values (always `String`). Declaration order matters — literals before
-patterns (`/apps/new` before `/apps/:slug`, or "new" matches as slug).
-A `:name` is `[A-Za-z_][A-Za-z0-9_]*` and unique within its pattern; a
-literal segment's `%` starts a two-hex-digit UTF-8 escape (`%25` = `%`). A
-literal pattern breaking either rule is refused at compile time (IPE-L0156).
+declaration order, captures `:param` segments, and fills the page
+constructor's payload fields with them in order (`String`, `Int`, `Float`,
+`Bool`; a segment that does not parse falls through to the next route).
+Paths are case-sensitive.
+- Builder = the page constructor itself (`AppDetailPage`), never a lambda or
+  function (IPE-L0123): the compiler derives the inverse, page → path.
+- Every Page constructor, `notFound` included, needs a route (IPE-L0159).
+  The FIRST route listed for a constructor is its canonical path; later ones
+  are aliases a GET/HEAD redirects (308) to the canonical path.
+- Declaration order matters — literals before patterns (`/apps/new` before
+  `/apps/:slug`, or "new" matches as slug): a route an earlier one always
+  matches is refused (IPE-L0158); equivalent patterns building different
+  pages are refused (IPE-L0157).
+- A `:name` is `[A-Za-z_][A-Za-z0-9_]*` and unique within its pattern; a
+  literal segment's `%` starts a two-hex-digit UTF-8 escape (`%25` = `%`). A
+  literal pattern breaking either rule is refused at compile time (IPE-L0156),
+  as is a routed literal segment that is empty or decodes to `.` or `..`.
+- `onNavigate : Page -> Msg` (optional) turns each navigation into a Msg;
+  only a routed app may set it (IPE-L0162).
 
 ```elm
 type Page

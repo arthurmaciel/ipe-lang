@@ -19,18 +19,19 @@ use crate::code::{
     IPE_L0127, IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0134, IPE_L0135,
     IPE_L0136, IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0143, IPE_L0144, IPE_L0145, IPE_L0146,
     IPE_L0147, IPE_L0148, IPE_L0149, IPE_L0150, IPE_L0151, IPE_L0152, IPE_L0153, IPE_L0154,
-    IPE_L0155, IPE_L0156, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005,
-    IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023,
-    IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031,
-    IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0038, IPE_N0039, IPE_N0040,
-    IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044, IPE_N0045, IPE_N0046, IPE_N0047, IPE_N0048,
-    IPE_N0049, IPE_N0050, IPE_N0051, IPE_N0052, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
-    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
-    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
-    IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_P0068,
-    IPE_P0069, IPE_P0070, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
-    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
-    IPE_T0019, IPE_T0020, IPE_T0021, Severity,
+    IPE_L0155, IPE_L0156, IPE_L0157, IPE_L0158, IPE_L0159, IPE_L0160, IPE_L0161, IPE_L0162,
+    IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011,
+    IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025,
+    IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033,
+    IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042,
+    IPE_N0043, IPE_N0044, IPE_N0045, IPE_N0046, IPE_N0047, IPE_N0048, IPE_N0049, IPE_N0050,
+    IPE_N0051, IPE_N0052, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012,
+    IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021,
+    IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
+    IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_P0068, IPE_P0069, IPE_P0070,
+    IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012,
+    IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020,
+    IPE_T0021, Severity,
 };
 use crate::span::Span;
 use crate::terminal::TerminalSafe;
@@ -1449,10 +1450,42 @@ pub enum LowerError {
         /// Why the path was refused.
         defect: RoutePatternDefect,
     },
-    /// A `Web.route` page builder is not a page constructor, inline lambda, or
-    /// named function — the Rust backend cannot emit a type-directed params
-    /// closure for a let-bound variable or computed expression. [IPE-L0123]
+    /// A `Web.route` page builder is not a bare page constructor (a lambda, a
+    /// named or let-bound function, a partial application). A function builder
+    /// has no inverse, so the page's canonical path cannot be rendered.
+    /// [IPE-L0123]
     RouteBuilderUnsupportedShape,
+    /// Two routes of a routed app have equivalent patterns (same segment count;
+    /// at each position both parameters, or both literals with equal decoded
+    /// text) but build different page constructors. [IPE-L0157]
+    RouteAmbiguous {
+        /// The earlier route's pattern (a bounded excerpt).
+        first: Box<str>,
+        /// The later route's pattern (a bounded excerpt).
+        second: Box<str>,
+    },
+    /// A route of a routed app can never match: an earlier route matches every
+    /// path it matches and always builds its page. [IPE-L0158]
+    RouteUnreachable {
+        /// The unreachable route's pattern (a bounded excerpt).
+        pattern: Box<str>,
+        /// The earlier pattern that matches first (a bounded excerpt).
+        earlier: Box<str>,
+    },
+    /// A constructor of a routed app's page type has no route, so the page has
+    /// no canonical path to render. [IPE-L0159]
+    RoutedPageWithoutRoute {
+        /// The constructor's name.
+        ctor: Box<str>,
+    },
+    /// A routed app's `routes` is not a list of `Web.route "<literal>" Ctor`
+    /// the compiler can read, inline or as a top-level binding. [IPE-L0160]
+    RouteTableOpaque,
+    /// A routed app's `Model.page` field is not a custom type. [IPE-L0161]
+    RoutedPageNotCustomType,
+    /// An app sets `onNavigate` but its Model has no `page` field, so nothing
+    /// would ever call it. [IPE-L0162]
+    OnNavigateWithoutPage,
     /// A `Web.route` page-constructor payload field has a type that cannot be
     /// decoded from a URL `:param` string (only `String`, `Int`, `Float`, and
     /// `Bool` are supported). [IPE-L0123]
@@ -1661,6 +1694,13 @@ pub enum RoutePatternDefect {
     TooLong {
         /// The ceiling in bytes.
         cap: usize,
+    },
+    /// A literal segment of a routed app's pattern decodes to the empty text,
+    /// `.` or `..`, which no rendered URL can carry back, so the route's page
+    /// would have no address.
+    UnrenderableLiteral {
+        /// The offending literal segment, as written.
+        segment: Box<str>,
     },
 }
 
@@ -2357,6 +2397,12 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::RouteBuilderUnsupportedShape | LowerError::RouteParamUnsupportedType { .. } => {
             IPE_L0123
         }
+        LowerError::RouteAmbiguous { .. } => IPE_L0157,
+        LowerError::RouteUnreachable { .. } => IPE_L0158,
+        LowerError::RoutedPageWithoutRoute { .. } => IPE_L0159,
+        LowerError::RouteTableOpaque => IPE_L0160,
+        LowerError::RoutedPageNotCustomType => IPE_L0161,
+        LowerError::OnNavigateWithoutPage => IPE_L0162,
         LowerError::DevOnlyKernelInProduction { .. } => IPE_L0140,
         LowerError::UiCellsInWebShape(_) => IPE_L0132,
         LowerError::UiCellsInCliShape(_) => IPE_L0153,
@@ -2729,9 +2775,44 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
         )],
         LowerError::RoutePatternMalformed { defect, .. } => route_pattern_malformed_help(defect),
         LowerError::RouteBuilderUnsupportedShape => vec![HelpLine::Note(
-            "inline the constructor or lambda directly at the `Web.route` call site; \
-             a let-bound variable or computed expression cannot be used as a page builder."
+            "pass the page constructor itself, e.g. `Web.route \"/apps/:id\" AppPage`; \
+             the route's `:param` segments fill its payload fields in order. Reshape a \
+             parameter in `update` or `view`, not in the builder."
                 .into(),
+        )],
+        LowerError::RouteAmbiguous { first, .. } => vec![HelpLine::Note(
+            format!(
+                "`{first}` already matches every path this route matches, whatever the \
+                 parameter types. Give one of the two routes a distinct literal segment."
+            )
+            .into_boxed_str(),
+        )],
+        LowerError::RouteUnreachable { earlier, .. } => vec![HelpLine::Note(
+            format!(
+                "`{earlier}` matches first. Remove this route, or list the more specific \
+                 route before `{earlier}`."
+            )
+            .into_boxed_str(),
+        )],
+        LowerError::RoutedPageWithoutRoute { ctor } => vec![HelpLine::Note(
+            format!(
+                "add a `Web.route` that builds `{ctor}`; every page, `notFound` included, \
+                 needs a path. The first route listed for a page is its canonical path."
+            )
+            .into_boxed_str(),
+        )],
+        LowerError::RouteTableOpaque => vec![HelpLine::Note(
+            "write `routes` as a list of `Web.route \"<literal path>\" PageConstructor`, \
+             inline or as a top-level value."
+                .into(),
+        )],
+        LowerError::RoutedPageNotCustomType => vec![HelpLine::Note(
+            "declare the pages as a custom type, e.g. `type Page = HomePage | PostPage String`, \
+             and give `Model.page` that type."
+                .into(),
+        )],
+        LowerError::OnNavigateWithoutPage => vec![HelpLine::Note(
+            "add a `page` field to the Model to route the app, or remove `onNavigate`.".into(),
         )],
         LowerError::RouteParamUnsupportedType {
             field_index,
@@ -2914,6 +2995,10 @@ fn route_pattern_malformed_help(defect: &RoutePatternDefect) -> Vec<HelpLine> {
         }
         RoutePatternDefect::TooLong { cap } => {
             format!("a route path is at most {cap} bytes — shorten it")
+        }
+        RoutePatternDefect::UnrenderableLiteral { .. } => {
+            "a page's path is rendered back into a URL, and a browser drops an empty,              `.` or `..` segment — remove the empty segment or rename the literal"
+                .to_string()
         }
     };
     vec![HelpLine::Note(note.into_boxed_str())]

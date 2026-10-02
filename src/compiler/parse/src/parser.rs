@@ -90,7 +90,7 @@ struct Annotation {
 
 /// Map a concrete lexer token to its payload-free [`TokenKind`] category — the
 /// "found" shape a [`ParseError::UnexpectedToken`] reports.
-const fn tok_kind(t: &Tok) -> TokenKind {
+pub const fn tok_kind(t: &Tok) -> TokenKind {
     match t {
         Tok::Module => TokenKind::Module,
         Tok::Import => TokenKind::Import,
