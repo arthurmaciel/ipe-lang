@@ -11380,11 +11380,15 @@ impl StdlibKernel {
         const HANDLER_TO_ROUTE: TyShape = TyShape::Fun(&RESP_HANDLER, &SERVER_ROUTE);
         const SERVER_ROUTE_KERNEL: TyShape = TyShape::Fun(&STRING, &HANDLER_TO_ROUTE);
         // Authed routes. `authConfig : Secret -> TokenSource -> AuthConfig`;
-        // `cookieToken : String -> TokenSource`; the route kernels take a
-        // two-argument handler `Request -> Principal -> Task Error Response`.
+        // `cookieToken : String -> Result Error TokenSource` (an empty name is
+        // an `Error`); the route kernels take a two-argument handler
+        // `Request -> Principal -> Task Error Response`.
         const SECRET_TO_TOKEN_SOURCE_TO_AUTH_CONFIG: TyShape =
             TyShape::Fun(&SECRET, &TyShape::Fun(&TOKEN_SOURCE, &AUTH_CONFIG));
-        const STRING_TO_TOKEN_SOURCE: TyShape = TyShape::Fun(&STRING, &TOKEN_SOURCE);
+        const RESULT_ERROR_TOKEN_SOURCE: TyShape =
+            TyShape::Con(BuiltinTag::Result, &[ERROR, TOKEN_SOURCE]);
+        const STRING_TO_RESULT_TOKEN_SOURCE: TyShape =
+            TyShape::Fun(&STRING, &RESULT_ERROR_TOKEN_SOURCE);
         // `withRevocation : RevocationMode -> AuthConfig -> AuthConfig` — arms the gate.
         const REVOCATION_MODE_TO_AUTH_CONFIG_TO_AUTH_CONFIG: TyShape =
             TyShape::Fun(&REVOCATION_MODE, &TyShape::Fun(&AUTH_CONFIG, &AUTH_CONFIG));
@@ -12841,7 +12845,7 @@ impl StdlibKernel {
             | Self::ServerDeleteAuthed => Some(&SERVER_AUTHED_ROUTE_KERNEL),
             Self::ServerAuthConfig => Some(&SECRET_TO_TOKEN_SOURCE_TO_AUTH_CONFIG),
             Self::ServerTokenBearer => Some(&TOKEN_SOURCE),
-            Self::ServerCookieToken => Some(&STRING_TO_TOKEN_SOURCE),
+            Self::ServerCookieToken => Some(&STRING_TO_RESULT_TOKEN_SOURCE),
             // `withRevocation : RevocationMode -> AuthConfig -> AuthConfig`
             Self::ServerWithRevocation => Some(&REVOCATION_MODE_TO_AUTH_CONFIG_TO_AUTH_CONFIG),
             Self::ServerText | Self::ServerJson | Self::ServerHtml | Self::ServerRedirect => {

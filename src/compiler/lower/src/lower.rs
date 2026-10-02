@@ -25427,7 +25427,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StoreUpper
                 | KernelFn::StoreLower
                 // ── Server: cookie token source — arity 1 ────────────────
-                // `Server.cookieToken : String -> TokenSource`
+                // `Server.cookieToken : String -> Result Error TokenSource`
                 | KernelFn::ServerCookieToken
                 // ── Ipe.Ffi.Js port — outbound. `Js.send : a -> Cmd msg`. Arity 1;
                 //    the port intercept rejects it before emission, this is the

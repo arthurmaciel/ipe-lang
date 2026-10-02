@@ -77,6 +77,264 @@ pub(crate) fn origin_host_mismatch(origin: &str, host: &str) -> bool {
     origin_host != host_host
 }
 
+/// RFC 6265 cookie name and value grammar, held in types.
+///
+/// One grammar for the server request parser, the `Set-Cookie` builder and the
+/// browser `document.cookie` reader, so a cookie reads back the same on every
+/// host. A name holds only RFC 7230 `token` bytes and a value only RFC 6265
+/// `cookie-octet` bytes; every other byte (non-ASCII, a CTL including CR/LF,
+/// `;`, `,`, whitespace, `"`, `\`) and `%` itself is written `%XX`, so the
+/// encoding is injective and [`cookie::decode`] inverts it exactly.
+#[cfg(any(
+    feature = "server",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+pub mod cookie {
+    /// Whether `b` is an RFC 6265 `cookie-octet` other than `%`.
+    const fn is_value_octet(b: u8) -> bool {
+        matches!(b, 0x21 | 0x23..=0x24 | 0x26..=0x2B | 0x2D..=0x3A | 0x3C..=0x5B | 0x5D..=0x7E)
+    }
+
+    /// Whether `b` is an RFC 7230 `tchar` other than `%`.
+    const fn is_name_octet(b: u8) -> bool {
+        b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'!' | b'#'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'|'
+                    | b'~'
+            )
+    }
+
+    /// `raw` with every byte `keep` refuses written as `%XX` (upper-case hex).
+    fn percent_encode(raw: &str, keep: fn(u8) -> bool) -> String {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        let mut out = String::with_capacity(raw.len());
+        for b in raw.bytes() {
+            if keep(b) {
+                out.push(char::from(b));
+            } else {
+                out.push('%');
+                for nibble in [b >> 4, b & 0x0F] {
+                    if let Some(&h) = HEX.get(usize::from(nibble)) {
+                        out.push(char::from(h));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The fixed base of a cookie name the runtime itself sets.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum RuntimeCookie {
+        /// `ipe_csrf`: the `Middleware.withCsrf` cookie outside production.
+        ServerCsrf,
+        /// `__ipe_csrf`: the `Ipe.Web` CSRF cookie when cookies are not `Secure`.
+        WebCsrf,
+        /// `__Host-ipe_csrf`: a CSRF cookie when cookies are `Secure`.
+        HostCsrf,
+        /// `ipe_sid`: the `Ipe.Web` session cookie.
+        Session,
+        /// `__Host-ipe_sid`: the root `Ipe.Web` session cookie when cookies are `Secure`.
+        HostSession,
+    }
+
+    impl RuntimeCookie {
+        const fn base(self) -> &'static str {
+            match self {
+                Self::ServerCsrf => "ipe_csrf",
+                Self::WebCsrf => "__ipe_csrf",
+                Self::HostCsrf => "__Host-ipe_csrf",
+                Self::Session => "ipe_sid",
+                Self::HostSession => "__Host-ipe_sid",
+            }
+        }
+    }
+
+    /// A non-empty cookie name: the program's text and its `token` wire form.
+    ///
+    /// The wire form is an injective function of the text, so two names are
+    /// equal exactly when their texts are.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct CookieName {
+        text: String,
+        wire: String,
+    }
+
+    impl CookieName {
+        /// Parse `raw`, percent-encoding every byte that is not a `token` byte.
+        ///
+        /// An empty name has no representation: a `Set-Cookie` line starting
+        /// with `=` is a nameless cookie a browser sends back as a bare value,
+        /// which a server reads as some other cookie.
+        #[must_use]
+        pub fn parse(raw: &str) -> Option<Self> {
+            (!raw.is_empty()).then(|| Self {
+                text: raw.to_owned(),
+                wire: percent_encode(raw, is_name_octet),
+            })
+        }
+
+        /// The name of a runtime cookie: `base` followed by `suffix`.
+        ///
+        /// Non-empty by construction, since every base is.
+        #[must_use]
+        pub fn runtime(base: RuntimeCookie, suffix: &str) -> Self {
+            let text = format!("{}{suffix}", base.base());
+            let wire = percent_encode(&text, is_name_octet);
+            Self { text, wire }
+        }
+
+        /// The name as the program wrote it.
+        #[must_use]
+        pub fn text(&self) -> &str {
+            &self.text
+        }
+
+        /// The encoded name sent on the wire.
+        #[must_use]
+        pub fn as_str(&self) -> &str {
+            &self.wire
+        }
+    }
+
+    impl std::fmt::Display for CookieName {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.wire)
+        }
+    }
+
+    /// A cookie value made only of RFC 6265 `cookie-octet` bytes other than `%`.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct CookieValue(String);
+
+    impl CookieValue {
+        /// Encode `raw`, percent-encoding `%` and every byte that is not a `cookie-octet`.
+        ///
+        /// A value made of the other `cookie-octet` bytes is kept byte-for-byte.
+        #[must_use]
+        pub fn encode(raw: &str) -> Self {
+            Self(percent_encode(raw, is_value_octet))
+        }
+
+        /// The encoded value.
+        #[must_use]
+        pub fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    /// The value of one hexadecimal digit byte.
+    fn hex_digit(b: u8) -> Option<u8> {
+        char::from(b)
+            .to_digit(16)
+            .and_then(|d| u8::try_from(d).ok())
+    }
+
+    /// Invert the cookie percent-encoding of `wire`.
+    ///
+    /// A `%` not followed by two hex digits, or bytes that are not UTF-8, have
+    /// no decoding: the result is `None`, never a lossy replacement.
+    #[must_use]
+    pub fn decode(wire: &str) -> Option<String> {
+        let mut out = Vec::with_capacity(wire.len());
+        let mut bytes = wire.bytes();
+        while let Some(b) = bytes.next() {
+            if b == b'%' {
+                let hi = bytes.next().and_then(hex_digit)?;
+                let lo = bytes.next().and_then(hex_digit)?;
+                out.push(hi.checked_mul(16)?.checked_add(lo)?);
+            } else {
+                out.push(b);
+            }
+        }
+        String::from_utf8(out).ok()
+    }
+
+    /// The decoded `(name, value)` pairs of one `Cookie` header or of
+    /// `document.cookie`, in order.
+    ///
+    /// A pair is kept only when its wire name is exactly the encoding of a
+    /// non-empty name, so a lookup by name matches only what a `Set-Cookie`
+    /// line would have written for it, and when its value decodes. Every other
+    /// pair is skipped. Each name is the program's text.
+    pub fn request_cookies(header: &str) -> impl Iterator<Item = (String, String)> + '_ {
+        header.split(';').filter_map(|pair| {
+            let (wire_name, wire_value) = pair.split_once('=')?;
+            let wire_name = wire_name.trim();
+            let name = CookieName::parse(&decode(wire_name)?)?;
+            if name.as_str() != wire_name {
+                return None;
+            }
+            let value = decode(wire_value.trim())?;
+            Some((name.text, value))
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{CookieName, CookieValue, decode, request_cookies};
+
+        /// The browser reader and the server parser are one function: a pair
+        /// decodes, and a non-canonical or undecodable pair is skipped.
+        #[test]
+        fn request_cookies_decodes_and_skips_non_canonical_pairs() {
+            let pairs: Vec<(String, String)> = request_cookies(
+                "my%20sid=%C3%A9%3B%25; ipe%5Fsid=forged; a=%ZZ; =v; theme=dark; theme=light",
+            )
+            .collect();
+            assert_eq!(
+                pairs,
+                [
+                    ("my sid".to_owned(), "é;%".to_owned()),
+                    ("theme".to_owned(), "dark".to_owned()),
+                    ("theme".to_owned(), "light".to_owned()),
+                ]
+            );
+        }
+
+        /// Every byte encodes to the same wire form the RFC grammar names: a
+        /// `cookie-octet` other than `%` is kept, every other byte is `%XX`,
+        /// and decoding inverts the name encoder over every ASCII byte.
+        #[test]
+        fn encoders_keep_exactly_the_rfc_octets_and_round_trip() {
+            for b in 0u8..=0x7F {
+                let raw = char::from(b).to_string();
+                let value_kept = matches!(
+                    b,
+                    0x21 | 0x23..=0x24 | 0x26..=0x2B | 0x2D..=0x3A | 0x3C..=0x5B | 0x5D..=0x7E
+                );
+                let want = if value_kept {
+                    raw.clone()
+                } else {
+                    format!("%{b:02X}")
+                };
+                assert_eq!(CookieValue::encode(&raw).as_str(), want, "byte {b:#04x}");
+                let name = CookieName::parse(&raw);
+                let wire = name.as_ref().map(CookieName::as_str);
+                assert_eq!(
+                    wire.and_then(decode).as_deref(),
+                    Some(raw.as_str()),
+                    "byte {b:#04x}"
+                );
+            }
+            assert_eq!(CookieValue::encode("é").as_str(), "%C3%A9");
+            assert_eq!(decode("%c3%a9").as_deref(), Some("é"));
+        }
+    }
+}
+
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {

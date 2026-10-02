@@ -306,7 +306,7 @@ pub enum TokenSource {
     /// `Authorization: Bearer <token>`.
     BearerHeader,
     /// A named request cookie carrying the token.
-    Cookie(String),
+    Cookie(CookieName),
 }
 
 /// Ipe.Server.AuthConfig (opaque) — the secret, token source, claim key, and
@@ -364,11 +364,17 @@ pub fn server_token_bearer() -> TokenSource {
 }
 
 #[cfg(feature = "jwt")]
-/// Ipe.Server.cookieToken : String -> TokenSource. Reads the token from the
-/// named request cookie.
+/// Ipe.Server.cookieToken : String -> Result Error TokenSource. Reads the token
+/// from the named request cookie; an empty name is an `InvalidInput` error, so a
+/// cookie source always names a cookie a request can carry.
 #[must_use]
-pub fn server_cookie_token(name: String) -> TokenSource {
-    TokenSource::Cookie(name)
+pub fn server_cookie_token(name: String) -> IpeResult<IpeError, TokenSource> {
+    match CookieName::parse(&name) {
+        Some(name) => IpeResult::Ok(TokenSource::Cookie(name)),
+        None => IpeResult::Err(IpeError::invalid_input(
+            "Server.cookieToken: a cookie name must not be empty".to_owned(),
+        )),
+    }
 }
 
 #[cfg(feature = "jwt")]
@@ -390,7 +396,7 @@ fn read_token(source: &TokenSource, req: &ServerRequest) -> Option<String> {
         }
         TokenSource::Cookie(name) => req
             .cookies
-            .get(name)
+            .get(name.text())
             .filter(|v| !v.is_empty())
             .map(ToString::to_string),
     }
@@ -408,19 +414,18 @@ fn unauthorized() -> ServerResponse {
 /// security attributes of the original session cookie: `__Host-`/Secure,
 /// `Path=/`, `HttpOnly`, and `SameSite`. The cookie name must be the same name
 /// that the request carried the token under so the browser replaces the existing
-/// cookie entry rather than creating a duplicate. An empty name has no
-/// `CookieName`, so it gives `None`; a request never carries such a cookie.
+/// cookie entry rather than creating a duplicate.
 ///
 /// `is_https` must be pre-captured from the incoming request's headers
 /// BEFORE the request is moved into the handler — mirrors the combined gate
 /// in `page_response` (`csrf::cookies_secure() || request_is_https(headers)`):
 /// a re-issued cookie must never be less-Secure than the initial session cookie.
 fn reissue_set_cookie(
-    cookie_name: &str,
+    cookie_name: &CookieName,
     token: &str,
     slide_window_secs: u64,
     is_https: bool,
-) -> Option<SetCookie> {
+) -> SetCookie {
     // The cookie-security signal lives in `web::csrf` for a program that emits the
     // web surface; a server-only program (no `web` module) falls back to the
     // production-env signal. `feature = "web"` is the exact condition under which
@@ -442,8 +447,8 @@ fn reissue_set_cookie(
     } else {
         SameSite::Lax
     };
-    Some(SetCookie::new(
-        &CookieName::parse(cookie_name)?,
+    SetCookie::new(
+        cookie_name,
         &CookieValue::encode(token),
         CookieAttributes {
             path: CookiePath::root(),
@@ -452,7 +457,7 @@ fn reissue_set_cookie(
             secure,
             max_age_secs: Some(slide_window_secs),
         },
-    ))
+    )
 }
 
 #[cfg(feature = "jwt")]
@@ -530,54 +535,56 @@ where
 
             // Sliding re-issue — cookie-source only (bearer tokens are API
             // credentials; the client manages re-issue itself via re-auth).
-            let reissue_cookie: Option<SetCookie> = if let TokenSource::Cookie(ref name) =
-                cfg.source
-            {
-                if let Some(ctx) = crate::auth::reissue_context_from_claims(&claims) {
-                    let slide_window_secs = crate::app_config::resolve_auth_slide_window();
-                    let slide_i64 = i64::try_from(slide_window_secs).unwrap_or(i64::MAX);
-                    let now = crate::jwt::now_unix_seconds();
-                    // Throttle: re-issue only once past exp - slide_window/2.
-                    // Parse exp from the verified claims string representation.
-                    let past_threshold = claims
-                        .get("exp")
-                        .and_then(|s| s.parse::<i64>().ok())
-                        .map(|exp| now > exp.saturating_sub(slide_i64 / 2))
-                        .unwrap_or(false);
-                    if past_threshold && now < ctx.cap {
-                        // Extra claims to carry into the re-issued token (all
-                        // verified claims except the time anchors and subject —
-                        // those come from the ReissueContext).
-                        let extra: HashMap<String, String> = claims
-                            .iter()
-                            .filter(|(k, _)| {
-                                // Time anchors and session-identity fields come from
-                                // ReissueContext verbatim; skip them in extra_claims.
-                                *k != "exp"
-                                    && *k != "iat"
-                                    && *k != "cap"
-                                    && *k != "jti"
-                                    && *k != "sub"
-                            })
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
-                        match crate::auth::auth_reissue_token::<String>(
-                            &secret, &ctx, extra, slide_i64,
-                        ) {
-                            Some(IpeResult::Ok(new_token)) => {
-                                reissue_set_cookie(name, &new_token, slide_window_secs, is_https)
+            let reissue_cookie: Option<SetCookie> =
+                if let TokenSource::Cookie(ref name) = cfg.source {
+                    if let Some(ctx) = crate::auth::reissue_context_from_claims(&claims) {
+                        let slide_window_secs = crate::app_config::resolve_auth_slide_window();
+                        let slide_i64 = i64::try_from(slide_window_secs).unwrap_or(i64::MAX);
+                        let now = crate::jwt::now_unix_seconds();
+                        // Throttle: re-issue only once past exp - slide_window/2.
+                        // Parse exp from the verified claims string representation.
+                        let past_threshold = claims
+                            .get("exp")
+                            .and_then(|s| s.parse::<i64>().ok())
+                            .map(|exp| now > exp.saturating_sub(slide_i64 / 2))
+                            .unwrap_or(false);
+                        if past_threshold && now < ctx.cap {
+                            // Extra claims to carry into the re-issued token (all
+                            // verified claims except the time anchors and subject —
+                            // those come from the ReissueContext).
+                            let extra: HashMap<String, String> = claims
+                                .iter()
+                                .filter(|(k, _)| {
+                                    // Time anchors and session-identity fields come from
+                                    // ReissueContext verbatim; skip them in extra_claims.
+                                    *k != "exp"
+                                        && *k != "iat"
+                                        && *k != "cap"
+                                        && *k != "jti"
+                                        && *k != "sub"
+                                })
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            match crate::auth::auth_reissue_token::<String>(
+                                &secret, &ctx, extra, slide_i64,
+                            ) {
+                                Some(IpeResult::Ok(new_token)) => Some(reissue_set_cookie(
+                                    name,
+                                    &new_token,
+                                    slide_window_secs,
+                                    is_https,
+                                )),
+                                _ => None,
                             }
-                            _ => None,
+                        } else {
+                            None
                         }
                     } else {
                         None
                     }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
             let mut resp = handler(req, principal).await;
             // Attach the re-issue cookie when warranted. The handler returns an
@@ -678,6 +685,9 @@ enum HeaderRefusal {
     Value,
     /// `Set-Cookie`, in any case: every cookie line is built by `SetCookie`.
     SetCookie,
+    /// `Content-Length` or `Transfer-Encoding`, in any case: the server frames
+    /// the body it sends, so a handler's value could only disagree with it.
+    Framing,
 }
 
 impl HeaderRefusal {
@@ -691,6 +701,9 @@ impl HeaderRefusal {
             Self::SetCookie => {
                 "Server.withHeader: `Set-Cookie` is not a raw header; set a cookie with `Server.withCookie` and `Server.cookie`"
             }
+            Self::Framing => {
+                "Server.withHeader: `Content-Length` and `Transfer-Encoding` are set by the server from the body it sends"
+            }
         }
     }
 }
@@ -698,7 +711,9 @@ impl HeaderRefusal {
 /// Parse one response header into its typed name and value.
 ///
 /// `Set-Cookie` in any case is refused, so a cookie line is only ever the one
-/// `SetCookie` builds from typed parts.
+/// `SetCookie` builds from typed parts. `Content-Length` and
+/// `Transfer-Encoding` in any case are refused, so the body framing is only
+/// ever the server's own.
 fn parse_response_header(
     name: &str,
     value: &str,
@@ -708,6 +723,9 @@ fn parse_response_header(
     if name == axum::http::header::SET_COOKIE {
         return Err(HeaderRefusal::SetCookie);
     }
+    if name == axum::http::header::CONTENT_LENGTH || name == axum::http::header::TRANSFER_ENCODING {
+        return Err(HeaderRefusal::Framing);
+    }
     let value = axum::http::HeaderValue::from_str(value).map_err(|_| HeaderRefusal::Value)?;
     Ok((name, value))
 }
@@ -715,8 +733,8 @@ fn parse_response_header(
 /// `Server.withHeader : String -> String -> Response -> Result Error Response`.
 ///
 /// The header enters the response only when its name is a `token` other than
-/// `Set-Cookie` and its value a visible-ASCII header value; any other header is
-/// an `InvalidInput` error.
+/// `Set-Cookie`, `Content-Length` and `Transfer-Encoding` and its value a
+/// visible-ASCII header value; any other header is an `InvalidInput` error.
 #[must_use]
 pub fn server_with_header(
     k: String,
@@ -818,201 +836,21 @@ pub fn server_method(req: ServerRequest) -> String {
 
 // ─── cookies ──────────────────────────────────────────────────────────────
 
-pub use cookie_octets::{
-    CookieAttributes, CookieName, CookiePath, CookieValue, RuntimeCookie, SameSite, SetCookie,
-    request_cookies,
-};
+pub use crate::http_header::cookie::{CookieName, CookieValue, RuntimeCookie, request_cookies};
+pub use cookie_octets::{CookieAttributes, CookiePath, SameSite, SetCookie};
 
-/// RFC 6265 cookie grammar, held in types.
+/// The `Set-Cookie` line grammar, held in types.
 ///
-/// A cookie name holds only `token` bytes and a value only `cookie-octet`
-/// bytes; every other byte (non-ASCII, a CTL including CR/LF, `%`, `;`, `,`,
-/// whitespace, `"`, `\`) is percent-encoded as `%XX` when the type is built.
-/// `%` itself is always encoded, so the encoding is injective and `decode`
-/// inverts it exactly. A [`SetCookie`] line is assembled only from those types
-/// and a typed attribute set, so every `Set-Cookie` value the server emits is a
-/// valid header value and carries no attribute or line the caller supplied.
+/// A [`SetCookie`] line is assembled only from a [`CookieName`], a
+/// [`CookieValue`] (the shared RFC 6265 grammar in `http_header::cookie`) and a
+/// typed attribute set, so every `Set-Cookie` value the server emits is a valid
+/// header value and carries no attribute or line the caller supplied.
 mod cookie_octets {
+    use super::{CookieName, CookieValue};
     use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
-
-    /// Bytes outside RFC 6265 `cookie-octet`, plus `%`.
-    ///
-    /// CTLs, space, `"`, `%`, `,`, `;` and `\`; non-ASCII bytes are always
-    /// encoded by `utf8_percent_encode`.
-    const NOT_COOKIE_OCTET: &AsciiSet = &CONTROLS
-        .add(b' ')
-        .add(b'"')
-        .add(b'%')
-        .add(b',')
-        .add(b';')
-        .add(b'\\');
-
-    /// Bytes outside RFC 7230 `token`, plus `%`.
-    ///
-    /// The `cookie-octet` exclusions plus the `token` separators.
-    const NOT_TOKEN: &AsciiSet = &NOT_COOKIE_OCTET
-        .add(b'(')
-        .add(b')')
-        .add(b'<')
-        .add(b'>')
-        .add(b'@')
-        .add(b':')
-        .add(b'/')
-        .add(b'[')
-        .add(b']')
-        .add(b'?')
-        .add(b'=')
-        .add(b'{')
-        .add(b'}');
 
     /// Bytes outside RFC 6265 `av-octet` (a `Path` attribute value): CTLs and `;`.
     const NOT_AV_OCTET: &AsciiSet = &CONTROLS.add(b';');
-
-    /// The fixed base of a cookie name the runtime itself sets.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum RuntimeCookie {
-        /// `ipe_csrf`: the `Middleware.withCsrf` cookie outside production.
-        ServerCsrf,
-        /// `__ipe_csrf`: the `Ipe.Web` CSRF cookie when cookies are not `Secure`.
-        WebCsrf,
-        /// `__Host-ipe_csrf`: a CSRF cookie when cookies are `Secure`.
-        HostCsrf,
-        /// `ipe_sid`: the `Ipe.Web` session cookie.
-        Session,
-        /// `__Host-ipe_sid`: the root `Ipe.Web` session cookie when cookies are `Secure`.
-        HostSession,
-    }
-
-    impl RuntimeCookie {
-        const fn base(self) -> &'static str {
-            match self {
-                Self::ServerCsrf => "ipe_csrf",
-                Self::WebCsrf => "__ipe_csrf",
-                Self::HostCsrf => "__Host-ipe_csrf",
-                Self::Session => "ipe_sid",
-                Self::HostSession => "__Host-ipe_sid",
-            }
-        }
-    }
-
-    /// A non-empty cookie name: the program's text and its `token` wire form.
-    ///
-    /// The wire form is an injective function of the text, so two names are
-    /// equal exactly when their texts are.
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct CookieName {
-        text: String,
-        wire: String,
-    }
-
-    impl CookieName {
-        /// Parse `raw`, percent-encoding every byte that is not a `token` byte.
-        ///
-        /// An empty name has no representation: a `Set-Cookie` line starting
-        /// with `=` is a nameless cookie a browser sends back as a bare value,
-        /// which a server reads as some other cookie.
-        #[must_use]
-        pub fn parse(raw: &str) -> Option<Self> {
-            (!raw.is_empty()).then(|| Self {
-                text: raw.to_owned(),
-                wire: utf8_percent_encode(raw, NOT_TOKEN).to_string(),
-            })
-        }
-
-        /// The name of a runtime cookie: `base` followed by `suffix`.
-        ///
-        /// Non-empty by construction, since every base is.
-        #[must_use]
-        pub fn runtime(base: RuntimeCookie, suffix: &str) -> Self {
-            let text = format!("{}{suffix}", base.base());
-            let wire = utf8_percent_encode(&text, NOT_TOKEN).to_string();
-            Self { text, wire }
-        }
-
-        /// The name as the program wrote it.
-        #[must_use]
-        pub fn text(&self) -> &str {
-            &self.text
-        }
-
-        /// The encoded name sent on the wire.
-        #[must_use]
-        pub fn as_str(&self) -> &str {
-            &self.wire
-        }
-    }
-
-    impl std::fmt::Display for CookieName {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(&self.wire)
-        }
-    }
-
-    /// A cookie value made only of RFC 6265 `cookie-octet` bytes other than `%`.
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct CookieValue(String);
-
-    impl CookieValue {
-        /// Parse `raw`, percent-encoding `%` and every byte that is not a `cookie-octet`.
-        ///
-        /// A value made of the other `cookie-octet` bytes is kept byte-for-byte.
-        #[must_use]
-        pub fn encode(raw: &str) -> Self {
-            Self(utf8_percent_encode(raw, NOT_COOKIE_OCTET).to_string())
-        }
-
-        /// The encoded value.
-        #[must_use]
-        pub fn as_str(&self) -> &str {
-            &self.0
-        }
-    }
-
-    /// The value of one hexadecimal digit byte.
-    fn hex_digit(b: u8) -> Option<u8> {
-        char::from(b)
-            .to_digit(16)
-            .and_then(|d| u8::try_from(d).ok())
-    }
-
-    /// Invert the cookie percent-encoding of `wire`.
-    ///
-    /// A `%` not followed by two hex digits, or bytes that are not UTF-8, have
-    /// no decoding: the result is `None`, never a lossy replacement.
-    #[must_use]
-    pub fn decode(wire: &str) -> Option<String> {
-        let mut out = Vec::with_capacity(wire.len());
-        let mut bytes = wire.bytes();
-        while let Some(b) = bytes.next() {
-            if b == b'%' {
-                let hi = bytes.next().and_then(hex_digit)?;
-                let lo = bytes.next().and_then(hex_digit)?;
-                out.push(hi.checked_mul(16)?.checked_add(lo)?);
-            } else {
-                out.push(b);
-            }
-        }
-        String::from_utf8(out).ok()
-    }
-
-    /// The decoded `(name, value)` pairs of one `Cookie` request header.
-    ///
-    /// A pair is kept only when its wire name is exactly the encoding of a
-    /// non-empty name, so a lookup by name matches only what `SetCookie`
-    /// would have written for it, and when its value decodes. Every other pair
-    /// is skipped. Each name is the program's text.
-    pub fn request_cookies(header: &str) -> impl Iterator<Item = (String, String)> + '_ {
-        header.split(';').filter_map(|pair| {
-            let (wire_name, wire_value) = pair.split_once('=')?;
-            let wire_name = wire_name.trim();
-            let name = CookieName::parse(&decode(wire_name)?)?;
-            if name.as_str() != wire_name {
-                return None;
-            }
-            let value = decode(wire_value.trim())?;
-            Some((name.text, value))
-        })
-    }
 
     /// The `SameSite` attribute of a `Set-Cookie` line.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4258,9 +4096,16 @@ mod tests {
     #[test]
     fn undecodable_cookie_is_nothing() {
         for wire in ["%ZZ", "%C3", "%FF%FE", "%4", "%", "a%G1"] {
-            assert_eq!(cookie_octets::decode(wire), None, "wire {wire:?}");
+            assert_eq!(
+                crate::http_header::cookie::decode(wire),
+                None,
+                "wire {wire:?}"
+            );
         }
-        assert_eq!(cookie_octets::decode("%C3%A9%25"), Some("é%".to_owned()));
+        assert_eq!(
+            crate::http_header::cookie::decode("%C3%A9%25"),
+            Some("é%".to_owned())
+        );
         let mut jar = HashMap::new();
         parse_cookies("a=%ZZ; b=%C3; c=%FF%FE; d=%4; e=ok; =v; s%69d=v", &mut jar);
         assert_eq!(jar.len(), 1, "{jar:?}");
@@ -4344,6 +4189,20 @@ mod tests {
                 "{name:?} -> {refusal:?}"
             );
         }
+        for name in [
+            "Content-Length",
+            "content-length",
+            "Transfer-Encoding",
+            "TRANSFER-ENCODING",
+        ] {
+            let refusal = with_header_refusal(name, "5");
+            assert!(
+                refusal
+                    .as_deref()
+                    .is_some_and(|m| m.contains("set by the server")),
+                "{name:?} -> {refusal:?}"
+            );
+        }
         assert_eq!(with_header_refusal("X-Frame-Options", "DENY"), None);
         let IpeResult::Ok(r) = server_with_header(
             "X-Frame-Options".to_owned(),
@@ -4371,6 +4230,8 @@ mod tests {
             ("set-cookie", "sid=forged"),
             ("X-Ok", "a\r\nSet-Cookie: sid=forged"),
             ("X Bad", "v"),
+            ("Content-Length", "0"),
+            ("transfer-encoding", "chunked"),
         ] {
             let mut r = server_text("ok".to_owned());
             r.headers.insert(name.to_owned(), value.to_owned());
@@ -4414,13 +4275,32 @@ mod tests {
         }
     }
 
+    /// A parsed non-empty cookie name for a test.
+    #[cfg(feature = "jwt")]
+    fn sid(raw: &str) -> CookieName {
+        CookieName::parse(raw).unwrap()
+    }
+
+    /// `Server.cookieToken ""` is an `InvalidInput` error: no cookie source
+    /// names a cookie no request can carry.
+    #[cfg(feature = "jwt")]
+    #[test]
+    fn cookie_token_empty_name_is_refused() {
+        assert!(matches!(
+            server_cookie_token(String::new()),
+            IpeResult::Err(IpeError::Error(IpeErrorKind::InvalidInput, ref info))
+                if info.message.starts_with("Server.cookieToken:")
+        ));
+        assert!(matches!(
+            server_cookie_token("my sid".to_owned()),
+            IpeResult::Ok(TokenSource::Cookie(ref name)) if name.as_str() == "my%20sid"
+        ));
+    }
+
     #[cfg(feature = "jwt")]
     #[test]
     fn reissue_set_cookie_encodes_name_and_token() {
-        assert!(reissue_set_cookie("", "tok", 1800, false).is_none());
-        let Some(line) = reissue_set_cookie("my sid", "t;ok", 1800, false) else {
-            return;
-        };
+        let line = reissue_set_cookie(&sid("my sid"), "t;ok", 1800, false);
         assert!(
             line.starts_with("my%20sid=t%3Bok; Path=/; HttpOnly; SameSite="),
             "{line}"
@@ -4754,7 +4634,7 @@ mod tests {
             let token = hs256(&serde_json::json!({ "sub": "user-9", "exp": 9_999_999_999i64 }));
             let cfg = server_auth_config(
                 crate::secret::secret_from_string(SECRET.to_string()),
-                TokenSource::Cookie("ipe_sid".to_string()),
+                TokenSource::Cookie(sid("ipe_sid")),
             );
             let resp = run(cfg, req_with(&[], &[("ipe_sid", &token)])).await;
             assert_eq!(resp.status, 200, "a valid cookie token must dispatch");
@@ -4788,7 +4668,7 @@ mod tests {
         fn cookie_cfg() -> AuthConfig {
             server_auth_config(
                 crate::secret::secret_from_string(SECRET.to_string()),
-                TokenSource::Cookie("ipe_sid".to_string()),
+                TokenSource::Cookie(sid("ipe_sid")),
             )
         }
 
@@ -4897,14 +4777,14 @@ mod tests {
             crate::system::locked_remove_var("IPE_ENV");
 
             // is_https=true, cookies_secure()=false → Secure must fire.
-            let c_https = reissue_set_cookie("ipe_sid", "tok", 1800, true).unwrap();
+            let c_https = reissue_set_cookie(&sid("ipe_sid"), "tok", 1800, true);
             assert!(
                 c_https.contains("; Secure"),
                 "reissue behind TLS proxy must carry Secure: {c_https}"
             );
 
             // is_https=false, cookies_secure()=false → no Secure (dev default).
-            let c_plain = reissue_set_cookie("ipe_sid", "tok", 1800, false).unwrap();
+            let c_plain = reissue_set_cookie(&sid("ipe_sid"), "tok", 1800, false);
             assert!(
                 !c_plain.contains("; Secure"),
                 "reissue over plain HTTP in dev must NOT carry Secure: {c_plain}"
@@ -4928,7 +4808,7 @@ mod tests {
             let is_https = request_is_https_with_trust(&headers, true);
             assert!(is_https, "trusted HTTPS header must be detected");
 
-            let cookie = reissue_set_cookie("ipe_sid", "tok", 1800, is_https).unwrap();
+            let cookie = reissue_set_cookie(&sid("ipe_sid"), "tok", 1800, is_https);
             assert!(
                 cookie.contains("; Secure"),
                 "reissue with HTTPS proxy signal must carry Secure: {cookie}"
@@ -4945,7 +4825,7 @@ mod tests {
             let is_https = request_is_https_with_trust(&headers, false);
             assert!(!is_https);
 
-            let cookie = reissue_set_cookie("ipe_sid", "tok", 1800, is_https).unwrap();
+            let cookie = reissue_set_cookie(&sid("ipe_sid"), "tok", 1800, is_https);
             assert!(
                 !cookie.contains("; Secure"),
                 "reissue over plain HTTP must NOT carry Secure: {cookie}"
