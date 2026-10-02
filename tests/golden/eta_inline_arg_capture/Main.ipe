@@ -1,0 +1,86 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String
+import Ipe.Task as Task
+
+
+-- SEAL: a pipeline stage `|> Maybe.andThen (addLabel (labelOf s))` lowers to a
+-- synthetic `Fn` closure `\m -> andThen m (addLabel (labelOf s))`. Its
+-- function-typed argument is rebuilt on every call, so `labelOf s` reads the
+-- captured non-`Copy` `s` inside the closure body: the read must clone, or the
+-- closure moves `s` out of its `Fn` environment. The same holds for a
+-- `Copy`-typed argument (`count s`) inlined into a named partial (`plus`), a
+-- value partial (a local `add`), and an over-application (`curry3 1 (count s)`).
+type Label
+    = Label String
+
+
+labelOf : String -> Label
+labelOf s =
+    Label (s ++ "!")
+
+
+addLabel : Label -> Int -> Maybe Int
+addLabel label n =
+    case label of
+        Label text ->
+            Just (n + String.length text)
+
+
+checkLen : String -> Int -> Maybe Int
+checkLen s n =
+    if String.length s > 0 then
+        Just (n + 1)
+
+    else
+        Nothing
+
+
+score : String -> Maybe Int
+score s =
+    Just 1
+        |> Maybe.andThen (checkLen s)
+        |> Maybe.andThen (addLabel (labelOf s))
+
+
+count : String -> Int
+count s =
+    String.length (s ++ "?")
+
+
+plus : Int -> Int -> Int
+plus a b =
+    a + b
+
+
+curry3 : Int -> Int -> Int -> Int
+curry3 a =
+    \b c -> a + b + c
+
+
+sums : String -> List Int
+sums s =
+    let
+        add =
+            \a b -> a * b
+    in
+    List.map (plus (count s)) [ 1, 2 ]
+        ++ List.map (add (count s)) [ 1, 2 ]
+        ++ List.map (curry3 1 (count s)) [ 1, 2 ]
+
+
+main : Task Error ()
+main =
+    let
+        total =
+            String.join "," (List.map String.fromInt (sums "abc"))
+    in
+    case score "abc" of
+        Just n ->
+            Io.println ("score=" ++ String.fromInt n ++ " sums=" ++ total)
+
+        Nothing ->
+            Io.println "score=none"
