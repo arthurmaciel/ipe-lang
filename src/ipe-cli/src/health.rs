@@ -36,6 +36,7 @@
 //! install runs a fixed `argv`; a package-manager command (which needs
 //! elevation the command deliberately does not take) is shown, never run.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -235,7 +236,10 @@ pub struct ConfigEdit {
     /// Which in-scope file to edit.
     pub target: ConfigTarget,
     /// The dotted TOML key path (e.g. `build.rustc-wrapper`).
-    pub key: Vec<&'static str>,
+    ///
+    /// A segment derived at run time (the host triple) owns its text; a
+    /// literal segment borrows a `'static` string with no allocation.
+    pub key: Vec<Cow<'static, str>>,
     /// The value to set the key to.
     pub value: ConfigValue,
     /// A one-line reason, shown in the preview.
@@ -614,14 +618,24 @@ fn check_runtime() -> Check {
 /// The check order:
 /// 1. Already configured in `~/.cargo/config.toml` → `Ok`, nothing to do.
 /// 2. The host's link driver is [`LinkDriver::Msvc`] → not applicable, no fix.
-/// 3. A linker is on PATH AND passes a link probe → offer the `rustflags` fix.
+/// 3. A linker is on PATH AND passes a link probe AND the host triple is
+///    known (read from `rustc -vV`) → offer the `rustflags` fix keyed on
+///    that triple.
+/// 3b. Same, but the host triple could not be read → report
+///    found-but-unconfigured with no fix: fail closed rather than guess a
+///    `[target.<triple>]` key `rustc` would never match.
 /// 4. A linker is on PATH but fails the probe → report found-but-rejected
 ///    (neutral; never offer a fix that would break the user's builds).
 /// 5. Nothing found → suggest installation.
 fn check_linker() -> Check {
+    // The one source for the host triple every per-target key below reads;
+    // `None` when `rustc -vV` cannot be read, so every caller below must
+    // fail closed rather than fall back to a guessed key.
+    let triple = host_target_triple();
+
     // 1. Already configured: the `rustflags` key for the host target is present
     //    in `~/.cargo/config.toml` and contains a `-fuse-ld=` flag.
-    if linker_already_configured() {
+    if linker_already_configured(triple.as_deref()) {
         return Check {
             group: Group::Linker,
             id: "linker",
@@ -668,18 +682,39 @@ fn check_linker() -> Check {
         };
         match probe_linker(flag_name) {
             LinkerProbeResult::Accepted => {
+                // Fail closed when the host triple is unknown: never write a
+                // `[target.<triple>]` key under a guessed or placeholder
+                // triple `rustc` would never match.
+                let fix = triple
+                    .as_deref()
+                    .map(|t| Fix::ConfigEdit(linker_edit(t, flag_name)));
+                let detail = if fix.is_some() {
+                    format!(
+                        "{name} found at {} — not yet configured for native builds",
+                        path.display()
+                    )
+                } else {
+                    format!(
+                        "{name} found at {} — not yet configured for native builds (the host \
+                         triple could not be read from `rustc -vV`, so no config edit is \
+                         offered)",
+                        path.display()
+                    )
+                };
+                let suggestion = if fix.is_some() {
+                    Some(
+                        "configure it in ~/.cargo/config.toml to halve native link time".to_owned(),
+                    )
+                } else {
+                    None
+                };
                 return Check {
                     group: Group::Linker,
                     id,
                     status: Status::Ok,
-                    detail: format!(
-                        "{name} found at {} — not yet configured for native builds",
-                        path.display()
-                    ),
-                    suggestion: Some(
-                        "configure it in ~/.cargo/config.toml to halve native link time".to_owned(),
-                    ),
-                    fix: Some(Fix::ConfigEdit(linker_edit(flag_name))),
+                    detail,
+                    suggestion,
+                    fix,
                 };
             }
             LinkerProbeResult::Rejected => {
@@ -720,7 +755,14 @@ fn check_linker() -> Check {
 /// Whether a fast linker is already wired in `~/.cargo/config.toml` for the
 /// host target: the `rustflags` array at `[target.<triple>]` contains a
 /// `-fuse-ld=` argument.
-fn linker_already_configured() -> bool {
+///
+/// `triple` is `None` when the host triple could not be read from `rustc
+/// -vV`; there is then no `[target.<triple>]` key to look up, so this
+/// reports "not configured" rather than guessing one.
+fn linker_already_configured(triple: Option<&str>) -> bool {
+    let Some(triple) = triple else {
+        return false;
+    };
     let Ok(path) = cargo_config_path() else {
         return false;
     };
@@ -732,7 +774,6 @@ fn linker_already_configured() -> bool {
     let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
         return false;
     };
-    let triple = host_target_triple();
     // Walk target.<triple>.rustflags; accept either a string or an array.
     let Some(target_table) = doc.get("target").and_then(|t| t.get(triple)) else {
         return false;
@@ -781,6 +822,17 @@ impl LinkDriver {
     }
 }
 
+/// The triple on a `rustc -vV` `host:` line, trimmed.
+///
+/// The one parser [`host_link_driver`] and [`host_target_triple`] both read,
+/// so neither can derive a different triple from the same `rustc` output.
+fn parse_host_triple(rustc_vv: &str) -> Option<&str> {
+    rustc_vv
+        .lines()
+        .find_map(|l| l.strip_prefix("host:"))
+        .map(str::trim)
+}
+
 /// The host's link driver, read from the `rustc -vV` `host:` line.
 ///
 /// Absent or unparsable `rustc` output resolves to [`LinkDriver::Msvc`]: fail
@@ -789,10 +841,8 @@ impl LinkDriver {
 fn host_link_driver() -> LinkDriver {
     rustc_vv_text()
         .as_deref()
-        .and_then(|text| text.lines().find_map(|l| l.strip_prefix("host:")))
-        .map_or(LinkDriver::Msvc, |triple| {
-            LinkDriver::from_triple(triple.trim())
-        })
+        .and_then(parse_host_triple)
+        .map_or(LinkDriver::Msvc, LinkDriver::from_triple)
 }
 
 /// Outcome of a toolchain-level linker probe.
@@ -946,13 +996,22 @@ fn write_probe_cache(name: &str, toolchain_key: Option<&str>, result: &LinkerPro
 }
 
 /// The `~/.cargo/config.toml` edit that wires a fast linker for the host
-/// target via a `rustflags` array. The `rustflags` approach works with the
-/// default `gcc`/`cc` linker driver — no `clang` dependency — and is the
-/// mechanism proven to halve native link time.
-fn linker_edit(flag_name: &'static str) -> ConfigEdit {
+/// target via a `rustflags` array.
+///
+/// The `rustflags` approach works with the default `gcc`/`cc` linker driver —
+/// no `clang` dependency — and is the mechanism proven to halve native link
+/// time.
+///
+/// `triple` is the caller's already-resolved host triple (from
+/// [`host_target_triple`]) — this function never re-derives or guesses one.
+fn linker_edit(triple: &str, flag_name: &'static str) -> ConfigEdit {
     ConfigEdit {
         target: ConfigTarget::Cargo,
-        key: vec!["target", host_target_triple(), "rustflags"],
+        key: vec![
+            Cow::Borrowed("target"),
+            Cow::Owned(triple.to_owned()),
+            Cow::Borrowed("rustflags"),
+        ],
         value: ConfigValue::StrList(vec![
             "-C".to_owned(),
             format!("link-arg=-fuse-ld={flag_name}"),
@@ -979,7 +1038,7 @@ fn check_cache() -> Check {
             suggestion: Some("set it as the rustc wrapper to cache compilations".to_owned()),
             fix: Some(Fix::ConfigEdit(ConfigEdit {
                 target: ConfigTarget::Cargo,
-                key: vec!["build", "rustc-wrapper"],
+                key: vec![Cow::Borrowed("build"), Cow::Borrowed("rustc-wrapper")],
                 value: ConfigValue::Str("sccache".to_owned()),
                 rationale: "cache Rust compilations across builds with sccache",
             })),
@@ -1192,42 +1251,22 @@ const LOW_DISK_FLOOR: u64 = 5 * 1024 * 1024 * 1024;
 
 // ---- small probes ---------------------------------------------------------
 
-/// The host target triple as `rustc` names it, for a per-target `rustflags`
-/// key. Built from the compile-time `cfg` facts so it needs no `rustc` spawn.
-const fn host_target_triple() -> &'static str {
-    // A minimal mapping of the common host arch/OS pairs. An unmapped host
-    // falls back to a generic key that still parses (the linker edit is a
-    // convenience, not a correctness requirement).
-    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
-    {
-        "x86_64-unknown-linux-gnu"
-    }
-    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
-    {
-        "aarch64-unknown-linux-gnu"
-    }
-    #[cfg(all(target_arch = "x86_64", target_os = "macos"))]
-    {
-        "x86_64-apple-darwin"
-    }
-    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
-    {
-        "aarch64-apple-darwin"
-    }
-    #[cfg(all(target_arch = "x86_64", target_os = "freebsd"))]
-    {
-        "x86_64-unknown-freebsd"
-    }
-    #[cfg(not(any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "linux"),
-        all(target_arch = "x86_64", target_os = "macos"),
-        all(target_arch = "aarch64", target_os = "macos"),
-        all(target_arch = "x86_64", target_os = "freebsd"),
-    )))]
-    {
-        "host"
-    }
+/// The host target triple as `rustc` names it, for a per-target
+/// `rustflags` key.
+///
+/// Read from the `rustc -vV` `host:` line — the one source every per-target
+/// config key reads — rather than a compile-time `cfg` table, which has no
+/// arm for every host `rustc` supports (e.g. Windows) and would otherwise
+/// fall back to a placeholder key no toolchain matches.
+///
+/// `None` when `rustc` is not on PATH, exits non-zero, or its `-vV` output
+/// has no `host:` line: every caller must fail closed (offer no config
+/// edit) rather than guess a key.
+fn host_target_triple() -> Option<String> {
+    rustc_vv_text()
+        .as_deref()
+        .and_then(parse_host_triple)
+        .map(str::to_owned)
 }
 
 /// Resolve `name` on `PATH` to its absolute executable path, or `None`.
@@ -1676,7 +1715,11 @@ fn run_install(argv: &[String]) -> Result<(), CliError> {
 /// [`CliError::Io`] on a filesystem failure; [`CliError::Usage`] when the
 /// existing file does not parse as TOML (the command will not blindly overwrite
 /// a file it cannot understand).
-fn apply_config_edit(path: &Path, key: &[&str], value: &ConfigValue) -> Result<(), CliError> {
+fn apply_config_edit<T: AsRef<str>>(
+    path: &Path,
+    key: &[T],
+    value: &ConfigValue,
+) -> Result<(), CliError> {
     let existing = match crate::io_bounded::read_to_string_capped(
         path,
         crate::io_bounded::SMALL_FILE_READ_CAP,
@@ -1742,10 +1785,14 @@ fn apply_config_edit(path: &Path, key: &[&str], value: &ConfigValue) -> Result<(
 
 /// Whether the dotted key in `doc` already holds exactly `value` (idempotency
 /// check). Handles both string and string-array values.
-fn dotted_value_matches(doc: &toml_edit::DocumentMut, key: &[&str], value: &ConfigValue) -> bool {
+fn dotted_value_matches<T: AsRef<str>>(
+    doc: &toml_edit::DocumentMut,
+    key: &[T],
+    value: &ConfigValue,
+) -> bool {
     let mut item = doc.as_item();
     for segment in key {
-        let Some(next) = item.get(segment) else {
+        let Some(next) = item.get(segment.as_ref()) else {
             return false;
         };
         item = next;
@@ -1764,14 +1811,14 @@ fn dotted_value_matches(doc: &toml_edit::DocumentMut, key: &[&str], value: &Conf
 
 /// Set a dotted key on a document, creating intermediate tables as needed and
 /// preserving every unrelated line. Supports both string and string-array values.
-fn set_dotted(doc: &mut toml_edit::DocumentMut, key: &[&str], value: &ConfigValue) {
+fn set_dotted<T: AsRef<str>>(doc: &mut toml_edit::DocumentMut, key: &[T], value: &ConfigValue) {
     let Some((last, parents)) = key.split_last() else {
         return;
     };
     let mut table = doc.as_table_mut();
     for segment in parents {
         let entry = table
-            .entry(segment)
+            .entry(segment.as_ref())
             .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
         // Coerce a non-table entry at an intermediate segment into a table so
         // the leaf has somewhere to land. A user who put a scalar where a table
@@ -1790,14 +1837,14 @@ fn set_dotted(doc: &mut toml_edit::DocumentMut, key: &[&str], value: &ConfigValu
     }
     match value {
         ConfigValue::Str(s) => {
-            table.insert(last, toml_edit::value(s.as_str()));
+            table.insert(last.as_ref(), toml_edit::value(s.as_str()));
         }
         ConfigValue::StrList(elems) => {
             let mut arr = toml_edit::Array::new();
             for elem in elems {
                 arr.push(elem.as_str());
             }
-            table.insert(last, toml_edit::value(arr));
+            table.insert(last.as_ref(), toml_edit::value(arr));
         }
     }
 }
@@ -2151,6 +2198,48 @@ mod tests {
     }
 
     #[test]
+    fn host_triple_parses_from_rustc_vv_on_every_host_including_windows() {
+        // Before this fix, the host triple came from a compile-time `cfg`
+        // table with no Windows arm, so building `ipe` on Windows fell back
+        // to the literal "host" — a `[target.host]` key no toolchain
+        // matches. `parse_host_triple` derives the triple from the `rustc
+        // -vV` `host:` line alone, so it reads the real triple for a host
+        // whether or not a `cfg` table happens to enumerate it.
+        let vv =
+            "rustc 1.90.0 (abcdef 2026-01-01)\nhost: x86_64-pc-windows-msvc\nrelease: 1.90.0\n";
+        assert_eq!(parse_host_triple(vv), Some("x86_64-pc-windows-msvc"));
+
+        let vv_gnu = "host: x86_64-pc-windows-gnu\n";
+        assert_eq!(parse_host_triple(vv_gnu), Some("x86_64-pc-windows-gnu"));
+
+        // No `host:` line at all → fail closed, never a guessed literal.
+        assert_eq!(parse_host_triple("release: 1.90.0\n"), None);
+    }
+
+    #[test]
+    fn host_target_triple_is_the_one_rustc_vv_parse() {
+        // host_target_triple must never derive a triple other than what
+        // parse_host_triple reads from the same rustc -vV text: one source,
+        // read by both host_link_driver and host_target_triple.
+        let Some(raw) = rustc_vv_text() else {
+            // No rustc on PATH in this environment: both readers must agree
+            // it is unknown.
+            assert_eq!(host_target_triple(), None);
+            return;
+        };
+        let expected = parse_host_triple(&raw).map(str::to_owned);
+        assert_eq!(host_target_triple(), expected);
+    }
+
+    #[test]
+    fn linker_already_configured_fails_closed_without_a_known_triple() {
+        // When the host triple cannot be read, there is no `[target.<?>]`
+        // key to look up, so this must report "not configured" rather than
+        // guess one — never offer a config edit keyed on a guessed triple.
+        assert!(!linker_already_configured(None));
+    }
+
+    #[test]
     fn an_msvc_host_offers_no_fuse_ld_fix() {
         // Pure over the triple: every MSVC triple parses to LinkDriver::Msvc,
         // the branch that short-circuits check_linker before any probe runs
@@ -2180,9 +2269,20 @@ mod tests {
 
     #[test]
     fn linker_edit_emits_rustflags_array_not_linker_key() {
-        let edit = linker_edit("mold");
+        let edit = linker_edit("x86_64-unknown-linux-gnu", "mold");
         // The key must target rustflags, not linker.
-        assert_eq!(edit.key.last(), Some(&"rustflags"), "key must be rustflags");
+        assert_eq!(
+            edit.key.last().map(std::convert::AsRef::as_ref),
+            Some("rustflags"),
+            "key must be rustflags"
+        );
+        // The triple segment carries the exact triple passed in, not a
+        // compile-time guess.
+        assert_eq!(
+            edit.key.get(1).map(std::convert::AsRef::as_ref),
+            Some("x86_64-unknown-linux-gnu"),
+            "key must carry the caller's resolved host triple"
+        );
         // The value must be a string array containing the fuse-ld flag.
         assert!(
             matches!(&edit.value, ConfigValue::StrList(_)),
@@ -2303,7 +2403,7 @@ mod tests {
             suggestion: None,
             fix: Some(Fix::ConfigEdit(ConfigEdit {
                 target: ConfigTarget::Cargo,
-                key: vec!["build", "rustc-wrapper"],
+                key: vec![Cow::Borrowed("build"), Cow::Borrowed("rustc-wrapper")],
                 value: ConfigValue::Str("sccache".to_owned()),
                 rationale: "cache builds",
             })),
