@@ -4353,10 +4353,18 @@ public static int Main(string[] args) {
     #[test]
     fn build_lock_wait_stays_under_the_ci_test_cap() {
         let config: toml::Table = NEXTEST_CONFIG.parse().expect("parse nextest config");
-        let slow = &config["profile"]["ci"]["slow-timeout"];
-        let period = nextest_seconds(&slow["period"]).expect("ci slow-timeout period");
-        let periods = slow["terminate-after"]
-            .as_integer()
+        let ci = config
+            .get("profile")
+            .and_then(|p| p.get("ci"))
+            .expect("ci profile");
+        let slow = ci.get("slow-timeout").expect("ci slow-timeout");
+        let period = slow
+            .get("period")
+            .and_then(nextest_seconds)
+            .expect("ci slow-timeout period");
+        let periods = slow
+            .get("terminate-after")
+            .and_then(toml::Value::as_integer)
             .and_then(|n| u64::try_from(n).ok())
             .expect("ci slow-timeout terminate-after");
         let cap = period.checked_mul(periods).expect("ci test cap fits u64");
@@ -4366,11 +4374,16 @@ public static int Main(string[] args) {
             BUILD_LOCK_WAIT.as_secs()
         );
         assert_eq!(
-            config["test-groups"]["windows-junction"]["max-threads"].as_integer(),
+            config
+                .get("test-groups")
+                .and_then(|g| g.get("windows-junction"))
+                .and_then(|g| g.get("max-threads"))
+                .and_then(toml::Value::as_integer),
             Some(2)
         );
-        let grouped = config["profile"]["ci"]["overrides"]
-            .as_array()
+        let grouped = ci
+            .get("overrides")
+            .and_then(toml::Value::as_array)
             .expect("ci overrides")
             .iter()
             .any(|o| o.get("test-group").and_then(toml::Value::as_str) == Some("windows-junction"));
