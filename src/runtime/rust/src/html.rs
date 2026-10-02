@@ -974,8 +974,10 @@ pub fn html_on_raw_fixed_<M>(_name: String, _msg: M) -> Attribute<M> {
 
 /// `Ffi.callPure "htmlEscapeText"` — HTML-escape a string for text content.
 ///
-/// Routes through the same escaper as render, so the set (`& ' < >`; `"` stays
-/// raw, it carries no meaning in text content) can never drift.
+/// Escapes exactly `&` `<` `>` `'` (as `&amp;` `&lt;` `&gt;` `&#39;`) and
+/// leaves `"` raw, so the output is safe only as element text content. A
+/// double-quoted attribute value needs [`html_escape_attr_`], which also
+/// escapes `"`. Routes through render's escaper, so the set cannot drift.
 #[must_use]
 pub fn html_escape_text_(s: String) -> String {
     crate::escape::html_text(&s)
@@ -1258,6 +1260,26 @@ mod tests {
             "select strips value: {}",
             render_html(&sel)
         );
+    }
+
+    /// The text kernel escapes exactly `& < > '` and leaves `"` raw; the attr
+    /// kernel adds `"`, the one byte that separates the two contexts.
+    #[test]
+    fn escape_kernels_pin_their_escaped_sets() {
+        assert_eq!(
+            html_escape_text_("&<>'\"".to_string()),
+            "&amp;&lt;&gt;&#39;\""
+        );
+        assert_eq!(
+            html_escape_attr_("&<>'\"".to_string()),
+            "&amp;&lt;&gt;&#39;&#34;"
+        );
+        let untouched: String = (0x20u8..=0x7E)
+            .map(char::from)
+            .filter(|c| !matches!(c, '&' | '<' | '>' | '\'' | '"'))
+            .collect();
+        assert_eq!(html_escape_text_(untouched.clone()), untouched);
+        assert_eq!(html_escape_attr_(untouched.clone()), untouched);
     }
 
     #[test]
