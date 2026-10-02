@@ -119,13 +119,8 @@ fn every_fixture_is_a_fixed_point() {
 #[test]
 fn canonical_inputs_are_unchanged() {
     for (name, src) in fixtures() {
-        // First canonicalise, then assert the canonical form is stable.
-        let canon = format_source(&src).unwrap();
-        assert_eq!(
-            format_source(&canon).unwrap(),
-            canon,
-            "{name}: canonical form is not stable"
-        );
+        let out = format_source(&src).unwrap();
+        assert_eq!(out, src, "{name}: fmt rewrote an already-canonical fixture");
     }
 }
 
