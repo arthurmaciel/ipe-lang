@@ -915,7 +915,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
-      - run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
+      # `debugger` is a build-mode opt-in outside `full`; named here so its
+      # overlay and recorder tests run.
+      - run: cargo nextest run -p ipe-runtime-rust --features full,debugger --profile ci
       - name: Upload JUnit results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

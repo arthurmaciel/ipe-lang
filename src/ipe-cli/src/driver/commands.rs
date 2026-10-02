@@ -2635,15 +2635,12 @@ const TRACE_LABEL: &str = "trace (not a replay — shown as recorded, nothing re
 
 /// One trace line made safe for any terminal, or `None` when nothing is left.
 ///
-/// Every escape sequence (CSI, OSC and the rest) is dropped whole, then every
-/// remaining control character — C0, `DEL` and C1, tab included — so the output
-/// carries none, whatever the stream is.
+/// Delegates to [`style::TerminalLine`]: every escape sequence (CSI, OSC and
+/// the rest) is dropped whole, then every remaining control character — C0,
+/// `DEL` and C1 — and every denied format character, tab and newline
+/// included, so the output carries none, whatever the stream is.
 fn terminal_safe_line(body: &str) -> Option<String> {
-    let plain: String = style::TerminalSafe::sanitize(body)
-        .as_str()
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
+    let plain = style::TerminalLine::sanitize(body);
     (!plain.is_empty()).then(|| format!("{plain}\n"))
 }
 

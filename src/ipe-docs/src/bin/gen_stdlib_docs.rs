@@ -32,6 +32,7 @@ use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use ipe_docs::markdown_text;
 use ipe_docs::stdlib_docs::{ModuleDoc, all_module_docs};
 
 fn main() -> ExitCode {
@@ -114,7 +115,7 @@ fn render_stdlib_index(modules: &[ModuleDoc]) -> String {
                 out,
                 "| `{}` | {} |",
                 export.name,
-                escape_table_cell(summary)
+                markdown_text::table_cell(summary)
             );
         }
         out.push('\n');
@@ -161,12 +162,6 @@ fn one_line_summary(body: &str) -> &str {
         .map(str::trim)
         .find(|l| !l.is_empty())
         .unwrap_or("(no summary)")
-}
-
-/// Escape a one-line summary for use inside a Markdown table cell: a literal
-/// `|` would otherwise start a new column.
-fn escape_table_cell(summary: &str) -> String {
-    summary.replace('|', "\\|")
 }
 
 /// Convert a short module name (`List`, `Html.Attributes`) to a GitHub Markdown
@@ -264,12 +259,6 @@ mod tests {
     fn module_file_name_dots_preserved() {
         assert_eq!(module_file_name("Html.Attributes"), "Html.Attributes.md");
         assert_eq!(module_file_name("List"), "List.md");
-    }
-
-    #[test]
-    fn escape_table_cell_escapes_pipe() {
-        assert_eq!(escape_table_cell("a | b"), "a \\| b");
-        assert_eq!(escape_table_cell("no pipe"), "no pipe");
     }
 
     #[test]

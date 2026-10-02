@@ -343,6 +343,9 @@ pub fn print_command_header() {
 /// rules the CLI applies to every message it prints.
 pub use ipe_diagnostics::terminal::TerminalSafe;
 
+/// The single-terminal-line boundary; see [`ipe_diagnostics::terminal::TerminalLine`].
+pub use ipe_diagnostics::terminal::TerminalLine;
+
 /// A framed, guttered status line: a leading success/failure glyph, then the
 /// message. `ok` picks the green check or the red cross; `color` toggles ANSI.
 ///

@@ -20,10 +20,9 @@
 //! a body somehow carried one. Absent proof the body is control-free, the sink
 //! still cannot feed a control byte to the destination — fail closed.
 //!
-//! The strip rule is identical to the cli's `progress::inspect_line` `Mode::Plain`
-//! branch (`char::is_control` filter, one settling newline). The two live in
-//! separate crates and cannot import one another; [`plain_line`] is pinned to
-//! that rule by a unit test here, so a drift breaks the build's test gate.
+//! The strip rule is a `char::is_control` filter plus one settling newline,
+//! pinned by a unit test here. A trace read back by the cli is sanitised again,
+//! line by line, through `ipe_diagnostics::terminal::TerminalLine`.
 
 #![cfg(feature = "debugger")]
 
@@ -66,9 +65,7 @@ impl RecordDest {
 ///
 /// Every control byte is stripped (C0/C1 and DEL — every ANSI-escape introducer,
 /// carriage return, and cursor-motion byte), then a single settling newline is
-/// appended. This mirrors the cli's `progress::inspect_line(Mode::Plain, …)`
-/// exactly; the equivalence is pinned by a test in this module so the two cannot
-/// drift.
+/// appended. A test in this module pins the rule.
 #[must_use]
 pub fn plain_line(body: &str) -> String {
     let plain: String = body.chars().filter(|c| !c.is_control()).collect();
@@ -246,8 +243,7 @@ mod tests {
 
     // plain_line strips every control byte and settles with exactly one newline
     // — the fail-closed output boundary. A control-laced body reaches the sink
-    // as plain text with zero control codes (byte-identical to the cli's
-    // `progress::inspect_line(Mode::Plain, …)` refusal).
+    // as plain text with zero control codes.
     #[test]
     fn plain_line_strips_all_control_bytes() {
         let laced = "\x1b[31mModel { n = 7 }\x1b[0m\r\x1b[2K\x07";

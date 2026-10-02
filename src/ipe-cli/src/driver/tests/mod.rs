@@ -4123,15 +4123,16 @@ fn default_replay_prefers_the_typed_log_then_the_trace() {
 }
 
 // A planted trace carrying terminal escapes (a screen clear, an OSC 8
-// hyperlink, C1 controls, DEL, tabs) is shown with every control character
-// removed, one step per line under a label that says it is not a replay.
+// hyperlink, C1 controls, DEL, tabs, a zero-width space, and a bidi override)
+// is shown with every control character and denied format character removed,
+// one step per line under a label that says it is not a replay.
 #[test]
 fn shown_trace_strips_every_control_character() {
     let dir = session_scratch("laced");
     let trace = dir.join("planted\x1b[31m.ipelog");
-    let laced = "\x1b[2JAdd(1) => 1\n\
+    let laced = "\x1b]8;;https://evil.example\x07\x1b[2JAdd(1\u{200B}) => 1\n\
                  Say(\x1b]8;;https://evil.example\x07link\x1b]8;;\x1b\\) => 2\r\n\
-                 \u{9b}2J\u{9d}0;title\u{9c}Add(\u{85}3\t\u{7f}) => 5\n\
+                 \u{9b}2J\u{9d}0;title\u{9c}Add(\u{85}3\t\u{7f}\u{202e}) => 5\n\
                  \x1b[H\x1b[2J\n";
     assert!(fs::write(&trace, laced).is_ok(), "write planted trace");
     let shown = load_session_trace(&trace);
@@ -4143,6 +4144,14 @@ fn shown_trace_strips_every_control_character() {
     assert!(
         !out.chars().any(|c| c.is_control() && c != '\n'),
         "the shown trace must carry no control character: {out:?}"
+    );
+    assert!(
+        !out.contains('\u{200B}') && !out.contains('\u{202e}'),
+        "the shown trace must carry no denied format character: {out:?}"
+    );
+    assert!(
+        !out.contains("\x1b]") && !out.contains("\x1b["),
+        "the shown trace must carry no escape sequence: {out:?}"
     );
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines.len(), 4, "label + one line per step: {out:?}");
