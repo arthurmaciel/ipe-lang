@@ -24,14 +24,14 @@ const WAIT_CEILING: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Open `/dev/null`, close-on-exec or inheritable.
-fn dev_null(cloexec: bool) -> OwnedFd {
+fn dev_null(cloexec: bool) -> rustix::io::Result<OwnedFd> {
     use rustix::fs::{Mode, OFlags};
     let flags = if cloexec {
         OFlags::RDONLY | OFlags::CLOEXEC
     } else {
         OFlags::RDONLY
     };
-    rustix::fs::open(c"/dev/null", flags, Mode::empty()).expect("open /dev/null")
+    rustix::fs::open(c"/dev/null", flags, Mode::empty())
 }
 
 /// A `/bin/sh -c script` with positional `args` and null stdio.
@@ -48,43 +48,41 @@ fn sh(script: &str, args: &[&str]) -> Command {
 }
 
 /// Wait for `child`, killing it (a failed status) past `WAIT_CEILING`.
-fn bounded_wait(mut child: Child) -> ExitStatus {
+fn bounded_wait(mut child: Child) -> std::io::Result<ExitStatus> {
     let started = Instant::now();
     loop {
-        if let Some(status) = child.try_wait().expect("poll child") {
-            return status;
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
         }
         if started.elapsed() > WAIT_CEILING {
             let _ = child.kill();
-            return child.wait().expect("reap killed child");
+            return child.wait();
         }
         std::thread::sleep(POLL_INTERVAL);
     }
 }
 
 /// Whether descriptor `fd` is close-on-exec in this process.
-fn is_cloexec(fd: &OwnedFd) -> bool {
-    rustix::io::fcntl_getfd(fd)
-        .expect("read descriptor flags")
-        .contains(rustix::io::FdFlags::CLOEXEC)
+fn is_cloexec(fd: &OwnedFd) -> rustix::io::Result<bool> {
+    Ok(rustix::io::fcntl_getfd(fd)?.contains(rustix::io::FdFlags::CLOEXEC))
 }
 
 /// A descriptor the parent left inheritable is closed in the hardened child.
 #[test]
 fn a_hardened_child_inherits_no_unnamed_descriptor() {
-    let leaked = dev_null(false);
+    let leaked = dev_null(false).expect("open /dev/null");
     assert!(
-        !is_cloexec(&leaked),
+        !is_cloexec(&leaked).expect("read descriptor flags"),
         "the probe descriptor must be inheritable"
     );
     let n = leaked.as_raw_fd().to_string();
     let child = spawn_hardened(sh("[ ! -e /dev/fd/$1 ]", &[&n])).expect("hardened spawn");
     assert!(
-        bounded_wait(child).success(),
+        bounded_wait(child).expect("wait child").success(),
         "descriptor {n} must not reach a hardened child"
     );
     assert!(
-        !is_cloexec(&leaked),
+        !is_cloexec(&leaked).expect("read descriptor flags"),
         "the floor must not touch the parent's table"
     );
 }
@@ -92,13 +90,13 @@ fn a_hardened_child_inherits_no_unnamed_descriptor() {
 /// A named descriptor reaches the child it was handed to and no sibling.
 #[test]
 fn a_named_descriptor_reaches_only_its_child() {
-    let named_fd = dev_null(true);
+    let named_fd = dev_null(true).expect("open /dev/null");
     let n = named_fd.as_raw_fd().to_string();
     let sibling = sh("[ ! -e /dev/fd/$1 ]", &[&n])
         .spawn()
         .expect("plain sibling");
     assert!(
-        bounded_wait(sibling).success(),
+        bounded_wait(sibling).expect("wait sibling").success(),
         "a named descriptor must never reach a sibling"
     );
     let mut named = NamedFds::none();
@@ -108,7 +106,7 @@ fn a_named_descriptor_reaches_only_its_child() {
     let child =
         spawn_hardened_naming(sh("[ -e /dev/fd/$1 ]", &[&n]), named).expect("hardened spawn");
     assert!(
-        bounded_wait(child).success(),
+        bounded_wait(child).expect("wait child").success(),
         "descriptor {n} must reach the child that names it"
     );
 }
@@ -140,7 +138,7 @@ fn a_named_descriptor_is_read_from_offset_zero() {
         named,
     )
     .expect("hardened spawn");
-    let status = bounded_wait(child);
+    let status = bounded_wait(child).expect("wait child");
     let _ = std::fs::remove_file(&path);
     assert!(
         status.success(),
@@ -149,12 +147,14 @@ fn a_named_descriptor_is_read_from_offset_zero() {
 }
 
 /// A process replaced through `exec_naming` keeps its named descriptor and no other.
+///
+/// In probe mode a returned error is the refused replacement.
 #[test]
-fn an_exec_replacement_inherits_only_named() {
+fn an_exec_replacement_inherits_only_named() -> std::io::Result<()> {
     if std::env::args().any(|arg| arg == EXEC_PROBE_MARKER) {
         // Probe mode: replace this process with a shell that checks its table.
-        let leaked = dev_null(false);
-        let named_fd = dev_null(true);
+        let leaked = dev_null(false).expect("open /dev/null");
+        let named_fd = dev_null(true).expect("open /dev/null");
         let (leaked_n, named_n) = (
             leaked.as_raw_fd().to_string(),
             named_fd.as_raw_fd().to_string(),
@@ -171,9 +171,7 @@ fn an_exec_replacement_inherits_only_named() {
             named,
         );
         drop(leaked);
-        let replaced: Result<(), std::io::Error> = Err(refused);
-        replaced.expect("exec_naming must replace the probe");
-        return;
+        return Err(refused);
     }
     let probe = Command::new(std::env::current_exe().expect("test binary"))
         .args([
@@ -187,7 +185,8 @@ fn an_exec_replacement_inherits_only_named() {
         .spawn()
         .expect("re-exec probe");
     assert!(
-        bounded_wait(probe).success(),
+        bounded_wait(probe).expect("wait probe").success(),
         "the replacement must hold its named descriptor and no other"
     );
+    Ok(())
 }
