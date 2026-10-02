@@ -819,8 +819,8 @@ fn post_signing_key(
     }
 }
 
-/// GitHub's `message` field, stripped of control characters and capped, so a
-/// hostile response cannot drive the terminal.
+/// GitHub's `message` field as one capped terminal line, so a hostile
+/// response cannot drive the terminal; see [`echoed_message`].
 ///
 /// The body is read through [`crate::remote_ingest::read_capped`] at
 /// [`crate::remote_ingest::JSON_RESPONSE_MAX_BYTES`]; an over-budget body
@@ -839,9 +839,16 @@ fn github_message(response: ureq::Response) -> String {
             .map(str::to_owned)
     })
     .unwrap_or_default();
-    let cleaned: String = message
+    echoed_message(&message)
+}
+
+/// An untrusted response message parsed into one [`crate::style::TerminalLine`]
+/// (every escape sequence dropped whole, no control or denied format
+/// character) and capped at [`MAX_ECHOED_MESSAGE_CHARS`] characters.
+fn echoed_message(message: &str) -> String {
+    let cleaned: String = crate::style::TerminalLine::sanitize(message)
+        .as_str()
         .chars()
-        .filter(|c| !c.is_control())
         .take(MAX_ECHOED_MESSAGE_CHARS)
         .collect();
     if cleaned.is_empty() {
@@ -928,6 +935,20 @@ pub(crate) fn run_setup_command() -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hostile response message loses each escape sequence whole, not just
+    /// its `ESC`, and every bidi or zero-width character, before it is echoed.
+    #[test]
+    fn echoed_message_drops_escape_sequences_whole_and_format_chars() {
+        let hostile = "Bad\u{1b}[31m key\u{1b}]8;;https://evil.example\u{7}\u{202e}here\u{200b}\n!";
+        assert_eq!(echoed_message(hostile), "Bad keyhere!");
+        assert_eq!(echoed_message("\u{1b}[2J\u{202e}"), "no message");
+        let long = "x".repeat(MAX_ECHOED_MESSAGE_CHARS + 5);
+        assert_eq!(
+            echoed_message(&long).chars().count(),
+            MAX_ECHOED_MESSAGE_CHARS
+        );
+    }
 
     /// RFC 8032 §7.1 test 1 secret seed.
     const RFC8032_SEED: [u8; 32] = [
