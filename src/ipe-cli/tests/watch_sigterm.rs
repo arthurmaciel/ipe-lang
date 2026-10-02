@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! SIGTERM-handling proofs for `ipe watch` (`crate::watch`).
 //!
-//! Three scenarios around the `run()`-only SIGTERM forwarder:
+//! Three scenarios around the `run()`-only SIGTERM shutdown subscriber:
 //!
 //! 1. `IPE_E2E=1`: a PID-only `kill -TERM <ipe>` (the systemd-style shape —
 //!    NOT the whole foreground process group Ctrl-C signals) runs the full
@@ -9,11 +9,9 @@
 //! 2. Always-on negative control: `spawn()` (the embedder path) must NEVER
 //!    install a process-wide SIGTERM handler — the embedding host's own
 //!    disposition stays untouched.
-//! 3. `IPE_E2E=1` proof: a SECOND SIGTERM during the teardown's bounded
-//!    grace window is silently absorbed (the forwarder thread already
-//!    consumed the one registration; `signal-hook` does not restore the
-//!    default disposition) — a stuck `ipe watch` needs SIGKILL, never a
-//!    second SIGTERM.
+//! 3. `IPE_E2E=1`: a SECOND SIGTERM during the teardown ends the process —
+//!    by the signal, unless the teardown already finished cleanly — and the
+//!    supervised child is gone either way.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -238,7 +236,7 @@ fn wait_for_child_of(ipe_pid: u32, timeout: Duration) -> Option<u32> {
 }
 
 /// Spawn a REAL `ipe watch` subprocess (the `run()` path, `external_stop =
-/// None` — the only caller the SIGTERM forwarder is installed for). When
+/// None` — the only caller the SIGTERM shutdown subscriber is registered for). When
 /// `capture_stderr` is set the child's stderr is piped so the caller can
 /// synchronize on the [`ipe::watch::SIGTERM_TEARDOWN_MARKER`] ack; otherwise it
 /// is discarded.
@@ -285,7 +283,7 @@ fn spawn_ipe_watch(
 ///
 /// Synchronizing on this ack — rather than a fixed sleep — is what makes the
 /// double-SIGTERM sequence deterministic: the second signal is sent only once
-/// the forwarder has provably consumed the first.
+/// the subscriber has provably answered the first.
 #[cfg(target_os = "linux")]
 fn watch_marker_seen(
     child: &mut std::process::Child,
@@ -464,28 +462,18 @@ fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
     )
 }
 
-/// Proof (not just a claim): a SECOND SIGTERM sent while the teardown is in
-/// flight is SILENTLY ABSORBED — it neither escalates the exit nor kills the
-/// process with a signal disposition. `signal-hook-registry` does not restore
-/// the default disposition once the forwarder thread has consumed its one
-/// signal and returned, so a second SIGTERM is neither re-handled nor
-/// delivered as a kernel kill. Observable consequence asserted here: the
-/// process still exits CLEANLY (status 0, not signal-killed) and the
-/// supervised child is reaped — no orphan on the port — regardless of a second
-/// signal racing the teardown.
-///
-/// The teardown is bounded but fast: behind the blue-green proxy the stop is
-/// zero-grace (the proxy holds the user port, so there is nothing to drain), so
-/// the window is a fraction of a second, not the direct path's 3 s. The
-/// durable property is the clean exit under a double signal, not a fixed
-/// duration.
-///
-/// Operational conclusion: a stuck `ipe watch` needs SIGKILL — a second
-/// SIGTERM is not a documented or relied-upon escape hatch.
+/// A SECOND SIGTERM sent once the first was answered (the teardown marker
+/// printed) ends the process: either the signal ends it, or the teardown it
+/// raced had already exited cleanly. Neither path waits on a hung teardown,
+/// and the supervised child is gone in both. The deterministic proof that a
+/// second request ends the process while the teardown hangs is the
+/// termination owner's own unit test.
 #[cfg(target_os = "linux")]
 #[test]
-fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() -> Result<(), BoxError>
+fn double_sigterm_during_teardown_ends_the_process_and_every_transfer_group() -> Result<(), BoxError>
 {
+    use std::os::unix::process::ExitStatusExt;
+
     if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
@@ -511,61 +499,54 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() ->
     let child_pid = wait_for_child_of(ipe_proc.id(), Duration::from_secs(10))
         .ok_or("the supervised child must be discoverable via /proc once v1 is serving")?;
 
-    // Watch the child's stderr for the forwarder's teardown ack BEFORE sending
+    // Watch the child's stderr for the subscriber's teardown ack BEFORE sending
     // any signal, so the reader thread is already draining when the marker is
     // printed.
     let marker_rx = watch_marker_seen(&mut ipe_proc, ipe::watch::SIGTERM_TEARDOWN_MARKER)?;
 
-    // First SIGTERM: starts the forwarder's orderly teardown.
+    // First SIGTERM: starts the orderly teardown.
     sigterm(ipe_proc.id())?;
 
-    // Barrier — NOT a sleep: block until the forwarder has PROVABLY consumed the
-    // first SIGTERM (it printed the teardown marker on its dedicated thread just
-    // before sending the `Shutdown` event). Only then is `signal-hook`'s one
-    // registration spent, so every later SIGTERM is guaranteed absorbed. This
-    // makes the double-signal ordering deterministic under any scheduling load —
-    // the racy 50 ms guess this replaces could, under full-suite concurrency,
-    // send the second SIGTERM before the first was consumed.
+    // Barrier — NOT a sleep: block until the first SIGTERM was provably
+    // answered (the subscriber printed the teardown marker just before sending
+    // the `Shutdown` event), so the next SIGTERM is a second request.
     let acked = marker_rx
         .recv_timeout(Duration::from_secs(30))
         .map_err(|_| -> BoxError {
-            "the forwarder must announce it consumed the first SIGTERM (teardown marker)".into()
+            "the subscriber must announce it answered the first SIGTERM (teardown marker)".into()
         })?;
     if !acked {
         let _ = ipe_proc.kill();
         let _ = ipe_proc.wait();
         return Err(
-            "child stderr closed before the SIGTERM teardown marker — the forwarder never \
-             reported consuming the first signal"
+            "child stderr closed before the SIGTERM teardown marker — the subscriber never \
+             reported answering the first signal"
                 .into(),
         );
     }
 
-    // Two further SIGTERMs land AFTER the ack, so the forwarder has definitely
-    // spent its one registration: both must be silently absorbed — never a
-    // signal-death of the process. Sending twice a beat apart exercises the
-    // teardown-still-running and teardown-finished orderings; a signal to an
-    // already-exited pid is harmless.
-    let _ = sigterm(ipe_proc.id());
-    std::thread::sleep(Duration::from_millis(50));
+    // The second request. A send to an already-exited pid fails: that is the
+    // clean-teardown ordering, so the send's result is not the outcome.
     let _ = sigterm(ipe_proc.id());
 
     let status = wait_for_exit(&mut ipe_proc, Duration::from_secs(30));
     let Some(status) = status else {
         let _ = ipe_proc.kill();
         let _ = ipe_proc.wait();
-        return Err("ipe must still exit after its bounded teardown".into());
+        return Err("a second SIGTERM must end ipe, never leave it waiting on its teardown".into());
     };
-    // The second signal had NO escalating effect: the process exits through its
-    // own clean teardown (status 0), not a SIGTERM-disposition signal death.
     assert!(
-        status.success(),
-        "a second SIGTERM must be absorbed, not delivered as a kill — the process \
-         must still exit cleanly (status 0), got {status}"
+        status.signal() == Some(signal_hook::consts::SIGTERM) || status.success(),
+        "a second SIGTERM must end the process by the signal (or find it already \
+         exited cleanly), got {status}"
     );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while pid_is_alive(child_pid) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
     assert!(
         !pid_is_alive(child_pid),
-        "the supervised child (pid {child_pid}) must still be reaped by the teardown"
+        "the supervised child (pid {child_pid}) must not outlive ipe"
     );
     Ok(())
 }

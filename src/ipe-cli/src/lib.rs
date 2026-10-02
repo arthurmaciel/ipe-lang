@@ -76,6 +76,8 @@ pub mod secret_file;
 pub mod signing;
 pub mod ssh_signing_key;
 pub mod style;
+#[cfg(unix)]
+mod terminate;
 pub mod text;
 pub mod toolchain;
 pub mod unsafe_ack;
