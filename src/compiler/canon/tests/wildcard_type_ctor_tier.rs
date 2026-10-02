@@ -161,13 +161,13 @@ fn two_open_imports_sharing_a_type_and_ctor_are_legal_unused() {
 fn a_bare_ctor_from_two_open_imports_is_ambiguous_at_the_use() {
     let main = format!("{BOTH_OPEN}main = Done\n");
     let (result, _) = canonicalise_main(&[TASK_STUB, PARSER_STUB], &main);
-    let Some((span, modules)) = ambiguous_modules(&result) else {
-        assert!(
-            matches!(result, Err(Diagnostic::Name { .. })),
-            "a bare `Done` from two open imports must be IPE-N0024, got {result:?}"
-        );
-        return;
-    };
+    let ambiguous = ambiguous_modules(&result);
+    assert!(
+        ambiguous.is_some(),
+        "a bare `Done` from two open imports must be IPE-N0024, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_some` is asserted just above
+    let (span, modules) = ambiguous.expect("asserted present above");
     assert_eq!(
         span.lo,
         span_of(&main, "Done", 0).lo,
@@ -184,13 +184,13 @@ fn a_bare_ctor_pattern_from_two_open_imports_is_ambiguous_at_the_pattern() {
          main = 0\n"
     );
     let (result, _) = canonicalise_main(&[TASK_STUB, PARSER_STUB], &main);
-    let Some((span, modules)) = ambiguous_modules(&result) else {
-        assert!(
-            matches!(result, Err(Diagnostic::Name { .. })),
-            "a bare `Done` pattern from two open imports must be IPE-N0024, got {result:?}"
-        );
-        return;
-    };
+    let ambiguous = ambiguous_modules(&result);
+    assert!(
+        ambiguous.is_some(),
+        "a bare `Done` pattern from two open imports must be IPE-N0024, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_some` is asserted just above
+    let (span, modules) = ambiguous.expect("asserted present above");
     assert_eq!(
         span.lo,
         span_of(&main, "Done", 0).lo,
@@ -204,13 +204,13 @@ fn a_bare_ctor_pattern_from_two_open_imports_is_ambiguous_at_the_pattern() {
 fn a_bare_type_from_two_open_imports_is_ambiguous_at_the_annotation() {
     let main = format!("{BOTH_OPEN}f : Step Int Int -> Int\nf _ =\n    0\n\nmain = 0\n");
     let (result, _) = canonicalise_main(&[TASK_STUB, PARSER_STUB], &main);
-    let Some((span, modules)) = ambiguous_modules(&result) else {
-        assert!(
-            matches!(result, Err(Diagnostic::Name { .. })),
-            "a bare `Step` annotation from two open imports must be IPE-N0024, got {result:?}"
-        );
-        return;
-    };
+    let ambiguous = ambiguous_modules(&result);
+    assert!(
+        ambiguous.is_some(),
+        "a bare `Step` annotation from two open imports must be IPE-N0024, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_some` is asserted just above
+    let (span, modules) = ambiguous.expect("asserted present above");
     assert!(
         span.lo >= span_of(&main, "f : ", 0).lo,
         "the ambiguity is located at the annotation, not at an import: {span:?}"
@@ -229,13 +229,12 @@ fn qualified_uses_of_two_open_imports_resolve() {
                 p = Parser.Done\n\n\
                 main = 0\n";
     let (result, interner) = canonicalise_main(&[TASK_STUB, PARSER_STUB], main);
-    let Ok(module) = &result else {
-        assert!(
-            result.is_ok(),
-            "qualified uses must resolve, got {result:?}"
-        );
-        return;
-    };
+    assert!(
+        result.is_ok(),
+        "qualified uses must resolve, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_ok` is asserted just above
+    let module = result.as_ref().expect("asserted ok above");
     assert_eq!(
         ctor_home(module, &interner, "t").as_deref(),
         Some("Ipe.Task")
@@ -259,13 +258,12 @@ fn an_explicit_import_outranks_an_open_one_in_either_order() {
     for imports in [format!("{explicit}{open}"), format!("{open}{explicit}")] {
         let main = format!("module Main exposing (main)\n\n{imports}\nmain = Done\n");
         let (result, interner) = canonicalise_main(&[TASK_STUB, PARSER_STUB], &main);
-        let Ok(module) = &result else {
-            assert!(
-                result.is_ok(),
-                "explicit-over-open must resolve, got {result:?}"
-            );
-            return;
-        };
+        assert!(
+            result.is_ok(),
+            "explicit-over-open must resolve, got {result:?}"
+        );
+        #[allow(clippy::expect_used)] // `is_ok` is asserted just above
+        let module = result.as_ref().expect("asserted ok above");
         assert_eq!(
             ctor_home(module, &interner, "main").as_deref(),
             Some("Ipe.Parser"),
@@ -283,13 +281,12 @@ fn a_local_type_shadows_an_open_import() {
                 s : Step\ns =\n    A\n\n\
                 main = Done\n";
     let (result, interner) = canonicalise_main(&[TASK_STUB], main);
-    let Ok(module) = &result else {
-        assert!(
-            result.is_ok(),
-            "a local type must shadow an open import, got {result:?}"
-        );
-        return;
-    };
+    assert!(
+        result.is_ok(),
+        "a local type must shadow an open import, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_ok` is asserted just above
+    let module = result.as_ref().expect("asserted ok above");
     let s = annotation(module, &interner, "s");
     assert_eq!(
         s.and_then(|ty| con_home(ty, &interner)).as_deref(),
@@ -306,13 +303,12 @@ fn a_local_type_shadows_an_open_import() {
 fn a_local_ctor_shadows_two_open_imports() {
     let main = format!("{BOTH_OPEN}type T = Done\n\nmain = Done\n");
     let (result, interner) = canonicalise_main(&[TASK_STUB, PARSER_STUB], &main);
-    let Ok(module) = &result else {
-        assert!(
-            result.is_ok(),
-            "a local ctor must shadow open imports, got {result:?}"
-        );
-        return;
-    };
+    assert!(
+        result.is_ok(),
+        "a local ctor must shadow open imports, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_ok` is asserted just above
+    let module = result.as_ref().expect("asserted ok above");
     assert_eq!(
         ctor_home(module, &interner, "main").as_deref(),
         Some("Main")
@@ -325,13 +321,12 @@ fn a_local_ctor_shadows_two_open_imports() {
 fn an_open_import_outranks_the_ambient_ctor() {
     let open = "module Main exposing (main)\n\nimport Ipe.Task exposing (..)\n\nmain = Done\n";
     let (result, interner) = canonicalise_main(&[TASK_STUB], open);
-    let Ok(module) = &result else {
-        assert!(
-            result.is_ok(),
-            "an open `Done` must resolve, got {result:?}"
-        );
-        return;
-    };
+    assert!(
+        result.is_ok(),
+        "an open `Done` must resolve, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_ok` is asserted just above
+    let module = result.as_ref().expect("asserted ok above");
     assert_eq!(
         ctor_home(module, &interner, "main").as_deref(),
         Some("Ipe.Task")
@@ -339,13 +334,12 @@ fn an_open_import_outranks_the_ambient_ctor() {
 
     let bare = "module Main exposing (main)\n\nmain = Done\n";
     let (result, interner) = canonicalise_main(&[TASK_STUB], bare);
-    let Ok(module) = &result else {
-        assert!(
-            result.is_ok(),
-            "the ambient `Done` must resolve, got {result:?}"
-        );
-        return;
-    };
+    assert!(
+        result.is_ok(),
+        "the ambient `Done` must resolve, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_ok` is asserted just above
+    let module = result.as_ref().expect("asserted ok above");
     assert_eq!(ctor_home(module, &interner, "main").as_deref(), Some(""));
 }
 
@@ -389,13 +383,12 @@ fn one_module_opened_twice_is_one_origin() {
                 s : Step Int Int\ns =\n    Done 1\n\n\
                 main = Done\n";
     let (result, interner) = canonicalise_main(&[TASK_STUB], main);
-    let Ok(module) = &result else {
-        assert!(
-            result.is_ok(),
-            "a module opened twice must not be ambiguous with itself, got {result:?}"
-        );
-        return;
-    };
+    assert!(
+        result.is_ok(),
+        "a module opened twice must not be ambiguous with itself, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_ok` is asserted just above
+    let module = result.as_ref().expect("asserted ok above");
     assert_eq!(
         ctor_home(module, &interner, "main").as_deref(),
         Some("Ipe.Task")
@@ -413,13 +406,12 @@ fn one_reexported_builtin_type_from_two_open_imports_is_one_origin() {
                 f : Attribute msg -> Int\nf _ =\n    0\n\n\
                 main = 0\n";
     let (result, interner) = canonicalise_main(&[one, two], main);
-    let Ok(module) = &result else {
-        assert!(
-            result.is_ok(),
-            "one re-exported builtin must not be ambiguous with itself, got {result:?}"
-        );
-        return;
-    };
+    assert!(
+        result.is_ok(),
+        "one re-exported builtin must not be ambiguous with itself, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_ok` is asserted just above
+    let module = result.as_ref().expect("asserted ok above");
     let f = annotation(module, &interner, "f");
     assert_eq!(
         f.and_then(|ty| con_home(ty, &interner)).as_deref(),
@@ -450,13 +442,12 @@ fn an_open_alias_never_beats_an_explicit_union() {
             "module Main exposing (main)\n\n{imports}\nx : Foo\nx =\n    FooB\n\nmain = 0\n"
         );
         let (result, interner) = canonicalise_main(&[ALIAS_STUB, UNION_STUB], &main);
-        let Ok(module) = &result else {
-            assert!(
-                result.is_ok(),
-                "explicit union over open alias must resolve, got {result:?}"
-            );
-            return;
-        };
+        assert!(
+            result.is_ok(),
+            "explicit union over open alias must resolve, got {result:?}"
+        );
+        #[allow(clippy::expect_used)] // `is_ok` is asserted just above
+        let module = result.as_ref().expect("asserted ok above");
         let x = annotation(module, &interner, "x");
         assert_eq!(
             x.and_then(|ty| con_home(ty, &interner)).as_deref(),
@@ -543,13 +534,12 @@ fn an_opening_module_exports_only_its_own_ctors() {
                  type Step2 = Done2\n";
     let mut interner = Interner::new();
     let result = stub_exports(&[TASK_STUB, other], &mut interner);
-    let Ok(deps) = &result else {
-        assert!(
-            result.is_ok(),
-            "the opening module must canonicalise, got {result:?}"
-        );
-        return;
-    };
+    assert!(
+        result.is_ok(),
+        "the opening module must canonicalise, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_ok` is asserted just above
+    let deps = result.as_ref().expect("asserted ok above");
     let exports = deps
         .values()
         .find(|e| dotted(&e.path, &interner).as_deref() == Some("Ipe.Other"));
@@ -589,13 +579,12 @@ fn a_local_record_alias_ctor_outranks_an_open_ctor() {
          {LOCAL_RECORD_DONE}mk = Done\n\nmain = 0\n"
     );
     let (result, interner) = canonicalise_main(&[TASK_STUB], &main);
-    let Ok(module) = &result else {
-        assert!(
-            result.is_ok(),
-            "a local record alias over an open ctor must resolve, got {result:?}"
-        );
-        return;
-    };
+    assert!(
+        result.is_ok(),
+        "a local record alias over an open ctor must resolve, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_ok` is asserted just above
+    let module = result.as_ref().expect("asserted ok above");
     assert_eq!(
         top_level_module(module, &interner, "mk").as_deref(),
         Some("Main"),
@@ -608,13 +597,12 @@ fn a_local_record_alias_ctor_outranks_an_open_ctor() {
 fn a_local_record_alias_ctor_outranks_the_ambient_ctor() {
     let main = format!("module Main exposing (main)\n\n{LOCAL_RECORD_DONE}mk = Done\n\nmain = 0\n");
     let (result, interner) = canonicalise_main(&[], &main);
-    let Ok(module) = &result else {
-        assert!(
-            result.is_ok(),
-            "a local record alias over the ambient ctor must resolve, got {result:?}"
-        );
-        return;
-    };
+    assert!(
+        result.is_ok(),
+        "a local record alias over the ambient ctor must resolve, got {result:?}"
+    );
+    #[allow(clippy::expect_used)] // `is_ok` is asserted just above
+    let module = result.as_ref().expect("asserted ok above");
     assert_eq!(
         top_level_module(module, &interner, "mk").as_deref(),
         Some("Main"),
