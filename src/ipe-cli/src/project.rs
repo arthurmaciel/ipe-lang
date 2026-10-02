@@ -1197,6 +1197,36 @@ mod tests {
     }
 
     #[test]
+    fn each_entry_refusal_renders_its_own_teaching_message() {
+        let cases = [
+            (EntryRefusal::Empty, "names no module"),
+            (EntryRefusal::EmptySegment, "empty path segment"),
+            (EntryRefusal::DotSegment, "`..` path segment"),
+            (EntryRefusal::Backslash, "contains a backslash"),
+            (EntryRefusal::DrivePrefix, "drive prefix"),
+            (EntryRefusal::Extension, "does not end in `.ipe`"),
+            (
+                EntryRefusal::NotModuleSegment {
+                    segment: "lower".to_owned(),
+                },
+                "segment \"lower\" that is not a valid module name",
+            ),
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for (refusal, phrase) in cases {
+            let rendered = CliError::manifest_entry_refused("X", &refusal).to_string();
+            assert!(
+                rendered.contains(phrase),
+                "{refusal:?} must say {phrase:?}: {rendered}"
+            );
+            assert!(
+                seen.insert(rendered),
+                "{refusal:?} shares another refusal's message"
+            );
+        }
+    }
+
+    #[test]
     fn windows_device_names_are_not_module_segments() {
         for name in ["CON", "Con", "PRN", "Prn", "AUX", "Aux", "NUL", "Nul"] {
             assert!(!is_module_segment(name), "{name} names a device");
@@ -1908,9 +1938,13 @@ import String
         let legal = manifest_with_second_entry("second_entry_legal", "Cli/Main.ipe");
         assert_eq!(legal.resolved_entry().ok(), Some(module(&["Main"])));
         let refused = manifest_with_second_entry("second_entry_refused", "Cli/./Main.ipe");
-        assert!(
-            matches!(refused.resolved_entry(), Err(CliError::Usage(_))),
-            "the second program's `./` entry refuses the manifest"
+        let expected =
+            CliError::manifest_entry_refused("Cli/./Main.ipe", &EntryRefusal::DotSegment)
+                .to_string();
+        assert_eq!(
+            refused.resolved_entry().map_err(|err| err.to_string()),
+            Err(expected),
+            "the second program's `./` entry refuses the manifest as a dot segment"
         );
     }
 

@@ -560,11 +560,11 @@ impl CliError {
             EntryRefusal::NotModuleSegment { segment } => {
                 text::msg::manifest_entry_segment_invalid(&entry, &format!("{segment:?}"))
             }
-            EntryRefusal::EmptySegment
-            | EntryRefusal::DotSegment
-            | EntryRefusal::Backslash
-            | EntryRefusal::DrivePrefix
-            | EntryRefusal::Extension => text::msg::manifest_entry_invalid(&entry),
+            EntryRefusal::EmptySegment => text::msg::manifest_entry_empty_segment(&entry),
+            EntryRefusal::DotSegment => text::msg::manifest_entry_dot_segment(&entry),
+            EntryRefusal::Backslash => text::msg::manifest_entry_backslash(&entry),
+            EntryRefusal::DrivePrefix => text::msg::manifest_entry_drive_prefix(&entry),
+            EntryRefusal::Extension => text::msg::manifest_entry_extension(&entry),
         })
     }
 

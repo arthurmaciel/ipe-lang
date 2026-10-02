@@ -1141,8 +1141,16 @@ messages! {
     ships_shape_mismatch(delivery, shape) = "ships-shape-mismatch";
     /// `ipe add` found the package already declared as an escape dependency.
     pkg_add_escape_dependency(name) = "pkg-add-escape-dependency";
-    /// A `package.ipe` program entry is not a valid entry file.
-    manifest_entry_invalid(entry) = "manifest-entry-invalid";
+    /// A `package.ipe` program entry has an empty path segment.
+    manifest_entry_empty_segment(entry) = "manifest-entry-empty-segment";
+    /// A `package.ipe` program entry has a `.` or `..` path segment.
+    manifest_entry_dot_segment(entry) = "manifest-entry-dot-segment";
+    /// A `package.ipe` program entry contains a backslash.
+    manifest_entry_backslash(entry) = "manifest-entry-backslash";
+    /// A `package.ipe` program entry opens with a drive prefix.
+    manifest_entry_drive_prefix(entry) = "manifest-entry-drive-prefix";
+    /// A `package.ipe` program entry does not end in `.ipe`.
+    manifest_entry_extension(entry) = "manifest-entry-extension";
     /// A `package.ipe` program entry has an invalid module segment.
     manifest_entry_segment_invalid(entry, segment) = "manifest-entry-segment-invalid";
     /// A `package.ipe` program entry names no module.
