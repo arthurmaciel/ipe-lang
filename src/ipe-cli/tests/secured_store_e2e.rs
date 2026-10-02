@@ -29,7 +29,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Shared error type for the helpers.
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -41,7 +41,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(10);
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The served Ipê program: one route per secured write, plus setup and dumps.
-const PROGRAM: &str = r##"module Main exposing (main)
+const PROGRAM: &str = r#"module Main exposing (main)
 
 import Ipe.Auth as Auth
 import Ipe.Codec as Codec exposing (Codec)
@@ -398,7 +398,7 @@ main =
         , Server.get "/dump/:table" handleDump
         , Server.postAuthed "/run/:case" authCfg handleRun
         ]
-"##;
+"#;
 
 /// Compiles [`PROGRAM`] with the dev-loop intent and builds the emitted crate.
 ///
