@@ -383,7 +383,8 @@ pub fn con_heads_compatible(
 ///   so any non-empty home for one is a builtin qualifier, never a user shadow.
 ///
 /// Everything else — a name with a *user* home (`type Order` in `Main` →
-/// `[Main]`) — is a genuinely distinct type and does NOT unify.
+/// `[Main]`), or a stdlib union listed in [`STDLIB_DISTINCT_UNIONS`] — is a
+/// genuinely distinct type and does NOT unify.
 fn empty_home_compat(
     other_home: &[ipe_intern::Symbol],
     name: ipe_intern::Symbol,
@@ -393,7 +394,7 @@ fn empty_home_compat(
         .first()
         .and_then(|s| interner.resolve(*s))
         .is_some_and(|root| root == IPE_STDLIB_ROOT);
-    ipe_rooted
+    (ipe_rooted && !is_stdlib_distinct_union(other_home, name, interner))
         || interner
             .resolve(name)
             .is_some_and(ipe_canon::is_user_type_declaration_forbidden)
@@ -404,6 +405,38 @@ fn empty_home_compat(
 /// so an `Ipe`-rooted home is always the stdlib spelling of a builtin, never a
 /// user shadow.
 const IPE_STDLIB_ROOT: &str = "Ipe";
+
+/// Stdlib unions that share a builtin type name but declare their own constructors.
+///
+/// Each entry is `(home, name)`. Such a union is its own head: its `Ipe`-rooted
+/// home must never merge with the empty-home builtin of the same name, or a
+/// value of one type would type-check where the other is expected
+/// (`Store.Asc == LT`). A test scans every stdlib source and fails when a union
+/// named like a builtin union carries a constructor set different from the
+/// builtin's without an entry here, so a new colliding declaration cannot
+/// silently merge.
+pub const STDLIB_DISTINCT_UNIONS: &[(&[&str], &str)] = &[(&["Ipe", "Db", "Store"], "Order")];
+
+/// Whether `home.name` is listed in [`STDLIB_DISTINCT_UNIONS`].
+fn is_stdlib_distinct_union(
+    home: &[ipe_intern::Symbol],
+    name: ipe_intern::Symbol,
+    interner: &Interner,
+) -> bool {
+    let Some(name) = interner.resolve(name) else {
+        return false;
+    };
+    STDLIB_DISTINCT_UNIONS
+        .iter()
+        .any(|(entry_home, entry_name)| {
+            *entry_name == name
+                && entry_home.len() == home.len()
+                && entry_home
+                    .iter()
+                    .zip(home)
+                    .all(|(want, got)| interner.resolve(*got).is_some_and(|got| got == *want))
+        })
+}
 
 /// Whether merging `ra` and `rb` would make the surviving class a direct child
 /// of itself — a depth-one cycle (`t = List t`) the structure-vs-structure path
@@ -1429,5 +1462,53 @@ mod tests {
             result.is_err(),
             "a non-builtin name with an empty home must not wildcard-match a user home"
         );
+    }
+
+    /// Intern a dotted module path into its home segments.
+    fn home(interner: &mut Interner, dotted: &str) -> Vec<ipe_intern::Symbol> {
+        dotted
+            .split('.')
+            .map(|seg| interner.intern(seg).unwrap())
+            .collect()
+    }
+
+    /// A stdlib union listed as distinct never shares a head with the builtin of
+    /// its name, while every other `Ipe`-rooted spelling still does.
+    #[test]
+    fn stdlib_distinct_union_is_its_own_head() {
+        let mut interner = Interner::new();
+        let order = interner.intern("Order").unwrap();
+        let store = home(&mut interner, "Ipe.Db.Store");
+        let basics = home(&mut interner, "Ipe.Basics");
+        assert!(
+            !con_heads_compatible(&store, order, &[], order, &interner),
+            "`Ipe.Db.Store.Order` (`Asc | Desc`) must not merge with the builtin `Order`"
+        );
+        assert!(
+            !con_heads_compatible(&[], order, &store, order, &interner),
+            "the refusal must hold with the builtin on either side"
+        );
+        assert!(
+            con_heads_compatible(&basics, order, &[], order, &interner),
+            "`Basics.Order` is the stdlib spelling of the builtin `Order`"
+        );
+        assert!(
+            con_heads_compatible(&store, order, &store, order, &interner),
+            "`Ipe.Db.Store.Order` is still identical to itself"
+        );
+    }
+
+    /// The distinct-union lookup matches the whole home, never a prefix or an
+    /// extension of a listed one.
+    #[test]
+    fn stdlib_distinct_union_matches_the_exact_home() {
+        let mut interner = Interner::new();
+        let order = interner.intern("Order").unwrap();
+        let prefix = home(&mut interner, "Ipe.Db");
+        let longer = home(&mut interner, "Ipe.Db.Store.Inner");
+        let exact = home(&mut interner, "Ipe.Db.Store");
+        assert!(!is_stdlib_distinct_union(&prefix, order, &interner));
+        assert!(!is_stdlib_distinct_union(&longer, order, &interner));
+        assert!(is_stdlib_distinct_union(&exact, order, &interner));
     }
 }

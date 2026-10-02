@@ -61,8 +61,8 @@ use constrain::{
 };
 use solve::solve_attributed;
 use ty::{Content, FlatType};
-pub use unify::con_heads_compatible;
 use unify::unify;
+pub use unify::{STDLIB_DISTINCT_UNIONS, con_heads_compatible};
 use unionfind::{UnionFind, VarId};
 
 /// The result of inference: resolved types for bindings and for every region.
@@ -271,6 +271,15 @@ pub struct TypedInterface {
     pub values: BTreeMap<Symbol, TypedScheme>,
     /// The module's union definitions, constructor spans erased.
     pub unions: Vec<canon::Union>,
+    /// Every union reachable through the module's dependencies, its own excluded.
+    ///
+    /// The transitive closure of the dependency interfaces' `unions`,
+    /// constructor spans erased, one entry per `(home, name)`. An importer sees
+    /// only its DIRECT dependencies' interfaces, yet a value can carry a union
+    /// declared further down the graph (`B.wrap : A.T`), so the importer's
+    /// exhaustiveness and equality checks read this closure to know every
+    /// union its values can inhabit.
+    pub reachable_unions: Vec<canon::Union>,
 }
 
 /// Whether a module's typed interface can stand for it in a dependency-first
@@ -434,11 +443,26 @@ fn infer_core(
             .flat_map(|iface| iface.unions.iter())
             .collect()
     });
+    // Every union a value in this module can inhabit beyond its own: the direct
+    // deps' unions plus each dep's own reachable closure. The exhaustiveness
+    // tables and the function-payload enum set read this set, so a union
+    // declared two imports down is still known to both.
+    let reachable_unions: Vec<&canon::Union> = scoped.map_or_else(Vec::new, |ctx| {
+        let mut by_id: BTreeMap<(&[Symbol], Symbol), &canon::Union> = BTreeMap::new();
+        for iface in ctx.deps.values() {
+            for union in iface.unions.iter().chain(iface.reachable_unions.iter()) {
+                by_id
+                    .entry((union.home.as_slice(), union.name))
+                    .or_insert(union);
+            }
+        }
+        by_id.into_values().collect()
+    });
     // The user enums whose definition embeds a function payload — consulted by
     // every concrete equality / stringify obligation so a `==` / `{{…}}` on a
     // function-carrying enum fails closed (the payload arrow is invisible in a
     // `Ty::Con`'s applied type arguments; see [`fn_embedding_enums`]).
-    let fn_enums = fn_embedding_enums(&m.unions, &dep_unions);
+    let fn_enums = fn_embedding_enums(&m.unions, &reachable_unions);
     let enum_embeds_fn = |home: &[Symbol], name: Symbol| fn_enums.contains(&(home.to_vec(), name));
     let generated = match scoped {
         None => lift!(Builder::run(&mut uf, interner, m)),
@@ -568,7 +592,7 @@ fn infer_core(
     // from byte offsets that every linked module shares.
     exhaust::check(
         m,
-        &dep_unions,
+        &reachable_unions,
         &regions_for_exhaust,
         interner,
         &mut warnings,
@@ -1180,6 +1204,7 @@ fn infer_core(
         InterfaceStatus::Closed(TypedInterface {
             values,
             unions: m.unions.iter().map(erase_union_spans).collect(),
+            reachable_unions: reachable_unions.iter().map(|u| (*u).clone()).collect(),
         })
     });
 
@@ -1851,11 +1876,11 @@ fn canon_type_embeds_lambda(t: &canon::Type) -> bool {
 /// enum fails closed (IPE-T0014) instead of emitting Rust that does not build.
 fn fn_embedding_enums(
     module_unions: &[canon::Union],
-    dep_unions: &[&canon::Union],
+    reachable_unions: &[&canon::Union],
 ) -> BTreeSet<(Vec<Symbol>, Symbol)> {
     module_unions
         .iter()
-        .chain(dep_unions.iter().copied())
+        .chain(reachable_unions.iter().copied())
         .filter(|u| {
             u.ctors
                 .iter()
@@ -7126,5 +7151,269 @@ h x =
                 );
             }
         }
+    }
+
+    // ── Builtin head identity and reachable unions ─────────────────────────
+
+    /// Scoped-solve each module over its DIRECT imports' interfaces only.
+    ///
+    /// Entries are dependency-first `(dotted module path, source, direct
+    /// imports)` triples. Unlike [`infer_scoped`], a module sees only the
+    /// interfaces it imports, exactly as the driver's per-module tier offers
+    /// them, so a union declared two imports down reaches it only through an
+    /// interface's reachable closure. Returns every module's result in order,
+    /// or `None` when one fails to parse or canonicalise.
+    fn infer_scoped_direct(modules_src: &[(&str, &str, &[&str])]) -> Option<Vec<ScopedResult>> {
+        let mut i = Interner::new();
+        let mut exports_by_path: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        let mut interfaces: BTreeMap<Vec<Symbol>, Arc<TypedInterface>> = BTreeMap::new();
+        let mut results = Vec::new();
+        for (path_str, src, imports) in modules_src {
+            let mut intern_path = |dotted: &str| {
+                dotted
+                    .split('.')
+                    .map(|seg| i.intern(seg))
+                    .collect::<DResult<Vec<Symbol>>>()
+                    .ok()
+            };
+            let path = intern_path(path_str)?;
+            let mut direct: BTreeMap<Vec<Symbol>, Arc<TypedInterface>> = BTreeMap::new();
+            for import in *imports {
+                let import_path = intern_path(import)?;
+                let iface = interfaces.get(&import_path)?;
+                direct.insert(import_path, Arc::clone(iface));
+            }
+            let parsed = ipe_parse::parse_module(src, &mut i).ok()?;
+            let (cm, exports) =
+                ipe_canon::canonicalise_module(&parsed, &path, &exports_by_path, &mut i).ok()?;
+            let result = infer_module(&cm, &exports, &direct, &mut i);
+            if let Ok(ModuleInference {
+                interface: InterfaceStatus::Closed(iface),
+                ..
+            }) = &result
+            {
+                interfaces.insert(path.clone(), Arc::new(iface.clone()));
+            }
+            exports_by_path.insert(path, exports);
+            results.push(result);
+        }
+        Some(results)
+    }
+
+    /// `A` declares a closed union, `B` hands out a value of it, `Main` imports
+    /// only `B`.
+    const REACHABLE_UNION_A: &str = "module A exposing (T(..))\n\ntype T\n    = X\n    | Y\n";
+    const REACHABLE_UNION_B: &str =
+        "module B exposing (wrap)\n\nimport A exposing (T(..))\n\nwrap : T\nwrap =\n    X\n";
+
+    /// A catch-all `case` over a union declared two imports down is judged
+    /// against that union's constructors (IPE-T0018), not skipped as unknown.
+    #[test]
+    fn catch_all_over_a_transitively_reached_union_is_refused() {
+        let main_src = format!(
+            "{M2C_HDR}import B\n\nmain =\n    case B.wrap of\n        _ ->\n            0\n"
+        );
+        let modules: [(&str, &str, &[&str]); 3] = [
+            ("A", REACHABLE_UNION_A, &[]),
+            ("B", REACHABLE_UNION_B, &["A"]),
+            ("Main", main_src.as_str(), &["B"]),
+        ];
+        let results = infer_scoped_direct(&modules);
+        assert!(
+            results.is_some(),
+            "the three-module fixture must canonicalise"
+        );
+        let Some(results) = results else {
+            return;
+        };
+        assert!(
+            matches!(
+                results.get(2),
+                Some(Err((
+                    Diagnostic::Type {
+                        msg: TypeError::WildcardCoversKnownConstructors { .. },
+                        ..
+                    },
+                    _
+                )))
+            ),
+            "a `_`-only case over `A.T` reached through `B` must be refused: {:?}",
+            results.get(2)
+        );
+    }
+
+    /// The reachable closure is transitive: a fourth module importing only the
+    /// third still knows the union two interfaces down.
+    #[test]
+    fn reachable_unions_close_over_every_interface_level() {
+        let c_src = "module C exposing (again)\n\nimport B\n\nagain =\n    B.wrap\n";
+        let main_src = format!(
+            "{M2C_HDR}import C\n\nmain =\n    case C.again of\n        _ ->\n            0\n"
+        );
+        let modules: [(&str, &str, &[&str]); 4] = [
+            ("A", REACHABLE_UNION_A, &[]),
+            ("B", REACHABLE_UNION_B, &["A"]),
+            ("C", c_src, &["B"]),
+            ("Main", main_src.as_str(), &["C"]),
+        ];
+        let results = infer_scoped_direct(&modules);
+        assert!(
+            results.is_some(),
+            "the four-module fixture must canonicalise"
+        );
+        let Some(results) = results else {
+            return;
+        };
+        assert!(
+            matches!(
+                results.get(3),
+                Some(Err((
+                    Diagnostic::Type {
+                        msg: TypeError::WildcardCoversKnownConstructors { .. },
+                        ..
+                    },
+                    _
+                )))
+            ),
+            "a `_`-only case over `A.T` reached through `C` and `B` must be refused: {:?}",
+            results.get(3)
+        );
+    }
+
+    /// Equality on a function-carrying union declared two imports down is
+    /// refused (IPE-T0014) exactly as on one declared next door.
+    #[test]
+    fn equality_on_a_transitively_reached_function_union_is_refused() {
+        let a_src = "module A exposing (H(..))\n\ntype H\n    = H (Int -> Int)\n";
+        let b_src = "module B exposing (mk)\n\nimport A exposing (H(..))\n\n\
+                     mk : H\nmk =\n    H (\\n -> n)\n";
+        let main_src = format!("{M2C_HDR}import B\n\nmain =\n    B.mk == B.mk\n");
+        let modules: [(&str, &str, &[&str]); 3] = [
+            ("A", a_src, &[]),
+            ("B", b_src, &["A"]),
+            ("Main", main_src.as_str(), &["B"]),
+        ];
+        let results = infer_scoped_direct(&modules);
+        assert!(
+            results.is_some(),
+            "the three-module fixture must canonicalise"
+        );
+        let Some(results) = results else {
+            return;
+        };
+        assert!(
+            matches!(
+                results.get(2),
+                Some(Err((
+                    Diagnostic::Type {
+                        msg: TypeError::SuperTypeUnsatisfied { .. },
+                        ..
+                    },
+                    _
+                )))
+            ),
+            "`==` on `A.H` reached through `B` must be refused: {:?}",
+            results.get(2)
+        );
+    }
+
+    /// Canonicalise dependency-first modules, an `Ipe.*` path as embedded stdlib.
+    ///
+    /// Returns each module's canonical form and exports in order, or `None`
+    /// when one fails to parse or canonicalise.
+    fn canon_with_stdlib_origin(
+        modules_src: &[(&str, &str)],
+        i: &mut Interner,
+    ) -> Option<Vec<(Vec<Symbol>, canon::Module, ModuleExports)>> {
+        let mut exports_by_path: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        let mut out = Vec::new();
+        for (path_str, src) in modules_src {
+            let path: Vec<Symbol> = path_str
+                .split('.')
+                .map(|seg| i.intern(seg))
+                .collect::<DResult<Vec<Symbol>>>()
+                .ok()?;
+            let origin = if path_str.starts_with("Ipe.") {
+                ipe_canon::ModuleOrigin::EmbeddedStdlib
+            } else {
+                ipe_canon::ModuleOrigin::User
+            };
+            let parsed = ipe_parse::parse_module(src, i).ok()?;
+            let (cm, exports) = ipe_canon::canonicalise_module_with_origin(
+                &parsed,
+                &path,
+                &exports_by_path,
+                origin,
+                i,
+            )
+            .ok()?;
+            exports_by_path.insert(path.clone(), exports.clone());
+            out.push((path, cm, exports));
+        }
+        Some(out)
+    }
+
+    /// The `Ipe.Db.Store` sort direction shares the builtin name `Order` but not
+    /// its constructors, so `Store.Asc == LT` is a mismatch, never a comparison
+    /// of one type.
+    #[test]
+    fn store_sort_order_is_not_the_builtin_order() {
+        let store_src =
+            "module Ipe.Db.Store exposing (Order(..))\n\ntype Order\n    = Asc\n    | Desc\n";
+        let main_src =
+            format!("{M2C_HDR}import Ipe.Db.Store as Store\n\nmain =\n    Store.Asc == LT\n");
+        let modules = [("Ipe.Db.Store", store_src), ("Main", main_src.as_str())];
+
+        let mut i = Interner::new();
+        let canon = canon_with_stdlib_origin(&modules, &mut i);
+        assert!(
+            canon.is_some(),
+            "the store-shaped fixture must canonicalise"
+        );
+        let Some(canon) = canon else {
+            return;
+        };
+        let entry = canon
+            .last()
+            .map(|(path, _, _)| path.clone())
+            .unwrap_or_default();
+        let linked = ipe_canon::link::link(
+            entry,
+            canon.iter().map(|(_, cm, _)| cm.clone()).collect(),
+            &i,
+        );
+        assert!(
+            linked.is_ok(),
+            "the store-shaped fixture must link: {linked:?}"
+        );
+        let Ok(m) = linked else {
+            return;
+        };
+        let solved = infer(&m, &mut i);
+        assert!(
+            refused_as_mismatch(&solved),
+            "`Store.Asc == LT` must be a type mismatch: {solved:?}"
+        );
+
+        let mut interfaces: BTreeMap<Vec<Symbol>, Arc<TypedInterface>> = BTreeMap::new();
+        let mut results = Vec::new();
+        for (path, cm, exports) in &canon {
+            let result = infer_module(cm, exports, &interfaces, &mut i);
+            if let Ok(ModuleInference {
+                interface: InterfaceStatus::Closed(iface),
+                ..
+            }) = &result
+            {
+                interfaces.insert(path.clone(), Arc::new(iface.clone()));
+            }
+            results.push(result);
+        }
+        assert!(
+            scoped_refuses_importer(&results, |msg| matches!(
+                msg,
+                TypeError::TypeMismatch { .. }
+            )),
+            "the scoped solve must refuse `Store.Asc == LT` too: {results:?}"
+        );
     }
 }
