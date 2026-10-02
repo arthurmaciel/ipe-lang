@@ -215,6 +215,8 @@ fn mkdir_mode(path: &Path, mode: u32) -> io::Result<()> {
 struct Run {
     /// The exit status, or `None` when the run timed out and was killed.
     status: Option<ExitStatus>,
+    /// What reached stdout, which the installer never writes to.
+    stdout: Vec<u8>,
     stderr: Vec<u8>,
     /// Every argument line the `curl` stub was called with.
     curl_log: Vec<u8>,
@@ -223,7 +225,8 @@ struct Run {
 /// Run `sh install.sh` under the scratch root `r`.
 ///
 /// The environment is cleared: a private `HOME`, `LC_ALL=C`, a `PATH` whose
-/// `curl` is a stub that logs its arguments and exits 7, then `env` on top.
+/// `curl` is a stub that logs its arguments, prints them to stdout and exits
+/// 7, then `env` on top.
 /// Stdin is empty; a run past 30 s is killed.
 fn run_installer(r: &ScratchDir, env: &[(&str, &OsStr)]) -> io::Result<Run> {
     let bin = leaf(r, "bin")?;
@@ -231,13 +234,14 @@ fn run_installer(r: &ScratchDir, env: &[(&str, &OsStr)]) -> io::Result<Run> {
     let curl = bin.join("curl");
     std::fs::write(
         &curl,
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$CURL_LOG\"\nexit 7\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >>\"$CURL_LOG\"\nprintf 'curl %s\\n' \"$*\"\nexit 7\n",
     )?;
     std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755))?;
     let home = leaf(r, "home")?;
     mkdir_mode(&home, 0o700)?;
     let log = leaf(r, "curl.log")?;
     let stderr_path = leaf(r, "stderr")?;
+    let stdout_path = leaf(r, "stdout")?;
     let mut path = OsString::from(bin.as_os_str());
     path.push(":/usr/bin:/bin");
 
@@ -250,7 +254,7 @@ fn run_installer(r: &ScratchDir, env: &[(&str, &OsStr)]) -> io::Result<Run> {
         .env("LC_ALL", "C")
         .envs(env.iter().copied())
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(File::create(&stdout_path)?)
         .stderr(File::create(&stderr_path)?)
         .spawn()?;
     let mut status = None;
@@ -269,6 +273,7 @@ fn run_installer(r: &ScratchDir, env: &[(&str, &OsStr)]) -> io::Result<Run> {
     };
     Ok(Run {
         status,
+        stdout: std::fs::read(stdout_path)?,
         stderr: std::fs::read(stderr_path)?,
         curl_log,
     })
@@ -276,9 +281,15 @@ fn run_installer(r: &ScratchDir, env: &[(&str, &OsStr)]) -> io::Result<Run> {
 
 /// Assert that `run` refused safely and printed `escaped`.
 ///
-/// Safely: exit 1, before any network call, and with no raw ESC or BEL byte.
+/// Safely: exit 1, before any network call, with nothing on stdout and no raw
+/// ESC or BEL byte.
 fn assert_refused_escaped(run: &Run, escaped: &str, why: &str) {
     let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        run.stdout.is_empty(),
+        "{why}: the installer must write nothing to stdout, got {}",
+        String::from_utf8_lossy(&run.stdout)
+    );
     assert_eq!(
         run.status.and_then(|status| status.code()),
         Some(1),
@@ -348,6 +359,28 @@ fn version_tag_outside_grammar_is_refused_before_network() -> io::Result<()> {
             "IPE_VERSION `{shown}` must be refused as a malformed tag"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn installer_stdout_never_reaches_the_terminal() -> io::Result<()> {
+    let r = root("install-msg-stdout")?;
+    let run = run_installer(&r, &[("IPE_VERSION", OsStr::new("v0.0.1"))])?;
+    assert_eq!(
+        run.status.and_then(|status| status.code()),
+        Some(2),
+        "a tag with no prebuilt binary must end in die_no_prebuilt; stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        !run.curl_log.is_empty(),
+        "the run must reach the binary check, whose `curl` prints to stdout"
+    );
+    assert!(
+        run.stdout.is_empty(),
+        "a command's stdout must go to /dev/null, got {}",
+        String::from_utf8_lossy(&run.stdout)
+    );
     Ok(())
 }
 
@@ -978,6 +1011,42 @@ const VALUE_PRINTERS: [&str; 2] = ["scratch_base_reason", "trusted_tmp_base"];
 /// The commands that run text the scan cannot see.
 const OPAQUE: [&str; 6] = ["eval", "alias", "builtin", ".", "source", "function"];
 
+/// The commands that run another command or program text the scan cannot
+/// see: shells, wrappers that exec their arguments, and script interpreters.
+const RUNNERS: [&str; 27] = [
+    "sh", "bash", "dash", "ash", "ksh", "mksh", "zsh", "busybox", "env", "exec", "xargs", "nohup",
+    "nice", "timeout", "time", "stdbuf", "setsid", "chroot", "flock", "sudo", "doas", "su", "perl",
+    "python", "python3", "ruby", "node",
+];
+
+/// The one shell the installer runs: rustup-init, read from the pipe on its
+/// stdin, with `-y` for its own prompt.
+const RUSTUP_SHELL: [&str; 4] = ["sh", "-s", "--", "-y"];
+
+/// The line that opens the group holding the whole installer, right after
+/// `set -eu`.
+const GUARD_OPEN: &str = "{";
+
+/// The installer's last line: the group's stdout goes to `/dev/null`, so only
+/// what the message helpers write to stderr reaches the terminal.
+const GUARD_CLOSE: &str = "} >/dev/null";
+
+/// The variable file targets the installer writes, each a regular file it
+/// owns.
+///
+/// - `"$TAG_FILE"`: `ipe upgrade`'s tag file, checked by `tag_file_ok`.
+/// - `"$dl_dest"`: the download destination inside the private scratch dir.
+/// - `"$tmp/curl.rc"`: the download's exit code, inside the same dir.
+/// - `"$wm_tmp"`: `mktemp` under `IPE_HOME`.
+/// - `"$RC_FILE"`: the shell rc file, checked by `refuse_symlink_escape`.
+const FILE_TARGETS: [&str; 5] = [
+    "\"$TAG_FILE\"",
+    "\"$dl_dest\"",
+    "\"$tmp/curl.rc\"",
+    "\"$wm_tmp\"",
+    "\"$RC_FILE\"",
+];
+
 /// The one file the installer sources, on the user's say-so: rustup's own
 /// `env` script, which puts cargo on `PATH`.
 const SOURCED: &str = "\"$HOME/.cargo/env\"";
@@ -1000,6 +1069,13 @@ struct Scan {
 /// into a redirected command, or redirected to a file.
 fn scan_script(script: &str) -> Scan {
     let mut scan = Scan::default();
+    let script = match guarded_body(script) {
+        Ok(body) => body,
+        Err(why) => {
+            scan.violations.push(why);
+            script
+        }
+    };
     let once = script.matches(BEGIN).count() == 1 && script.matches(END).count() == 1;
     let (outside, block) = match (script.find(BEGIN), script.find(END)) {
         (Some(begin), Some(end)) if once && begin < end => (
@@ -1020,6 +1096,40 @@ fn scan_script(script: &str) -> Scan {
     let reserved = block_words(block);
     scan_source(&outside, false, &reserved, &mut scan);
     scan
+}
+
+/// The installer between its stdout guard's lines: everything before the
+/// `{` line is `set -eu` alone, and the last line is `} >/dev/null`.
+fn guarded_body(script: &str) -> Result<&str, String> {
+    let refused = || {
+        format!(
+            "the script must be `set -eu`, a `{GUARD_OPEN}` line, its body, and a last line `{GUARD_CLOSE}`"
+        )
+    };
+    let mut offset = 0;
+    let open = script.split_inclusive('\n').find_map(|line| {
+        let start = offset;
+        offset += line.len();
+        (line.trim_end_matches('\n') == GUARD_OPEN).then_some((start, offset))
+    });
+    let (open_start, body_start) = open.ok_or_else(refused)?;
+    let prefix: Vec<String> = lex(script.get(..open_start).unwrap_or_default())
+        .into_iter()
+        .filter_map(|token| match token {
+            Token::Sep(Sep::End) => None,
+            Token::Word(word) => Some(word.text),
+            _ => Some(String::new()),
+        })
+        .collect();
+    if prefix != ["set", "-eu"] {
+        return Err(refused());
+    }
+    let trimmed = script.trim_end_matches('\n');
+    let close_start = trimmed.rfind('\n').map_or(0, |at| at + 1).max(body_start);
+    if trimmed.get(close_start..) != Some(GUARD_CLOSE) {
+        return Err(refused());
+    }
+    Ok(script.get(body_start..close_start).unwrap_or_default())
 }
 
 /// Every literal word of the message block: the helpers it defines and the
@@ -1065,21 +1175,44 @@ fn scan_source(source: &str, captured: bool, reserved: &[String], scan: &mut Sca
     Scanner::new(captured, reserved, scan).run(&tokens);
 }
 
-/// Whether `op target` writes to the terminal.
-fn writes_terminal(op: &str, target: &str) -> bool {
-    let target = target.trim_matches(['"', '\'']);
-    op.contains('>')
-        && ((op.ends_with('&') && target.starts_with('2'))
-            || matches!(
-                target,
-                "/dev/tty"
-                    | "/dev/stderr"
-                    | "/dev/stdout"
-                    | "/dev/fd/1"
-                    | "/dev/fd/2"
-                    | "/proc/self/fd/1"
-                    | "/proc/self/fd/2"
-            ))
+/// Why the output redirection `op target` is refused, if it is: a
+/// duplication onto stderr or stdin (the terminal, when the installer runs as
+/// `sh install.sh`), or a file target other than `/dev/null` and the
+/// installer's own `FILE_TARGETS`.
+fn output_refusal(op: &str, target: &str) -> Option<String> {
+    if !op.contains('>') {
+        return None;
+    }
+    if op.ends_with('&') {
+        let source = target.trim_matches(['"', '\'']).trim_end_matches('-');
+        return matches!(source, "0" | "2")
+            .then(|| format!("`{op}{target}` writes to the terminal outside the message block"));
+    }
+    (target != "/dev/null" && !FILE_TARGETS.contains(&target)).then(|| {
+        format!(
+            "`{op}{target}` writes to a target that is neither `/dev/null` nor one of the installer's own files"
+        )
+    })
+}
+
+/// Whether `text`, unquoted, names a device or process file other than
+/// `/dev/null`: an argument that can name the terminal to a command that
+/// writes to it (`tee /dev/stderr`, an awk `print > "/dev/tty"`).
+fn names_device(text: &str) -> bool {
+    let plain: String = text
+        .chars()
+        .filter(|c| !matches!(c, '"' | '\'' | '\\'))
+        .collect();
+    let device = plain.match_indices("/dev/").any(|(at, _)| {
+        let rest = plain.get(at + "/dev/".len()..).unwrap_or_default();
+        !rest.strip_prefix("null").is_some_and(|after| {
+            after
+                .chars()
+                .next()
+                .is_none_or(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-')))
+        })
+    });
+    device || plain.contains("/proc/")
 }
 
 /// Why `op target` is refused for the descriptors it names, if it is: a
@@ -1142,6 +1275,8 @@ struct Cmd {
     /// The stdout writes it makes (its own, or a closed frame's).
     writes: Vec<String>,
     redirected: bool,
+    /// The command is `[` or `test`, which only reads its arguments.
+    test: bool,
 }
 
 /// Where a token sits relative to a `case` header.
@@ -1214,10 +1349,8 @@ impl<'a> Scanner<'a> {
                     if let Some(why) = fd_refusal(op, target) {
                         self.refuse(why);
                     }
-                    if writes_terminal(op, target) {
-                        self.refuse(format!(
-                            "`{op}{target}` writes to the terminal outside the message block"
-                        ));
+                    if let Some(why) = output_refusal(op, target) {
+                        self.refuse(why);
                     }
                     if redirects_stdout(op, target) {
                         self.cmd.redirected = true;
@@ -1227,6 +1360,12 @@ impl<'a> Scanner<'a> {
                 Token::Word(word) => {
                     for body in &word.substitutions {
                         scan_source(body, true, self.reserved, self.scan);
+                    }
+                    if names_device(&word.text) && !self.cmd.test {
+                        self.refuse(format!(
+                            "`{}` names a device or process file outside a `[`/`test`",
+                            word.text
+                        ));
                     }
                     if self.case == CaseAt::Patterns {
                         if word.text == "esac" {
@@ -1263,6 +1402,7 @@ impl<'a> Scanner<'a> {
                 self.command = true;
             }
             Sep::Open => {
+                self.body_not_group();
                 self.frames.push(Frame {
                     function: None,
                     paren: true,
@@ -1285,6 +1425,9 @@ impl<'a> Scanner<'a> {
     /// return how many tokens of `rest` it consumed.
     fn command_word(&mut self, word: &Word, rest: &[Token]) -> usize {
         let name = word.text.as_str();
+        if name != "{" {
+            self.body_not_group();
+        }
         if KEYWORDS.contains(&name) || is_assignment(name) {
             match name {
                 "{" => {
@@ -1300,9 +1443,10 @@ impl<'a> Scanner<'a> {
             return 0;
         }
         self.command = false;
-        if !is_literal_name(word) {
+        self.cmd.test = matches!(name, "[" | "test");
+        if !is_literal_name(word) || name.contains('/') {
             self.refuse(format!(
-                "`{name}` is a quoted, escaped or expanded command name"
+                "`{name}` is a quoted, escaped, expanded or path command name"
             ));
             return 0;
         }
@@ -1331,6 +1475,10 @@ impl<'a> Scanner<'a> {
             }
             "command" => self.refuse("`command` hides which command runs".to_owned()),
             "." if first_word(rest) == Some(SOURCED) => {}
+            "sh" if rustup_shell(rest) => {}
+            _ if RUNNERS.contains(&name) => {
+                self.refuse(format!("`{name}` runs a command the scan cannot see"));
+            }
             _ if OPAQUE.contains(&name) => {
                 self.refuse(format!("`{name}` runs text the scan cannot see"));
             }
@@ -1344,6 +1492,14 @@ impl<'a> Scanner<'a> {
             _ => {}
         }
         0
+    }
+
+    /// Refuse a pending function definition whose body is not a `{` group:
+    /// its name would otherwise attach to a later, unrelated group.
+    fn body_not_group(&mut self) {
+        if let Some(name) = self.defining.take() {
+            self.refuse(format!("function `{name}` must have a `{{ … }}` body"));
+        }
     }
 
     /// Scan a `trap` action: it runs later, outside any capture.
@@ -1436,6 +1592,26 @@ impl<'a> Scanner<'a> {
     }
 }
 
+/// Whether `sh` followed by `rest` is exactly `RUSTUP_SHELL`, reading the
+/// pipe on its stdin (no input redirection).
+fn rustup_shell(rest: &[Token]) -> bool {
+    let command: Vec<&Token> = rest
+        .iter()
+        .take_while(|token| !matches!(token, Token::Sep(_)))
+        .collect();
+    let words: Vec<&str> = std::iter::once("sh")
+        .chain(command.iter().filter_map(|token| match token {
+            Token::Word(word) => Some(word.text.as_str()),
+            _ => None,
+        }))
+        .collect();
+    words == RUSTUP_SHELL
+        && command.iter().all(|token| match token {
+            Token::Redirect { op, .. } => !op.contains('<'),
+            _ => true,
+        })
+}
+
 /// The text of the first word of `rest`, if it starts with one.
 const fn first_word(rest: &[Token]) -> Option<&str> {
     match rest.first() {
@@ -1487,7 +1663,9 @@ fn call_refusal(args: &[&Word]) -> Option<String> {
 
 /// `fixture` after a message block that itself writes to stderr.
 fn with_block(fixture: &str) -> String {
-    format!("{BEGIN}\nsay() {{ printf '%s\\n' \"$1\" >&2; }}\n{END}\n{fixture}\n")
+    format!(
+        "set -eu\n{GUARD_OPEN}\n{BEGIN}\nsay() {{ printf '%s\\n' \"$1\" >&2; }}\n{END}\n{fixture}\n{GUARD_CLOSE}\n"
+    )
 }
 
 #[test]
@@ -1552,10 +1730,10 @@ const REFUSED_SHAPES: &[&str] = &[
     "printf() { :; }",
     "trap 'die \"$x\"' EXIT",
     "trap \"$t\" EXIT",
-    "cat >\"$f\" <<EOF\nit's\nEOF\ndie \"$x\"",
-    "cat >\"$f\" <<EOF\n$(die \"$x\")\nEOF",
+    "cat >\"$wm_tmp\" <<EOF\nit's\nEOF\ndie \"$x\"",
+    "cat >\"$wm_tmp\" <<EOF\n$(die \"$x\")\nEOF",
     "cat <<EOF\nhi\nEOF",
-    "cat >\"$f\" <<EOF\nhi",
+    "cat >\"$wm_tmp\" <<EOF\nhi",
     "say 'a %s' \"${x:-$(die \"$y\")}\"",
     "x=$(: # it's\n) ; die \"$x\" ; : ')'",
     "x=$(cat <<E\n)\nE\n)",
@@ -1572,6 +1750,37 @@ const REFUSED_SHAPES: &[&str] = &[
     "f() { printf x; }\nf >/dev/null",
     "printf 'x",
     "x=$(printf x",
+    "printf x >&0",
+    "printf x >&0-",
+    "exec >&0",
+    "printf x >/dev/stdin",
+    "printf x >//dev/tty",
+    "printf x >/dev/pts/0",
+    "printf x >/dev/console",
+    "printf x >/dev/fd/0",
+    "printf x >/proc/self/fd/0",
+    "printf x <>/dev/tty",
+    "printf x >\"$f\"",
+    "printf x >>\"$tmp/x\"",
+    "printf x >out",
+    "printf x | tee /dev/stderr >/dev/null",
+    "cp \"$wm_tmp\" /dev/tty",
+    "cp \"$wm_tmp\" \"/de\"v/tty",
+    "awk 'BEGIN { print \"x\" > \"/dev/stderr\" }'",
+    "cat /proc/self/fd/2 >/dev/null",
+    "printf x >/dev/nullx",
+    "sh -c 'printf \"$1\" >&2' _ \"$x\"",
+    "sh -s -- -y </dev/tty",
+    "sh -s -- -y -q",
+    "bash -c 'die \"$x\"'",
+    "env printf x",
+    "exec printf x",
+    "xargs printf <\"$wm_tmp\"",
+    "nohup printf x",
+    "/usr/bin/printf x",
+    "./x",
+    "trusted_tmp_base() ( : )\n{ printf x; }",
+    "trusted_tmp_base()\nprintf x\n{ printf y; }",
 ];
 
 /// Shapes the message scan must accept outside the block.
@@ -1580,23 +1789,29 @@ const ACCEPTED_SHAPES: &[&str] = &[
     "die 'x %s' \"$y\"",
     "foo || die 'a %s %%' \"$b\"",
     "stage_ok 'Found %s.' \"$(f \"$t\" | cut -d' ' -f2)\"",
-    "printf '%s' \"$x\" >\"$file\" 2>/dev/null",
+    "printf '%s' \"$x\" >\"$TAG_FILE\" 2>/dev/null",
     "IFS= read -r ans </dev/tty",
     "case $x in\n  *) die 'y %s' \"$x\" ;;\nesac",
     "# die \"$x\" in a comment",
     "die 'a %s' \\\n  \"$b\"",
     "x=\"$(printf '%s' \"$y\")\"",
-    "printf x >\"$f\"",
-    "printf x 2>&1 >\"$f\"",
-    "printf x | sed 1d >\"$f\"",
-    "{ printf a; printf b; } >>\"$f\"",
-    "( curl x; echo $? > \"$tmp/rc\" ) 2>/dev/null",
+    "printf x >\"$wm_tmp\"",
+    "printf x 2>&1 >\"$wm_tmp\"",
+    "printf x | sed 1d >\"$dl_dest\"",
+    "{ printf a; printf b; } >>\"$RC_FILE\"",
+    "( curl x; echo $? > \"$tmp/curl.rc\" ) 2>/dev/null",
+    "[ -r /dev/tty ]",
+    "test -c /dev/tty",
+    "curl -o /dev/null x",
+    "printf x 2>/dev/null >/dev/null",
+    "printf x >&-",
+    "curl x | sh -s -- -y 2>/dev/null",
     "trusted_tmp_base() { printf x; }",
     "trusted_tmp_base \"$b\" >/dev/null",
     "x=$(trusted_tmp_base \"$b\")",
     "case $a in\n''|[Yy]) die 'q' ;;\nesac\ndie 'r'",
     "read -r a b <<EOF\n$v\nEOF",
-    "cat <<EOF >\"$f\"\nit's\nEOF",
+    "cat <<EOF >\"$wm_tmp\"\nit's\nEOF",
     "command -v cargo >/dev/null 2>&1",
     "x=$((1 << 2))",
     "trap 'rm -rf \"$tmp\"' EXIT",
@@ -1634,7 +1849,10 @@ fn message_scan_refuses_every_bypass() {
             format!("{}{}", with_block(""), with_block("")),
             "a second message block",
         ),
-        (format!("{END}\n{BEGIN}\n"), "markers out of order"),
+        (
+            format!("set -eu\n{GUARD_OPEN}\n{END}\n{BEGIN}\n{GUARD_CLOSE}\n"),
+            "markers out of order",
+        ),
     ] {
         assert!(
             !scan_script(&script).violations.is_empty(),
@@ -1644,10 +1862,66 @@ fn message_scan_refuses_every_bypass() {
 }
 
 #[test]
+fn message_scan_refuses_a_script_outside_the_stdout_guard() -> io::Result<()> {
+    let block = format!("{BEGIN}\nsay() {{ printf '%s\\n' \"$1\" >&2; }}\n{END}\n");
+    let guarded = with_block("");
+    assert!(
+        scan_script(&guarded).violations.is_empty(),
+        "the guarded fixture must pass: {:?}",
+        scan_script(&guarded).violations
+    );
+    for (script, why) in [
+        (format!("set -eu\n{block}"), "no guard"),
+        (
+            format!("{GUARD_OPEN}\n{block}{GUARD_CLOSE}\n"),
+            "no `set -eu`",
+        ),
+        (
+            format!("set -eu\n{GUARD_OPEN}\n{block}}}\n"),
+            "a close without `>/dev/null`",
+        ),
+        (
+            format!("set -eu\n{GUARD_OPEN}\n{block}}} >/dev/tty\n"),
+            "a close onto the terminal",
+        ),
+        (
+            format!("set -eu\nprintf x\n{GUARD_OPEN}\n{block}{GUARD_CLOSE}\n"),
+            "a command before the guard",
+        ),
+        (
+            format!("set -eu\n{GUARD_OPEN}\n{block}{GUARD_CLOSE}\nprintf x\n"),
+            "a command after the guard",
+        ),
+        (
+            format!("set -eu\n{GUARD_OPEN}\n{block}}}\nprintf x\n{{\n{GUARD_CLOSE}\n"),
+            "a body that closes the guard early",
+        ),
+    ] {
+        let scan = scan_script(&script);
+        assert!(
+            !scan.violations.is_empty(),
+            "the scan must refuse {why}: `{script}`"
+        );
+    }
+    let installer = installer_script()?;
+    let unguarded = installer.replacen(&format!("\n{GUARD_OPEN}\n"), "\n", 1);
+    assert!(
+        !scan_script(&unguarded).violations.is_empty(),
+        "install.sh without its guard line must be refused"
+    );
+    Ok(())
+}
+
+#[test]
 fn message_scan_refuses_redefining_what_the_block_runs() -> io::Result<()> {
     let installer = installer_script()?;
     for name in ["safe_text", "printf", "od", "awk"] {
-        let scan = scan_script(&format!("{installer}\n{name}() {{ :; }}\n"));
+        let inside = installer.replacen(
+            &format!("\n{GUARD_CLOSE}\n"),
+            &format!("\n{name}() {{ :; }}\n{GUARD_CLOSE}\n"),
+            1,
+        );
+        let scan = scan_script(&inside);
         assert!(
             scan.violations
                 .iter()
