@@ -24,20 +24,25 @@
 use super::*;
 use std::io::{Read, Write};
 
+/// The decompression output cap: `IPE_DECOMPRESS_MAX_BYTES`, default 256 MiB;
+/// `0` admits only empty output.
+const DECOMPRESS_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_DECOMPRESS_MAX_BYTES",
+    256 * 1024 * 1024,
+    crate::system::ZeroCeiling::Accepted,
+    "decimal byte count",
+);
+
 /// Returns the decompression output cap in bytes.
 ///
-/// Reads `IPE_DECOMPRESS_MAX_BYTES` from the environment once (lazily) and
-/// caches the result. Falls back to 256 MiB when the variable is absent or
-/// unparseable.
-fn decompress_max_bytes() -> u64 {
+/// Reads [`DECOMPRESS_CEILING`] once (lazily) and caches the outcome, so a
+/// malformed value fails every decompression closed rather than falling back.
+fn decompress_max_bytes() -> Result<u64, String> {
     use std::sync::OnceLock;
-    static CAP: OnceLock<u64> = OnceLock::new();
-    *CAP.get_or_init(|| {
-        crate::system::read_env_var("IPE_DECOMPRESS_MAX_BYTES")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(256 * 1024 * 1024) // 256 MiB
-    })
+    static CAP: OnceLock<Result<u64, crate::system::EnvCeilingRefusal>> = OnceLock::new();
+    CAP.get_or_init(|| DECOMPRESS_CEILING.read())
+        .clone()
+        .map_err(String::from)
 }
 
 fn gzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
@@ -55,7 +60,7 @@ fn gunzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
     // identically either way, so this is a pure completeness fix, not a
     // behavior change for the common case.
     use flate2::read::MultiGzDecoder;
-    let max = decompress_max_bytes();
+    let max = decompress_max_bytes()?;
     let d = MultiGzDecoder::new(data);
     // Read up to max+1 bytes; if we fill the buffer exactly at max+1 the
     // input would expand beyond the cap.
@@ -148,7 +153,7 @@ pub fn compression_zstd_decompress<E: From<String> + Send + 'static>(
 
 fn zstd_decompress_capped(data: &[u8]) -> Result<Vec<u8>, String> {
     use zstd::stream::read::Decoder as ZstdDecoder;
-    let max = decompress_max_bytes();
+    let max = decompress_max_bytes()?;
     let d = ZstdDecoder::new(data).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     d.take(max.saturating_add(1))

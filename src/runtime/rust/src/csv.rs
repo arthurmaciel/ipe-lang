@@ -74,12 +74,16 @@ fn validated_delimiter<E: From<String>>(delim: &str) -> IpeResult<E, u8> {
 /// Row-count ceiling (default 10M). A large/untrusted input would otherwise
 /// accumulate rows unbounded; past the cap the parse `Err`s rather than OOMs.
 /// Overridable via `IPE_CSV_MAX_ROWS`.
-fn csv_max_rows() -> usize {
-    crate::system::read_env_var("IPE_CSV_MAX_ROWS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(10_000_000)
+const CSV_ROWS_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_CSV_MAX_ROWS",
+    10_000_000,
+    crate::system::ZeroCeiling::Refused,
+    "decimal row count",
+);
+
+/// Resolves [`CSV_ROWS_CEILING`]; a malformed setting fails the parse closed.
+fn csv_max_rows() -> Result<usize, String> {
+    CSV_ROWS_CEILING.read().map_err(String::from)
 }
 
 /// Total-decoded-bytes ceiling (default 512 MiB, the same default as `File.readFile`'s
@@ -89,12 +93,16 @@ fn csv_max_rows() -> usize {
 /// and §1's exhaustion clause when the CSV arrives over the network): the sum of
 /// decoded field bytes is tracked and the parse `Err`s the moment it exceeds the
 /// ceiling, never OOMs. Overridable via `IPE_CSV_MAX_BYTES`.
-fn csv_max_bytes() -> u64 {
-    crate::system::read_env_var("IPE_CSV_MAX_BYTES")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(512 * 1024 * 1024)
+const CSV_BYTES_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_CSV_MAX_BYTES",
+    512 * 1024 * 1024,
+    crate::system::ZeroCeiling::Refused,
+    "decimal byte count",
+);
+
+/// Resolves [`CSV_BYTES_CEILING`]; a malformed setting fails the parse closed.
+fn csv_max_bytes() -> Result<u64, String> {
+    CSV_BYTES_CEILING.read().map_err(String::from)
 }
 
 /// Add this record's decoded field bytes to `seen`, returning `Err` when the
@@ -123,8 +131,10 @@ fn parse_delim<E: From<String>>(text: &str, delim: u8) -> IpeResult<E, CsvDoc> {
     // unbounded into `rows` — either by row COUNT (many small rows) or by decoded
     // BYTES (one huge record / oversized fields that slips under any row count).
     // Bound both → Err rather than OOM. Mirrors csv_parse_stream_from_file's caps.
-    let max_rows = csv_max_rows();
-    let max_bytes = csv_max_bytes();
+    let (max_rows, max_bytes) = match (csv_max_rows(), csv_max_bytes()) {
+        (Ok(rows), Ok(bytes)) => (rows, bytes),
+        (Err(e), _) | (_, Err(e)) => return IpeResult::Err(format!("Csv.parse: {e}").into()),
+    };
     let mut seen_bytes: u64 = 0;
     let header: Vec<String> = match rdr.headers() {
         Ok(h) => {
@@ -256,8 +266,8 @@ fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, Strin
     // by row COUNT or by decoded BYTES (a single monster record / oversized
     // fields slips under any row count). Bound both (IPE_CSV_MAX_ROWS default 10M,
     // IPE_CSV_MAX_BYTES default 512 MiB) → Err rather than OOM.
-    let max_rows = csv_max_rows();
-    let max_bytes = csv_max_bytes();
+    let max_rows = csv_max_rows()?;
+    let max_bytes = csv_max_bytes()?;
     let mut seen_bytes: u64 = 0;
     let mut out = Vec::new();
     for rec in rdr.records() {
