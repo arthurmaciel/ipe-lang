@@ -22,6 +22,7 @@ pub mod debug;
 pub mod decimal;
 pub mod dict;
 pub mod error;
+pub mod escape;
 pub mod ffi_polyfills;
 pub mod file;
 pub mod http_header;

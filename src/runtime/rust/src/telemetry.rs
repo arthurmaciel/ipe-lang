@@ -570,12 +570,7 @@ pub fn dev_console_banner(base: &str) -> String {
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "/_ipe/console".to_string());
-    let esc = url
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&#34;")
-        .replace('\'', "&#39;");
+    let esc = crate::escape::html_attr(&url);
     format!(
         "<a id=\"__ipe-dev-console\" href=\"{esc}\" target=\"_blank\" rel=\"noopener\" \
          title=\"Ipe Console (dev only)\" \

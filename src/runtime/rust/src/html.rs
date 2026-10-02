@@ -265,7 +265,7 @@ fn render_into_ctx<M>(
             if raw_text {
                 s.push_str(t);
             } else {
-                escape_html_into(t, false, s);
+                crate::escape::html_text_into(t, s);
             }
         }
         Html::HRaw(r) => s.push_str(r),
@@ -396,7 +396,7 @@ fn render_into_ctx<M>(
                 s.push(' ');
                 s.push_str(safe_key.as_str());
                 s.push_str("=\"");
-                escape_html_into(sanitise_url_attr(k, v), true, s);
+                crate::escape::html_attr_into(sanitise_url_attr(k, v), s);
                 s.push('"');
             }
             // Browser-client wire markers (live/client.js): the delegated
@@ -416,7 +416,7 @@ fn render_into_ctx<M>(
                 s.push('"');
                 if let Some(id) = ipe_id {
                     s.push_str(" data-ipe-hid=\"");
-                    escape_html_into(id, true, s);
+                    crate::escape::html_attr_into(id, s);
                     s.push('"');
                 }
                 for ev in &events {
@@ -453,7 +453,7 @@ fn render_into_ctx<M>(
                 && !v.is_empty()
                 && kids.is_empty()
             {
-                escape_html_into(v, false, s);
+                crate::escape::html_text_into(v, s);
             }
             // <script>/<style> emit text children verbatim (rawBody); a
             // <select> threads its value to option children for the `selected`
@@ -505,53 +505,6 @@ fn render_into_ctx<M>(
             s.push_str("</");
             s.push_str(tag);
             s.push('>');
-        }
-    }
-}
-
-fn escape_text(t: &str) -> String {
-    // The single quote `'` is escaped too —  html.EscapeString covers the
-    // full `& ' < > "` set, and a missed `'` is an attribute-breakout XSS hole
-    // when the result lands in a single-quoted attr.
-    escape_html(t, false)
-}
-
-fn escape_attr(t: &str) -> String {
-    // `"` → `&#34;` (NOT `&quot;`); both are valid HTML but the numeric entity
-    // is required for byte-exact equivalence tests.
-    escape_html(t, true)
-}
-
-/// Shared single-pass escaper behind [`escape_text`] / [`escape_attr`],
-/// returning a fresh `String`. Prefer [`escape_html_into`] when the result is
-/// immediately appended to an existing buffer — that path skips the extra
-/// allocation and copy the caller would otherwise pay.
-fn escape_html(t: &str, escape_quote: bool) -> String {
-    let mut out = String::with_capacity(t.len() + 8);
-    escape_html_into(t, escape_quote, &mut out);
-    out
-}
-
-/// Append `t`, HTML-escaped, directly to `out`.
-///
-/// A single original→output map never re-scans its own output, so the escape
-/// set and every emitted entity are the same as a multi-pass form; the
-/// metacharacter-free common case appends the input verbatim without any
-/// scanning passes or intermediate allocation.
-fn escape_html_into(t: &str, escape_quote: bool, out: &mut String) {
-    if !t.contains(['&', '<', '>', '\'', '"']) {
-        out.push_str(t);
-        return;
-    }
-    out.reserve(t.len() + 8);
-    for c in t.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '\'' => out.push_str("&#39;"),
-            '"' if escape_quote => out.push_str("&#34;"),
-            _ => out.push(c),
         }
     }
 }
@@ -754,9 +707,18 @@ pub(crate) fn safe_patch_attr<'a>(name: &'a str, value: &'a str) -> Option<(&'a 
 /// depth, and the optional `:{key}` disambiguator (from an explicit `ipe-key`
 /// attribute, or implicit from `name` on form-bearing tags) lets keyed list items
 /// and named form fields keep identity across reorder.
+///
+/// The id holds only `[A-Za-z0-9_.:-]`: a tag that fails `is_safe_html_name`
+/// contributes [`UNSAFE_TAG_ID_SEGMENT`] instead of its own text, and a key is
+/// sanitised, so `style_inject` can quote the id inside a CSS selector.
 pub fn assign_ipe_ids<M>(node: &mut Html<M>, path: &str) {
     assign_ipe_ids_depth(node, path, 0);
 }
+
+/// The `ipe-id` tag segment of an element whose tag fails `is_safe_html_name`.
+///
+/// Such an element never renders, but its id still reaches `style_inject`.
+const UNSAFE_TAG_ID_SEGMENT: &str = "x";
 
 // Same bounded-descent rationale as render_into_ctx (see MAX_HTML_DEPTH): the
 // stamper recurses once per nesting level, so an attacker-influenced deep tree
@@ -771,7 +733,12 @@ fn assign_ipe_ids_depth<M>(node: &mut Html<M>, path: &str, depth: usize) {
         let mut idx = 0usize;
         for child in kids.iter_mut() {
             if let Html::HElement(ctag, cattrs, _) = child {
-                let mut seg = format!("{path}_{idx}_{ctag}");
+                let tag_seg = if is_safe_html_name(ctag) {
+                    ctag.as_str()
+                } else {
+                    UNSAFE_TAG_ID_SEGMENT
+                };
+                let mut seg = format!("{path}_{idx}_{tag_seg}");
                 if let Some(key) = ipe_id_key(ctag, cattrs) {
                     seg.push(':');
                     seg.push_str(&key);
@@ -854,7 +821,7 @@ pub fn html_render_<M>(node: Html<M>) -> String {
 // Every builder produces the runtime `Attribute<M>` value the render sink
 // already knows how to neutralise. SECURITY (P1): the value string is escaped
 // at the sink (`render_into_ctx` runs `SafeAttrName::parse` on the KEY and
-// `escape_attr` on the VALUE), so no builder here re-implements escaping —
+// `escape::html_attr_into` on the VALUE), so no builder here re-implements escaping —
 // there is exactly one escaping boundary. Fixed-key builders (`class`/`id`/…)
 // pass a compile-time-literal key (never attacker data). The generic
 // `attribute k v` / `boolAttribute k b` pass a runtime key, which the sink
@@ -1006,11 +973,12 @@ pub fn html_on_raw_fixed_<M>(_name: String, _msg: M) -> Attribute<M> {
 }
 
 /// `Ffi.callPure "htmlEscapeText"` — HTML-escape a string for text content.
-/// Routes through the same escaper as render so the escape set (`& ' < > "`,
-/// matching  html.EscapeString for the text subset) can never drift.
+///
+/// Routes through the same escaper as render, so the set (`& ' < >`; `"` stays
+/// raw, it carries no meaning in text content) can never drift.
 #[must_use]
 pub fn html_escape_text_(s: String) -> String {
-    escape_text(&s)
+    crate::escape::html_text(&s)
 }
 
 /// `Ffi.callPure "htmlEscapeAttr"` — escape a string for use in a quoted
@@ -1018,7 +986,7 @@ pub fn html_escape_text_(s: String) -> String {
 /// double-quoted attribute is escaped identically (no attribute-breakout hole).
 #[must_use]
 pub fn html_escape_attr_(s: String) -> String {
-    escape_attr(&s)
+    crate::escape::html_attr(&s)
 }
 
 /// `Ffi.callPure "htmlAttrToString"` — serialise a single Attribute to its key="value" form.
@@ -1297,8 +1265,11 @@ mod tests {
         // A `'` in attr/text/kernel output must become `&#39;` so a value placed
         // in a single-quoted attribute can't break out (XSS) and the escape set
         // matches  html.EscapeString.
-        assert_eq!(escape_text("it's <b>"), "it&#39;s &lt;b&gt;");
-        assert_eq!(escape_attr("a'\"b"), "a&#39;&#34;b");
+        assert_eq!(
+            html_escape_text_("it's <b>".to_string()),
+            "it&#39;s &lt;b&gt;"
+        );
+        assert_eq!(html_escape_attr_("a'\"b".to_string()), "a&#39;&#34;b");
         assert_eq!(html_escape_text_("x'y".to_string()), "x&#39;y");
         assert_eq!(html_escape_attr_("x'y".to_string()), "x&#39;y");
         // Round-trips through render on a real attribute value.
@@ -1362,6 +1333,31 @@ mod tests {
         let mut out = vec![];
         collect_ids_go(n, &mut out);
         out
+    }
+
+    #[test]
+    fn unsafe_child_tag_never_reaches_the_ipe_id() {
+        let mut t: Html<()> = Html::HElement(
+            "div".into(),
+            vec![],
+            vec![
+                Html::HElement(
+                    "x\"]{}</style>".into(),
+                    vec![],
+                    vec![Html::HElement("b".into(), vec![], vec![])],
+                ),
+                Html::HElement("span".into(), vec![], vec![]),
+            ],
+        );
+        assign_ipe_ids(&mut t, "r");
+        let ids = collect_ids(&t);
+        assert_eq!(ids, vec!["r", "r_0_x", "r_0_x_0_b", "r_1_span"]);
+        for id in &ids {
+            assert!(
+                !id.contains(['"', ']', '{', '<']),
+                "ipe-id {id:?} holds a selector or markup metacharacter"
+            );
+        }
     }
 
     #[test]

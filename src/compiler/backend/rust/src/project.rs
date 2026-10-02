@@ -250,6 +250,7 @@ pub mod task;
 pub mod dict;
 pub mod encoding;
 pub mod error;
+pub mod escape;
 pub mod ffi_polyfills;
 pub mod file;
 pub mod http_header;

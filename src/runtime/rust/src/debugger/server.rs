@@ -107,23 +107,6 @@ fn truncate(s: &str, max: usize) -> String {
     out
 }
 
-/// Escape `s` for safe embedding in an HTML attribute value (double-quote
-/// delimited). Only the characters that can break out of `"..."` or inject
-/// markup are escaped.
-fn attr_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("&quot;"),
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 /// Build the overlay `<div>` fragment to inject into the served HTML page.
 ///
 /// `labels`     — rendered message labels (oldest first, already `ipe_show`'d).
@@ -146,7 +129,7 @@ pub fn overlay_html(labels: &[String], total: usize, scrub_base: &str) -> String
     let mut rows = String::new();
     for (idx, label) in labels.iter().enumerate() {
         let truncated = truncate(label, MAX_LABEL_LEN);
-        let escaped = attr_escape(&truncated);
+        let escaped = crate::escape::html_attr(&truncated);
         rows.push_str(&format!(
             "<div data-ipe-dbg-step=\"{idx}\" \
              style=\"padding:1px 8px;cursor:pointer;\
@@ -295,11 +278,19 @@ mod tests {
     }
 
     #[test]
-    fn attr_escape_forecloses_injection() {
-        let s = attr_escape("foo\"bar<baz>qux");
-        assert!(!s.contains('"'));
-        assert!(!s.contains('<'));
-        assert!(!s.contains('>'));
+    fn overlay_label_cannot_break_out_of_its_title_attribute() {
+        let html = overlay_html(&["a'b\"c<d".to_owned()], 1, "");
+        let row = html
+            .split_once("data-ipe-dbg-step=\"0\"")
+            .map_or("", |(_, rest)| rest);
+        let title = row.split_once("title=\"").map_or("", |(_, rest)| rest);
+        let value = title.split_once('"').map_or("<unclosed>", |(v, _)| v);
+        assert_eq!(value, "a&#39;b&#34;c&lt;d");
+        assert!(!value.contains(['\'', '"', '<']));
+        assert!(
+            row.contains(">a&#39;b&#34;c&lt;d</div>"),
+            "row text must be escaped too: {row}"
+        );
     }
 
     #[test]
