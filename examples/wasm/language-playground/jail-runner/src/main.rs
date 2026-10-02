@@ -124,7 +124,18 @@ fn cmd_run(args: &[String]) -> i32 {
             return 2;
         }
     };
-    start_watchdog(parsed.wall_secs, &parsed.project_dir);
+    // Fail closed: without the watchdog thread, a submitted program could run
+    // unbounded (no wall-clock cap), so a refused watchdog spawn must stop
+    // the harness BEFORE any build or run starts, not just log and continue.
+    if let Err(e) = start_watchdog(parsed.wall_secs, &parsed.project_dir) {
+        let outcome = Outcome::failure(format!(
+            "failed to start the harness wall-clock watchdog: {:?}",
+            e.kind()
+        ));
+        print_json(&outcome);
+        cleanup_project(&parsed.project_dir);
+        return 2;
+    }
     let outcome = run_project(&parsed.project_dir, &parsed.warm_dir);
     print_json(&outcome);
     cleanup_project(&parsed.project_dir);
@@ -226,27 +237,30 @@ fn cmd_prewarm(args: &[String]) -> i32 {
 /// Harness-level wall-clock: after `wall_secs` the watchdog prints a timeout
 /// JSON document and exits hard. The jail wrapper runs with
 /// `--die-with-parent`, so the whole bwrap tree dies with the harness.
-fn start_watchdog(wall_secs: u64, project_dir: &Path) {
+fn start_watchdog(wall_secs: u64, project_dir: &Path) -> std::io::Result<()> {
     let project_dir = project_dir.to_path_buf();
-    thread::spawn(move || {
-        thread::sleep(Duration::from_secs(wall_secs));
-        let outcome = Outcome {
-            ok: false,
-            unsandboxed: false,
-            build: None,
-            run: None,
-            exit: None,
-            error: Some(format!("timed out after {wall_secs}s (harness wall-clock)")),
-        };
-        print_json(&outcome);
-        // Best-effort: remove the staged project (compiled artifacts can be
-        // large). Children may still hold cwd entries; leftover files in that
-        // race are bounded by the wall budget and harmless.
-        cleanup_project(&project_dir);
-        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — watchdog expiry: process
-        // exit kills all threads; --die-with-parent reaps the bwrap tree.
-        std::process::exit(2);
-    });
+    thread::Builder::new()
+        .name("jail-runner-watchdog".to_owned())
+        .spawn(move || {
+            thread::sleep(Duration::from_secs(wall_secs));
+            let outcome = Outcome {
+                ok: false,
+                unsandboxed: false,
+                build: None,
+                run: None,
+                exit: None,
+                error: Some(format!("timed out after {wall_secs}s (harness wall-clock)")),
+            };
+            print_json(&outcome);
+            // Best-effort: remove the staged project (compiled artifacts can be
+            // large). Children may still hold cwd entries; leftover files in that
+            // race are bounded by the wall budget and harmless.
+            cleanup_project(&project_dir);
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — watchdog expiry: process
+            // exit kills all threads; --die-with-parent reaps the bwrap tree.
+            std::process::exit(2);
+        })?;
+    Ok(())
 }
 
 /// Best-effort removal of a staged project tree. The harness owns the
