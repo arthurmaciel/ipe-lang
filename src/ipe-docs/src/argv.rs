@@ -112,10 +112,7 @@ mod tests {
     #[test]
     fn the_refusal_never_echoes_the_argument_bytes() {
         let decoded = decode([os("ipe"), non_utf8()]);
-        assert!(
-            matches!(decoded, Err(_)),
-            "a non-UTF-8 argument must be refused"
-        );
+        assert!(decoded.is_err(), "a non-UTF-8 argument must be refused");
         let Err(refused) = decoded else { return };
         let text = refused.to_string();
         assert!(text.contains("argument 1"), "{text}");

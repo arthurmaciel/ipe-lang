@@ -13,11 +13,12 @@
 //! - an `env::{..}` group naming `args`, `args_os` or `self as ..`, an
 //!   `env::*` glob, and an `env as ..` alias, under which a read would no
 //!   longer spell `env::args`;
-//! - an `env::args_os` read outside the pinned [`ARGS_OS_OWNERS`] counts.
+//! - an `env::args_os` read outside the pinned [`ARGS_OS_OWNERS`] counts;
+//! - an `env::$name` macro path, which names a reader only once expanded.
 //!
 //! A file whose pinned count moves, or a pinned file that no longer holds its
-//! site, goes red, so the inventory only ever shrinks to the truth. A read
-//! reached through a macro expansion is beyond a lexical scan.
+//! site, goes red, so the inventory only ever shrinks to the truth. A reader
+//! named only inside an external macro's own expansion is beyond a lexical scan.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -54,8 +55,6 @@ const ARGS_DEBT: &[(&str, usize)] = &[
     ),
     ("tools/ipe-ffi-inspector/src/main.rs", 1),
     ("tools/panic-scan/src/main.rs", 1),
-    ("tools/regen-cli-transcripts/src/main.rs", 1),
-    ("tools/regen-goldens/src/main.rs", 1),
 ];
 
 /// One lexical token: an identifier or keyword, or a punctuation mark (`::`
@@ -122,6 +121,7 @@ fn lex(src: &str) -> Vec<Token> {
                 '*' => tokens.push(Token::Punct("*")),
                 ',' => tokens.push(Token::Punct(",")),
                 ';' => tokens.push(Token::Punct(";")),
+                '$' => tokens.push(Token::Punct("$")),
                 _ if !c.is_whitespace() => tokens.push(Token::Punct("other")),
                 _ => {}
             }
@@ -239,6 +239,10 @@ fn findings(src: &str) -> Findings {
             found.args += 1;
         } else if is_ident(item, "args_os") {
             found.args_os += 1;
+        } else if item == Some(&Token::Punct("$")) {
+            found
+                .hiding
+                .push("`env::$..` names a reader through a macro metavariable");
         } else if item == Some(&Token::Punct("*")) {
             found.hiding.push("`env::*` glob-imports the readers");
         } else if item == Some(&Token::Punct("{")) {
@@ -417,6 +421,7 @@ fn every_import_that_hides_a_read_is_refused() {
         "use std::env::{var, args_os};",
         "use std::{env::{self, args}};",
         "use std::env::*;",
+        "macro_rules! read { ($r:ident) => { std::env::$r() }; }",
     ];
     for src in hidden {
         assert!(

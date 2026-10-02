@@ -1117,25 +1117,34 @@ pub fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
 /// The source file `ipe type-check` uses as its analysis root for a manifest
 /// project.
 ///
-/// The entry precedence is the build's ([`project::ProjectManifest::resolved_entry`]):
-/// a declared program's entry (when a `programs` stage names one) wins, resolved
-/// through the same [`contained_path::ContainedRelPath`] gate the build path uses
-/// so an absolute or `..` entry cannot escape the source root; otherwise
+/// The entry is the build's ([`project::ProjectManifest::resolved_entry`]): a
+/// declared program's entry module (when a `programs` stage names one) wins, its
+/// file resolved through the [`contained_path::ContainedRelPath`] gate so it
+/// cannot escape the source root; otherwise
 /// `<src_root>/Main.ipe`. A library (a manifest declaring `exposedModules` with
 /// no `src/Main.ipe` and no runnable program) has no `main` to check, so its
 /// analysis root is its first exposed module's file — checking the public
 /// surface is a library's meaningful verification.
 ///
 /// # Errors
-/// [`CliError::PathEscape`] when a declared program's entry resolves outside the
-/// source root.
+/// [`CliError::Usage`] when a declared program's entry names no module (the
+/// build's own refusal); [`CliError::PathEscape`] when its file resolves outside
+/// the source root.
 pub fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<PathBuf, CliError> {
     if let Some(program) = parsed.default_program() {
-        let contained = contained_path::ContainedRelPath::parse(&parsed.src_root, &program.entry)
-            .map_err(|reason| CliError::PathEscape {
-            raw: program.entry.clone(),
-            reason,
-        })?;
+        // The build's own module path for the entry, never the raw `entry`
+        // string: an entry the build refuses is refused here, and an entry
+        // spelled without (or with another) extension names the same `.ipe`
+        // file the build compiles.
+        let module = parsed.resolved_entry()?;
+        let rel = format!("{}.ipe", module.join("/"));
+        let contained =
+            contained_path::ContainedRelPath::parse(&parsed.src_root, &rel).map_err(|reason| {
+                CliError::PathEscape {
+                    raw: program.entry.clone(),
+                    reason,
+                }
+            })?;
         return Ok(contained.resolved().to_path_buf());
     }
     // No declared program: `Main.ipe`, else the first exposed module's file.
@@ -1160,25 +1169,25 @@ const TESTS_DIR_NAME: &str = "tests";
 /// The analysis an `ipe type-check`-family `<path>` argument resolved to.
 ///
 /// A FILE argument is always analysed as itself. It is project-rooted
-/// ([`Self::SourceFile`] or [`Self::TestFile`]) exactly when its canonical path
+/// ([`Self::Source`] or [`Self::Test`]) exactly when its canonical path
 /// lies under the governing manifest's canonical `src/` or `tests/` root, and
-/// loose ([`Self::LooseFile`]) otherwise. A DIRECTORY argument (or none) names
+/// loose ([`Self::Loose`]) otherwise. A DIRECTORY argument (or none) names
 /// the project's own entry file, which is then classified exactly like a file
 /// argument — so every form shares one root resolution, the build's `src` root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysisTarget {
     /// A file no manifest roots, canonicalised like every other file
     /// variant so each diagnostic names it the same way.
-    LooseFile(ResolvedPath),
+    Loose(ResolvedPath),
     /// A file under a governing manifest's `src/` root.
-    SourceFile {
+    Source {
         /// The named file.
         file: ResolvedPath,
         /// The governing manifest's `src/` root.
         src_root: ResolvedPath,
     },
     /// A file under a governing manifest's `tests/` root.
-    TestFile {
+    Test {
         /// The named test file.
         file: ResolvedPath,
         /// The governing manifest's `src/` root.
@@ -1218,7 +1227,7 @@ pub fn resolve_analysis_target(path: &Path) -> Result<AnalysisTarget, CliError> 
 fn resolve_file_target(path: &Path) -> Result<AnalysisTarget, CliError> {
     let file = ResolvedPath::of(path).map_err(|e| io_err(path, e))?;
     let Some(manifest_path) = discover_manifest(file.as_path())? else {
-        return Ok(AnalysisTarget::LooseFile(file));
+        return Ok(AnalysisTarget::Loose(file));
     };
     let parsed = project::parse_manifest(&manifest_path)?;
     let project_root = ResolvedPath::of(&parsed.root).map_err(|e| io_err(&parsed.root, e))?;
@@ -1231,16 +1240,16 @@ fn resolve_file_target(path: &Path) -> Result<AnalysisTarget, CliError> {
     }
     .filter(|root| root.is_strictly_under(&project_root));
     if let Some(tests_root) = tests_root.filter(|root| file.is_strictly_under(root)) {
-        return Ok(AnalysisTarget::TestFile {
+        return Ok(AnalysisTarget::Test {
             file,
             src_root,
             tests_root,
         });
     }
     if file.is_strictly_under(&src_root) {
-        return Ok(AnalysisTarget::SourceFile { file, src_root });
+        return Ok(AnalysisTarget::Source { file, src_root });
     }
-    Ok(AnalysisTarget::LooseFile(file))
+    Ok(AnalysisTarget::Loose(file))
 }
 
 /// `ipe type-check [<path>]` — type-check a program and stop. Runs the same

@@ -5499,6 +5499,7 @@ name = "regen-cli-transcripts"
 version = "0.3.5"
 dependencies = [
  "ipe",
+ "ipe_docs",
  "serde_json",
 ]
 
@@ -5508,6 +5509,7 @@ version = "0.3.5"
 dependencies = [
  "e2e-support",
  "ipe",
+ "ipe_docs",
 ]
 
 [[package]]

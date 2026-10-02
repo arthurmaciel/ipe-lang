@@ -2632,7 +2632,7 @@ fn type_check_of_a_non_default_src_file_is_analysed_as_itself() {
     );
     assert_eq!(
         target.expect("resolves"),
-        AnalysisTarget::SourceFile {
+        AnalysisTarget::Source {
             file: blamed,
             src_root,
         },
@@ -2645,7 +2645,7 @@ fn type_check_of_a_non_default_src_file_is_analysed_as_itself() {
 #[test]
 fn type_check_of_a_directory_still_resolves_the_project_entry() {
     let tmp = analysis_project("ipe_type_check_directory_resolves_project_entry");
-    let expected = AnalysisTarget::SourceFile {
+    let expected = AnalysisTarget::Source {
         file: resolved(&tmp.join("src").join("Main.ipe")),
         src_root: resolved(&tmp.join("src")),
     };
@@ -2663,7 +2663,7 @@ fn type_check_of_a_directory_still_resolves_the_project_entry() {
     );
 }
 
-/// A file under the manifest's `tests/` tree resolves to `TestFile`, carrying
+/// A file under the manifest's `tests/` tree resolves to `AnalysisTarget::Test`, carrying
 /// the canonical `src/` and `tests/` roots.
 #[test]
 fn resolve_analysis_target_of_a_tests_file_returns_test_file() {
@@ -2672,7 +2672,7 @@ fn resolve_analysis_target_of_a_tests_file_returns_test_file() {
     fs::create_dir_all(&tests_dir).expect("create tests/");
     let tests_main = tests_dir.join("Main.ipe");
     fs::write(&tests_main, "module Main exposing (main)\nmain = 1\n").expect("tests/Main.ipe");
-    let expected = AnalysisTarget::TestFile {
+    let expected = AnalysisTarget::Test {
         file: resolved(&tests_main),
         src_root: resolved(&tmp.join("src")),
         tests_root: resolved(&tests_dir),
@@ -2683,19 +2683,19 @@ fn resolve_analysis_target_of_a_tests_file_returns_test_file() {
     assert_eq!(
         target.expect("resolves"),
         expected,
-        "a tests/-rooted file argument resolves to TestFile carrying both roots"
+        "a tests/-rooted file argument resolves to AnalysisTarget::Test carrying both roots"
     );
 }
 
 /// A `..`-bearing spelling of a `src/` file resolves to the same canonical
-/// `SourceFile` its plain spelling does.
+/// `AnalysisTarget::Source` its plain spelling does.
 #[test]
 fn resolve_analysis_target_of_a_dotdot_src_spelling_is_source_file() {
     let tmp = analysis_project("ipe_resolve_target_dotdot_src_spelling");
     let src = tmp.join("src");
     let other = src.join("Other.ipe");
     fs::write(&other, "module Other exposing (x)\nx = 1\n").expect("src/Other.ipe");
-    let expected = AnalysisTarget::SourceFile {
+    let expected = AnalysisTarget::Source {
         file: resolved(&other),
         src_root: resolved(&src),
     };
@@ -2710,7 +2710,7 @@ fn resolve_analysis_target_of_a_dotdot_src_spelling_is_source_file() {
 }
 
 /// A file reached through a symlinked project directory resolves to the
-/// canonical `SourceFile` of the real project.
+/// canonical `AnalysisTarget::Source` of the real project.
 #[cfg(unix)]
 #[test]
 fn resolve_analysis_target_through_a_symlinked_project_dir_is_source_file() {
@@ -2723,7 +2723,7 @@ fn resolve_analysis_target_through_a_symlinked_project_dir_is_source_file() {
     fs::write(&other, "module Other exposing (x)\nx = 1\n").expect("src/Other.ipe");
     let link = base.join("link");
     std::os::unix::fs::symlink(&tmp, &link).expect("symlink project");
-    let expected = AnalysisTarget::SourceFile {
+    let expected = AnalysisTarget::Source {
         file: resolved(&other),
         src_root: resolved(&src),
     };
@@ -2759,18 +2759,18 @@ fn resolve_analysis_target_refuses_a_symlink_escaping_the_project_roots() {
     let via_src = resolve_analysis_target(&tmp.join("src").join("link").join("Y.ipe"));
     let _ = fs::remove_dir_all(&base);
     assert!(
-        matches!(&via_tests, Ok(AnalysisTarget::LooseFile(_))),
-        "a tests/ symlink leaving the project must not be a TestFile: {via_tests:?}"
+        matches!(&via_tests, Ok(AnalysisTarget::Loose(_))),
+        "a tests/ symlink leaving the project must not be a AnalysisTarget::Test: {via_tests:?}"
     );
     assert!(
-        matches!(&via_src, Ok(AnalysisTarget::LooseFile(_))),
-        "a src/ symlink leaving the project must not be a SourceFile: {via_src:?}"
+        matches!(&via_src, Ok(AnalysisTarget::Loose(_))),
+        "a src/ symlink leaving the project must not be a AnalysisTarget::Source: {via_src:?}"
     );
 }
 
 /// A file the project's manifest governs but that lies under neither `src/`
-/// nor `tests/` (here `scripts/Y.ipe`) resolves loose, never `SourceFile` or
-/// `TestFile`: it clears the manifest lookup and is refused by the
+/// nor `tests/` (here `scripts/Y.ipe`) resolves loose, never `AnalysisTarget::Source` or
+/// `AnalysisTarget::Test`: it clears the manifest lookup and is refused by the
 /// `tests/` and `src/` containment checks themselves.
 #[test]
 fn resolve_analysis_target_of_an_in_project_file_outside_src_and_tests_is_loose() {
@@ -2785,7 +2785,7 @@ fn resolve_analysis_target_of_an_in_project_file_outside_src_and_tests_is_loose(
     let target = resolve_analysis_target(&script);
     let _ = fs::remove_dir_all(&tmp);
     assert!(
-        matches!(&target, Ok(AnalysisTarget::LooseFile(p)) if p.as_path() == canonical),
+        matches!(&target, Ok(AnalysisTarget::Loose(p)) if p.as_path() == canonical),
         "a governed file outside src/ and tests/ must stay loose: {target:?}"
     );
 }
@@ -2808,16 +2808,16 @@ fn resolve_analysis_target_refuses_a_src_symlink_to_elsewhere_in_the_project() {
     let target = resolve_analysis_target(&arg);
     let _ = fs::remove_dir_all(&tmp);
     assert!(
-        matches!(&target, Ok(AnalysisTarget::LooseFile(p)) if p.as_path() == canonical),
+        matches!(&target, Ok(AnalysisTarget::Loose(p)) if p.as_path() == canonical),
         "a src/ symlink leaving src/ for elsewhere in the project must not be a \
-         SourceFile: {target:?}"
+         AnalysisTarget::Source: {target:?}"
     );
 }
 
 /// A `tests` symlink to the project root itself is not a tests root: its
 /// canonical path equals the project root, not strictly under it, so it is
 /// dropped and `tests/X.ipe` (canonically `<proj>/X.ipe`) resolves loose,
-/// never `TestFile`.
+/// never `AnalysisTarget::Test`.
 #[cfg(unix)]
 #[test]
 fn resolve_analysis_target_drops_a_tests_root_that_is_the_project_root() {
@@ -2831,9 +2831,9 @@ fn resolve_analysis_target_drops_a_tests_root_that_is_the_project_root() {
     let target = resolve_analysis_target(&arg);
     let _ = fs::remove_dir_all(&tmp);
     assert!(
-        matches!(&target, Ok(AnalysisTarget::LooseFile(p)) if p.as_path() == canonical),
+        matches!(&target, Ok(AnalysisTarget::Loose(p)) if p.as_path() == canonical),
         "a tests root equal to the project root must be dropped, so the file \
-         is not a TestFile: {target:?}"
+         is not a AnalysisTarget::Test: {target:?}"
     );
 }
 
@@ -2857,7 +2857,7 @@ fn resolve_analysis_target_refuses_an_unresolvable_tests_root() {
 }
 
 /// With `sourceRoot = "."` the `tests/` root lies inside the source root, so a
-/// `tests/X.ipe` is under both; the tests root wins and it resolves `TestFile`.
+/// `tests/X.ipe` is under both; the tests root wins and it resolves `AnalysisTarget::Test`.
 #[test]
 fn resolve_analysis_target_prefers_test_file_when_tests_is_inside_src_root() {
     let tmp = ipe_test_temp::temp_root().join("ipe_resolve_target_tests_inside_src_root");
@@ -2871,7 +2871,7 @@ fn resolve_analysis_target_prefers_test_file_when_tests_is_inside_src_root() {
     .expect("pkg");
     let tests_x = tests_dir.join("X.ipe");
     fs::write(&tests_x, "module X exposing (x)\nx = 1\n").expect("tests/X.ipe");
-    let expected = AnalysisTarget::TestFile {
+    let expected = AnalysisTarget::Test {
         file: resolved(&tests_x),
         src_root: resolved(&tmp),
         tests_root: resolved(&tests_dir),
@@ -2882,7 +2882,7 @@ fn resolve_analysis_target_prefers_test_file_when_tests_is_inside_src_root() {
     assert_eq!(
         target.expect("resolves"),
         expected,
-        "a file under both tests/ and the source root resolves to TestFile"
+        "a file under both tests/ and the source root resolves to AnalysisTarget::Test"
     );
 }
 
@@ -2976,7 +2976,7 @@ fn type_check_of_a_nested_entry_project_directory_resolves_src_rooted_imports() 
         "ipe_type_check_nested_entry_directory_src_rooted",
         "module App.Main exposing (main)\nimport Shared.Util as Util\nmain = Util.one\n",
     );
-    let expected = AnalysisTarget::SourceFile {
+    let expected = AnalysisTarget::Source {
         file: resolved(&tmp.join("src").join("App").join("Main.ipe")),
         src_root: resolved(&tmp.join("src")),
     };
@@ -3039,6 +3039,84 @@ fn analysis_root_prefers_the_declared_program_entry_like_the_build() {
         root.ok(),
         Some(src.join("App").join("Main.ipe")),
         "the declared program's entry is the analysis root, as it is the build's"
+    );
+}
+
+/// A project with a `src/Main.ipe` that defines `main` and a declared program
+/// whose `entry` is spelled `entry`, beside `extra` files under `src/`.
+fn declared_entry_project(name: &str, entry: &str, extra: &[(&str, &str)]) -> PathBuf {
+    let tmp = ipe_test_temp::temp_root().join(name);
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    fs::create_dir_all(&src).expect("create src/");
+    fs::write(
+        tmp.join("package.ipe"),
+        format!(
+            "module Package exposing (package)\n\n\npackage =\n    {{ name = \"app\"\n    , programs = [ {{ name = \"app\", entry = \"{entry}\" }} ]\n    }}\n"
+        ),
+    )
+    .expect("pkg");
+    fs::write(
+        src.join("Main.ipe"),
+        "module Main exposing (main)\nmain = 1\n",
+    )
+    .expect("src/Main.ipe");
+    for (rel, body) in extra {
+        fs::write(src.join(rel), body).expect("extra src file");
+    }
+    tmp
+}
+
+/// The analysis root is the file of the module the build compiles, not the raw
+/// `entry` text: an entry spelled without `.ipe`, or with another extension
+/// naming a decoy file, still roots at `src/Main.ipe` — the file whose `main`
+/// the audit's disclosure and the delivery shape are derived from.
+#[test]
+fn analysis_root_is_the_file_of_the_builds_entry_module() {
+    for (name, entry) in [
+        ("ipe_analysis_root_entry_without_extension", "Main"),
+        ("ipe_analysis_root_entry_other_extension", "Main.txt"),
+    ] {
+        let tmp = declared_entry_project(
+            name,
+            entry,
+            &[("Main.txt", "module Main exposing (one)\none = 1\n")],
+        );
+        let manifest = project::parse_manifest(&tmp.join("package.ipe")).expect("parses");
+        let built = manifest.resolved_entry();
+        let root = analysis_root_of(&manifest);
+        let expected = resolved(&tmp.join("src").join("Main.ipe"));
+        let _ = fs::remove_dir_all(&tmp);
+        assert_eq!(
+            built.ok(),
+            Some(vec!["Main".to_owned()]),
+            "the build compiles module `Main` for entry {entry:?}"
+        );
+        assert_eq!(
+            root.ok(),
+            Some(expected.as_path().to_path_buf()),
+            "entry {entry:?} must root analysis at the build's `src/Main.ipe`"
+        );
+    }
+}
+
+/// An entry the build refuses (a segment that is no module name) is refused by
+/// the analysis root too, never analysed as the raw path it spells.
+#[test]
+fn analysis_root_refuses_an_entry_the_build_refuses() {
+    let tmp = declared_entry_project(
+        "ipe_analysis_root_refuses_lowercase_entry",
+        "main.ipe",
+        &[("main.ipe", "module Main exposing (main)\nmain = 1\n")],
+    );
+    let manifest = project::parse_manifest(&tmp.join("package.ipe")).expect("parses");
+    let built = manifest.resolved_entry();
+    let root = analysis_root_of(&manifest);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(built.is_err(), "the build refuses a lowercase entry module");
+    assert!(
+        matches!(&root, Err(CliError::Usage(_))),
+        "the analysis root must refuse the entry the build refuses: {root:?}"
     );
 }
 
