@@ -971,9 +971,8 @@ fn emit_enum_variant_lines_and_arms(
             // braces doubled); the `{}` placeholders then go in before the
             // closing quote the renderer always ends with.
             let mut fmt_literal = rust_fmt_str_lit(&format!("{display} "));
-            fmt_literal.pop();
-            fmt_literal.push_str(&placeholders);
-            fmt_literal.push('"');
+            let closing_quote = fmt_literal.len().saturating_sub(1);
+            fmt_literal.insert_str(closing_quote, &placeholders);
             show_arms.push(render_stringify_enum_arm(
                 &arm_head,
                 &fmt_literal,
