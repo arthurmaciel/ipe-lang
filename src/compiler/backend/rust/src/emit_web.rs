@@ -23,6 +23,7 @@
 //!   defensive invariant check.
 
 use ipe_diagnostics::{DResult, Diagnostic, LowerError, RoutePatternDefect, Span};
+use ipe_intern::rust_str_lit;
 use ipe_ir::{Callee, Expr, IrType, KernelFn};
 
 use crate::EmitCtx;
@@ -320,7 +321,7 @@ fn granted_web_features_register_stmt(ctx: &EmitCtx) -> String {
     let suffixes: Vec<String> = ctx
         .web_capabilities
         .iter()
-        .map(|c| format!("{:?}", c.as_str()))
+        .map(|c| rust_str_lit(c.as_str()))
         .collect();
     format!(
         "ipe_runtime::telemetry::register_granted_web_features(&[{}]); ",
@@ -1002,7 +1003,10 @@ fn msg_set_descriptor_item(ctx: &EmitCtx, update_e: &Expr) -> String {
     // space separates the item from the following `ipe_runtime::…` token when the
     // gate is on; with the gate off this helper returns `""`, leaving the emitted
     // text byte-identical.
-    format!("#[allow(dead_code)] const IPE_WEB_MSG_SET: &str = {json:?}; ")
+    format!(
+        "#[allow(dead_code)] const IPE_WEB_MSG_SET: &str = {}; ",
+        rust_str_lit(&json)
+    )
 }
 
 /// Build the `set_page : Fn(Page, Model) -> (Model, Cmd)` entry fn the routed runtime enters a URL through.
