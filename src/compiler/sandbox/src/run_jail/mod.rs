@@ -102,9 +102,12 @@ pub use macos::*;
 pub(crate) mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
-// `windows_scrubbed_env` is a pure, host-independent helper (the Windows env
-// scrub, unit-tested on any host) that is part of the run-jail public surface on
-// every target, so it is re-exported unconditionally, not only on Windows.
+// `windows_scrubbed_env` and its `WindowsBaseEnv` set are pure and
+// host-independent (the Windows env scrub, unit-tested on any host), so they
+// are re-exported on every target: the workspace env scan pins the base set's
+// home names from any host.
+#[cfg(not(target_os = "windows"))]
+pub use windows::WindowsBaseEnv;
 pub use windows::windows_scrubbed_env;
 
 /// The number of a sealed, inheritable descriptor `bwrap` reads from.

@@ -10,7 +10,7 @@
 //! name however it is spelled or computed, and a jail's granted variables are
 //! forwarded verbatim by the sandbox-private `ipe_sandbox::host_env::granted`,
 //! reachable from outside the sandbox crate only as `granted_env` over a
-//! profile's own allowlist, from the one pinned WASI launcher.
+//! profile's own allowlist, from the pinned WASI launcher and Windows jail e2e.
 //!
 //! The root `clippy.toml` denies `std::env::{var, var_os, vars, vars_os}`, so
 //! the audited readers are the only raw readers. This scan pins that set
@@ -19,7 +19,7 @@
 //! manifest dependency or a source path, a shared home-name constant outside its pinned files, a raw `std::env` read or
 //! whole-environment iterator outside the audited files, the escape-hatch
 //! allow outside the pinned allow files, the jail passthrough outside the
-//! sandbox crate and its pinned caller, and a `/proc/*/environ` read.
+//! sandbox crate and its pinned callers, and a `/proc/*/environ` read.
 //!
 //! [`lexical`] is an independent third layer: a function-granular lexical
 //! scan refusing every home-name literal and computed-key read outside its
@@ -92,8 +92,13 @@ const ESCAPE_HATCH_SITES: &[(&str, usize)] = &[
 const SANDBOX_SRC: &str = "src/compiler/sandbox/src/";
 
 /// Workspace-relative files outside the sandbox crate that may forward a
-/// profile's granted variables through `host_env::granted_env`.
-const JAIL_ENV_CALLERS: &[&str] = &["src/ipe-cli/src/wasi_run.rs"];
+/// profile's granted variables through `host_env::granted_env`: the WASI
+/// launcher, and the Windows run-jail e2e, which reads the host values of the
+/// launcher's declared base set to compute the environment the child must see.
+const JAIL_ENV_CALLERS: &[&str] = &[
+    "src/ipe-cli/src/wasi_run.rs",
+    "src/compiler/sandbox/tests/run_jail_windows_e2e.rs",
+];
 
 /// The profile-scoped passthrough's name.
 const JAIL_ENV_FN: &str = "granted_env";
@@ -1108,11 +1113,32 @@ mod lexical {
             func: "cargo_home_env",
             reason: "writes the accessor's validated home into a child's environment; reads nothing",
         },
+        Allowed {
+            file: WINDOWS_JAIL_FILE,
+            func: "name",
+            reason: WINDOWS_JAIL_HOST_ENV,
+        },
     ];
 
-    /// The reason shared by the jail spawners' `host_env` reader closures.
-    const JAIL_HOST_ENV: &str = "`host_env` closure: yields only the jail's fixed \
-         `LANG`/`PATH`/`SystemRoot` and the profile's consented `env_allowlist`";
+    /// The Windows run jail, whose base set forwards host profile variables.
+    const WINDOWS_JAIL_FILE: &str = "src/compiler/sandbox/src/run_jail/windows.rs";
+
+    /// The home names the Windows run jail forwards from the host:
+    /// `WindowsBaseEnv`'s `AppContainer` profile variables.
+    const WINDOWS_JAIL_HOME_NAMES: &[&str] = &["USERPROFILE", "HOMEDRIVE", "HOMEPATH"];
+
+    /// The reason shared by the Unix jail spawners' `host_env` reader closures.
+    const JAIL_HOST_ENV: &str = "`host_env` closure: yields only the host's `LANG` and \
+         the profile's consented `env_allowlist`";
+
+    /// The reason for the Windows run jail's `host_env` reader and the base-set
+    /// names it reads.
+    const WINDOWS_JAIL_HOST_ENV: &str = "`host_env` closure: yields only the host values \
+         of `WindowsBaseEnv`'s host-valued names (`SystemRoot`, `PATH`, `LANG`, and the \
+         `AppContainer` profile variables `LOCALAPPDATA`, `APPDATA`, `USERPROFILE`, \
+         `HOMEDRIVE`, `HOMEPATH` that `CreateProcessW` requires) and the profile's \
+         consented `env_allowlist`; the values name host profile folders but grant the \
+         `AppContainer` token nothing";
 
     /// The reason shared by the runtime's `System.getenv*` kernels.
     const PROGRAM_GETENV: &str = "a `System.getenv*` kernel: the key is the Ipê program's own \
@@ -1198,9 +1224,9 @@ mod lexical {
             reason: JAIL_HOST_ENV,
         },
         Allowed {
-            file: "src/compiler/sandbox/src/run_jail/windows.rs",
+            file: WINDOWS_JAIL_FILE,
             func: "run_confined",
-            reason: JAIL_HOST_ENV,
+            reason: WINDOWS_JAIL_HOST_ENV,
         },
         Allowed {
             file: "src/runtime/rust/src/system.rs",
@@ -1891,6 +1917,69 @@ mod lexical {
                 entry.file
             );
         }
+    }
+
+    #[test]
+    fn the_windows_jail_base_set_forwards_exactly_the_pinned_home_names() {
+        use ipe_sandbox::run_jail::WindowsBaseEnv;
+        let base: Vec<&str> = WindowsBaseEnv::ALL
+            .into_iter()
+            .map(WindowsBaseEnv::name)
+            .collect();
+        let forwarded_home: Vec<&str> = base
+            .iter()
+            .copied()
+            .filter(|name| HOME_NAMES.contains(name))
+            .collect();
+        assert_eq!(
+            forwarded_home, WINDOWS_JAIL_HOME_NAMES,
+            "the Windows jail's base set forwards a different home set than its \
+             allowlist entry pins; re-audit `WindowsBaseEnv` and its reason"
+        );
+        for name in base {
+            let scratch_valued = matches!(name, "TMP" | "TEMP");
+            assert_eq!(
+                WINDOWS_JAIL_HOST_ENV.contains(&format!("`{name}`")),
+                !scratch_valued,
+                "the Windows jail reason must name exactly the host-valued base \
+                 names; `{name}` disagrees"
+            );
+        }
+    }
+
+    #[test]
+    fn the_windows_jail_home_literals_sit_only_in_the_base_name_table() {
+        let text = std::fs::read_to_string(workspace().join(WINDOWS_JAIL_FILE));
+        assert!(text.is_ok(), "`{WINDOWS_JAIL_FILE}` is gone");
+        let Ok(text) = text else { return };
+        let mut unexempt: Vec<String> = raw_home_reads(&text, &[], &[])
+            .into_iter()
+            .map(|hit| hit.what)
+            .filter(|what| what.starts_with("literal "))
+            .collect();
+        unexempt.sort();
+        let mut pinned: Vec<String> = WINDOWS_JAIL_HOME_NAMES
+            .iter()
+            .map(|name| format!("literal {name:?}"))
+            .collect();
+        pinned.sort();
+        assert_eq!(
+            unexempt, pinned,
+            "`{WINDOWS_JAIL_FILE}` spells a home name beyond its base-set table"
+        );
+    }
+
+    #[test]
+    fn a_home_literal_beside_an_exempt_name_table_is_detected() {
+        let src = "const fn name() -> &'static str { \"USERPROFILE\" }\n\
+                   fn leak() -> &'static str { \"USERPROFILE\" }\n";
+        assert_eq!(
+            raw_home_reads(src, &["name"], &[]),
+            vec![Hit {
+                line: 2,
+                what: "literal \"USERPROFILE\"".to_owned(),
+            }]
+        );
     }
 
     /// The refused constructs in a planted snippet, with no exemptions.
