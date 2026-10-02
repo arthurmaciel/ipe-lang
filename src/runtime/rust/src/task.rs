@@ -1439,10 +1439,12 @@ mod std_block_on_tests {
                 }
                 self.armed = true;
                 let waker = cx.waker().clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                    waker.wake();
-                });
+                std::thread::Builder::new()
+                    .spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        waker.wake();
+                    })
+                    .expect("spawn test thread");
                 Poll::Pending
             }
         }

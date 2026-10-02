@@ -193,6 +193,10 @@ pub mod system;
 // runtime guard (`TuiGuard::enter*`) and by `ipe-cli`'s pre-build gate over
 // `Shape::Tui`. Neither depends on the `tui` feature's crossterm/tokio stack.
 pub mod terminal_access;
+// `threads` is always compiled (std-only; its tokio offload is gated inside): it
+// is the one start point for OS threads and blocking-pool work, refusing with a
+// typed error where the std and tokio starts panic.
+pub mod threads;
 // wasm32: the pure future-combinator half of `Task.*` (`map`/`andThen`/
 // `mapError`/`succeed`/`fail`/`fromResult`/`andThenResult`/`onError`/`lazy`/
 // `sequence`) compiles + runs unchanged — no tokio dependency. The
