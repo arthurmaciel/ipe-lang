@@ -1253,6 +1253,8 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_E2E_BUILD_TIMEOUT_SECS", // golden E2E harness: emitted-crate build fail-fast cap
     "IPE_E2E_SECRET",          // macOS jail e2e test sentinel
     "IPE_E2E_STATIC",          // CI gate for static-binary e2e tests
+    "IPE_FUZZ_ITERS",          // fuzz template harness: random-run iteration count
+    "IPE_FUZZ_SEED",           // fuzz template harness: random-run seed
     "IPE_HOST_ENV_TEST_UNSET_7F3A9C21D84E", // sandbox host_env test: a name no host sets
     "IPE_HTTP_TEST_URL",
     "IPE_JUNCTION_AT",  // Windows junction test helper: PowerShell script input
