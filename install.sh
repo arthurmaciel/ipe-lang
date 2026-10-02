@@ -7,6 +7,12 @@
 # Overrides:  IPE_VERSION=v0.1.0  IPE_INSTALL_DIR=$HOME/.local/bin  sh install.sh
 set -eu
 
+# The whole installer is one group with stdout on /dev/null: it talks only
+# through the message helpers below, on stderr, so no command's own output
+# reaches the terminal. The shell reads the group in full before running any
+# of it, so a truncated download runs nothing.
+{
+
 REPO="ipe-lang/compiler"
 INSTALL_DIR="${IPE_INSTALL_DIR:-$HOME/.local/bin}"
 # Set only by `ipe upgrade`'s own wrapper — see die_no_prebuilt below.
@@ -1177,3 +1183,4 @@ fi
 # CLI's "report bugs" line (kept in sync with the style SSOT by a drift test).
 say '\n  Ipê %s was @G@successfully@0@ installed!' "$ver"
 say '\n  If you find any bugs, please report them at https://github.com/%s/issues.\n' "$REPO"
+} >/dev/null
