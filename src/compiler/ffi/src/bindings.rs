@@ -24,6 +24,8 @@
 
 use std::collections::BTreeSet;
 
+use ipe_intern::rust_str_lit;
+
 use crate::carrier::{Carrier, ClosureRet, ClosureSig, EnumDef, StructDef};
 use crate::naming::{RustIdent, arg_name, rust_kernel_name, rust_safe_ident, wrapper_fn_ident};
 use crate::num_coerce::{is_numeric_rust, num_saturate, num_widen_scalar};
@@ -68,15 +70,6 @@ pub fn absolutize_crate(krate: &str, s: &str) -> String {
         }
     }
     out
-}
-
-/// Render `s` as a double-quoted Rust string literal.
-///
-/// Rust's own `Debug` grammar escapes every character a literal cannot carry
-/// raw, so a foreign tag name holding `"`, `\` or a bidi override stays inside
-/// the literal and never trips rustc's `text_direction_codepoint_in_literal`.
-fn rust_str_lit(s: &str) -> String {
-    format!("{s:?}")
 }
 
 /// If the type is `Wrapper<inner>`, return `inner` (trimmed).
@@ -2345,11 +2338,6 @@ mod tests {
     }
 
     // ── helper units ────────────────────────────────────────────────────
-
-    #[test]
-    fn rust_str_lit_escapes_quotes_backslashes_and_bidi_overrides() {
-        assert_eq!(rust_str_lit("a\u{202E}\"b\\"), r#""a\u{202e}\"b\\""#);
-    }
 
     #[test]
     fn absolutize_rewrites_only_path_starts() {
