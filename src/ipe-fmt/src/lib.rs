@@ -414,16 +414,18 @@ pub(crate) fn format_source_unchecked(src: &str) -> Result<String, FmtError> {
     Ok(Printer::new(&interner, &input, Some(src)).module(&module))
 }
 
-/// Test-only count of [`Printer::expr`] / [`Printer::expr_atom`] calls made
-/// since the last [`reset_render_call_count`] — a work counter standing in for
-/// wall-clock time, so a bounded-work regression test cannot flake on a slow
-/// or loaded machine. Every node is rendered through one of those two
-/// entry points, so this count is the total number of node renders: linear
-/// growth in input size is the class-closing property (`PRINCIPLES.md`,
-/// "bounded by construction"), and an exponential regression shows up here as
-/// an exponential count, not merely a slow wall clock.
 #[cfg(test)]
 thread_local! {
+    /// A work counter for render calls, used by tests only.
+    ///
+    /// Counts [`Printer::expr`] / [`Printer::expr_atom`] calls since the
+    /// last [`reset_render_call_count`] — standing in for wall-clock time,
+    /// so a bounded-work regression test cannot flake on a slow or loaded
+    /// machine. Every node is rendered through one of those two entry
+    /// points, so this count is the total number of node renders: linear
+    /// growth in input size is the class-closing property (`PRINCIPLES.md`,
+    /// "bounded by construction"), and an exponential regression shows up
+    /// here as an exponential count, not merely a slow wall clock.
     static RENDER_CALLS: Cell<u64> = const { Cell::new(0) };
 }
 
@@ -1881,18 +1883,19 @@ impl<'a> Printer<'a> {
         let first_is_block =
             |a: &Expr| matches!(&a.value, Expr_::MultilineStr { raw, .. } if raw.contains('\n'));
         let later_block = |tail_strs: &[String]| tail_strs.iter().any(|s| has_layout_newline(s));
-        let (mut out, rest_strs): (String, &[String]) = match args.split_first() {
-            Some((first, _))
-                if self.joins_on_head_line(first, &arg_one_strs[0])
-                    && head_line_fits(&head_s, first, indent)
-                    && (is_simple_ref(first)
-                        || first_is_block(first)
-                        || later_block(&arg_one_strs[1..])) =>
-            {
-                (format!("{head_s} {}", arg_one_strs[0]), &arg_one_strs[1..])
-            }
-            _ => (head_s, &arg_one_strs[..]),
-        };
+        let (mut out, rest_strs): (String, &[String]) =
+            match (args.split_first(), arg_one_strs.split_first()) {
+                (Some((first, _)), Some((first_str, tail_strs)))
+                    if Self::joins_on_head_line(first, first_str)
+                        && head_line_fits(&head_s, first, indent)
+                        && (is_simple_ref(first)
+                            || first_is_block(first)
+                            || later_block(tail_strs)) =>
+                {
+                    (format!("{head_s} {first_str}"), tail_strs)
+                }
+                _ => (head_s, arg_one_strs.as_slice()),
+            };
         for s in rest_strs {
             out.push('\n');
             out.push_str(&inner);
@@ -1908,7 +1911,7 @@ impl<'a> Printer<'a> {
     /// a name, qualified name, literal, unit, or empty collection — anything
     /// that renders on a single line AND is not itself a block form
     /// (non-empty list / record / tuple / update / parenthesised compound).
-    fn joins_on_head_line(&self, a: &Expr, rendered: &str) -> bool {
+    fn joins_on_head_line(a: &Expr, rendered: &str) -> bool {
         // A triple-quoted string hugs the function line only when it opens with
         // visible content on its first physical line (`interpolate """head\n…"""`).
         // One that opens with a newline (`"""\n…`) — or any string literal that is
@@ -3137,7 +3140,7 @@ mod tests {
             };
             out.push_str(&line);
         }
-        out.push_str(&format!("        Task.succeed v{}\n", n - 1));
+        let _ = writeln!(out, "        Task.succeed v{}", n - 1);
         out
     }
 
