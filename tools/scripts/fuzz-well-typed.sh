@@ -714,10 +714,14 @@ render_template() {
 setup_project() {
     local dir=$1
     mkdir -p "$dir/src"
-    cat > "$dir/ipe.toml" <<'EOF'
-name = "ipe-fuzz-iter"
-version = "0.0.0"
-entry = "src/Main.ipe"
+    cat > "$dir/package.ipe" <<'EOF'
+module Package exposing (package)
+
+
+package =
+    { name = "ipe-fuzz-iter"
+    , version = "0.0.0"
+    }
 EOF
 }
 
@@ -856,7 +860,7 @@ save_failure() {
     local dst="$FAILURES_DIR/seed-${seed}-${ts}"
     mkdir -p "$dst"
     cp -rf "$iterdir/src"       "$dst/"     2>/dev/null || true
-    cp -f  "$iterdir/ipe.toml"  "$dst/"     2>/dev/null || true
+    cp -f  "$iterdir/package.ipe" "$dst/"     2>/dev/null || true
     cp -f  "$iterdir/build.log" "$dst/"     2>/dev/null || true
     cp -f  "$iterdir/run.log"   "$dst/"     2>/dev/null || true
     # Emitted Rust source (most useful artefact for debugging)
