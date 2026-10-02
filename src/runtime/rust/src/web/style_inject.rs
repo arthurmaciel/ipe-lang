@@ -209,8 +209,8 @@ fn strip_markers<M>(attrs: &mut Vec<Attribute<M>>, markers: &[&str]) {
 // `<style>` path and the Ipe.Css / styleNode `<style>` sink share the identical
 // close-tag stripper.
 use super::super::css_safety::{
-    SafeCssMediaQuery, SafeCssValue, sink_safe_declaration_list, sink_safe_keyframes_body,
-    strip_style_close,
+    SafeCssMediaQuery, SafeCssValue, css_ident, sink_safe_declaration_list,
+    sink_safe_keyframes_body, strip_style_close,
 };
 
 fn build_mq<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
@@ -410,35 +410,15 @@ fn build_anim<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
 }
 
 /// ipe-id (`r.0.2#div`) → CSS-safe ident suffix (`r_0_2_div`) for @keyframes
-/// names. Structural separators map to `_`; anything else outside the CSS-ident
-/// charset is dropped ( `ipeIDToCSSIdent`).
+/// names. Delegates to the single CSS-ident owner `css_safety::css_ident`.
 fn ipe_id_to_css_ident(s: &str) -> String {
-    s.chars()
-        .filter_map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => Some(c),
-            '.' | '#' => Some('_'),
-            _ => None,
-        })
-        .collect()
+    css_ident(s)
 }
 
-/// Strip chars that would break a CSS `@keyframes` ident (non-ident → `_`); a
-/// leading digit is illegal so prefix `_` ( `sanitiseAnimationName`).
+/// An animation name (developer-authored) → a valid CSS `@keyframes` ident.
+/// Delegates to the single CSS-ident owner `css_safety::css_ident`.
 fn sanitise_animation_name(s: &str) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-    let mut out: String = s
-        .chars()
-        .map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => c,
-            _ => '_',
-        })
-        .collect();
-    if out.starts_with(|c: char| c.is_ascii_digit()) {
-        out.insert(0, '_');
-    }
-    out
+    css_ident(s)
 }
 
 #[cfg(test)]
@@ -604,6 +584,32 @@ mod tests {
             css.contains("@media (prefers-reduced-motion: no-preference)"),
             "respect=1 must keep the reduced-motion gate: {css}"
         );
+    }
+
+    /// An animation name starting with `-` followed by a digit must still
+    /// become a valid CSS identifier (prefixed with `_`), never the invalid
+    /// `-1x`-shaped ident the browser silently ignores.
+    #[test]
+    fn anim_name_leading_dash_digit_is_a_valid_css_ident() {
+        let attrs = vec![attr(
+            "data-ipe-anim-rules",
+            "-1x||300ms||0% { opacity: 0 } 100% { opacity: 1 }||1",
+        )];
+        let css = build_anim("r.0", &attrs);
+        assert!(css.contains("@keyframes _-1x__r_0"), "{css}");
+    }
+
+    /// The owner `css_safety::css_ident` maps every out-of-charset byte to
+    /// `_` rather than dropping it, so an animation name holding `:` keeps
+    /// its distinctness instead of vanishing.
+    #[test]
+    fn anim_name_colon_maps_to_underscore_instead_of_vanishing() {
+        let attrs = vec![attr(
+            "data-ipe-anim-rules",
+            "a:b||300ms||0% { opacity: 0 } 100% { opacity: 1 }||1",
+        )];
+        let css = build_anim("r.0", &attrs);
+        assert!(css.contains("@keyframes a_b__r_0"), "{css}");
     }
 
     #[test]

@@ -718,6 +718,36 @@ fn is_safe_keyframe_selector(sel: &str) -> bool {
         })
 }
 
+/// The SOLE CSS identifier (`<ident-token>`) constructor.
+///
+/// Every byte outside `[A-Za-z0-9_-]` maps to `_` (mapped, never dropped, so
+/// two distinct inputs that differ only in a non-ident byte still differ in
+/// the output). A leading digit, or a leading `-` immediately followed by a
+/// digit, is not a legal identifier start (`-1a` is not a valid CSS
+/// identifier) and gets a `_` prefix. Empty input stays empty; a caller that
+/// needs a name treats an empty result as "drop", the same posture an empty
+/// source name already gets.
+#[cfg(feature = "web-core")]
+pub(crate) fn css_ident(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    let mut out: String = s
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => c,
+            _ => '_',
+        })
+        .collect();
+    let bytes = out.as_bytes();
+    let invalid_start = bytes.first().is_some_and(u8::is_ascii_digit)
+        || (bytes.first() == Some(&b'-') && bytes.get(1).is_some_and(u8::is_ascii_digit));
+    if invalid_start {
+        out.insert(0, '_');
+    }
+    out
+}
+
 /// A validated CSS selector / media-query string (NEW — strict, drop-on-doubt).
 ///
 /// Allowed charset: ASCII letters, digits, and the CSS structural set
@@ -1157,6 +1187,27 @@ mod tests {
                 "breakout media query must be dropped: {q:?}"
             );
         }
+    }
+
+    #[cfg(feature = "web")]
+    #[test]
+    fn css_ident_maps_rather_than_drops_and_fixes_invalid_starts() {
+        // A leading `-` followed by a digit is not a legal identifier start:
+        // prefix with `_` rather than emit an ident the browser silently
+        // ignores.
+        assert_eq!(css_ident("-1a"), "_-1a");
+        // Empty input stays empty — the caller's own "drop" posture.
+        assert_eq!(css_ident(""), "");
+        // Every out-of-charset byte maps to `_` (never dropped), so distinct
+        // inputs differing only in a structural byte still differ.
+        assert_eq!(css_ident("a:b"), "a_b");
+        // A bare leading digit also gets the `_` prefix.
+        assert_eq!(css_ident("1x"), "_1x");
+        // `--x` already has a legal start (two dashes, no digit): unchanged.
+        assert_eq!(css_ident("--x"), "--x");
+        // Non-ASCII input is mapped, never panics, never empty for non-empty
+        // input.
+        assert_eq!(css_ident("é"), "_");
     }
 
     #[cfg(feature = "web")]
