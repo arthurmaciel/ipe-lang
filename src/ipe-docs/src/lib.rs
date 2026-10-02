@@ -24,6 +24,7 @@
 pub mod env_vars;
 pub mod html;
 pub mod markdown;
+pub mod markdown_text;
 pub mod render;
 pub mod stdlib_docs;
 
