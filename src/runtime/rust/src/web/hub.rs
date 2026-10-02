@@ -35,33 +35,60 @@ use std::time::Duration;
 
 // ─── Tenant-prefix SQL enforcement ─────────────────────────────────────────
 //
-// Tenant-prefix SQL enforcement gate: this module builds the full
-// CONSUMER side (SQL-layer `LIKE`-prefix scoping + the `reject_cross_tenant_svc`
-// gate + the task-local plumbing to carry a tenant prefix through a request) —
-// fully real and fully enforced, testable in isolation with a hand-constructed
-// session carrying a `Claims` map, not a live `consoleAuth` callback.
+// CONSUMER side of tenant scoping: the SQL-layer exact-prefix predicate, the
+// `reject_cross_tenant_svc` gate, and the task-local that carries a tenant
+// prefix through a request. Both layers judge the same `TenantPrefix` with the
+// same relation (`str::starts_with`), so an explicit `service` argument and an
+// unscoped read cannot disagree on what is in scope.
 //
-// What is NOT wired here (tracked as a follow-up, not a silent gap): the
-// PRODUCER side — deriving a tenant prefix from a live session's authenticated
-// identity (`id.Claims["tenant"]`) and calling `with_tenant_prefix` from the
-// request-dispatch loop. That depends on `IPE_CONSOLE_AUTH=app` (the row-poly
-// `consoleAuth` callback that mints a per-session `Identity` with `claims`),
-// which is not yet implemented in this Rust runtime —
-// `ConsoleAuthMode::App` (`src/runtime/rust/src/telemetry.rs`) is refused
-// with 501 by `gate_decision` in `src/runtime/rust/src/web/console.rs`, and `hub_current_identity` (below) is hardcoded to the
-// empty identity for the same reason. Until that lands, `with_tenant_prefix`
-// is called by tests only — every live request runs with an empty tenant
-// prefix, i.e. unscoped (matches the pre-existing, pre-this-fix behaviour;
-// this change is additive and cannot regress a deployment that has no tenant
-// concept configured).
+// The PRODUCER side — deriving a tenant prefix from a live session's
+// authenticated identity (`id.Claims["tenant"]`) and calling
+// `with_tenant_prefix` from the request-dispatch loop — depends on
+// `IPE_CONSOLE_AUTH=app` (the row-poly `consoleAuth` callback that mints a
+// per-session `Identity` with `claims`), which this Rust runtime does not
+// implement: `ConsoleAuthMode::App` (`src/runtime/rust/src/telemetry.rs`) is
+// refused with 501 by `gate_decision` in `src/runtime/rust/src/web/console.rs`,
+// and `hub_current_identity` (below) returns the empty identity for the same
+// reason. Until it lands, `with_tenant_prefix` is called by tests only and
+// every live request runs unscoped.
+
+/// A tenant's service-name prefix, non-empty by construction.
+///
+/// "No tenant" is `Option::None`, never an empty prefix, so an empty string
+/// cannot stand in for a tenant whose scope would then admit every service.
+/// The prefix is compared literally and case-sensitively: no character of it
+/// is a wildcard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TenantPrefix(String);
+
+impl TenantPrefix {
+    /// Build a tenant prefix; `None` for the empty string.
+    #[must_use]
+    pub fn new(prefix: impl Into<String>) -> Option<Self> {
+        let prefix = prefix.into();
+        if prefix.is_empty() {
+            None
+        } else {
+            Some(Self(prefix))
+        }
+    }
+
+    /// The prefix text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether `service` lies in this tenant's scope (byte-exact prefix).
+    fn admits(&self, service: &str) -> bool {
+        service.starts_with(&self.0)
+    }
+}
 
 tokio::task_local! {
-    /// The tenant-scope prefix in effect for the current request, when the
-    /// session carries a `tenant` claim. Unset (→ "") outside a tenant-scoped
-    /// session — every service is in-scope in that case (matches
-    /// `tenantPrefixForSession` returning "" when the session has no tenant
-    /// claim).
-    static TENANT_PREFIX: String;
+    /// The tenant scope in effect for the current request. Unset outside a
+    /// tenant-scoped session, in which case every service is in scope.
+    static TENANT_PREFIX: TenantPrefix;
 }
 
 /// Run future `f` with `prefix` available to [`current_tenant_prefix`] for
@@ -74,49 +101,61 @@ tokio::task_local! {
 /// `sync_scope` only holds the task-local for a SYNCHRONOUS closure, and
 /// [`current_tenant_prefix`] is read deep inside a lazily-polled
 /// `Box::pin(async move { .. })` future body (`hub_read_filtered_logs` and
-/// siblings) — by the time that body actually runs, a `sync_scope`-based
-/// design would have already popped the scope, silently defaulting every
-/// read back to the unscoped `""` prefix. The `.scope(..).await` form keeps
-/// the task-local set for as long as the awaited future is being polled,
-/// which is the actual lifetime this gate needs.
-pub async fn with_tenant_prefix<R>(prefix: String, f: impl Future<Output = R>) -> R {
+/// siblings) — by the time that body runs, a `sync_scope`-based design would
+/// have popped the scope, silently reading every request as unscoped. The
+/// `.scope(..).await` form keeps the task-local set for as long as the awaited
+/// future is being polled, which is the lifetime this gate needs.
+pub async fn with_tenant_prefix<R>(prefix: TenantPrefix, f: impl Future<Output = R>) -> R {
     TENANT_PREFIX.scope(prefix, f).await
 }
 
-fn current_tenant_prefix() -> String {
-    TENANT_PREFIX.try_with(|s| s.clone()).unwrap_or_default()
+fn current_tenant_prefix() -> Option<TenantPrefix> {
+    TENANT_PREFIX.try_with(Clone::clone).ok()
 }
 
 /// Enforce that an explicit service-name argument is scoped within the
-/// caller's tenant. `Ok(effective_svc)` when the call may proceed (either no
-/// tenant claim is in scope, so every svc is in-scope; or `svc == ""` so the
-/// tenant prefix alone drives scoping; or `svc` starts with the tenant
-/// prefix). `Err(())` when `svc` is outside the tenant's scope — the caller
-/// MUST refuse with an `Err`, never silently drop the tenant filter and fall
-/// through to an unscoped read.
-fn reject_cross_tenant_svc(svc: &str, tenant_prefix: &str) -> Result<String, ()> {
-    if tenant_prefix.is_empty() {
-        return Ok(svc.to_string());
-    }
-    if svc.is_empty() {
-        return Ok(String::new());
-    }
-    if svc.starts_with(tenant_prefix) {
-        Ok(svc.to_string())
-    } else {
-        Err(())
+/// caller's tenant.
+///
+/// `Ok(effective_svc)` when the call may proceed (no tenant in scope, so every
+/// svc is in scope; or `svc == ""` so the tenant prefix alone drives scoping;
+/// or the tenant admits `svc`). `Err(())` when `svc` is outside the tenant's
+/// scope — the caller MUST refuse with an `Err`, never silently drop the
+/// tenant filter and fall through to an unscoped read.
+fn reject_cross_tenant_svc(svc: &str, tenant: Option<&TenantPrefix>) -> Result<String, ()> {
+    match tenant {
+        Some(t) if !svc.is_empty() && !t.admits(svc) => Err(()),
+        _ => Ok(svc.to_string()),
     }
 }
 
-/// Strip SQL `LIKE` wildcard characters (`%`, `_`) out of a tenant prefix
-/// before it is used to build a `LIKE 'prefix%'` pattern — a tenant identifier
-/// containing either character would otherwise WIDEN its own scope (e.g. a
-/// tenant literally named `%` would match every service). Mirrors
-/// `escapeLikePrefix` (strips rather than backslash-escapes, since tenant
-/// identifiers are short alphanumeric-with-dashes slugs, not arbitrary user
-/// text where preserving the literal character matters).
-fn escape_like_prefix(p: &str) -> String {
-    p.chars().filter(|&c| c != '%' && c != '_').collect()
+/// A query over the SQLite telemetry spill.
+type SpillQuery<'q> =
+    sqlx::query::Query<'q, sqlx::Sqlite, <sqlx::Sqlite as sqlx::Database>::Arguments<'q>>;
+
+/// The tenant-scoping predicate of one spill query.
+///
+/// Appended to the SQL text once, then bound at the same placeholder
+/// position. `substr(service_name, 1, length(?)) = ?` is exactly
+/// [`TenantPrefix::admits`]: SQLite's `substr`/`length` count characters on
+/// TEXT and `=` compares with the binary collation, so the prefix carries no
+/// wildcard and no case folding (unlike `LIKE`).
+struct TenantFilter<'p>(&'p TenantPrefix);
+
+impl<'p> TenantFilter<'p> {
+    /// Append the predicate to `sql` when a tenant is in scope.
+    fn push(sql: &mut String, tenant: Option<&'p TenantPrefix>) -> Option<Self> {
+        let tenant = tenant?;
+        sql.push_str(" AND substr(service_name, 1, length(?)) = ?");
+        Some(Self(tenant))
+    }
+
+    /// Bind the prefix to the predicate's two placeholders.
+    fn bind<'q>(self, q: SpillQuery<'q>) -> SpillQuery<'q>
+    where
+        'p: 'q,
+    {
+        q.bind(self.0.as_str()).bind(self.0.as_str())
+    }
 }
 
 /// Default per-table read cap (200 for logs/metrics).
@@ -186,28 +225,16 @@ fn parse_attrs(raw: &str) -> HashMap<String, String> {
     serde_json::from_str(raw).unwrap_or_default()
 }
 
-/// Append `AND service_name LIKE ?` to `sql` when `tenant_prefix` is
-/// non-empty, returning the bind pattern (`Some("<escaped-prefix>%")`) to
-/// push, else `None`. Centralises the tenant-scoping SQL fragment so all
-/// four `read_*_value` builders apply it identically — the SQL-layer half of
-/// the tenant-prefix gate (see the module-level `TENANT_PREFIX` doc comment).
-fn tenant_like_clause(sql: &mut String, tenant_prefix: &str) -> Option<String> {
-    if tenant_prefix.is_empty() {
-        return None;
-    }
-    sql.push_str(" AND service_name LIKE ?");
-    Some(format!("{}%", escape_like_prefix(tenant_prefix)))
-}
-
 /// Build the `LogEntry`-shaped JSON array applying query/session filters.
-/// `service` empty → no service
-/// scoping. `tenant_prefix` empty → no tenant scoping (every service
-/// in-scope); non-empty → additionally requires `service_name LIKE
-/// '<prefix>%'`. Returns an empty array on any open/SQL failure.
+///
+/// `service` empty → no service scoping. `tenant` `None` → no tenant scoping
+/// (every service in scope); `Some` → additionally requires the service name
+/// to start with the prefix (see [`TenantFilter`]). Returns an empty array on
+/// any open/SQL failure.
 async fn read_logs_value(
     db_path: &str,
     service: &str,
-    tenant_prefix: &str,
+    tenant: Option<&TenantPrefix>,
     filter: HubLogFilter,
 ) -> Value {
     let Some(pool) = open_spill(db_path).await else {
@@ -221,7 +248,7 @@ async fn read_logs_value(
     if !service.is_empty() {
         sql.push_str(" AND service_name = ?");
     }
-    let tenant_like = tenant_like_clause(&mut sql, tenant_prefix);
+    let tenant_filter = TenantFilter::push(&mut sql, tenant);
     if level.is_some() {
         sql.push_str(" AND level = ?");
     }
@@ -231,8 +258,8 @@ async fn read_logs_value(
     if !service.is_empty() {
         q = q.bind(service);
     }
-    if let Some(pat) = tenant_like {
-        q = q.bind(pat);
+    if let Some(tf) = tenant_filter {
+        q = tf.bind(q);
     }
     if let Some(lv) = level {
         q = q.bind(lv);
@@ -308,7 +335,7 @@ where
     Box::pin(async move {
         let tenant = current_tenant_prefix();
         let f = decode_filter(filter);
-        let arr = read_logs_value(&db_path, "", &tenant, f).await;
+        let arr = read_logs_value(&db_path, "", tenant.as_ref(), f).await;
         decode_rows(arr)
     })
 }
@@ -325,7 +352,7 @@ where
 {
     Box::pin(async move {
         let tenant = current_tenant_prefix();
-        let effective_svc = match reject_cross_tenant_svc(&service, &tenant) {
+        let effective_svc = match reject_cross_tenant_svc(&service, tenant.as_ref()) {
             Ok(s) => s,
             Err(()) => {
                 return IpeResult::Err(str_err(
@@ -334,7 +361,7 @@ where
             }
         };
         let f = decode_filter(filter);
-        let arr = read_logs_value(&db_path, &effective_svc, &tenant, f).await;
+        let arr = read_logs_value(&db_path, &effective_svc, tenant.as_ref(), f).await;
         decode_rows(arr)
     })
 }
@@ -368,11 +395,12 @@ const METRIC_LIMIT: i64 = 200;
 const TRACE_LIMIT: i64 = 100;
 const ERROR_LIMIT: i64 = 500;
 
-/// Build the `MetricRow`-shaped JSON array. `labels` is
-/// the attrs map rendered `k=v, k=v` (keys sorted for stable output); `sum`/
-/// `count` are 0 (the spill doesn't carry histogram aggregates yet).
-/// `tenant_prefix` empty → no tenant scoping; see [`tenant_like_clause`].
-async fn read_metrics_value(db_path: &str, service: &str, tenant_prefix: &str) -> Value {
+/// Build the `MetricRow`-shaped JSON array.
+///
+/// `labels` is the attrs map rendered `k=v, k=v` (keys sorted for stable
+/// output); `sum`/`count` are 0 (the spill doesn't carry histogram aggregates
+/// yet). `tenant` `None` → no tenant scoping; see [`TenantFilter`].
+async fn read_metrics_value(db_path: &str, service: &str, tenant: Option<&TenantPrefix>) -> Value {
     let Some(pool) = open_spill(db_path).await else {
         return Value::Array(vec![]);
     };
@@ -380,14 +408,14 @@ async fn read_metrics_value(db_path: &str, service: &str, tenant_prefix: &str) -
     if !service.is_empty() {
         sql.push_str(" AND service_name = ?");
     }
-    let tenant_like = tenant_like_clause(&mut sql, tenant_prefix);
+    let tenant_filter = TenantFilter::push(&mut sql, tenant);
     sql.push_str(" ORDER BY time DESC, id DESC LIMIT ?");
     let mut q = sqlx::query(&sql);
     if !service.is_empty() {
         q = q.bind(service);
     }
-    if let Some(pat) = tenant_like {
-        q = q.bind(pat);
+    if let Some(tf) = tenant_filter {
+        q = tf.bind(q);
     }
     let rows = match q.bind(METRIC_LIMIT).fetch_all(&pool).await {
         Ok(r) => r,
@@ -433,10 +461,11 @@ fn duration_ms(start: &str, end: &str) -> f64 {
     }
 }
 
-/// Build the `TraceRow`-shaped JSON array. `kind`=service,
-/// `durationMs` from start/end, `status` from attrs. `tenant_prefix` empty →
-/// no tenant scoping; see [`tenant_like_clause`].
-async fn read_traces_value(db_path: &str, service: &str, tenant_prefix: &str) -> Value {
+/// Build the `TraceRow`-shaped JSON array.
+///
+/// `kind`=service, `durationMs` from start/end, `status` from attrs. `tenant`
+/// `None` → no tenant scoping; see [`TenantFilter`].
+async fn read_traces_value(db_path: &str, service: &str, tenant: Option<&TenantPrefix>) -> Value {
     let Some(pool) = open_spill(db_path).await else {
         return Value::Array(vec![]);
     };
@@ -447,14 +476,14 @@ async fn read_traces_value(db_path: &str, service: &str, tenant_prefix: &str) ->
     if !service.is_empty() {
         sql.push_str(" AND service_name = ?");
     }
-    let tenant_like = tenant_like_clause(&mut sql, tenant_prefix);
+    let tenant_filter = TenantFilter::push(&mut sql, tenant);
     sql.push_str(" ORDER BY time DESC, id DESC LIMIT ?");
     let mut q = sqlx::query(&sql);
     if !service.is_empty() {
         q = q.bind(service);
     }
-    if let Some(pat) = tenant_like {
-        q = q.bind(pat);
+    if let Some(tf) = tenant_filter {
+        q = tf.bind(q);
     }
     let rows = match q.bind(TRACE_LIMIT).fetch_all(&pool).await {
         Ok(r) => r,
@@ -482,11 +511,11 @@ async fn read_traces_value(db_path: &str, service: &str, tenant_prefix: &str) ->
     Value::Array(out)
 }
 
-/// Build the `ErrorRow`-shaped JSON array: error-level
-/// logs grouped by message → `{count, message}`, descending by count for a
-/// stable, useful order. `tenant_prefix` empty → no tenant scoping; see
-/// [`tenant_like_clause`].
-async fn read_errors_value(db_path: &str, service: &str, tenant_prefix: &str) -> Value {
+/// Build the `ErrorRow`-shaped JSON array of error-level logs.
+///
+/// Grouped by message → `{count, message}`, descending by count for a stable,
+/// useful order. `tenant` `None` → no tenant scoping; see [`TenantFilter`].
+async fn read_errors_value(db_path: &str, service: &str, tenant: Option<&TenantPrefix>) -> Value {
     let Some(pool) = open_spill(db_path).await else {
         return Value::Array(vec![]);
     };
@@ -494,14 +523,14 @@ async fn read_errors_value(db_path: &str, service: &str, tenant_prefix: &str) ->
     if !service.is_empty() {
         sql.push_str(" AND service_name = ?");
     }
-    let tenant_like = tenant_like_clause(&mut sql, tenant_prefix);
+    let tenant_filter = TenantFilter::push(&mut sql, tenant);
     sql.push_str(" ORDER BY time DESC, id DESC LIMIT ?");
     let mut q = sqlx::query(&sql);
     if !service.is_empty() {
         q = q.bind(service);
     }
-    if let Some(pat) = tenant_like {
-        q = q.bind(pat);
+    if let Some(tf) = tenant_filter {
+        q = tf.bind(q);
     }
     let rows = match q.bind(ERROR_LIMIT).fetch_all(&pool).await {
         Ok(r) => r,
@@ -533,7 +562,7 @@ where
 {
     Box::pin(async move {
         let tenant = current_tenant_prefix();
-        decode_rows(read_metrics_value(&db_path, "", &tenant).await)
+        decode_rows(read_metrics_value(&db_path, "", tenant.as_ref()).await)
     })
 }
 
@@ -547,7 +576,7 @@ where
 {
     Box::pin(async move {
         let tenant = current_tenant_prefix();
-        let effective_svc = match reject_cross_tenant_svc(&service, &tenant) {
+        let effective_svc = match reject_cross_tenant_svc(&service, tenant.as_ref()) {
             Ok(s) => s,
             Err(()) => {
                 return IpeResult::Err(str_err(
@@ -555,7 +584,7 @@ where
                 ));
             }
         };
-        decode_rows(read_metrics_value(&db_path, &effective_svc, &tenant).await)
+        decode_rows(read_metrics_value(&db_path, &effective_svc, tenant.as_ref()).await)
     })
 }
 
@@ -568,7 +597,7 @@ where
 {
     Box::pin(async move {
         let tenant = current_tenant_prefix();
-        decode_rows(read_traces_value(&db_path, "", &tenant).await)
+        decode_rows(read_traces_value(&db_path, "", tenant.as_ref()).await)
     })
 }
 
@@ -582,7 +611,7 @@ where
 {
     Box::pin(async move {
         let tenant = current_tenant_prefix();
-        let effective_svc = match reject_cross_tenant_svc(&service, &tenant) {
+        let effective_svc = match reject_cross_tenant_svc(&service, tenant.as_ref()) {
             Ok(s) => s,
             Err(()) => {
                 return IpeResult::Err(str_err(
@@ -590,7 +619,7 @@ where
                 ));
             }
         };
-        decode_rows(read_traces_value(&db_path, &effective_svc, &tenant).await)
+        decode_rows(read_traces_value(&db_path, &effective_svc, tenant.as_ref()).await)
     })
 }
 
@@ -603,7 +632,7 @@ where
 {
     Box::pin(async move {
         let tenant = current_tenant_prefix();
-        decode_rows(read_errors_value(&db_path, "", &tenant).await)
+        decode_rows(read_errors_value(&db_path, "", tenant.as_ref()).await)
     })
 }
 
@@ -617,7 +646,7 @@ where
 {
     Box::pin(async move {
         let tenant = current_tenant_prefix();
-        let effective_svc = match reject_cross_tenant_svc(&service, &tenant) {
+        let effective_svc = match reject_cross_tenant_svc(&service, tenant.as_ref()) {
             Ok(s) => s,
             Err(()) => {
                 return IpeResult::Err(str_err(
@@ -625,7 +654,7 @@ where
                 ));
             }
         };
-        decode_rows(read_errors_value(&db_path, &effective_svc, &tenant).await)
+        decode_rows(read_errors_value(&db_path, &effective_svc, tenant.as_ref()).await)
     })
 }
 
@@ -1398,29 +1427,28 @@ mod tests {
 
     // ─── §5 Class-7 spec: tenant-prefix SQL enforcement ────────────────────
 
-    #[test]
-    fn reject_cross_tenant_svc_table() {
-        // Cross-tenant rejection spec table.
-        assert_eq!(reject_cross_tenant_svc("", "tenant-"), Ok(String::new()));
-        assert_eq!(
-            reject_cross_tenant_svc("tenant-foo", "tenant-"),
-            Ok("tenant-foo".to_string())
-        );
-        assert_eq!(reject_cross_tenant_svc("other-foo", "tenant-"), Err(()));
-        // Prefix match must be strict (bare "tenant" does not start with
-        // "tenant-" as a PREFIX match on the full string "tenant-").
-        assert_eq!(reject_cross_tenant_svc("tenant", "tenant-"), Err(()));
-        // No tenant claim → every svc in scope.
-        assert_eq!(
-            reject_cross_tenant_svc("anything", ""),
-            Ok("anything".to_string())
-        );
+    fn tenant(prefix: &str) -> TenantPrefix {
+        TenantPrefix::new(prefix).expect("non-empty test prefix")
     }
 
     #[test]
-    fn escape_like_prefix_strips_wildcards() {
-        assert_eq!(escape_like_prefix("customer-42-"), "customer-42-");
-        assert_eq!(escape_like_prefix("cust%omer_42"), "customer42");
+    fn reject_cross_tenant_svc_table() {
+        let t = tenant("tenant-");
+        assert_eq!(reject_cross_tenant_svc("", Some(&t)), Ok(String::new()));
+        assert_eq!(
+            reject_cross_tenant_svc("tenant-foo", Some(&t)),
+            Ok("tenant-foo".to_string())
+        );
+        assert_eq!(reject_cross_tenant_svc("other-foo", Some(&t)), Err(()));
+        // Prefix match is strict: bare "tenant" does not start with "tenant-".
+        assert_eq!(reject_cross_tenant_svc("tenant", Some(&t)), Err(()));
+        // Case-sensitive: "Tenant-foo" is another tenant's service.
+        assert_eq!(reject_cross_tenant_svc("Tenant-foo", Some(&t)), Err(()));
+        // No tenant in scope → every svc in scope.
+        assert_eq!(
+            reject_cross_tenant_svc("anything", None),
+            Ok("anything".to_string())
+        );
     }
 
     /// The two-tenant regression: a spill DB seeded with rows for
@@ -1447,7 +1475,7 @@ mod tests {
             .unwrap();
         }
         let res: IpeResult<String, Vec<Value>> = with_tenant_prefix(
-            "customer-42-".to_string(),
+            tenant("customer-42-"),
             hub_read_filtered_logs(path.clone(), String::new(), TestFilter::none()),
         )
         .await;
@@ -1487,7 +1515,7 @@ mod tests {
             .unwrap();
         }
         let res: IpeResult<String, Vec<Value>> = with_tenant_prefix(
-            "customer-42-".to_string(),
+            tenant("customer-42-"),
             hub_read_logs(path.clone(), TestFilter::none()),
         )
         .await;
@@ -1524,7 +1552,7 @@ mod tests {
         .await
         .unwrap();
         let res: IpeResult<String, Vec<Value>> = with_tenant_prefix(
-            "customer-42-".to_string(),
+            tenant("customer-42-"),
             hub_read_filtered_logs(
                 path.clone(),
                 "customer-99-billing".to_string(),
@@ -1579,26 +1607,212 @@ mod tests {
         }
 
         let metrics: IpeResult<String, Vec<Value>> = with_tenant_prefix(
-            "customer-42-".to_string(),
+            tenant("customer-42-"),
             hub_read_filtered_metrics(path.clone(), String::new()),
         )
         .await;
         assert!(matches!(&metrics, IpeResult::Ok(rows) if rows.len() == 1));
 
         let traces: IpeResult<String, Vec<Value>> = with_tenant_prefix(
-            "customer-42-".to_string(),
+            tenant("customer-42-"),
             hub_read_filtered_traces(path.clone(), String::new()),
         )
         .await;
         assert!(matches!(&traces, IpeResult::Ok(rows) if rows.len() == 1));
 
         let errors: IpeResult<String, Vec<Value>> = with_tenant_prefix(
-            "customer-42-".to_string(),
+            tenant("customer-42-"),
             hub_read_filtered_errors(path.clone(), String::new()),
         )
         .await;
         assert!(matches!(&errors, IpeResult::Ok(rows) if rows.len() == 1));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Refusals of the tenant-scope predicate against a real SQLite spill.
+    #[cfg(not(target_arch = "wasm32"))]
+    mod tenant_prefix {
+        use super::*;
+
+        /// Services whose names collide under `LIKE` semantics: case folding
+        /// (`Acme-b`), `_` as a one-character wildcard (`a_b-d` vs `ab-c`), and
+        /// `%` as an any-run wildcard (`%x`).
+        const SERVICES: [&str; 5] = ["acme-a", "Acme-b", "ab-c", "a_b-d", "%x"];
+
+        /// Create a spill holding one log, error log, metric and span per service.
+        async fn seed_spill(name: &str) -> String {
+            let path = crate::scratch_core::test_temp_root()
+                .join(format!("hub-tenant-{name}-{}.db", std::process::id()))
+                .to_string_lossy()
+                .to_string();
+            let _ = std::fs::remove_file(&path);
+            let pool = seed(&path).await;
+            for svc in SERVICES {
+                sqlx::query(
+                    "INSERT INTO telemetry_log (service_name, time, level, message, attrs) \
+                 VALUES (?, '2026-01-01T00:00:00Z', 'error', ?, '{}')",
+                )
+                .bind(svc)
+                .bind(svc)
+                .execute(&pool)
+                .await
+                .expect("insert log");
+                sqlx::query(
+                    "INSERT INTO telemetry_metric (service_name, time, name, type, value, attrs) \
+                 VALUES (?, '2026-01-01T00:00:00Z', ?, 'counter', 1.0, '{}')",
+                )
+                .bind(svc)
+                .bind(svc)
+                .execute(&pool)
+                .await
+                .expect("insert metric");
+                sqlx::query(
+                    "INSERT INTO telemetry_span (service_name, time, name, trace_id, span_id, \
+                 parent_id, start_time, end_time, attrs) \
+                 VALUES (?, '2026-01-01T00:00:00Z', 'op', 't', 's', '', '', '', '{}')",
+                )
+                .bind(svc)
+                .execute(&pool)
+                .await
+                .expect("insert span");
+            }
+            pool.close().await;
+            path
+        }
+
+        /// The service column of each row, sorted.
+        fn services_of(res: &IpeResult<String, Vec<Value>>, key: &str) -> Vec<String> {
+            let IpeResult::Ok(rows) = res else {
+                return vec!["<Err>".to_string()];
+            };
+            let mut out: Vec<String> = rows
+                .iter()
+                .map(|r| r[key].as_str().unwrap_or("<missing>").to_string())
+                .collect();
+            out.sort();
+            out
+        }
+
+        /// Every no-service reader under `prefix`, as `(reader, services seen)`.
+        async fn scoped_reads(path: &str, prefix: &str) -> Vec<(&'static str, Vec<String>)> {
+            let t = TenantPrefix::new(prefix).expect("non-empty test prefix");
+            let logs: IpeResult<String, Vec<Value>> = with_tenant_prefix(
+                t.clone(),
+                hub_read_logs(path.to_string(), TestFilter::none()),
+            )
+            .await;
+            let metrics: IpeResult<String, Vec<Value>> =
+                with_tenant_prefix(t.clone(), hub_read_metrics(path.to_string())).await;
+            let traces: IpeResult<String, Vec<Value>> =
+                with_tenant_prefix(t.clone(), hub_read_traces(path.to_string())).await;
+            let errors: IpeResult<String, Vec<Value>> =
+                with_tenant_prefix(t, hub_read_errors(path.to_string())).await;
+            vec![
+                ("logs", services_of(&logs, "subapp")),
+                ("metrics", services_of(&metrics, "name")),
+                ("traces", services_of(&traces, "kind")),
+                ("errors", services_of(&errors, "message")),
+            ]
+        }
+
+        async fn assert_scope(name: &str, prefix: &str, expected: &[&str]) {
+            let path = seed_spill(name).await;
+            let expected: Vec<String> = expected.iter().map(ToString::to_string).collect();
+            for (reader, seen) in scoped_reads(&path, prefix).await {
+                assert_eq!(seen, expected, "{reader} under tenant prefix {prefix:?}");
+            }
+            let _ = std::fs::remove_file(&path);
+        }
+
+        #[test]
+        fn empty_prefix_is_no_tenant() {
+            assert_eq!(TenantPrefix::new(""), None);
+            assert_eq!(TenantPrefix::new(String::new()), None);
+            assert_eq!(
+                TenantPrefix::new("%").map(|t| t.as_str().to_string()),
+                Some("%".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn prefix_is_case_sensitive() {
+            assert_scope("case", "acme", &["acme-a"]).await;
+        }
+
+        #[tokio::test]
+        async fn underscore_is_literal() {
+            assert_scope("underscore", "a_b", &["a_b-d"]).await;
+        }
+
+        #[tokio::test]
+        async fn percent_is_literal() {
+            assert_scope("percent", "%", &["%x"]).await;
+        }
+
+        #[tokio::test]
+        async fn wildcard_only_prefix_matches_nothing_else() {
+            assert_scope("wild", "_", &[]).await;
+            assert_scope("wildrun", "%_%", &[]).await;
+        }
+
+        #[tokio::test]
+        async fn explicit_service_outside_prefix_refuses() {
+            let path = seed_spill("explicit").await;
+            let t = TenantPrefix::new("a_b").expect("non-empty test prefix");
+            for svc in ["ab-c", "acme-a", "%x"] {
+                let logs: IpeResult<String, Vec<Value>> = with_tenant_prefix(
+                    t.clone(),
+                    hub_read_filtered_logs(path.clone(), svc.to_string(), TestFilter::none()),
+                )
+                .await;
+                assert!(matches!(logs, IpeResult::Err(_)), "logs {svc:?}: {logs:?}");
+                let metrics: IpeResult<String, Vec<Value>> = with_tenant_prefix(
+                    t.clone(),
+                    hub_read_filtered_metrics(path.clone(), svc.to_string()),
+                )
+                .await;
+                assert!(
+                    matches!(metrics, IpeResult::Err(_)),
+                    "metrics {svc:?}: {metrics:?}"
+                );
+                let traces: IpeResult<String, Vec<Value>> = with_tenant_prefix(
+                    t.clone(),
+                    hub_read_filtered_traces(path.clone(), svc.to_string()),
+                )
+                .await;
+                assert!(
+                    matches!(traces, IpeResult::Err(_)),
+                    "traces {svc:?}: {traces:?}"
+                );
+                let errors: IpeResult<String, Vec<Value>> = with_tenant_prefix(
+                    t.clone(),
+                    hub_read_filtered_errors(path.clone(), svc.to_string()),
+                )
+                .await;
+                assert!(
+                    matches!(errors, IpeResult::Err(_)),
+                    "errors {svc:?}: {errors:?}"
+                );
+            }
+            let inside: IpeResult<String, Vec<Value>> = with_tenant_prefix(
+                t,
+                hub_read_filtered_logs(path.clone(), "a_b-d".to_string(), TestFilter::none()),
+            )
+            .await;
+            assert_eq!(services_of(&inside, "subapp"), vec!["a_b-d".to_string()]);
+            let _ = std::fs::remove_file(&path);
+        }
+
+        #[tokio::test]
+        async fn no_tenant_reads_every_service() {
+            let path = seed_spill("none").await;
+            let logs: IpeResult<String, Vec<Value>> =
+                hub_read_logs(path.clone(), TestFilter::none()).await;
+            let mut all: Vec<String> = SERVICES.iter().map(ToString::to_string).collect();
+            all.sort();
+            assert_eq!(services_of(&logs, "subapp"), all);
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
