@@ -1145,6 +1145,9 @@ mod registry_phase_c_tests {
             K::DbUpdateWhere,
             // Cross-backend `ON CONFLICT … DO UPDATE` upsert (Ipê-new, no legacy oracle).
             K::DbUpsertFields,
+            // Policy-checked secured writes (Store-private, Ipê-new).
+            K::DbInsertFieldsChecked,
+            K::DbUpdateWhereChecked,
             // Two-store inner-join constructor (getter-arrow scheme, Ipê-new).
             K::StoreJoin,
             // Single-column projection over a join (getter-arrow scheme, Ipê-new).

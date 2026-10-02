@@ -10,8 +10,9 @@ module Main exposing (main)
 --     operation. `secured` (like `public`) is the only promotion to a queryable
 --     value; a table nobody classified is unqueryable by construction.
 --   • Owner-scoped. `ownerColumn .author` scopes every operation to
---     `author = $subject` AND forces the owner column to the caller on write, so
---     a caller can never read — or write — a row it does not own.
+--     `author = $subject`, forces the owner column to the caller on insert, and
+--     never rewrites it on update, so a caller can never read — or write — a
+--     row it does not own.
 --   • Immutable columns. `andPolicy (immutable .createdAt)` drops `.createdAt`
 --     from every update SET, so its insert-time value cannot change later.
 --   • The `Principal` is minted only by the fail-closed auth middleware

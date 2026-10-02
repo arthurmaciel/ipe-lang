@@ -3534,6 +3534,16 @@ pub enum StdlibKernel {
     /// (update-in-place on both backends); the `List String` is the conflict
     /// target.
     DbUpsertFields,
+    /// `Db_insertFieldsChecked : Db -> String -> List (String, SqlField)
+    /// -> SqlFragment -> Task Error Int` — `Store.insertAs`'s insert: kept only
+    /// when the policy check holds over the row as stored (`0` otherwise).
+    /// Store-private: bound by a non-exported `Kernel.kernel` alias.
+    DbInsertFieldsChecked,
+    /// `Db_updateWhereChecked : Db -> String -> List (String, SqlField)
+    /// -> SqlFragment -> SqlFragment -> Task Error Int` — `Store.updateAs`'s
+    /// update (fields, scoping `WHERE`, check): kept only when every updated row
+    /// satisfies the check as stored. Store-private like `DbInsertFieldsChecked`.
+    DbUpdateWhereChecked,
     // ── Ipe.Secret — opaque secret-string wrapper ─────────
     // The ONLY public constructor: every `Secret` value traces back to one of
     // these calls. Never derivable from a bare `String` implicitly.
@@ -7194,6 +7204,22 @@ impl StdlibKernel {
             Self::DbDeleteWhere => d("Db", "deleteWhere", 3, Db, "db_delete_where", IpeOrder),
             Self::DbUpdateWhere => d("Db", "updateWhere", 4, Db, "db_update_where", IpeOrder),
             Self::DbUpsertFields => d("Db", "upsertFields", 4, Db, "db_upsert_fields", IpeOrder),
+            Self::DbInsertFieldsChecked => d(
+                "Db",
+                "insertFieldsChecked",
+                4,
+                Db,
+                "db_insert_fields_checked",
+                IpeOrder,
+            ),
+            Self::DbUpdateWhereChecked => d(
+                "Db",
+                "updateWhereChecked",
+                5,
+                Db,
+                "db_update_where_checked",
+                IpeOrder,
+            ),
             // ── Ipe.Secret — opaque secret-string wrapper ─
             Self::SecretFromString => d(
                 "Secret",
@@ -8675,6 +8701,8 @@ impl StdlibKernel {
         Self::DbDeleteWhere,
         Self::DbUpdateWhere,
         Self::DbUpsertFields,
+        Self::DbInsertFieldsChecked,
+        Self::DbUpdateWhereChecked,
         Self::SecretFromString,
         Self::SecretReveal,
         Self::SecretUse,
@@ -10580,6 +10608,17 @@ impl StdlibKernel {
         const STRING_TO_UPDATE_WHERE: TyShape =
             TyShape::Fun(&STRING, &LIST_SQLFIELD_TO_UPDATE_WHERE);
         const DB_UPDATE_WHERE: TyShape = TyShape::Fun(&DB, &STRING_TO_UPDATE_WHERE);
+        // `Db_updateWhereChecked : Db -> String -> List (String, SqlField)
+        //                          -> SqlFragment -> SqlFragment -> Task Int`.
+        const SQLFRAGMENT_TO_SQLFRAGMENT_TO_TASK_INT: TyShape =
+            TyShape::Fun(&SQLFRAGMENT, &SQLFRAGMENT_TO_TASK_INT);
+        const LIST_SQLFIELD_TO_UPDATE_WHERE_CHECKED: TyShape = TyShape::Fun(
+            &LIST_TUPLE_STRING_SQLFIELD,
+            &SQLFRAGMENT_TO_SQLFRAGMENT_TO_TASK_INT,
+        );
+        const STRING_TO_UPDATE_WHERE_CHECKED: TyShape =
+            TyShape::Fun(&STRING, &LIST_SQLFIELD_TO_UPDATE_WHERE_CHECKED);
+        const DB_UPDATE_WHERE_CHECKED: TyShape = TyShape::Fun(&DB, &STRING_TO_UPDATE_WHERE_CHECKED);
         // `Db.insertFieldsReturning : Db -> String -> List (String, SqlField)
         //                             -> String -> Decoder a -> Task (List a)`.
         const DEC_A_TO_TASK_LIST_A_2: TyShape = TyShape::Fun(&DEC_A, &TASK_LIST_A);
@@ -12354,7 +12393,10 @@ impl StdlibKernel {
             Self::DbFindJoinOrdered => Some(&DB_FIND_JOIN_ORDERED),
             Self::DbFindProjectionOrdered => Some(&DB_FIND_PROJECTION_ORDERED),
             Self::DbDeleteWhere => Some(&DB_DELETE_WHERE),
-            Self::DbUpdateWhere => Some(&DB_UPDATE_WHERE),
+            // `Db_insertFieldsChecked` has `Db.updateWhere`'s exact shape
+            // (`Db -> String -> List (String, SqlField) -> SqlFragment -> Task Int`).
+            Self::DbUpdateWhere | Self::DbInsertFieldsChecked => Some(&DB_UPDATE_WHERE),
+            Self::DbUpdateWhereChecked => Some(&DB_UPDATE_WHERE_CHECKED),
             Self::DbUpsertFields => Some(&DB_UPSERT_FIELDS),
             Self::DbInsertFields => Some(&DB_INSERT_FIELDS),
             Self::DbUpdateFields => Some(&DB_UPDATE_FIELDS),
@@ -13369,6 +13411,8 @@ impl StdlibKernel {
             | Self::DbDeleteWhere
             | Self::DbUpdateWhere
             | Self::DbUpsertFields
+            | Self::DbInsertFieldsChecked
+            | Self::DbUpdateWhereChecked
             | Self::DbDefaultMigration
             | Self::DbDecString
             | Self::DbDecInt

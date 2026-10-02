@@ -27,12 +27,19 @@ Four ideas carry the whole security model.
   fail-closed middleware has verified the token. So an unauthenticated request can
   reach none of the `…As` operations — there is no `Principal` to pass them.
 - **A `Policy` is per-operation, and every operation it does not open is `never`.**
-  `ownerColumn .author` scopes read, get, update, and delete to `author = $subject`
-  and forces the owner column to the caller on write, so a caller can neither read
-  nor write a row it does not own. `readOnly p` opens reads to `p` and leaves every
-  write at `never`; a write path is opened deliberately with `alsoInsert` /
-  `alsoUpdate` / `alsoDelete`, never by omission. The unspecified operation fails
-  closed because its predicate is `never`, which has no representation as an open one.
+  `ownerColumn .author` scopes read, get, update, and delete to `author = $subject`,
+  forces the owner column to the caller on insert, and never rewrites it on update,
+  so a caller can neither read nor write a row it does not own, nor hand one to
+  another principal. `readOnly p` opens reads to `p` and leaves every write at
+  `never`; a write path is opened deliberately with `alsoInsert` / `alsoUpdate` /
+  `alsoDelete`, never by omission. The unspecified operation fails closed because
+  its predicate is `never`, which has no representation as an open one.
+- **A write keeps only a row its policy admits.** `insertAs` and `updateAs` each
+  run as one statement in its own savepoint whose `RETURNING` evaluates the insert
+  or update predicate over the row as stored; the savepoint is kept only when that
+  check holds. A write the policy refuses returns `0` and writes nothing, so a
+  `readOnly` store rejects every `insertAs`, and an update cannot move a row out of
+  what the policy lets the caller update.
 - **The policy compiles to a bound-param `WHERE`, never interpolation.** The owner
   filter lowers through `Sql.column` (for the validated column) and `Sql.param` (for
   the subject); the caller-side leaves — `role` / `memberOf` / `claimEquals` — read

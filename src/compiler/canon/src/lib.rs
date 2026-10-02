@@ -2539,6 +2539,11 @@ mod tests {
             // through `Ipe.Secret.Unsafe.unsafeReveal`. The scoped `Secret.use`
             // stays on the native `Secret` surface (capability-neutral).
             ("Secret", "reveal"),
+            // The policy-checked secured writes: canonical `("Db", …)` keys for
+            // the `Kernel.kernel` aliases `Ipe.Db.Store` keeps private to
+            // `insertAs` / `updateAs`; no module surfaces them.
+            ("Db", "insertFieldsChecked"),
+            ("Db", "updateWhereChecked"),
         ]
         .into_iter()
         .collect();

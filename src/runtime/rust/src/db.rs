@@ -266,6 +266,28 @@ impl QueryTarget<'_> {
         }
     }
 
+    /// Runs a write whose `RETURNING` names the policy check, keeping it only
+    /// when every returned row is admitted.
+    ///
+    /// The write runs in its own savepoint: a fresh transaction on the pool, or
+    /// a nested `SAVEPOINT` on the routed transaction connection, so a refused
+    /// write rolls back alone and leaves an enclosing `withTransaction` usable.
+    /// [`settle_checked_write`] decides commit or rollback; the count is the
+    /// admitted row count, or `0` when nothing was kept.
+    async fn checked_write(&self, query: DbQuery<'_>) -> Result<u64, sqlx::Error> {
+        match self {
+            QueryTarget::Pool(pool) => {
+                let savepoint = pool.begin().await?;
+                settle_checked_write(savepoint, query).await
+            }
+            QueryTarget::Txn(conn) => {
+                let mut guard = conn.lock().await;
+                let savepoint = sqlx::Connection::begin(&mut **guard).await?;
+                settle_checked_write(savepoint, query).await
+            }
+        }
+    }
+
     /// Test-only observer of the routing decision — lets a test drive the
     /// ambient path (`with_recording_txn`) and assert which arm was chosen
     /// without reaching past the seam into the task-local by hand.
@@ -4286,12 +4308,72 @@ pub fn db_delete_where<E: Send + From<String> + 'static>(
     })
 }
 
+/// A built `UPDATE … WHERE …`, or the no-op an all-`OmitField` SET list is.
+#[derive(Debug, PartialEq)]
+enum UpdateStatement {
+    /// Every SET column was `OmitField`: nothing to write, no SQL to run.
+    NothingToSet,
+    /// The statement text (`?` placeholders) and its binds in placeholder order.
+    Built { sql: String, args: Vec<SqlParam> },
+}
+
+/// Builds `UPDATE <table> SET c = ?, … WHERE <where_>`.
+///
+/// Shared by [`db_update_where`] and [`db_update_where_checked`]. `OmitField`
+/// (`None`) columns are left out of the SET; when none remains the result is
+/// [`UpdateStatement::NothingToSet`]. Refused, in order: a poisoned WHERE, an
+/// invalid table or SET column name, and (once a SET exists) an empty WHERE,
+/// which would rewrite every row. The SET binds precede the WHERE binds,
+/// matching placeholder order.
+fn build_update_where_sql(
+    table: &str,
+    set_fields: Vec<(String, Option<SqlParam>)>,
+    where_: SqlFragment,
+) -> Result<UpdateStatement, DbBuildError> {
+    if let Some(reason) = where_.invalid {
+        return Err(DbBuildError::PoisonedFragment { reason });
+    }
+    let qtable = SqlIdent::parse_dotted(table).ok_or_else(|| DbBuildError::InvalidIdent {
+        slot: IdentSlot::Table,
+        name: table.to_string(),
+    })?;
+    let mut set_clauses: Vec<String> = Vec::new();
+    let mut args: Vec<SqlParam> = Vec::new();
+    for (col, opt) in set_fields {
+        let Some(qcol) = SqlIdent::parse_dotted(&col) else {
+            return Err(DbBuildError::InvalidIdent {
+                slot: IdentSlot::Column(ColumnList::Set),
+                name: col,
+            });
+        };
+        if let Some(p) = opt {
+            set_clauses.push(format!("{} = ?", qcol.as_str()));
+            args.push(p);
+        }
+    }
+    if set_clauses.is_empty() {
+        return Ok(UpdateStatement::NothingToSet);
+    }
+    if where_.sql.trim().is_empty() {
+        return Err(DbBuildError::UnscopedUpdate);
+    }
+    let sql = format!(
+        "UPDATE {} SET {} WHERE {}",
+        qtable.as_str(),
+        set_clauses.join(", "),
+        where_.sql
+    );
+    args.extend(where_.binds);
+    Ok(UpdateStatement::Built { sql, args })
+}
+
 /// `Db.updateWhere : Db -> String -> List (String, SqlField) -> SqlFragment -> Task Error Int`
 /// — the WHERE-`SqlFragment` counterpart to [`db_update_fields`]. The SET list is
 /// the OmitField-aware column/value binds of [`db_update_fields`]; the WHERE is
 /// the combinator-built `SqlFragment` of [`db_delete_where`]. Every SET value is
 /// bound (`SqlParam`); the WHERE text is always `?`-placeholder with a matching
-/// bind list, so no caller value or identifier reaches the SQL text.
+/// bind list, so no caller value or identifier reaches the SQL text. An
+/// all-`OmitField` SET writes nothing and returns `0`.
 pub fn db_update_where<E: Send + From<String> + 'static>(
     conn: Db,
     table: String,
@@ -4299,64 +4381,199 @@ pub fn db_update_where<E: Send + From<String> + 'static>(
     frag: SqlFragment,
 ) -> IpeTask<E, i64> {
     Box::pin(async move {
-        if let Some(reason) = frag.invalid {
-            return IpeResult::Err(format!("db.updateWhere: {reason}").into());
-        }
-        let qtable = match SqlIdent::parse_dotted(&table) {
-            Some(t) => t,
-            None => {
-                return IpeResult::Err(
-                    format!("db.updateWhere: invalid table name {:?}", table).into(),
-                );
-            }
+        let (sql, args) = match build_update_where_sql(&table, set_fields, frag) {
+            Ok(UpdateStatement::Built { sql, args }) => (sql, args),
+            Ok(UpdateStatement::NothingToSet) => return ok_res(0i64),
+            Err(e) => return IpeResult::Err(build_refusal("db.updateWhere", &e)),
         };
-        // Build SET clause — OmitField (None) columns are skipped.
-        let mut set_clauses: Vec<String> = Vec::new();
-        let mut args: Vec<SqlParam> = Vec::new();
-        for (col, opt) in set_fields {
-            let qcol = match SqlIdent::parse_dotted(&col) {
-                Some(c) => c,
-                None => {
-                    return IpeResult::Err(
-                        format!("db.updateWhere: invalid SET column name {:?}", col).into(),
-                    );
-                }
-            };
-            if let Some(p) = opt {
-                set_clauses.push(format!("{} = ?", qcol.as_str()));
-                args.push(p);
-            }
-        }
-        if set_clauses.is_empty() {
-            // Every column was OmitField — nothing to update; report zero rows.
-            return ok_res(0i64);
-        }
-        // Refuse an unscoped UPDATE: an empty WHERE fragment would emit
-        // `UPDATE <table> SET ...` with no WHERE, silently rewriting EVERY row.
-        // Fail closed instead of mass-updating.
-        if frag.sql.trim().is_empty() {
-            return IpeResult::Err(
-                "db.updateWhere: refusing unscoped UPDATE (no WHERE); pass an explicit condition"
-                    .to_string()
-                    .into(),
-            );
-        }
-        let sql = db_format_sql(format!(
-            "UPDATE {} SET {} WHERE {}",
-            qtable.as_str(),
-            set_clauses.join(", "),
-            frag.sql
-        ));
+        let sql = db_format_sql(sql);
         let mut q = sqlx::query(&sql);
         for p in args {
-            q = bind_sql_param(q, p);
-        }
-        for p in frag.binds {
             q = bind_sql_param(q, p);
         }
         match exec_routed(&conn, q).await {
             Ok(res) => ok_res(res.rows_affected() as i64),
             Err(e) => IpeResult::Err(ipe_err(&e)),
+        }
+    })
+}
+
+/// The result column a checked write's `RETURNING` clause names.
+const POLICY_OK_COLUMN: &str = "ipe_policy_ok";
+
+/// A policy predicate a checked write evaluates over each row as stored.
+///
+/// Built only by [`PolicyCheck::parse`], so a poisoned or empty fragment never
+/// reaches a `RETURNING` clause.
+#[derive(Debug)]
+struct PolicyCheck(SqlFragment);
+
+impl PolicyCheck {
+    /// Accepts a check fragment that carries no poison and names a predicate.
+    ///
+    /// A poisoned fragment is [`DbBuildError::PoisonedFragment`]; an empty one
+    /// is [`DbBuildError::EmptyCheck`].
+    fn parse(frag: SqlFragment) -> Result<Self, DbBuildError> {
+        if let Some(reason) = frag.invalid {
+            return Err(DbBuildError::PoisonedFragment { reason });
+        }
+        if frag.sql.trim().is_empty() {
+            return Err(DbBuildError::EmptyCheck);
+        }
+        Ok(Self(frag))
+    }
+
+    /// Appends `RETURNING (<check>) AS ipe_policy_ok` to a built statement.
+    ///
+    /// The check's binds follow the statement's own, which is placeholder order.
+    fn returning(self, sql: &str, mut args: Vec<SqlParam>) -> (String, Vec<SqlParam>) {
+        let Self(check) = self;
+        args.extend(check.binds);
+        (
+            format!("{sql} RETURNING ({}) AS {POLICY_OK_COLUMN}", check.sql),
+            args,
+        )
+    }
+}
+
+/// Builds the insert of [`db_insert_fields_checked`].
+///
+/// It is the [`build_insert_sql`] statement plus the policy check's
+/// `RETURNING` suffix; the check is parsed first.
+fn build_checked_insert_sql(
+    table: &str,
+    fields: Vec<(String, Option<SqlParam>)>,
+    check: SqlFragment,
+) -> Result<(String, Vec<SqlParam>), DbBuildError> {
+    let check = PolicyCheck::parse(check)?;
+    let (sql, args) = build_insert_sql(table, fields)?;
+    Ok(check.returning(&sql, args))
+}
+
+/// Builds the update of [`db_update_where_checked`].
+///
+/// It is the [`build_update_where_sql`] statement plus the policy check's
+/// `RETURNING` suffix; the check is parsed first.
+fn build_checked_update_sql(
+    table: &str,
+    set_fields: Vec<(String, Option<SqlParam>)>,
+    where_: SqlFragment,
+    check: SqlFragment,
+) -> Result<UpdateStatement, DbBuildError> {
+    let check = PolicyCheck::parse(check)?;
+    Ok(match build_update_where_sql(table, set_fields, where_)? {
+        UpdateStatement::NothingToSet => UpdateStatement::NothingToSet,
+        UpdateStatement::Built { sql, args } => {
+            let (sql, args) = check.returning(&sql, args);
+            UpdateStatement::Built { sql, args }
+        }
+    })
+}
+
+/// True when a checked write's returned row holds the policy check as `true`.
+///
+/// Only a boolean `true` or the integer `1` admits. `false`, `0`, `NULL`, any
+/// other value, a missing column, and a decode failure each refuse. The integer
+/// reader runs first: a SQLite comparison yields an integer, and a SQLite `bool`
+/// decode would accept every non-zero integer. A Postgres `BOOL` fails the
+/// integer reader's type check and is read as `bool`.
+fn policy_admits(row: &DbRow) -> bool {
+    match row.try_get::<Option<i64>, _>(POLICY_OK_COLUMN) {
+        Ok(v) => v == Some(1),
+        Err(_) => matches!(
+            row.try_get::<Option<bool>, _>(POLICY_OK_COLUMN),
+            Ok(Some(true))
+        ),
+    }
+}
+
+/// Runs a checked write inside `savepoint` and settles it.
+///
+/// The savepoint is committed only when the statement returned at least one row
+/// and [`policy_admits`] holds for every one; the count is then the returned
+/// row count. Otherwise it is rolled back and the count is `0`. A statement
+/// error rolls back too and is returned.
+async fn settle_checked_write(
+    mut savepoint: sqlx::Transaction<'_, DbDatabase>,
+    query: DbQuery<'_>,
+) -> Result<u64, sqlx::Error> {
+    let rows = match query.fetch_all(&mut *savepoint).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            // The statement error is the one reported; were this rollback to
+            // fail, dropping the savepoint still rolls it back.
+            let _ = savepoint.rollback().await;
+            return Err(e);
+        }
+    };
+    if !rows.is_empty() && rows.iter().all(policy_admits) {
+        savepoint.commit().await?;
+        Ok(u64::try_from(rows.len()).unwrap_or(u64::MAX))
+    } else {
+        savepoint.rollback().await?;
+        Ok(0)
+    }
+}
+
+/// Runs a built checked write on `conn`'s routed target and maps the count.
+async fn run_checked_write<E: From<String>>(
+    conn: &Db,
+    sql: String,
+    args: Vec<SqlParam>,
+) -> IpeResult<E, i64> {
+    let sql = db_format_sql(sql);
+    let mut q = sqlx::query(&sql);
+    for p in args {
+        q = bind_sql_param(q, p);
+    }
+    match route_for(conn).checked_write(q).await {
+        Ok(n) => ok_res(i64::try_from(n).unwrap_or(i64::MAX)),
+        Err(e) => IpeResult::Err(ipe_err(&e)),
+    }
+}
+
+/// `Db_insertFieldsChecked : Db -> String -> List (String, SqlField) -> SqlFragment -> Task Error Int`
+/// — the insert of `Store.insertAs`.
+///
+/// Builds the [`db_insert_fields`] statement with `RETURNING (<check>)` and runs
+/// it through [`QueryTarget::checked_write`]: the row stays only when `check`
+/// holds over it as stored. Returns `1` when kept and `0` when the check refused
+/// it (nothing is written). A poisoned or empty `check` is refused before any SQL.
+pub fn db_insert_fields_checked<E: Send + From<String> + 'static>(
+    conn: Db,
+    table: String,
+    fields: Vec<(String, Option<SqlParam>)>,
+    check: SqlFragment,
+) -> IpeTask<E, i64> {
+    Box::pin(async move {
+        match build_checked_insert_sql(&table, fields, check) {
+            Ok((sql, args)) => run_checked_write(&conn, sql, args).await,
+            Err(e) => IpeResult::Err(build_refusal("db.insertFieldsChecked", &e)),
+        }
+    })
+}
+
+/// `Db_updateWhereChecked : Db -> String -> List (String, SqlField) -> SqlFragment -> SqlFragment -> Task Error Int`
+/// — the update of `Store.updateAs`.
+///
+/// Arguments after the table: the SET fields, the scoping `WHERE`, then the
+/// check. Builds the [`db_update_where`] statement with `RETURNING (<check>)`
+/// and runs it through [`QueryTarget::checked_write`]: the update stays only
+/// when every updated row satisfies `check` as stored after the write. Returns
+/// the updated-row count, or `0` when no row matched or the check refused
+/// (nothing is written). An all-`OmitField` SET returns `0` without SQL.
+pub fn db_update_where_checked<E: Send + From<String> + 'static>(
+    conn: Db,
+    table: String,
+    set_fields: Vec<(String, Option<SqlParam>)>,
+    where_: SqlFragment,
+    check: SqlFragment,
+) -> IpeTask<E, i64> {
+    Box::pin(async move {
+        match build_checked_update_sql(&table, set_fields, where_, check) {
+            Ok(UpdateStatement::Built { sql, args }) => run_checked_write(&conn, sql, args).await,
+            Ok(UpdateStatement::NothingToSet) => ok_res(0i64),
+            Err(e) => IpeResult::Err(build_refusal("db.updateWhereChecked", &e)),
         }
     })
 }
@@ -4640,6 +4857,8 @@ enum ColumnList {
     Fields,
     /// The `ON CONFLICT (…)` target of an upsert.
     ConflictTarget,
+    /// The `SET` list of an update.
+    Set,
 }
 
 #[cfg(feature = "db")]
@@ -4649,6 +4868,7 @@ impl ColumnList {
         match self {
             Self::Fields => "",
             Self::ConflictTarget => "conflict-target ",
+            Self::Set => "SET ",
         }
     }
 }
@@ -4663,7 +4883,8 @@ enum IdentSlot {
     Column(ColumnList),
 }
 
-/// Why [`build_insert_sql`] / [`build_upsert_sql`] refused to build a statement.
+/// Why a statement builder ([`build_insert_sql`], [`build_upsert_sql`],
+/// [`build_update_where_sql`]) or a [`PolicyCheck`] refused to build.
 ///
 /// Every variant carries identifier NAMES only, never a bound value, so the
 /// rendered message cannot leak row data. `Display` is the refusal text; the
@@ -4682,6 +4903,13 @@ enum DbBuildError {
     TargetNotSupplied { name: String },
     /// A conflict-target column was bound to `SqlNull`.
     NullTarget { name: String },
+    /// A `SqlFragment` carries a poison marker; `reason` is its own text,
+    /// which names only a Debug-escaped identifier.
+    PoisonedFragment { reason: String },
+    /// An update's `WHERE` fragment is empty, which would rewrite every row.
+    UnscopedUpdate,
+    /// A policy check fragment is empty, so it states no predicate to hold.
+    EmptyCheck,
 }
 
 #[cfg(feature = "db")]
@@ -4713,6 +4941,13 @@ impl std::fmt::Display for DbBuildError {
                 f,
                 "conflict-target column {name:?} is NULL; a NULL key never conflicts"
             ),
+            Self::PoisonedFragment { reason } => f.write_str(reason),
+            Self::UnscopedUpdate => {
+                f.write_str("refusing unscoped UPDATE (no WHERE); pass an explicit condition")
+            }
+            Self::EmptyCheck => {
+                f.write_str("empty policy check; a checked write must name the predicate it keeps")
+            }
         }
     }
 }
@@ -6479,6 +6714,350 @@ mod tests {
             count_title(&db, "mutated").await,
             0,
             "no mass-update may occur"
+        );
+    }
+
+    /// A hand-built fragment with no poison marker.
+    fn checked_frag(sql: &str, binds: Vec<SqlParam>) -> SqlFragment {
+        SqlFragment {
+            sql: sql.to_string(),
+            binds,
+            invalid: None,
+        }
+    }
+
+    fn text(v: &str) -> SqlParam {
+        SqlParam::Text(v.to_string())
+    }
+
+    /// The checked insert is the plain insert plus the check's `RETURNING`; the
+    /// check's binds come after the inserted values (placeholder order).
+    #[test]
+    fn checked_insert_sql_appends_the_check_after_the_insert_binds() {
+        let built = build_checked_insert_sql(
+            "docs",
+            vec![
+                ("author".to_string(), Some(text("alice"))),
+                ("created_at".to_string(), None),
+                ("n".to_string(), Some(SqlParam::Int(2))),
+            ],
+            checked_frag("author = ?", vec![text("check")]),
+        );
+        assert!(
+            matches!(
+                &built,
+                Ok((sql, args)) if sql == "INSERT INTO docs (author, n) VALUES (?, ?) \
+                    RETURNING (author = ?) AS ipe_policy_ok"
+                    && *args == vec![text("alice"), SqlParam::Int(2), text("check")]
+            ),
+            "unexpected checked insert: {built:?}"
+        );
+    }
+
+    /// The checked update binds SET, then WHERE, then the check, matching the
+    /// textual order of their placeholders; an all-`OmitField` SET builds nothing.
+    #[test]
+    fn checked_update_sql_binds_set_then_where_then_check() {
+        let built = build_checked_update_sql(
+            "docs",
+            vec![
+                ("title".to_string(), Some(text("new"))),
+                ("created_at".to_string(), None),
+            ],
+            checked_frag("id = ?", vec![SqlParam::Int(7)]),
+            checked_frag("author = ?", vec![text("alice")]),
+        );
+        assert!(
+            matches!(
+                &built,
+                Ok(UpdateStatement::Built { sql, args })
+                    if sql == "UPDATE docs SET title = ? WHERE id = ? \
+                        RETURNING (author = ?) AS ipe_policy_ok"
+                    && *args == vec![text("new"), SqlParam::Int(7), text("alice")]
+            ),
+            "unexpected checked update: {built:?}"
+        );
+        let nothing = build_checked_update_sql(
+            "docs",
+            vec![("created_at".to_string(), None)],
+            checked_frag("id = ?", vec![SqlParam::Int(7)]),
+            checked_frag("1", vec![]),
+        );
+        assert!(
+            matches!(nothing, Ok(UpdateStatement::NothingToSet)),
+            "an all-OmitField SET must build nothing: {nothing:?}"
+        );
+    }
+
+    /// A poisoned or empty check is refused before the statement is built, so a
+    /// check can never be dropped from a write; the update builder keeps its own
+    /// refusals.
+    #[test]
+    fn checked_write_builders_refuse_a_bad_check_or_statement() {
+        let poisoned = sql_column("x;".to_string());
+        let reason = "Sql.column: invalid identifier \"x;\"".to_string();
+        assert!(
+            matches!(
+                PolicyCheck::parse(poisoned.clone()),
+                Err(DbBuildError::PoisonedFragment { reason: r }) if r == reason
+            ),
+            "a poisoned check must be refused with its own reason"
+        );
+        let empty = PolicyCheck::parse(checked_frag("  ", vec![]));
+        assert!(
+            matches!(empty, Err(DbBuildError::EmptyCheck)),
+            "an empty check must be refused: {empty:?}"
+        );
+        let insert = build_checked_insert_sql(
+            "docs",
+            vec![("a".to_string(), Some(SqlParam::Int(1)))],
+            poisoned.clone(),
+        );
+        assert!(
+            matches!(&insert, Err(DbBuildError::PoisonedFragment { .. })),
+            "a checked insert with a poisoned check must be refused: {insert:?}"
+        );
+        let set = || vec![("a".to_string(), Some(SqlParam::Int(1)))];
+        let update = build_checked_update_sql(
+            "docs",
+            set(),
+            checked_frag("id = ?", vec![SqlParam::Int(1)]),
+            poisoned.clone(),
+        );
+        assert!(
+            matches!(&update, Err(DbBuildError::PoisonedFragment { .. })),
+            "a checked update with a poisoned check must be refused: {update:?}"
+        );
+        let unscoped = build_checked_update_sql(
+            "docs",
+            set(),
+            checked_frag(" ", vec![]),
+            checked_frag("1", vec![]),
+        );
+        assert!(
+            matches!(unscoped, Err(DbBuildError::UnscopedUpdate)),
+            "an empty WHERE must be refused: {unscoped:?}"
+        );
+        let poisoned_where = build_update_where_sql("docs", set(), poisoned);
+        assert!(
+            matches!(
+                &poisoned_where,
+                Err(DbBuildError::PoisonedFragment { reason: r }) if *r == reason
+            ),
+            "a poisoned WHERE must be refused: {poisoned_where:?}"
+        );
+        let hostile_set = build_update_where_sql(
+            "docs",
+            vec![("a = 1; --".to_string(), Some(SqlParam::Int(1)))],
+            checked_frag("id = ?", vec![SqlParam::Int(1)]),
+        );
+        assert!(
+            matches!(
+                &hostile_set,
+                Err(e) if *e == invalid(IdentSlot::Column(ColumnList::Set), "a = 1; --")
+            ),
+            "a hostile SET column must be refused: {hostile_set:?}"
+        );
+    }
+
+    /// The update refusals render the same task-edge text `db.updateWhere`
+    /// has always reported.
+    #[test]
+    fn update_where_refusal_text_is_pinned() {
+        let cases = [
+            (
+                DbBuildError::UnscopedUpdate,
+                "db.updateWhere: refusing unscoped UPDATE (no WHERE); pass an explicit condition",
+            ),
+            (
+                invalid(IdentSlot::Column(ColumnList::Set), "c;"),
+                "db.updateWhere: invalid SET column name \"c;\"",
+            ),
+            (
+                invalid(IdentSlot::Table, "t;"),
+                "db.updateWhere: invalid table name \"t;\"",
+            ),
+            (
+                DbBuildError::PoisonedFragment {
+                    reason: "Sql.column: invalid identifier \"x;\"".to_string(),
+                },
+                "db.updateWhere: Sql.column: invalid identifier \"x;\"",
+            ),
+        ];
+        for (e, want) in cases {
+            let got: String = build_refusal("db.updateWhere", &e);
+            assert_eq!(got, want, "refusal text for {e:?}");
+        }
+    }
+
+    /// A checked insert of `title` under the check `check_sql`.
+    async fn checked_insert_title(db: &Db, title: &str, check_sql: &str) -> IpeResult<String, i64> {
+        db_insert_fields_checked(
+            db.clone(),
+            "todos".into(),
+            vec![("title".to_string(), Some(text(title)))],
+            checked_frag(check_sql, vec![]),
+        )
+        .await
+    }
+
+    /// Only a check returning `1` keeps the row; `0`, `NULL` and a value that
+    /// does not decode as a boolean or integer (`'yes'`) each roll it back.
+    #[tokio::test]
+    async fn checked_insert_keeps_only_an_admitted_row() {
+        let db = fresh_db().await;
+        let cases = [
+            ("kept", "1", 1i64),
+            ("zero", "0", 0),
+            ("null", "NULL", 0),
+            ("text", "'yes'", 0),
+        ];
+        for (title, check, want) in cases {
+            let got = checked_insert_title(&db, title, check).await;
+            assert!(
+                matches!(got, IpeResult::Ok(n) if n == want),
+                "check {check}: expected Ok({want}), got {got:?}"
+            );
+            let stored = count_title(&db, title).await;
+            assert_eq!(
+                i64::try_from(stored).ok(),
+                Some(want),
+                "check {check}: the stored row count must equal the returned count"
+            );
+        }
+    }
+
+    /// The checked update keeps a write only when the row satisfies the check
+    /// after the write; a WHERE that matches nothing writes nothing.
+    #[tokio::test]
+    async fn checked_update_rolls_back_a_refused_row() {
+        let db = fresh_db().await;
+        insert_title(&db, "a").await;
+        let update = |to: &str, check_value: &str| {
+            db_update_where_checked::<String>(
+                db.clone(),
+                "todos".into(),
+                vec![("title".to_string(), Some(text(to)))],
+                where_eq_title("a"),
+                checked_frag("title = ?", vec![text(check_value)]),
+            )
+        };
+        let refused = update("b", "c").await;
+        assert!(
+            matches!(refused, IpeResult::Ok(0)),
+            "a row failing the check after the write must give 0, got {refused:?}"
+        );
+        assert_eq!(
+            count_title(&db, "a").await,
+            1,
+            "the refused update rolled back"
+        );
+        assert_eq!(
+            count_title(&db, "b").await,
+            0,
+            "the refused value is not stored"
+        );
+        let kept = update("b", "b").await;
+        assert!(
+            matches!(kept, IpeResult::Ok(1)),
+            "a row satisfying the check after the write must give 1, got {kept:?}"
+        );
+        assert_eq!(
+            count_title(&db, "b").await,
+            1,
+            "the admitted update is stored"
+        );
+        let unmatched = update("z", "z").await;
+        assert!(
+            matches!(unmatched, IpeResult::Ok(0)),
+            "a WHERE matching no row must give 0, got {unmatched:?}"
+        );
+        assert_eq!(count_title(&db, "z").await, 0);
+    }
+
+    /// A correlated `EXISTS` over another table, naming the written row as
+    /// `<table>.<col>`, is evaluated in the `RETURNING` check.
+    #[tokio::test]
+    async fn checked_insert_evaluates_a_correlated_subquery() {
+        let db = fresh_db().await;
+        let created: IpeResult<String, i64> = db_exec(
+            db.clone(),
+            "CREATE TABLE shares (doc_title TEXT NOT NULL)".into(),
+            vec![],
+        )
+        .await;
+        assert!(
+            matches!(created, IpeResult::Ok(_)),
+            "create shares: {created:?}"
+        );
+        let check = "EXISTS (SELECT 1 FROM shares WHERE shares.doc_title = todos.title)";
+        let unshared = checked_insert_title(&db, "y", check).await;
+        assert!(
+            matches!(unshared, IpeResult::Ok(0)),
+            "without a share the insert must give 0, got {unshared:?}"
+        );
+        assert_eq!(count_title(&db, "y").await, 0);
+        let shared: IpeResult<String, i64> = db_exec(
+            db.clone(),
+            "INSERT INTO shares (doc_title) VALUES (?)".into(),
+            vec!["y".to_string()],
+        )
+        .await;
+        assert!(
+            matches!(shared, IpeResult::Ok(_)),
+            "insert share: {shared:?}"
+        );
+        let admitted = checked_insert_title(&db, "y", check).await;
+        assert!(
+            matches!(admitted, IpeResult::Ok(1)),
+            "with a share the insert must give 1, got {admitted:?}"
+        );
+        assert_eq!(count_title(&db, "y").await, 1);
+    }
+
+    /// A refused checked write inside a transaction rolls back only its own
+    /// savepoint: later writes in the same transaction still commit.
+    #[tokio::test]
+    #[allow(clippy::expect_used)] // test: the recording transaction is solely owned once its scope ends
+    async fn checked_write_savepoint_leaves_the_outer_transaction_usable() {
+        let db = fresh_db().await;
+        let rec = recording_txn(&db).await;
+        let (refused, admitted, plain) = with_recording_txn(&db, rec.clone(), async {
+            let refused = checked_insert_title(&db, "refused", "0").await;
+            let admitted = checked_insert_title(&db, "admitted", "1").await;
+            let plain: IpeResult<String, i64> = db_insert_fields(
+                db.clone(),
+                "todos".into(),
+                vec![("title".to_string(), Some(text("plain")))],
+            )
+            .await;
+            (refused, admitted, plain)
+        })
+        .await;
+        assert!(matches!(refused, IpeResult::Ok(0)), "refused: {refused:?}");
+        assert!(
+            matches!(admitted, IpeResult::Ok(1)),
+            "admitted: {admitted:?}"
+        );
+        assert!(matches!(plain, IpeResult::Ok(_)), "plain: {plain:?}");
+        let tx = std::sync::Arc::try_unwrap(rec)
+            .expect("the scope released its clone")
+            .into_inner();
+        tx.commit().await.expect("commit the outer transaction");
+        assert_eq!(
+            count_title(&db, "refused").await,
+            0,
+            "the refused row rolled back"
+        );
+        assert_eq!(
+            count_title(&db, "admitted").await,
+            1,
+            "the admitted row committed"
+        );
+        assert_eq!(
+            count_title(&db, "plain").await,
+            1,
+            "the later plain insert committed"
         );
     }
 
@@ -8891,11 +9470,10 @@ mod tests {
         )
         .await;
 
-        // Exactly what the fixed `updateAs` emits for a policy of
-        // `ownerColumn owner |> andPolicy (immutable stamped)`: the SET carries
-        // the mutable `owner` (forced to the caller) but NOT `stamped` (dropped
-        // by `dropImmutableColumns`), scoped by pk AND the owner filter. The
-        // caller's attempt to set a new `stamped` value is simply absent.
+        // An update scoped by pk AND the owner filter whose SET carries a
+        // written column but NOT `stamped` (dropped the way `updateAs` drops
+        // every immutable and owner column). The caller's attempt to set a new
+        // `stamped` value is simply absent.
         let updated: IpeResult<String, i64> = db_update_where(
             db.clone(),
             "docs".to_string(),
