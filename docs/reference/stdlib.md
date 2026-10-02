@@ -1621,7 +1621,7 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `explain` | `explain policy` — a human-readable rendering of the (simplified) policy, one |
 | `allAs` | `allAs principal db secured` — read every row the policy admits for |
 | `getAs` | `getAs principal db secured keyValue` — read the single row whose primary |
-| `insertAs` | `insertAs principal db secured row` — insert `row`, forcing every owner |
+| `insertAs` | `insertAs principal db secured row` — insert `row` when the policy's insert |
 | `updateAs` | `updateAs principal db secured row` — update the row whose primary key |
 | `deleteAs` | `deleteAs principal db secured keyValue` — delete the row whose primary key |
 

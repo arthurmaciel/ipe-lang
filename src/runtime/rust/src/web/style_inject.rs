@@ -157,7 +157,8 @@ fn inject_pass<M>(
 
 /// Build the `<style>` node for an element's markers and strip those markers
 /// from its attrs. Returns `None` (markers still stripped) when there's no
-/// ipe-id, no non-empty marker, or the built CSS is empty.
+/// ipe-id, an ipe-id outside [`is_selector_safe_ipe_id`], no non-empty marker,
+/// or the built CSS is empty.
 fn build_style_node<M>(
     attrs: &mut Vec<Attribute<M>>,
     markers: &[&str],
@@ -165,8 +166,8 @@ fn build_style_node<M>(
     build: &impl Fn(&str, &[Attribute<M>]) -> String,
 ) -> Option<Html<M>> {
     let ipe_id = match attr_get(attrs, "ipe-id") {
-        Some(s) => s,
-        None => {
+        Some(s) if is_selector_safe_ipe_id(&s) => s,
+        _ => {
             strip_markers(attrs, markers);
             return None;
         }
@@ -190,6 +191,18 @@ fn build_style_node<M>(
     ))
 }
 
+/// The ipe-id is spliced raw into `[ipe-id="…"]` inside an `HRaw` `<style>`
+/// body. `assign_ipe_ids` builds it from the tag names the renderer admits
+/// (`[A-Za-z0-9_:.-]`), the sanitised key, `:`, and the `!doctype-wrapper`
+/// pseudo-tag; an id with any other byte (a `"`, `]`, `{`, `<`, `\`) did not
+/// come from that stamper and gets no style block.
+fn is_selector_safe_ipe_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b':' | b'.' | b'!'))
+}
+
 /// Read an attribute's value by key (owned clone — values are short and this
 /// keeps the helper lifetime-free, which also dodges a false-positive in the
 /// runtime indexing-precheck on `&'a [T]`).
@@ -209,8 +222,8 @@ fn strip_markers<M>(attrs: &mut Vec<Attribute<M>>, markers: &[&str]) {
 // `<style>` path and the Ipe.Css / styleNode `<style>` sink share the identical
 // close-tag stripper.
 use super::super::css_safety::{
-    SafeCssMediaQuery, SafeCssValue, sink_safe_declaration_list, sink_safe_keyframes_body,
-    strip_style_close,
+    SafeCssMediaQuery, SafeCssValue, css_ident, sink_safe_declaration_list,
+    sink_safe_keyframes_body, strip_style_close,
 };
 
 fn build_mq<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
@@ -409,36 +422,16 @@ fn build_anim<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
     sb.trim().to_string()
 }
 
-/// ipe-id (`r.0.2#div`) → CSS-safe ident suffix (`r_0_2_div`) for @keyframes
-/// names. Structural separators map to `_`; anything else outside the CSS-ident
-/// charset is dropped ( `ipeIDToCSSIdent`).
+/// ipe-id (`r_0_li:k`) → CSS-safe ident suffix (`r_0_li_k`) for @keyframes
+/// names. Delegates to the single CSS-ident owner `css_safety::css_ident`.
 fn ipe_id_to_css_ident(s: &str) -> String {
-    s.chars()
-        .filter_map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => Some(c),
-            '.' | '#' => Some('_'),
-            _ => None,
-        })
-        .collect()
+    css_ident(s)
 }
 
-/// Strip chars that would break a CSS `@keyframes` ident (non-ident → `_`); a
-/// leading digit is illegal so prefix `_` ( `sanitiseAnimationName`).
+/// An animation name (developer-authored) → a valid CSS `@keyframes` ident.
+/// Delegates to the single CSS-ident owner `css_safety::css_ident`.
 fn sanitise_animation_name(s: &str) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-    let mut out: String = s
-        .chars()
-        .map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => c,
-            _ => '_',
-        })
-        .collect();
-    if out.starts_with(|c: char| c.is_ascii_digit()) {
-        out.insert(0, '_');
-    }
-    out
+    css_ident(s)
 }
 
 #[cfg(test)]
@@ -606,6 +599,34 @@ mod tests {
         );
     }
 
+    /// An animation name starting with `-` followed by a digit must still
+    /// become a valid CSS identifier (prefixed with `_`), never the invalid
+    /// `-1x`-shaped ident the browser silently ignores.
+    #[test]
+    fn anim_name_leading_dash_digit_is_a_valid_css_ident() {
+        let attrs = vec![attr(
+            "data-ipe-anim-rules",
+            "-1x||300ms||0% { opacity: 0 } 100% { opacity: 1 }||1",
+        )];
+        let css = build_anim("r.0", &attrs);
+        assert!(css.contains("@keyframes _-1x__r_0"), "{css}");
+    }
+
+    /// The keyed ipe-id suffix goes through the same owner as the name: the
+    /// key separator `:` maps to `_` rather than vanishing, so `li:k` and the
+    /// unkeyed tag `lik` no longer share one `@keyframes` name.
+    #[test]
+    fn keyed_ipe_id_colon_maps_to_underscore_instead_of_vanishing() {
+        let attrs = vec![attr(
+            "data-ipe-anim-rules",
+            "a:b||300ms||0% { opacity: 0 } 100% { opacity: 1 }||1",
+        )];
+        let keyed = build_anim("r_0_li:k", &attrs);
+        assert!(keyed.contains("@keyframes a_b__r_0_li_k "), "{keyed}");
+        let unkeyed = build_anim("r_0_lik", &attrs);
+        assert!(unkeyed.contains("@keyframes a_b__r_0_lik "), "{unkeyed}");
+    }
+
     #[test]
     fn build_anim_sink_keeps_legit_entries_byte_identical() {
         let attrs = vec![attr(
@@ -677,6 +698,44 @@ mod tests {
             css.contains("@keyframes good__r_0"),
             "legit sibling entry must survive: {css}"
         );
+    }
+
+    /// An ipe-id the stamper could not have produced never reaches the raw
+    /// `[ipe-id="…"]` selector: no style block, markers still stripped.
+    #[test]
+    fn forged_ipe_id_outside_the_stamper_charset_gets_no_style_block() {
+        for forged in ["x\"]{}*{color:red}[a=\"", "a]", "a{", "a\\22", "a<b", ""] {
+            let mut tree: Html<()> = Html::HElement(
+                "button".to_string(),
+                vec![
+                    attr("ipe-id", forged),
+                    attr("data-ipe-pc-rules", "h|color: red"),
+                ],
+                vec![],
+            );
+            apply_style_injections(&mut tree);
+            assert_eq!(count_styles(&tree), 0, "forged ipe-id {forged:?}");
+            match &tree {
+                Html::HElement(_, attrs, _) => assert!(
+                    !attrs
+                        .iter()
+                        .any(|a| matches!(a, Attribute::Attr(k, _) if k == "data-ipe-pc-rules")),
+                    "marker must be stripped for {forged:?}"
+                ),
+                _ => panic!("expected element"),
+            }
+        }
+        // A stamper-shaped id (keyed, dotted, doctype pseudo-tag) still styles.
+        let mut tree: Html<()> = Html::HElement(
+            "button".to_string(),
+            vec![
+                attr("ipe-id", "r_0_!doctype-wrapper_0_li.x:k-1"),
+                attr("data-ipe-pc-rules", "h|color: red"),
+            ],
+            vec![],
+        );
+        apply_style_injections(&mut tree);
+        assert_eq!(count_styles(&tree), 1);
     }
 
     #[test]

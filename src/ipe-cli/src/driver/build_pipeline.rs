@@ -2052,21 +2052,12 @@ pub fn inject_wasm_widget_bundle(
     Ok(())
 }
 
-/// Render `s` as a plain double-quoted Rust string literal (the tag: a fixed
-/// `ipe-ce-<hex>`, `[a-z0-9-]` only, so escaping is trivial but applied for
-/// safety).
+/// Render `s` as a double-quoted Rust string literal.
+///
+/// Rust's own `Debug` grammar escapes every character a literal cannot carry
+/// raw, bidi overrides included.
 pub fn rust_str_literal(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
+    format!("{s:?}")
 }
 
 /// Render `s` as a Rust RAW string literal `r#"…"#` with a hash fence wide enough
@@ -2702,6 +2693,11 @@ mod tests {
 
     use super::*;
     use crate::output_dir::OutputRefusal;
+
+    #[test]
+    fn rust_str_literal_escapes_quotes_backslashes_and_bidi_overrides() {
+        assert_eq!(rust_str_literal("a\u{202E}\"b\\"), r#""a\u{202e}\"b\\""#);
+    }
 
     /// A build whose caller states no intent is a release build.
     #[test]

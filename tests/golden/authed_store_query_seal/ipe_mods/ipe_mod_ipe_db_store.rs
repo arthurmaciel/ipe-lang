@@ -1837,7 +1837,7 @@ pub(crate) fn user_ipe_db_store_first_unknown_policy_column(
         }
     }
 }
-pub(crate) fn user_ipe_db_store_policy_fragment<
+pub(crate) fn user_ipe_db_store_policy_check<
     T1: Clone,
     FN1: Fn(IpeDbStorePolicy) -> IpeDbStorePred + Send + Sync + 'static,
 >(
@@ -1845,14 +1845,27 @@ pub(crate) fn user_ipe_db_store_policy_fragment<
     op: FN1,
     store: IpeDbStoreStore<T1>,
     policy: IpeDbStorePolicy,
-) -> ipe_runtime::db::SqlFragment {
+) -> IpeResult<ipe_runtime::error::IpeError, ipe_runtime::db::SqlFragment> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match store.clone() {
-        IpeDbStoreStore::Store(s) => match crate::user_ipe_db_store_pred_fragment_in(principal, (s).table.clone(), crate::user_ipe_db_store_store_view(store), crate::user_ipe_db_store_simplify((op)(policy)))
-        {
-            IpeResult::Ok(fragment) => fragment,
-            IpeResult::Err(_) => crate::user_ipe_db_store_false_fragment(),
-        },
+        IpeDbStoreStore::Store(s) => crate::user_ipe_db_store_pred_fragment_in(
+            principal,
+            (s).table.clone(),
+            crate::user_ipe_db_store_store_view(store),
+            crate::user_ipe_db_store_simplify((op)(policy)),
+        ),
+    }
+}
+pub(crate) fn user_ipe_db_store_policy_fragment<T1: Clone>(
+    principal: ipe_runtime::principal::Principal,
+    op: Box<dyn Fn(IpeDbStorePolicy) -> IpeDbStorePred + Send + Sync + 'static>,
+    store: IpeDbStoreStore<T1>,
+    policy: IpeDbStorePolicy,
+) -> ipe_runtime::db::SqlFragment {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match crate::user_ipe_db_store_policy_check(principal, op, store, policy) {
+        IpeResult::Ok(fragment) => fragment,
+        IpeResult::Err(_) => crate::user_ipe_db_store_false_fragment(),
     }
 }
 pub(crate) fn user_ipe_db_store_read_pred(policy: IpeDbStorePolicy) -> IpeDbStorePred {

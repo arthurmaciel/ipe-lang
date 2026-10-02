@@ -25885,6 +25885,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbUpdateWhere
                 // `DbUpsertFields : Db -> String -> List String -> List (String, SqlField) -> Task Error Int`
                 | KernelFn::DbUpsertFields
+                // `DbInsertFieldsChecked : Db -> String -> List (String, SqlField) -> SqlFragment -> Task Error Int`
+                | KernelFn::DbInsertFieldsChecked
                 // ── Db.Decode arity-4 ────────────────────────────────
                 // `map3 : (a->b->c->d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d`
                 | KernelFn::DbDecMap3
@@ -25908,6 +25910,8 @@ impl<'a> Lowerer<'a> {
                 // ── Db arity-5 ───────────────────────────────────────
                 // `DbInsertFieldsReturning : Db -> String -> List (String, SqlField) -> String -> Decoder a -> Task Error (List a)`
                 | KernelFn::DbInsertFieldsReturning
+                // `DbUpdateWhereChecked : Db -> String -> List (String, SqlField) -> SqlFragment -> SqlFragment -> Task Error Int`
+                | KernelFn::DbUpdateWhereChecked
                 // `map4 : (a->b->c->d->e) -> Da -> Db -> Dc -> Dd -> De`
                 | KernelFn::DbDecMap4
                 // ── Result/Maybe map4 — arity 5 ────────────────────────
@@ -28117,6 +28121,14 @@ impl<'a> Lowerer<'a> {
                     ("Db", "insertFields") => Ok(Callee::Kernel(KernelFn::DbInsertFields)),
                     ("Db", "updateFields") => Ok(Callee::Kernel(KernelFn::DbUpdateFields)),
                     ("Db", "upsertFields") => Ok(Callee::Kernel(KernelFn::DbUpsertFields)),
+                    // Store-private checked writes, reached only through
+                    // `Kernel.kernel "Db_…"` aliases in `Ipe.Db.Store`.
+                    ("Db", "insertFieldsChecked") => {
+                        Ok(Callee::Kernel(KernelFn::DbInsertFieldsChecked))
+                    }
+                    ("Db", "updateWhereChecked") => {
+                        Ok(Callee::Kernel(KernelFn::DbUpdateWhereChecked))
+                    }
                     ("Db", "insertFieldsReturning") => {
                         Ok(Callee::Kernel(KernelFn::DbInsertFieldsReturning))
                     }
