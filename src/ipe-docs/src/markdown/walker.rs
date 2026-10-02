@@ -25,6 +25,7 @@
 
 use super::parse::parse_spans;
 use super::{Block, HeadingLevel, Span};
+use crate::html;
 use std::fmt::Write as _;
 
 use super::MAX_BLOCKQUOTE_DEPTH;
@@ -77,7 +78,7 @@ fn render_block(out: &mut String, block: &Block, opts: &WalkOptions, depth: usiz
         Block::Para(text) => {
             match opts.para_class {
                 Some(class) => {
-                    let _ = write!(out, "<p class=\"{}\">", html_escape(class));
+                    let _ = write!(out, "<p class=\"{}\">", html::escape(class));
                 }
                 None => out.push_str("<p>"),
             }
@@ -91,7 +92,7 @@ fn render_block(out: &mut String, block: &Block, opts: &WalkOptions, depth: usiz
                 out.push_str(&render(body));
             } else {
                 out.push_str("<code>");
-                out.push_str(&html_escape(body));
+                out.push_str(&html::escape(body));
                 out.push_str("</code>");
             }
             out.push_str("</pre>\n");
@@ -162,7 +163,7 @@ fn render_spans(out: &mut String, spans: &[Span], opts: &WalkOptions) {
 
 fn render_span(out: &mut String, span: &Span, opts: &WalkOptions) {
     match span {
-        Span::Plain(text) => out.push_str(&html_escape(text)),
+        Span::Plain(text) => out.push_str(&html::escape(text)),
         Span::Bold(text) => {
             out.push_str("<strong>");
             render_spans(out, &parse_spans(text), opts);
@@ -175,7 +176,7 @@ fn render_span(out: &mut String, span: &Span, opts: &WalkOptions) {
         }
         Span::Code(text) => {
             out.push_str("<code>");
-            out.push_str(&html_escape(text));
+            out.push_str(&html::escape(text));
             out.push_str("</code>");
         }
         Span::Link(text, url) => {
@@ -187,8 +188,8 @@ fn render_span(out: &mut String, span: &Span, opts: &WalkOptions) {
             let _ = write!(
                 out,
                 "<a href=\"{}\">{}</a>",
-                html_escape(url.as_str()),
-                html_escape(text)
+                html::escape(url.as_str()),
+                html::escape(text)
             );
         }
         Span::Image(alt, url) => {
@@ -197,35 +198,12 @@ fn render_span(out: &mut String, span: &Span, opts: &WalkOptions) {
             let _ = write!(
                 out,
                 "<img src=\"{}\" alt=\"{}\">",
-                html_escape(url.as_str()),
-                html_escape(alt)
+                html::escape(url.as_str()),
+                html::escape(alt)
             );
         }
         Span::HardBreak => out.push_str("<br>"),
     }
-}
-
-/// The one HTML escaper for the doc-side walker.
-///
-/// Escapes all five characters an HTML text or attribute context requires. `'`
-/// is included (unlike a 4-char escaper) so a value emitted into a
-/// single-quoted attribute context cannot break out. No text byte is ever
-/// emitted unescaped, and `<`/`>` in body text are escaped rather than passed
-/// through (no raw-HTML passthrough).
-#[must_use]
-pub fn html_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 /// Apply the caller heading offset to a level, clamped to `h6`. Mirrors the
@@ -262,11 +240,6 @@ mod tests {
     }
 
     // ── Escape-by-default (the §1-critical line) ────────────────────────────
-
-    #[test]
-    fn escapes_all_five_html_specials() {
-        assert_eq!(html_escape("a<b>&\"'"), "a&lt;b&gt;&amp;&quot;&#39;");
-    }
 
     #[test]
     fn raw_script_in_body_is_escaped_not_passed_through() {

@@ -18,6 +18,9 @@ use std::fmt;
 use std::path::Path;
 
 use include_dir::{Dir, include_dir};
+use ipe_docs::html;
+
+use crate::cli_args::json;
 
 // == Embedded doc-corpus ======================================================
 
@@ -833,50 +836,33 @@ pub fn rewrite_refs(
 }
 
 /// Produce the format-aware rewriting of one resolved cross-reference.
+///
+/// Every markup target escapes `key` and `display` for its own grammar: HTML
+/// through [`html::escape`] (attribute and text alike), JSON through
+/// [`json::string`].
 fn format_ref(kind: DocKind, key: &str, display: &str, target: RefTarget) -> String {
     match target {
         RefTarget::Html => format!(
             "<a href=\"{}/{}.html\">{}</a>",
             kind.prefix(),
-            key,
-            html_escape_ref(display)
+            html::escape(key),
+            html::escape(display)
         ),
         RefTarget::Markdown => format!("[{}]({}/{}.md)", display, kind.prefix(), key),
         RefTarget::Json => format!(
-            "{{\"ref\":{{\"kind\":\"{}\",\"key\":\"{}\"}},\"text\":\"{}\"}}",
-            kind.prefix(),
-            json_escape_ref(key),
-            json_escape_ref(display)
+            "{{\"ref\":{{\"kind\":{},\"key\":{}}},\"text\":{}}}",
+            json::string(kind.prefix()),
+            json::string(key),
+            json::string(display)
         ),
         RefTarget::Serve => format!(
             "<a href=\"/{}/{}\">{}</a>",
             kind.prefix(),
-            key,
-            html_escape_ref(display)
+            html::escape(key),
+            html::escape(display)
         ),
         RefTarget::Terminal => format!("{display} (ipe doc {}:{})", kind.prefix(), key),
     }
-}
-
-/// Minimal HTML escaping for ref display text.
-fn html_escape_ref(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
-/// Minimal JSON string escaping: backslash and double-quote.
-fn json_escape_ref(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 // == Fuzzy search =============================================================
@@ -1658,5 +1644,28 @@ mod tests {
             "embedded constructs corpus has {count} entries but expected >= {FORMER_COUNT} \
              (the former hand-maintained table count)"
         );
+    }
+
+    // -- Ref escaping ---------------------------------------------------------
+
+    /// A key and display holding markup are escaped in both HTML targets: the
+    /// key cannot close the `href` attribute, the display cannot open a tag.
+    #[test]
+    fn html_ref_escapes_key_in_href_and_display_in_text() {
+        let html_out = format_ref(DocKind::Module, "a\"b", "x<y", RefTarget::Html);
+        assert_eq!(html_out, "<a href=\"module/a&quot;b.html\">x&lt;y</a>");
+        let serve_out = format_ref(DocKind::Module, "a\"b", "x<y", RefTarget::Serve);
+        assert_eq!(serve_out, "<a href=\"/module/a&quot;b\">x&lt;y</a>");
+    }
+
+    /// A display or key holding control characters still yields valid JSON
+    /// that decodes back to the original strings.
+    #[test]
+    fn json_ref_with_control_chars_parses_and_round_trips() {
+        let out = format_ref(DocKind::Module, "k\"\\\n", "a\u{1}b", RefTarget::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        assert_eq!(parsed["ref"]["kind"], "module");
+        assert_eq!(parsed["ref"]["key"], "k\"\\\n");
+        assert_eq!(parsed["text"], "a\u{1}b");
     }
 }

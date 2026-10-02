@@ -36,7 +36,8 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use ipe_docs::render::{STYLESHEET, highlight_snippet, html_escape, page};
+use ipe_docs::html;
+use ipe_docs::render::{STYLESHEET, highlight_snippet, page};
 use ipe_docs::{Entry, EntryKind, Index};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -162,7 +163,7 @@ fn render_entry(key: &str, entry: &Entry) -> String {
     let kind_label = kind_label(&entry.kind);
     let mut body = format!(
         "<h1>{} <span class=\"kind-badge\">{kind_label}</span></h1>\n",
-        html_escape(key)
+        html::escape(key)
     );
 
     // Body text: highlight fenced ipe blocks, escape everything else.
@@ -229,7 +230,7 @@ fn emit_prose(out: &mut String, text: &str) {
         let p = paragraph.trim();
         if !p.is_empty() {
             out.push_str("<p>");
-            out.push_str(&html_escape(p));
+            out.push_str(&html::escape(p));
             out.push_str("</p>\n");
         }
     }
@@ -276,13 +277,13 @@ fn render_index_section(out: &mut String, title: &str, entries: &[&Entry], style
     for e in entries {
         let subdir = e.kind.route_subdir();
         let key = &e.source_key;
-        let name = html_escape(key);
+        let name = html::escape(key);
         match style {
             ListStyle::Name => {
                 let _ = writeln!(out, "<li><a href=\"/{subdir}/{key}/\">{name}</a></li>");
             }
             ListStyle::NameSummary => {
-                let summary = html_escape(&e.text);
+                let summary = html::escape(&e.text);
                 let _ = writeln!(
                     out,
                     "<li><a href=\"/{subdir}/{key}/\">{name}: {summary}</a></li>"
