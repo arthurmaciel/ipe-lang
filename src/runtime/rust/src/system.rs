@@ -114,23 +114,51 @@ pub(crate) fn gutter_line(msg: &str, is_terminal: bool) -> String {
     }
 }
 
-/// A character that must never reach an operator log line raw: every Unicode
-/// `Cc` control (C0 incl. CR/LF/ESC, DEL, C1 incl. NEL/CSI), the Unicode
-/// line/paragraph separators U+2028/U+2029 (record breaks for log viewers and
-/// JS-based aggregators), and the bidirectional formatting controls
-/// (U+061C, U+200E/F, U+202A-E, U+2066-9) that visually reorder a line.
-fn is_log_hazard(c: char) -> bool {
-    c.is_control()
-        || matches!(
-            c,
-            '\u{2028}'
-                | '\u{2029}'
-                | '\u{061c}'
-                | '\u{200e}'
-                | '\u{200f}'
-                | '\u{202a}'..='\u{202e}'
-                | '\u{2066}'..='\u{2069}'
-        )
+/// Format characters that reorder, hide, or break a log line without being control bytes.
+///
+/// Exactly the Unicode `Cf` (format) category plus the `Zl`/`Zp` line and
+/// paragraph separators: the bidirectional controls, the zero-width space,
+/// joiners and word joiner, the invisible operators, the byte-order mark, the
+/// soft hyphen, the prepended-number and annotation marks, and the whole tag
+/// block (so a tag assigned later is already covered). Range for range the
+/// compiler's terminal set (`ipe_diagnostics::terminal::DENIED_FORMAT_CHARS`),
+/// which the runtime cannot import because it ships as source; a test asserts
+/// the two tables equal, and the compiler's table is checked against the UCD.
+pub(crate) const LOG_FORMAT_HAZARDS: &[std::ops::RangeInclusive<char>] = &[
+    '\u{00AD}'..='\u{00AD}',   // SOFT HYPHEN
+    '\u{0600}'..='\u{0605}',   // ARABIC NUMBER SIGN .. NUMBER MARK ABOVE
+    '\u{061C}'..='\u{061C}',   // ARABIC LETTER MARK
+    '\u{06DD}'..='\u{06DD}',   // ARABIC END OF AYAH
+    '\u{070F}'..='\u{070F}',   // SYRIAC ABBREVIATION MARK
+    '\u{0890}'..='\u{0891}',   // ARABIC POUND / PIASTRE MARK ABOVE
+    '\u{08E2}'..='\u{08E2}',   // ARABIC DISPUTED END OF AYAH
+    '\u{180E}'..='\u{180E}',   // MONGOLIAN VOWEL SEPARATOR
+    '\u{200B}'..='\u{200F}',   // ZERO WIDTH SPACE, NON-JOINER, JOINER, LRM, RLM
+    '\u{2028}'..='\u{2029}',   // LINE / PARAGRAPH SEPARATOR
+    '\u{202A}'..='\u{202E}',   // bidi EMBEDDINGs, POP, OVERRIDEs
+    '\u{2060}'..='\u{2064}',   // WORD JOINER, invisible operators
+    '\u{2066}'..='\u{206F}',   // bidi ISOLATEs, deprecated format controls
+    '\u{FEFF}'..='\u{FEFF}',   // ZERO WIDTH NO-BREAK SPACE (BOM)
+    '\u{FFF9}'..='\u{FFFB}',   // INTERLINEAR ANNOTATION controls
+    '\u{110BD}'..='\u{110BD}', // KAITHI NUMBER SIGN
+    '\u{110CD}'..='\u{110CD}', // KAITHI NUMBER SIGN ABOVE
+    '\u{13430}'..='\u{1343F}', // EGYPTIAN HIEROGLYPH format controls
+    '\u{1BCA0}'..='\u{1BCA3}', // SHORTHAND FORMAT controls
+    '\u{1D173}'..='\u{1D17A}', // MUSICAL SYMBOL BEGIN/END controls
+    '\u{E0000}'..='\u{E007F}', // TAG block
+];
+
+/// Whether `c` must never reach an operator log line or terminal raw.
+///
+/// The set is Unicode `Cc`, `Cf`, `Zl` and `Zp`, the compiler's terminal set:
+/// every control (C0 incl. CR/LF/ESC, DEL, C1 incl. NEL/CSI) plus
+/// [`LOG_FORMAT_HAZARDS`]. The predicate behind [`scrub_log_controls`] and
+/// the console ingest filter.
+pub(crate) fn is_log_hazard(c: char) -> bool {
+    if matches!(c, ' '..='~') {
+        return false;
+    }
+    c.is_control() || LOG_FORMAT_HAZARDS.iter().any(|range| range.contains(&c))
 }
 
 /// Neutralise every log-hazard character (see [`is_log_hazard`]) in text
@@ -236,28 +264,131 @@ pub(crate) fn emit_runtime_log_stamped(stamp: &str, tag: &str, msg: &str) {
     write_stderr_line(&runtime_log_line(Some(stamp), tag, msg));
 }
 
-/// Resolve the port an HTTP listener binds: `env_value` (as injected by
-/// `ipe watch` — `IPE_SERVER_PORT` for `Ipe.Http.Server`, `IPE_WEB_PORT` for
-/// `Ipe.Web`) when it is a valid port number in `1..=65535`, else `fallback`.
+/// A TCP port an HTTP listener may bind: `1..=65535`.
 ///
-/// Parsing to `u16` and rejecting `0` closes EVERY out-of-range and garbage
-/// value at the boundary: empty, non-numeric, negative, greater than 65535, or
-/// `0` all fall back to `fallback` — never a silently OS-chosen ephemeral port
-/// the caller cannot reach. Fail-closed by construction; the single definition
-/// keeps the two runtimes' port precedence from drifting. Pure over its inputs,
-/// so the precedence is unit-testable without touching the process environment.
-///
-/// Gated to `server`: the only callers — `server::server_listen`
-/// (`IPE_SERVER_PORT`) and `web::serve_web` (`IPE_WEB_PORT`, whose `web` feature
-/// implies `server`) — are both `#[cfg(feature = "server")]`, so a build without
-/// the server surface would otherwise carry this as dead code.
+/// `0` (an OS-chosen ephemeral port the caller cannot reach) has no
+/// representation, so no env layer can request it.
 #[cfg(feature = "server")]
-pub(crate) fn resolve_listen_port(env_value: Option<String>, fallback: i64) -> i64 {
-    env_value
-        .and_then(|s| s.parse::<u16>().ok())
-        .filter(|&p| p != 0)
-        .map(i64::from)
-        .unwrap_or(fallback)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ListenPort(std::num::NonZeroU16);
+
+#[cfg(feature = "server")]
+impl ListenPort {
+    /// Parse an env value: `None` for empty, non-numeric, signed, `0`, or
+    /// out-of-range text.
+    ///
+    /// Only ASCII digits are admitted: `u16`'s `FromStr` alone also accepts a
+    /// leading `+`.
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
+        if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        raw.parse::<u16>()
+            .ok()
+            .and_then(std::num::NonZeroU16::new)
+            .map(Self)
+    }
+
+    /// The port as the listener's address integer.
+    pub(crate) fn get(self) -> i64 {
+        i64::from(self.0.get())
+    }
+}
+
+/// Which layer chose a listener's port.
+#[cfg(feature = "server")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PortOrigin {
+    /// A supervisor set [`crate::LISTEN_PORT_RELOCATION_ENV`] on this process.
+    Relocated,
+    /// The operator set the runtime's documented port var.
+    Operator,
+    /// Neither env layer held a valid port: the program's own port.
+    Source,
+}
+
+/// A listener port together with the layer that chose it.
+#[cfg(feature = "server")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ResolvedPort {
+    /// The port to bind.
+    pub(crate) port: i64,
+    /// The layer the port came from.
+    pub(crate) origin: PortOrigin,
+    /// The runtime's documented operator port var (`IPE_WEB_PORT` /
+    /// `IPE_SERVER_PORT`), named by the bind-failure advice.
+    pub(crate) operator_var: &'static str,
+}
+
+#[cfg(feature = "server")]
+impl ResolvedPort {
+    /// The refusal text for a bind that failed with `AddrInUse`.
+    ///
+    /// A port a supervisor chose names the supervisor, never the operator var
+    /// the supervisor outranks; any other port advises the operator var.
+    pub(crate) fn addr_in_use_message(&self) -> String {
+        let port = self.port;
+        let var = self.operator_var;
+        match self.origin {
+            PortOrigin::Relocated => format!(
+                "port {port} is already in use — another application is bound to it.\n\
+                 The port was chosen by the supervisor (`ipe watch` or the dev console); \
+                 restart it to pick a free port."
+            ),
+            PortOrigin::Operator | PortOrigin::Source => format!(
+                "port {port} is already in use — another application is bound to it.\n\
+                 Set a different port with the {var} environment variable, e.g.:\n\
+                 {var}=8123 ipe run"
+            ),
+        }
+    }
+}
+
+/// Resolve the port an HTTP listener binds, by fixed precedence: the
+/// supervisor's `relocation` value, then the operator's value (`operator.1`, of
+/// the var named `operator.0`), then the program's `source` port.
+///
+/// The first layer that parses as a [`ListenPort`] wins; an absent or malformed
+/// layer falls through to the next, so no env text can yield `0` or an
+/// out-of-range port. Pure over its inputs, so the precedence is unit-testable
+/// without touching the process environment. Gated to `server`: both callers
+/// (`server::server_listen`, `web::serve_web`) are.
+#[cfg(feature = "server")]
+pub(crate) fn resolve_listen_port(
+    relocation: Option<String>,
+    operator: (&'static str, Option<String>),
+    source: i64,
+) -> ResolvedPort {
+    let (operator_var, operator_value) = operator;
+    let layer = |raw: Option<String>| raw.as_deref().and_then(ListenPort::parse);
+    let (port, origin) = layer(relocation).map_or_else(
+        || {
+            layer(operator_value).map_or((source, PortOrigin::Source), |p| {
+                (p.get(), PortOrigin::Operator)
+            })
+        },
+        |p| (p.get(), PortOrigin::Relocated),
+    );
+    ResolvedPort {
+        port,
+        origin,
+        operator_var,
+    }
+}
+
+/// [`resolve_listen_port`] over the live environment (overlay first): the
+/// relocation var [`crate::LISTEN_PORT_RELOCATION_ENV`], then `operator`: the
+/// operator var's name and the value its caller read under that constant key.
+#[cfg(feature = "server")]
+pub(crate) fn listen_port_from_env(
+    operator: (&'static str, Option<String>),
+    source: i64,
+) -> ResolvedPort {
+    resolve_listen_port(
+        read_env_var(crate::LISTEN_PORT_RELOCATION_ENV).ok(),
+        operator,
+        source,
+    )
 }
 
 /// Read an environment variable as an `OsString` — the `var_os` companion of
@@ -527,7 +658,19 @@ where
 /// miss every Ipê `System.setenv`/`unsetenv`/`loadEnv`. Applied BEFORE any
 /// per-child override so an explicit override still wins.
 fn apply_env_overlay(builder: &mut std::process::Command) {
-    for (k, v) in env_overlay_snapshot() {
+    apply_env_directives(builder, env_overlay_snapshot());
+}
+
+/// Apply overlay `directives` to `builder`, then remove the supervisor's
+/// listener relocation var ([`crate::LISTEN_PORT_RELOCATION_ENV`]).
+///
+/// The relocation var addresses this process alone, so a user-spawned child
+/// never inherits it, whether it came from the real environ or the overlay.
+fn apply_env_directives(
+    builder: &mut std::process::Command,
+    directives: Vec<(String, Option<String>)>,
+) {
+    for (k, v) in directives {
         match v {
             Some(val) => {
                 builder.env(k, val);
@@ -537,7 +680,21 @@ fn apply_env_overlay(builder: &mut std::process::Command) {
             }
         }
     }
+    builder.env_remove(crate::LISTEN_PORT_RELOCATION_ENV);
 }
+
+/// Env var a supervisor (`ipe watch`, the dev console proxy) sets on the child
+/// it spawns to place that child's HTTP listener on a port the supervisor chose.
+///
+/// Internal plumbing, never operator configuration: it outranks the operator
+/// port var (`IPE_WEB_PORT` / `IPE_SERVER_PORT`) and the source port, is left
+/// out of the documented env registry, and is never inherited by a `Process.*`
+/// child (only the program's own explicit per-child env entry sets it there).
+/// Ungated, and defined in this module (vendored into every emitted project
+/// and re-exported at the runtime root), so the `ipe` CLI, which links the
+/// runtime without the `server` feature, and the runtime listeners share ONE
+/// wire name.
+pub const LISTEN_PORT_RELOCATION_ENV: &str = "IPE_INTERNAL_LISTEN_PORT";
 
 /// Why a hardened spawn was refused.
 ///
@@ -1905,11 +2062,71 @@ mod scrub_log_controls_tests {
             !out.chars().any(super::is_log_hazard),
             "hazard survived: {out:?}"
         );
-        // One step past each bidi range stays verbatim.
+    }
+
+    #[test]
+    fn printable_neighbours_stay_borrowed() {
+        // One step past a format range, and a variation selector (`Mn`, not
+        // `Cf`), stay verbatim.
         assert!(matches!(
-            scrub_log_controls("\u{202f}\u{206a}\u{2027}"),
+            scrub_log_controls("\u{202f}\u{2070}\u{2027}\u{E0100}"),
             std::borrow::Cow::Borrowed(_)
         ));
+    }
+
+    #[test]
+    fn escapes_zero_width_tag_and_soft_hyphen() {
+        let out = scrub_log_controls("adm\u{200B}in\u{E0041}\u{AD}\u{2060}\u{FEFF}");
+        assert_eq!(out, "adm\\u{200b}in\\u{e0041}\\u{ad}\\u{2060}\\u{feff}");
+    }
+
+    #[test]
+    fn log_format_hazards_equal_the_terminal_set() {
+        assert_eq!(
+            super::LOG_FORMAT_HAZARDS,
+            ipe_diagnostics::terminal::DENIED_FORMAT_CHARS
+        );
+    }
+
+    /// Every scalar value: the runtime predicate is the compiler's terminal set.
+    #[test]
+    fn is_log_hazard_is_the_terminal_set_for_every_char() {
+        for c in (0..=u32::from(char::MAX)).filter_map(char::from_u32) {
+            let terminal = c.is_control() || ipe_diagnostics::terminal::is_denied_format_char(c);
+            assert_eq!(super::is_log_hazard(c), terminal, "U+{:04X}", u32::from(c));
+        }
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // a malformed fixture fails the test
+    fn log_hazard_fixture_matches_the_table() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/log_hazard_ranges.json"))
+                .expect("fixture is JSON");
+        let rows = fixture.as_array().expect("fixture is an array");
+        let parsed: Vec<(u64, u64)> = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.get("lo")
+                        .and_then(serde_json::Value::as_u64)
+                        .expect("lo"),
+                    row.get("hi")
+                        .and_then(serde_json::Value::as_u64)
+                        .expect("hi"),
+                )
+            })
+            .collect();
+        let expected: Vec<(u64, u64)> = [(0, 31), (127, 159)]
+            .into_iter()
+            .chain(super::LOG_FORMAT_HAZARDS.iter().map(|range| {
+                (
+                    u64::from(u32::from(*range.start())),
+                    u64::from(u32::from(*range.end())),
+                )
+            }))
+            .collect();
+        assert_eq!(parsed, expected);
     }
 
     #[test]
@@ -2191,10 +2408,164 @@ mod parent_death_floor_tests {
     }
 }
 
+#[cfg(all(test, feature = "server"))]
+mod listen_port_tests {
+    use super::{PortOrigin, ResolvedPort, resolve_listen_port};
+
+    /// Every value that is not a bindable `1..=65535` port.
+    const GARBAGE: [&str; 15] = [
+        "",
+        "abc",
+        "80a0",
+        " ",
+        "-",
+        "+8080",
+        "+0",
+        "+",
+        " 8080",
+        "8080 ",
+        "0",
+        "-1",
+        "65536",
+        "70000",
+        "99999999999",
+    ];
+    const OPERATOR_VARS: [&str; 2] = ["IPE_WEB_PORT", "IPE_SERVER_PORT"];
+
+    fn resolve(
+        relocation: Option<&str>,
+        var: &'static str,
+        operator: Option<&str>,
+    ) -> ResolvedPort {
+        resolve_listen_port(
+            relocation.map(str::to_owned),
+            (var, operator.map(str::to_owned)),
+            8000,
+        )
+    }
+
+    #[test]
+    fn garbage_operator_value_falls_back_to_the_source_port() {
+        for var in OPERATOR_VARS {
+            for garbage in GARBAGE {
+                let r = resolve(None, var, Some(garbage));
+                assert_eq!(
+                    (r.port, r.origin),
+                    (8000, PortOrigin::Source),
+                    "{var}={garbage:?} must fall back to the source port, never bind 0"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn relocation_outranks_a_valid_operator_value() {
+        for var in OPERATOR_VARS {
+            let r = resolve(Some("9100"), var, Some("9200"));
+            assert_eq!((r.port, r.origin), (9100, PortOrigin::Relocated), "{var}");
+        }
+    }
+
+    #[test]
+    fn garbage_relocation_falls_through_to_operator_then_source() {
+        for var in OPERATOR_VARS {
+            for garbage in GARBAGE {
+                let r = resolve(Some(garbage), var, Some("9200"));
+                assert_eq!(
+                    (r.port, r.origin, r.operator_var),
+                    (9200, PortOrigin::Operator, var),
+                    "relocation {garbage:?} must fall through to {var}"
+                );
+                let r = resolve(Some(garbage), var, None);
+                assert_eq!(
+                    (r.port, r.origin),
+                    (8000, PortOrigin::Source),
+                    "relocation {garbage:?} over no operator value must give the source port"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn absent_layers_give_the_source_and_port_bounds_are_accepted() {
+        for var in OPERATOR_VARS {
+            let r = resolve(None, var, None);
+            assert_eq!((r.port, r.origin), (8000, PortOrigin::Source), "{var}");
+            for edge in [("1", 1), ("65535", 65535)] {
+                let r = resolve(Some(edge.0), var, None);
+                assert_eq!((r.port, r.origin), (edge.1, PortOrigin::Relocated), "{var}");
+                let r = resolve(None, var, Some(edge.0));
+                assert_eq!((r.port, r.origin), (edge.1, PortOrigin::Operator), "{var}");
+            }
+        }
+    }
+
+    #[test]
+    fn relocated_bind_failure_advises_no_operator_var() {
+        for var in OPERATOR_VARS {
+            let msg = resolve(Some("9100"), var, Some("9200")).addr_in_use_message();
+            assert!(
+                OPERATOR_VARS.iter().all(|v| !msg.contains(v)),
+                "a supervisor-chosen port must not advise an operator var: {msg}"
+            );
+            assert!(msg.contains("9100") && msg.contains("supervisor"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn operator_and_source_bind_failure_names_the_runtime_var() {
+        for var in OPERATOR_VARS {
+            for r in [resolve(None, var, Some("9200")), resolve(None, var, None)] {
+                let msg = r.addr_in_use_message();
+                assert!(
+                    msg.contains(&format!("{var}=8123 ipe run")),
+                    "the advice must name {var}: {msg}"
+                );
+                assert!(
+                    OPERATOR_VARS.iter().filter(|v| msg.contains(*v)).count() == 1,
+                    "the advice names only this runtime's var: {msg}"
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod env_overlay_tests {
     use super::*;
+
+    /// A `Process.*` child never inherits the supervisor's relocation var: the
+    /// built command removes it even when the overlay sets it.
+    #[test]
+    fn process_child_env_drops_the_listen_port_relocation_var() {
+        let relocation = crate::LISTEN_PORT_RELOCATION_ENV;
+        for directives in [
+            vec![(relocation.to_owned(), Some("9100".to_owned()))],
+            vec![("OVERLAY_TEST_KEEP".to_owned(), Some("1".to_owned()))],
+            Vec::new(),
+        ] {
+            let mut cmd = std::process::Command::new("true");
+            apply_env_directives(&mut cmd, directives);
+            let entry = cmd
+                .get_envs()
+                .find(|(k, _)| *k == std::ffi::OsStr::new(relocation));
+            assert!(
+                matches!(entry, Some((_, None))),
+                "the relocation var must be removed from a Process child: {entry:?}"
+            );
+        }
+        let mut cmd = std::process::Command::new("true");
+        apply_env_directives(
+            &mut cmd,
+            vec![("OVERLAY_TEST_KEEP".to_owned(), Some("1".to_owned()))],
+        );
+        assert!(
+            cmd.get_envs()
+                .any(|(k, v)| k == "OVERLAY_TEST_KEEP" && v == Some(std::ffi::OsStr::new("1"))),
+            "other overlay sets still reach the child"
+        );
+    }
 
     /// Overlay set is observed by the reader; a tombstone masks a value present
     /// in the real environ; an untouched key still defers to the real environ.

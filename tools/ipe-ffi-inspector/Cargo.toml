@@ -10,6 +10,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ipe_env = { path = "../../src/compiler/env" }
 ipe_sandbox = { path = "../../src/compiler/sandbox" }
+ipe_diagnostics = { path = "../../src/compiler/diagnostics" }
 
 
 [dev-dependencies]

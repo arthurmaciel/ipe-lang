@@ -527,12 +527,13 @@ fn stop_and_join(
     )
 }
 
-/// The live server PID, matched by the exact `IPE_WEB_PORT=<port>` env pair the
+/// The live server PID, matched by the exact listener relocation env pair
+/// (`ipe_runtime_rust::LISTEN_PORT_RELOCATION_ENV=<port>`) the
 /// supervised child carries. Same `/proc`-environ technique as
 /// `watch_integration.rs`, so it does not depend on the emitted binary's path.
 #[cfg(target_os = "linux")]
 fn server_pid(port: u16) -> Option<u32> {
-    let needle = format!("IPE_WEB_PORT={port}\0");
+    let needle = format!("{}={port}\0", ipe_runtime_rust::LISTEN_PORT_RELOCATION_ENV);
     for entry in std::fs::read_dir("/proc").ok()?.flatten() {
         let Some(pid) = entry
             .file_name()
