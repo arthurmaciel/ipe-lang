@@ -23,6 +23,9 @@ import Ipe.Tea.Web.Sub
 type Page
     = CounterPage
     | UserPage String
+    | ItemPage Int
+    | FlagPage Bool
+    | ScorePage Float
 
 type Msg
     = Increment
@@ -51,6 +54,15 @@ view model =
         CounterPage ->
             Ui.text (String.fromInt model.count)
 
+        ItemPage n ->
+            Ui.text ("item:" ++ String.fromInt n)
+
+        FlagPage _ ->
+            Ui.text "flag"
+
+        ScorePage _ ->
+            Ui.text "score"
+
 subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
@@ -58,6 +70,12 @@ subscriptions _model =
 main =
     Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
-        , routes = [ Web.route "/" CounterPage, Web.route "/u/:id" UserPage ]
+        , routes =
+            [ Web.route "/" CounterPage
+            , Web.route "/u/:id" UserPage
+            , Web.route "/i/:n" ItemPage
+            , Web.route "/f/:b" FlagPage
+            , Web.route "/s/:x" ScorePage
+            ]
         , notFound = CounterPage
         }

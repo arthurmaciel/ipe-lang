@@ -2707,6 +2707,10 @@ fn resolve_route_witness_checks(
 /// `routed_page_field` helper: both agree on what "routed" means, ensuring the
 /// type-check gate and the emit gate fire on exactly the same programs.
 ///
+/// `onNavigate`, an optional cfg field absorbed by the row tail, is typed
+/// `Page -> Msg` in a routed app (IPE-T0001 otherwise) and refused in an
+/// unrouted one (IPE-L0162), where nothing would call it.
+///
 /// Every error and warning carries the home of the `Web.tea` call it concerns.
 fn resolve_routed_web_checks(
     uf: &mut UnionFind<Content>,
@@ -2734,6 +2738,8 @@ fn resolve_routed_web_checks(
                 .map(|(_, v)| *v),
             _ => None,
         };
+        let on_navigate =
+            row_tail_field(uf, interner, check.cfg_tail_var, "onNavigate").map_err(homed)?;
         if let Some(page_var) = page_var {
             // Routed app: `notFound` must be the same type as `Model.page`.
             // `unify` produces IPE-T0001 (TypeMismatch) if they differ.
@@ -2746,6 +2752,17 @@ fn resolve_routed_web_checks(
                 page_var,
             )
             .map_err(homed)?;
+            if let Some(on_navigate) = on_navigate {
+                let page_to_msg = uf
+                    .fresh(Content::Structure(FlatType::Fun(page_var, check.msg_var)))
+                    .map_err(homed)?;
+                unify(uf, budget, interner, check.span, on_navigate, page_to_msg).map_err(homed)?;
+            }
+        } else if on_navigate.is_some() {
+            return Err(homed(Diagnostic::Lower {
+                span: check.span,
+                msg: LowerError::OnNavigateWithoutPage,
+            }));
         } else if has_routes {
             // Non-routed Model (no `page` field) BUT the program declared a
             // non-empty `routes` list: the routes are forwarded to the
@@ -2770,6 +2787,35 @@ fn resolve_routed_web_checks(
         // Non-routed with no routes → genuinely non-routed → silently skip.
     }
     Ok(())
+}
+
+/// The variable of field `name` in the settled row starting at `tail`, if the
+/// row has one. A row deeper than the walk's fuel is a compiler bug, never a
+/// silently absent field.
+fn row_tail_field(
+    uf: &mut UnionFind<Content>,
+    interner: &Interner,
+    tail: VarId,
+    name: &str,
+) -> DResult<Option<VarId>> {
+    let mut cur = uf.find(tail)?;
+    for _ in 0..4096u32 {
+        let Content::Structure(FlatType::Record(fields, ext)) = uf.content(cur)? else {
+            return Ok(None);
+        };
+        if let Some(var) = fields
+            .iter()
+            .find(|(sym, _)| interner.resolve(**sym) == Some(name))
+            .map(|(_, v)| *v)
+        {
+            return Ok(Some(var));
+        }
+        cur = uf.find(ext)?;
+    }
+    Err(Diagnostic::CompilerBug {
+        where_: "ipe_types::row_tail_field",
+        detail: "a cfg row is deeper than any record the checker builds".into(),
+    })
 }
 
 /// Build the [`TypeError::BuiltinRecordUpdate`] (IPE-T0017) for a record
@@ -4861,9 +4907,15 @@ mod tests {
         let not_found_var = uf.fresh(Content::Flex).expect("fresh notFound var");
 
         let home = vec![interner.intern("Main").expect("intern Main")];
+        let msg_var = uf.fresh(Content::Flex).expect("fresh msg var");
+        let cfg_tail_var = uf
+            .fresh(Content::Structure(FlatType::EmptyRecord))
+            .expect("fresh cfg tail");
         let check = RoutedWebCheck {
             model_var,
+            msg_var,
             not_found_var,
+            cfg_tail_var,
             span: Span::DUMMY,
             home: home.clone(),
         };
@@ -4924,9 +4976,15 @@ mod tests {
             .expect("fresh model var");
         let not_found_var = uf.fresh(Content::Flex).expect("fresh notFound var");
 
+        let msg_var = uf.fresh(Content::Flex).expect("fresh msg var");
+        let cfg_tail_var = uf
+            .fresh(Content::Structure(FlatType::EmptyRecord))
+            .expect("fresh cfg tail");
         let check = RoutedWebCheck {
             model_var,
+            msg_var,
             not_found_var,
+            cfg_tail_var,
             span: Span::DUMMY,
             home: vec![interner.intern("Main").expect("intern Main")],
         };
@@ -4967,9 +5025,15 @@ mod tests {
             .expect("fresh model var");
         let not_found_var = uf.fresh(Content::Flex).expect("fresh notFound var");
 
+        let msg_var = uf.fresh(Content::Flex).expect("fresh msg var");
+        let cfg_tail_var = uf
+            .fresh(Content::Structure(FlatType::EmptyRecord))
+            .expect("fresh cfg tail");
         let check = RoutedWebCheck {
             model_var,
+            msg_var,
             not_found_var,
+            cfg_tail_var,
             span: Span::DUMMY,
             home: Vec::new(),
         };
@@ -4990,6 +5054,138 @@ mod tests {
         assert!(
             warnings.is_empty(),
             "nothing reaches the sink, got {warnings:?}"
+        );
+    }
+
+    /// A routed-check fixture: a closed Model `{ <field> : page }` (or
+    /// `{ count : _ }` when `routed` is false), a cfg tail `{ onNavigate : nav }`
+    /// when `nav` is given, and a `Web.tea` check over them.
+    fn on_navigate_fixture(
+        interner: &mut Interner,
+        uf: &mut UnionFind<Content>,
+        routed: bool,
+        nav: Option<FlatType>,
+    ) -> (RoutedWebCheck, VarId, VarId) {
+        let field = interner
+            .intern(if routed { "page" } else { "count" })
+            .expect("intern field");
+        let page_var = uf
+            .fresh(Content::Structure(FlatType::Unit))
+            .expect("fresh page var");
+        let model_ext = uf
+            .fresh(Content::Structure(FlatType::EmptyRecord))
+            .expect("fresh model ext");
+        let model_var = uf
+            .fresh(Content::Structure(FlatType::Record(
+                BTreeMap::from([(field, page_var)]),
+                model_ext,
+            )))
+            .expect("fresh model var");
+        let msg_var = uf.fresh(Content::Flex).expect("fresh msg var");
+        let not_found_var = uf.fresh(Content::Flex).expect("fresh notFound var");
+        let empty = uf
+            .fresh(Content::Structure(FlatType::EmptyRecord))
+            .expect("fresh empty tail");
+        let cfg_tail_var = nav.map_or(empty, |shape| {
+            let nav_var = uf.fresh(Content::Structure(shape)).expect("fresh nav");
+            let nav_sym = interner.intern("onNavigate").expect("intern onNavigate");
+            uf.fresh(Content::Structure(FlatType::Record(
+                BTreeMap::from([(nav_sym, nav_var)]),
+                empty,
+            )))
+            .expect("fresh cfg tail")
+        });
+        let check = RoutedWebCheck {
+            model_var,
+            msg_var,
+            not_found_var,
+            cfg_tail_var,
+            span: Span::DUMMY,
+            home: vec![interner.intern("Main").expect("intern Main")],
+        };
+        (check, page_var, msg_var)
+    }
+
+    fn run_routed_check(
+        interner: &Interner,
+        uf: &mut UnionFind<Content>,
+        check: RoutedWebCheck,
+    ) -> Result<(), HomedDiagnostic> {
+        let mut budget = Budget::unbounded();
+        let mut warnings: Vec<HomedWarning> = Vec::new();
+        resolve_routed_web_checks(
+            uf,
+            &mut budget,
+            interner,
+            &[check],
+            /* has_routes */ true,
+            /* route_count */ 1,
+            &mut warnings,
+        )
+    }
+
+    /// In a routed app `onNavigate` is typed `Page -> Msg`: a well-typed one
+    /// passes and fixes the message type.
+    #[test]
+    fn routed_on_navigate_is_typed_page_to_msg() {
+        let mut interner = Interner::new();
+        let mut uf = UnionFind::new();
+        let nav_arg = uf.fresh(Content::Flex).expect("fresh arg");
+        let nav_ret = uf.fresh(Content::Flex).expect("fresh ret");
+        let (check, page_var, msg_var) = on_navigate_fixture(
+            &mut interner,
+            &mut uf,
+            true,
+            Some(FlatType::Fun(nav_arg, nav_ret)),
+        );
+        run_routed_check(&interner, &mut uf, check).expect("a Page -> Msg onNavigate type-checks");
+        assert_eq!(
+            uf.find(nav_arg).ok(),
+            uf.find(page_var).ok(),
+            "argument is the page"
+        );
+        assert_eq!(
+            uf.find(nav_ret).ok(),
+            uf.find(msg_var).ok(),
+            "result is the Msg"
+        );
+    }
+
+    /// A routed app's `onNavigate` that is not a function is IPE-T0001.
+    #[test]
+    fn routed_on_navigate_of_wrong_type_is_refused() {
+        let mut interner = Interner::new();
+        let mut uf = UnionFind::new();
+        let (check, _, _) = on_navigate_fixture(&mut interner, &mut uf, true, Some(FlatType::Unit));
+        let result = run_routed_check(&interner, &mut uf, check);
+        assert!(
+            matches!(result, Err((Diagnostic::Type { .. }, _))),
+            "a non-function onNavigate must be a type mismatch, got {result:?}"
+        );
+    }
+
+    /// An unrouted app (no `page` field) that sets `onNavigate` is IPE-L0162.
+    #[test]
+    fn unrouted_on_navigate_is_refused() {
+        let mut interner = Interner::new();
+        let mut uf = UnionFind::new();
+        let arg = uf.fresh(Content::Flex).expect("fresh arg");
+        let ret = uf.fresh(Content::Flex).expect("fresh ret");
+        let (check, _, _) =
+            on_navigate_fixture(&mut interner, &mut uf, false, Some(FlatType::Fun(arg, ret)));
+        let result = run_routed_check(&interner, &mut uf, check);
+        assert!(
+            matches!(
+                result,
+                Err((
+                    Diagnostic::Lower {
+                        msg: LowerError::OnNavigateWithoutPage,
+                        ..
+                    },
+                    _
+                ))
+            ),
+            "onNavigate without a page field must be refused, got {result:?}"
         );
     }
 
