@@ -1246,6 +1246,15 @@ mod tests {
         under_with(root, child, Regime::Windows).ok()
     }
 
+    /// Why the Windows-regime join refused `child` itself, or `None` when it
+    /// joined or refused only after the join.
+    fn win_child_refusal(root: &str, child: &str) -> Option<ChildRefusal> {
+        match under_with(root, child, Regime::Windows) {
+            Err(PathRefusal::Child { why, .. }) => Some(why),
+            _ => None,
+        }
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn under_joins_a_relative_child_beneath_the_root() {
@@ -1601,13 +1610,17 @@ mod tests {
             "CON\u{131}N$",
             "con\u{131}n$",
             "CON\u{131}N$.txt",
+            "a\\COM1",
+            "LPT9.log",
+            "nul.txt",
         ] {
-            assert_eq!(win_raw(".", child), None, "root `.` joined {child:?}");
-            assert_eq!(
-                win_raw("C:\\uploads", child),
-                None,
-                "`C:\\uploads` joined {child:?}"
-            );
+            for root in [".", "C:\\uploads"] {
+                assert_eq!(
+                    win_child_refusal(root, child),
+                    Some(ChildRefusal::Element(ElementRefusal::DosDevice)),
+                    "{root:?} joined {child:?}"
+                );
+            }
         }
         for child in ["CONSOLE", "COM10", "nulx"] {
             assert_eq!(
