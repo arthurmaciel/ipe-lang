@@ -258,6 +258,7 @@ jobs:
   # Windows on every code change; the Windows test suites do not run in CI.
   windows-check:
     runs-on: windows-latest
+    timeout-minutes: 180
     needs: changes
     if: needs.changes.outputs.cheap == 'true' && needs.changes.outputs.code == 'true'
     steps:
@@ -266,7 +267,92 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo check --locked -p ipe --all-targets
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
+        with:
+          tool: nextest
+      - name: Probe ipe-lib
+        id: probe-ipe-lib
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo nextest run --locked --profile ci --no-fail-fast -p ipe --lib 2>&1 | tee probe-ipe-lib.log
+          rc=${PIPESTATUS[0]}
+          mkdir -p probe-junit
+          cp target/nextest/ci/junit.xml probe-junit/ipe-lib.xml || true
+          exit $rc
+      - name: Probe ipe-tests
+        id: probe-ipe-tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo nextest run --locked --profile ci --no-fail-fast -p ipe --tests 2>&1 | tee probe-ipe-tests.log
+          rc=${PIPESTATUS[0]}
+          mkdir -p probe-junit
+          cp target/nextest/ci/junit.xml probe-junit/ipe-tests.xml || true
+          exit $rc
+      - name: Probe sandbox
+        id: probe-sandbox
+        continue-on-error: true
+        shell: bash
+        env:
+          IPE_E2E: '1'
+        run: |
+          cargo nextest run --locked --profile ci --no-fail-fast -p ipe_sandbox --lib --tests 2>&1 | tee probe-sandbox.log
+          rc=${PIPESTATUS[0]}
+          mkdir -p probe-junit
+          cp target/nextest/ci/junit.xml probe-junit/sandbox.xml || true
+          exit $rc
+      - name: Probe runtime
+        id: probe-runtime
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo nextest run --locked --profile ci --no-fail-fast -p ipe-runtime-rust --lib --tests --features full 2>&1 | tee probe-runtime.log
+          rc=${PIPESTATUS[0]}
+          mkdir -p probe-junit
+          cp target/nextest/ci/junit.xml probe-junit/runtime.xml || true
+          exit $rc
+      - name: Probe path-core
+        id: probe-path-core
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo nextest run --locked --profile ci --no-fail-fast -p ipe_path_core 2>&1 | tee probe-path-core.log
+          rc=${PIPESTATUS[0]}
+          mkdir -p probe-junit
+          cp target/nextest/ci/junit.xml probe-junit/path-core.xml || true
+          exit $rc
+      - name: Probe lint
+        id: probe-lint
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo nextest run --locked --profile ci --no-fail-fast -p ipe_lint 2>&1 | tee probe-lint.log
+          rc=${PIPESTATUS[0]}
+          mkdir -p probe-junit
+          cp target/nextest/ci/junit.xml probe-junit/lint.xml || true
+          exit $rc
+      - name: Upload probe results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-probe
+          path: |
+            probe-junit/
+            probe-*.log
+          if-no-files-found: error
+          retention-days: 14
+      - name: Probe verdict
+        if: always()
+        shell: bash
+        run: |
+          echo "ipe-lib: ${{ steps.probe-ipe-lib.outcome }}"
+          echo "ipe-tests: ${{ steps.probe-ipe-tests.outcome }}"
+          echo "sandbox: ${{ steps.probe-sandbox.outcome }}"
+          echo "runtime: ${{ steps.probe-runtime.outcome }}"
+          echo "path-core: ${{ steps.probe-path-core.outcome }}"
+          echo "lint: ${{ steps.probe-lint.outcome }}"
+          test "${{ steps.probe-ipe-lib.outcome }}${{ steps.probe-ipe-tests.outcome }}${{ steps.probe-sandbox.outcome }}${{ steps.probe-runtime.outcome }}${{ steps.probe-path-core.outcome }}${{ steps.probe-lint.outcome }}" = successsuccesssuccesssuccesssuccesssuccess
 
   # No compiler-internal jargon or raw Rust types leak into user-facing text
   # (rendered diagnostic goldens + `ipe explain` pages). Pure git + ripgrep, no
