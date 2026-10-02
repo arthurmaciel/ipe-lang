@@ -1254,8 +1254,8 @@ fn under_root(root: &Path, inner: &SafeMountPath) -> PathBuf {
 #[cfg(any(target_os = "freebsd", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FreebsdMountOp {
-    /// `mount -t tmpfs -o mode=0755 tmpfs <target>`: an empty mask the
-    /// unprivileged jail user cannot write.
+    /// `mount -t tmpfs -o uid=0,gid=0,mode=0755 tmpfs <target>`: an empty
+    /// mask no user but root can write.
     Mask {
         /// The masked directory inside the jail root.
         target: PathBuf,
@@ -1342,6 +1342,21 @@ pub(crate) fn apply_mount_ops(
     ops.iter().try_for_each(mount)
 }
 
+/// The `mount -t tmpfs` options of every tmpfs the FreeBSD jail mounts.
+///
+/// A tmpfs root takes its owner from the directory it covers unless told
+/// otherwise; the explicit root owner keeps every mask and provisioned
+/// directory writable by root alone, so [`root_only_dir`] holds for it.
+#[cfg(any(target_os = "freebsd", test))]
+const JAIL_TMPFS_OPTIONS: &str = "uid=0,gid=0,mode=0755";
+
+/// Whether a directory owned by `uid` with permission bits `mode` lets no user
+/// but root create, rename, or remove its entries.
+#[cfg(any(target_os = "freebsd", test))]
+const fn root_only_dir(uid: u32, mode: u32) -> bool {
+    uid == 0 && mode & 0o022 == 0
+}
+
 /// What a directory on a mount target's path inside the jail view guarantees
 /// about the names it holds.
 #[cfg(any(target_os = "freebsd", test))]
@@ -1412,6 +1427,52 @@ pub(crate) fn untrusted_mount_ancestor(
     Ok(None)
 }
 
+/// Refuse `path` unless every directory above it, from `/` down, is a
+/// directory only root can rename entries in, judged by `trust`.
+///
+/// The root-run launcher names the jail root and the `/proc`-mask source by
+/// path on every mount; a directory above either that another user can write
+/// would let that user swap the next name and redirect every mount.
+///
+/// # Errors
+///
+/// [`RunJailDefect::MountFailed`] when `path` is not absolute, or a directory
+/// above it is [`ViewDirTrust::Writable`], missing, or not a directory.
+#[cfg(any(target_os = "freebsd", test))]
+pub(crate) fn require_root_only_ancestors(
+    path: &Path,
+    mut trust: impl FnMut(&Path) -> ViewDirTrust,
+) -> Result<(), RunJailDefect> {
+    let refuse = |detail: String| RunJailDefect::MountFailed {
+        target: path.to_path_buf(),
+        detail,
+    };
+    let parent = path
+        .parent()
+        .filter(|_| path.is_absolute())
+        .ok_or_else(|| refuse("the jail directory is not an absolute path below /".to_owned()))?;
+    let mut dir = PathBuf::new();
+    for component in parent.components() {
+        dir.push(component);
+        match trust(&dir) {
+            ViewDirTrust::RootOnly => {}
+            ViewDirTrust::Writable => {
+                return Err(refuse(format!(
+                    "{} above the jail directory is writable by a user other than root",
+                    dir.display()
+                )));
+            }
+            ViewDirTrust::Missing | ViewDirTrust::Unusable => {
+                return Err(refuse(format!(
+                    "{} above the jail directory is not a usable directory",
+                    dir.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The FreeBSD returning build-jail arm: establish a scratch-rooted `jail(2)`
 /// (via the `jail(8)` CLI) lowering the profile's axes, scrub the env in the
 /// launcher, run the payload confined, wait, and decode the exit into a
@@ -1419,8 +1480,9 @@ pub(crate) fn untrusted_mount_ancestor(
 #[cfg(target_os = "freebsd")]
 mod freebsd_jail {
     use super::{
-        FreebsdMountOp, JailOutcome, SafeMountPath, ViewDirTrust, apply_mount_ops, find_in_path,
-        freebsd_mount_ops, macos_scrubbed_env, under_root,
+        FreebsdMountOp, JAIL_TMPFS_OPTIONS, JailOutcome, SafeMountPath, ViewDirTrust,
+        apply_mount_ops, find_in_path, freebsd_mount_ops, macos_scrubbed_env,
+        require_root_only_ancestors, root_only_dir, under_root,
     };
     use crate::JailMounts;
     use crate::mounts::{WorkingTree, jail_binds, mount_plan};
@@ -1758,21 +1820,21 @@ mod freebsd_jail {
         }
     }
 
-    /// Mount a FRESH root-owned `tmpfs` with mode `0755` at `target`, refusing
-    /// (fail-closed) on any non-success.
+    /// Mount a FRESH root-owned `tmpfs` with mode `0755` at `target`
+    /// ([`JAIL_TMPFS_OPTIONS`]), refusing (fail-closed) on any non-success.
     ///
     /// It serves two roles: a mask of the mount plan (the counterpart of bwrap's
     /// `--tmpfs`), and the provisioned parent a missing mountpoint leaf is created
-    /// on. Mode `0755` keeps both unwritable by the unprivileged jail user, whatever
-    /// the mode of the directory it covers. `mount(8)` — the stable base-system
-    /// primitive, the same binary used for devfs — carries the tmpfs type on every
-    /// supported FreeBSD release.
+    /// on. Root ownership and mode `0755` keep both writable by root alone,
+    /// whatever the owner and mode of the directory it covers. `mount(8)` — the
+    /// stable base-system primitive, the same binary used for devfs — carries the
+    /// tmpfs type on every supported FreeBSD release.
     fn mount_tmpfs(mount_bin: &Path, target: &Path) -> Result<(), RunJailDefect> {
         let status = std::process::Command::new(mount_bin)
             .arg("-t")
             .arg("tmpfs")
             .arg("-o")
-            .arg("mode=0755")
+            .arg(JAIL_TMPFS_OPTIONS)
             .arg("tmpfs")
             .arg(target)
             .status();
@@ -1780,7 +1842,7 @@ mod freebsd_jail {
             Ok(s) if s.success() => Ok(()),
             Ok(s) => Err(RunJailDefect::MountFailed {
                 target: target.to_path_buf(),
-                detail: format!("mount -t tmpfs -o mode=0755 tmpfs failed ({s})"),
+                detail: format!("mount -t tmpfs -o {JAIL_TMPFS_OPTIONS} tmpfs failed ({s})"),
             }),
             Err(e) => Err(RunJailDefect::MountFailed {
                 target: target.to_path_buf(),
@@ -1823,7 +1885,7 @@ mod freebsd_jail {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => ViewDirTrust::Missing,
             Err(_) => ViewDirTrust::Unusable,
             Ok(meta) if !meta.file_type().is_dir() => ViewDirTrust::Unusable,
-            Ok(meta) if meta.uid() == 0 && meta.mode() & 0o022 == 0 => ViewDirTrust::RootOnly,
+            Ok(meta) if root_only_dir(meta.uid(), meta.mode()) => ViewDirTrust::RootOnly,
             Ok(_) => ViewDirTrust::Writable,
         }
     }
@@ -1901,6 +1963,7 @@ mod freebsd_jail {
                 target: created.clone(),
                 detail: format!("could not resolve the jail root: {e}"),
             })?;
+            require_root_only_ancestors(&root, view_dir_trust)?;
 
             // The `/proc`-mask source: an empty dir rooted OUTSIDE the writable
             // scratch, under the same private cache root as the jail root. It is NOT
@@ -1909,7 +1972,14 @@ mod freebsd_jail {
             // so the jailed payload has no mount to it and cannot write it — the
             // read-only `/proc` mask it feeds stays immutable to the payload. Created
             // exclusively; a creation failure refuses (fail-closed).
-            let proc_mask_source = mount_dir_under(&proc_mask_source_dir()?, "empty-proc")?;
+            let created_mask_source = mount_dir_under(&proc_mask_source_dir()?, "empty-proc")?;
+            let proc_mask_source = std::fs::canonicalize(&created_mask_source).map_err(|e| {
+                RunJailDefect::MountFailed {
+                    target: created_mask_source.clone(),
+                    detail: format!("could not resolve the /proc mask source: {e}"),
+                }
+            })?;
+            require_root_only_ancestors(&proc_mask_source, view_dir_trust)?;
 
             let mut mount = Self {
                 umount_bin,
@@ -2015,11 +2085,11 @@ mod freebsd_jail {
         /// that user swap the next name for a symlink between this check and the
         /// root-run mount. The shallowest such directory is covered by a fresh
         /// tmpfs first ([`super::untrusted_mount_ancestor`]), so the target is
-        /// created on a filesystem only this jail can reach. A target whose path is
-        /// root-only and present is used as is; one on a tmpfs this jail mounted is
-        /// created there; otherwise a fresh tmpfs is layered over its parent to hold
-        /// the leaf — the FreeBSD counterpart of bwrap materialising its mount
-        /// targets inside the namespace.
+        /// created on a root-owned filesystem only root can write. A target whose
+        /// path is root-only and present is used as is; one on a tmpfs this jail
+        /// mounted is created there; otherwise a fresh tmpfs is layered over its
+        /// parent to hold the leaf — the FreeBSD counterpart of bwrap materialising
+        /// its mount targets inside the namespace.
         ///
         /// # Errors
         ///
@@ -3776,6 +3846,95 @@ mod tests {
             },
         );
         assert_eq!(anchor, Ok(None));
+    }
+
+    #[test]
+    fn a_jail_dir_below_a_user_writable_or_non_directory_ancestor_refuses() {
+        let jail = Path::new("/usr/home/u/.cache/ipe/jail/jailroot-1");
+        let mut seen: Vec<PathBuf> = Vec::new();
+        let ok =
+            require_root_only_ancestors(Path::new("/root/.cache/ipe/jail/jailroot-1"), |dir| {
+                seen.push(dir.to_path_buf());
+                ViewDirTrust::RootOnly
+            });
+        assert_eq!(ok, Ok(()));
+        assert_eq!(
+            seen.first().map(PathBuf::as_path),
+            Some(Path::new("/")),
+            "the walk starts at /: {seen:?}"
+        );
+        assert_eq!(
+            seen.last().map(PathBuf::as_path),
+            Some(Path::new("/root/.cache/ipe/jail")),
+            "the jail directory itself is not judged: {seen:?}"
+        );
+        for refused in [
+            ViewDirTrust::Writable,
+            ViewDirTrust::Missing,
+            ViewDirTrust::Unusable,
+        ] {
+            let outcome = require_root_only_ancestors(jail, |dir| {
+                if dir == Path::new("/usr/home/u") {
+                    refused
+                } else {
+                    ViewDirTrust::RootOnly
+                }
+            });
+            assert!(
+                matches!(&outcome, Err(RunJailDefect::MountFailed { detail, .. }) if detail.contains("/usr/home/u ")),
+                "{refused:?}: {outcome:?}"
+            );
+        }
+        for relative in ["jail", "a/jail", "/"] {
+            let outcome =
+                require_root_only_ancestors(Path::new(relative), |_| ViewDirTrust::RootOnly);
+            assert!(
+                matches!(outcome, Err(RunJailDefect::MountFailed { .. })),
+                "{relative}: {outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_jail_tmpfs_is_a_root_only_directory() {
+        // A tmpfs root defaults to the owner of the directory it covers, so a
+        // mask over a user-owned home would be that user's to write: every
+        // mount target below it would then be swappable, and refused.
+        let options: Vec<Option<(&str, &str)>> = JAIL_TMPFS_OPTIONS
+            .split(',')
+            .map(|option| option.split_once('='))
+            .collect();
+        let value = |key: &str| {
+            options
+                .iter()
+                .flatten()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| *value)
+        };
+        assert_eq!(value("gid"), Some("0"), "{JAIL_TMPFS_OPTIONS}");
+        let uid = value("uid").and_then(|uid| uid.parse::<u32>().ok());
+        let mode = value("mode").and_then(|mode| u32::from_str_radix(mode, 8).ok());
+        assert!(
+            matches!((uid, mode), (Some(uid), Some(mode)) if root_only_dir(uid, mode)),
+            "{JAIL_TMPFS_OPTIONS}"
+        );
+    }
+
+    #[test]
+    fn only_a_root_owned_dir_no_one_else_can_write_is_root_only() {
+        for (uid, mode) in [(0, 0o755), (0, 0o700), (0, 0o1755), (0, 0o555)] {
+            assert!(root_only_dir(uid, mode), "{uid} {mode:o}");
+        }
+        for (uid, mode) in [
+            (1000, 0o755),
+            (1000, 0o700),
+            (0, 0o775),
+            (0, 0o757),
+            (0, 0o1777),
+            (0, 0o4777),
+        ] {
+            assert!(!root_only_dir(uid, mode), "{uid} {mode:o}");
+        }
     }
 
     #[test]
