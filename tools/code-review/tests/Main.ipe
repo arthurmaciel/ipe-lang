@@ -3616,6 +3616,108 @@ progressIgnoresUndecodableReason =
         Task.succeed (result == Just 1)
 
 
+-- A rebuild with a page per pair succeeds at 6,000 pages, driving the loop
+-- well past the old 5,000-step recursion-guard trip with no stack wall left
+-- to measure. Red if the walk nests instead of running through `Task.loop`.
+resyncSucceedsAtSixThousandPages : Task.Task Error Bool
+resyncSucceedsAtSixThousandPages =
+    let
+        at =
+            scratchAt "ipe-index-progress-6000"
+
+        bound =
+            { pageSize = 1, pageCeiling = 6000 }
+    in
+    do
+        db <- seedProgressScratch at
+        List.range 1 6000
+            |> List.map (\i -> insertReviewRow db ("s-" ++ String.fromInt i) "hs")
+            |> Task.sequence
+        copied <- Queue.resyncReviewedWithin bound db
+        kept <- Index.loadProgress
+        cleanupProgressScratch at
+        Task.succeed (copied == 6000 && kept.mirrored == 6000)
+
+
+-- One pair past a 6,000-page ceiling refuses the rebuild and leaves the copy
+-- untouched, the same as the production ceiling. Red if the ceiling is off
+-- by one, or if a refused rebuild still commits what it drained.
+resyncRefusesSixThousandAndOnePages : Task.Task Error Bool
+resyncRefusesSixThousandAndOnePages =
+    let
+        at =
+            scratchAt "ipe-index-progress-6001"
+
+        bound =
+            { pageSize = 1, pageCeiling = 6000 }
+    in
+    do
+        db <- seedProgressScratch at
+        List.range 1 6001
+            |> List.map (\i -> insertReviewRow db ("t-" ++ String.fromInt i) "ht")
+            |> Task.sequence
+        refusal <-
+            Queue.resyncReviewedWithin bound db
+                |> Task.map (\_ -> Nothing)
+                |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
+        kept <- Index.loadProgress
+        cleanupProgressScratch at
+        Task.succeed (maybeContains "6000-page ceiling" refusal && kept.mirrored == 0)
+
+
+-- Exactly `pageCeiling x pageSize` pairs still succeeds when a page holds
+-- more than one pair, not only at `pageSize = 1`. Red if the boundary check
+-- only holds for a one-pair page.
+resyncSucceedsAtExactCeilingTimesPageSize : Task.Task Error Bool
+resyncSucceedsAtExactCeilingTimesPageSize =
+    let
+        at =
+            scratchAt "ipe-index-progress-exact"
+
+        bound =
+            { pageSize = 3, pageCeiling = 2000 }
+
+        total =
+            bound.pageCeiling * bound.pageSize
+    in
+    do
+        db <- seedProgressScratch at
+        List.range 1 total
+            |> List.map (\i -> insertReviewRow db ("x-" ++ String.fromInt i) "hx")
+            |> Task.sequence
+        copied <- Queue.resyncReviewedWithin bound db
+        kept <- Index.loadProgress
+        cleanupProgressScratch at
+        Task.succeed (copied == total && kept.mirrored == total)
+
+
+-- `pageCeiling = maxInt` wraps `Task.loop`'s own ceiling (`pageCeiling + 1`)
+-- to a negative value, which `Task.loop` refuses fail-closed before reading
+-- any page. Red if `+` is checked instead of wrapping, or if the wrapped
+-- ceiling is accepted as unlimited.
+resyncRefusesMaxIntCeiling : Task.Task Error Bool
+resyncRefusesMaxIntCeiling =
+    let
+        at =
+            scratchAt "ipe-index-progress-maxint"
+
+        bound =
+            { pageSize = 1, pageCeiling = 9223372036854775807 }
+    in
+    do
+        db <- seedProgressScratch at
+        refusal <-
+            Queue.resyncReviewedWithin bound db
+                |> Task.map (\_ -> Nothing)
+                |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
+        kept <- Index.loadProgress
+        cleanupProgressScratch at
+        Task.succeed
+            (maybeContains "Task.loop needs a step ceiling of at least 1" refusal
+                && kept.mirrored == 0
+            )
+
+
 -- Display escaping, startup probes, refusal fixes and progress. Last in the
 -- run: the probe case leaves `IPE_REVIEW_DB` at an unwritable location.
 displayAndStartupChecks : Task.Task Error (List ( String, Bool ))
@@ -3637,6 +3739,10 @@ displayAndStartupChecks =
         , Task.map (\ok -> ( "a progress rebuild at the deepest allowed page count copies, one past it is refused", ok )) resyncAtDeepestCeiling
         , Task.map (\ok -> ( "a progress rebuild refuses a bound below one pair or one page", ok )) resyncRefusesEmptyBound
         , Task.map (\ok -> ( "progress counts a refusal whose reason no longer parses", ok )) progressIgnoresUndecodableReason
+        , Task.map (\ok -> ( "a progress rebuild succeeds over 6,000 one-pair pages", ok )) resyncSucceedsAtSixThousandPages
+        , Task.map (\ok -> ( "a progress rebuild refuses one pair past a 6,000-page ceiling", ok )) resyncRefusesSixThousandAndOnePages
+        , Task.map (\ok -> ( "a progress rebuild succeeds at exactly ceiling times page size", ok )) resyncSucceedsAtExactCeilingTimesPageSize
+        , Task.map (\ok -> ( "a progress rebuild refuses a page ceiling that wraps past Int.max", ok )) resyncRefusesMaxIntCeiling
         , Task.map (\ok -> ( "startup probes name the variable and the file", ok )) probesNameTheirVariable
         , Task.map (\ok -> ( "tag grammar matches the shared ipe-index tag vectors", ok )) tagGrammarMatchesVectors
         ]

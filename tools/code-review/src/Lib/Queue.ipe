@@ -87,15 +87,12 @@ type alias ResyncBound =
     }
 
 
--- The most review-database pages one rebuild reads. Each page nests two
--- Task continuations whose futures are polled one inside the next, about
--- 1.5 KiB of stack per page in a debug build; the runtime's 8 MiB threads
--- trip the recursion guard near 5,000 pages. 1,000 pages keeps that trip
--- five times out of reach, so the ceiling refusal below is the only outcome
--- past the limit, never a recursion trip.
+-- The most review-database pages one rebuild reads: a bound on one rebuild
+-- transaction's work (`pageCeiling x pairPageSize` decisions), never a stack
+-- limit — the walk runs at constant stack depth through `Task.loop`.
 resyncPageCeiling : Int
 resyncPageCeiling =
-    1000
+    10000
 
 
 resyncBound : ResyncBound
@@ -118,23 +115,44 @@ resyncReviewed db =
 resyncReviewedWithin : ResyncBound -> Db.Db -> Task.Task Error Int
 resyncReviewedWithin bound db =
     if bound.pageSize < 1 || bound.pageCeiling < 1 then
-        Task.fail (Error.unexpected "a review progress rebuild needs a page size and a page ceiling of at least 1")
+        Task.fail (Error.invalidInput "a review progress rebuild needs a page size and a page ceiling of at least 1")
 
     else
-        Index.rebuildReviewed (\conn -> refillPages bound db conn 0 0 Nothing)
+        Index.rebuildReviewed (\conn -> refillPages bound db conn)
 
 
--- Page `pagesRead` of decided pairs after `cursor`, each drained on `conn`;
--- `copied` counts the pairs drained so far. A short page is the last one. A
--- non-empty page past the ceiling fails the whole rebuild.
-refillPages : ResyncBound -> Db.Db -> Db.Db -> Int -> Int -> Maybe ( String, String ) -> Task.Task Error Int
-refillPages bound db conn pagesRead copied cursor =
+-- The state one `refillPages` step carries: how many pages have been read,
+-- how many pairs have been drained so far, and the cursor the next page
+-- reads after.
+type alias RefillState =
+    { pagesRead : Int
+    , copied : Int
+    , cursor : Maybe ( String, String )
+    }
+
+
+-- `resyncReviewed` draining the review database at constant stack depth,
+-- however many pages it takes. The loop's own ceiling, `bound.pageCeiling +
+-- 1`, is an unreachable backstop (defence in depth): the step itself refuses
+-- a non-empty page once `pagesRead >= bound.pageCeiling`, so the loop's own
+-- limit never has a chance to fire.
+refillPages : ResyncBound -> Db.Db -> Db.Db -> Task.Task Error Int
+refillPages bound db conn =
+    Task.loop (bound.pageCeiling + 1) { pagesRead = 0, copied = 0, cursor = Nothing } (refillStep bound db conn)
+
+
+-- One page of decided pairs after `state.cursor`, drained on `conn`: an
+-- empty page ends the walk with the pairs copied so far; a non-empty page
+-- past the ceiling fails the whole rebuild; otherwise the page drains, then
+-- a short page ends the walk and a full page continues from its last pair.
+refillStep : ResyncBound -> Db.Db -> Db.Db -> RefillState -> Task.Task Error (Task.Step RefillState Int)
+refillStep bound db conn state =
     do
-        pairs <- LibDb.decidedPairsAfter db bound.pageSize cursor
+        pairs <- LibDb.decidedPairsAfter db bound.pageSize state.cursor
         if List.isEmpty pairs then
-            Task.succeed copied
+            Task.succeed (Task.Done state.copied)
 
-        else if pagesRead >= bound.pageCeiling then
+        else if state.pagesRead >= bound.pageCeiling then
             Task.fail (resyncCeilingRefusal bound)
 
         else
@@ -142,16 +160,26 @@ refillPages bound db conn pagesRead copied cursor =
                 pairs
                     |> List.map (\( uid, hash ) -> Index.drainPair conn uid hash)
                     |> Task.sequence
+                let
+                    copied =
+                        state.copied + List.length pairs
+                in
                 if List.length pairs < bound.pageSize then
-                    Task.succeed (copied + List.length pairs)
+                    Task.succeed (Task.Done copied)
 
                 else
-                    refillPages bound db conn (pagesRead + 1) (copied + List.length pairs) (List.head (List.reverse pairs))
+                    Task.succeed
+                        (Task.Continue
+                            { pagesRead = state.pagesRead + 1
+                            , copied = copied
+                            , cursor = List.head (List.reverse pairs)
+                            }
+                        )
 
 
 resyncCeilingRefusal : ResyncBound -> Error
 resyncCeilingRefusal bound =
-    Error.unavailable
+    Error.invalidInput
         ("the review database holds more than "
             ++ String.fromInt (bound.pageCeiling * bound.pageSize)
             ++ " decisions, past the "
