@@ -5,12 +5,9 @@
 #   golden tests build+run one emitted binary and should never approach 60s on a
 #   warm target; the 120s ceiling catches legitimately hung tests.
 # - ci profile (--profile ci, used in CI jobs): warn at 60s, terminate after
-#   10 periods (600s). Tests that drive a real `cargo build` with no shared
-#   target (watch_integration, webview_e2e, server_e2e, live_e2e) can take
-#   4–6 minutes on a cold CI runner. 120s kills them on scheduler contention,
-#   not on a real regression. 600s is the outer safety net; each test's own
-#   wait-budget (e.g. `wait_for_body(..., Duration::from_mins(4))`) is the
-#   functional guard.
+#   5 periods (300s). The heavy server/watch binaries that drive a real
+#   `cargo build` keep a wider override below; each test's own wait-budget
+#   (e.g. `wait_for_body(..., Duration::from_mins(4))`) is the functional guard.
 
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 2 }
@@ -77,8 +74,17 @@ path = "junit.xml"
 # load — the transient failure a `retries` override used to mask. Serializing it
 # (paired with the test's own stable, warm wasm target dir) removes the race:
 # one wasm check runs at a time, against a target that compiled its deps once.
+#
+# `windows-junction` (max 2): each member plants a junction through the
+# `output_dir::test_links` helper, which the first caller compiles with a cold
+# PowerShell `Add-Type` build while the others wait on its build lock for at
+# most `BUILD_LOCK_WAIT` (240 s, under the `ci` cap of 300 s; the
+# `build_lock_wait_stays_under_the_ci_test_cap` test pins both). Capping the
+# group at two keeps that build from being starved by every core running the
+# rest of the suite. Every caller of the helper names `junction`.
 [test-groups]
 heavy-server-e2e = { max-threads = 1 }
+windows-junction = { max-threads = 2 }
 cwd-mutating = { max-threads = 1 }
 advisory-db-lock = { max-threads = 1 }
 wasm-external-cargo = { max-threads = 1 }
@@ -109,6 +115,10 @@ slow-timeout = { period = "60s", terminate-after = 15 }
 [[profile.ci.overrides]]
 filter = 'binary(build_no_arg) | binary(release_subcommand)'
 test-group = 'cwd-mutating'
+
+[[profile.ci.overrides]]
+filter = 'package(ipe) & kind(lib) & test(/junction/)'
+test-group = 'windows-junction'
 
 # The audit integration binaries spawn `ipe package audit`, whose supply-chain
 # check runs `cargo-deny check advisories` against the single host-global RustSec
@@ -170,6 +180,10 @@ test-group = 'heavy-server-e2e'
 [[profile.default.overrides]]
 filter = 'binary(build_no_arg) | binary(release_subcommand)'
 test-group = 'cwd-mutating'
+
+[[profile.default.overrides]]
+filter = 'package(ipe) & kind(lib) & test(/junction/)'
+test-group = 'windows-junction'
 
 [[profile.default.overrides]]
 filter = 'binary(package_audit) | binary(audit_native)'

@@ -658,7 +658,9 @@ jobs:
       # Run this shard's disjoint partition from the prebuilt archive — no
       # recompile. `--workspace-remap .` re-roots the archived paths at this
       # checkout. E2E tests no-op without IPE_E2E.
-      - run: cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --partition count:${{ matrix.shard }}/4 --profile ci
+      - env:
+          SHARD: ${{ matrix.shard }}
+        run: cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --partition "count:$SHARD/4" --profile ci
       - name: Upload JUnit results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -1014,13 +1016,15 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       - name: ASAN shard ${{ matrix.shard }}/6 (build-std, instrumented std)
+        env:
+          SHARD: ${{ matrix.shard }}
         run: |
           cargo +nightly nextest run \
             -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics \
             -p ipe_sandbox -p ipe_ffi -p ipe-runtime-rust \
             -Zbuild-std --target x86_64-unknown-linux-gnu \
             --profile ci --no-fail-fast \
-            --partition count:${{ matrix.shard }}/6 \
+            --partition "count:$SHARD/6" \
             -E 'not (binary(run_jail_e2e) | binary(build_jail_e2e) | binary(/_seal$/))'
 
   # Stable aggregation gate for the sharded ASAN run: the post-merge phase
@@ -1543,7 +1547,7 @@ jobs:
       - name: Regenerate docs/reference/stdlib.md and docs/reference/stdlib/
         run: |
           chmod +x gen-stdlib-docs
-          ./gen-stdlib-docs --repo-root "${{ github.workspace }}"
+          ./gen-stdlib-docs --repo-root "$GITHUB_WORKSPACE"
       - name: Fail if generated docs differ from committed files
         run: tools/scripts/generated-unchanged.sh docs/reference/stdlib.md docs/reference/stdlib/
 
@@ -1567,7 +1571,7 @@ jobs:
       - name: Regenerate docs/reference/env.md
         run: |
           chmod +x gen-env-docs
-          ./gen-env-docs --repo-root "${{ github.workspace }}"
+          ./gen-env-docs --repo-root "$GITHUB_WORKSPACE"
       - name: Fail if generated docs differ from committed files
         run: tools/scripts/generated-unchanged.sh docs/reference/env.md
 
@@ -1591,7 +1595,7 @@ jobs:
       - name: Regenerate docs/reference/capabilities.md
         run: |
           chmod +x gen-capabilities-docs
-          ./gen-capabilities-docs --repo-root "${{ github.workspace }}"
+          ./gen-capabilities-docs --repo-root "$GITHUB_WORKSPACE"
       - name: Fail if generated docs differ from committed files
         run: tools/scripts/generated-unchanged.sh docs/reference/capabilities.md
 
@@ -1616,7 +1620,7 @@ jobs:
       - name: Regenerate docs/reference/cli.md
         run: |
           chmod +x gen-cli-docs
-          ./gen-cli-docs --repo-root "${{ github.workspace }}"
+          ./gen-cli-docs --repo-root "$GITHUB_WORKSPACE"
       - name: Fail if generated docs differ from committed files
         run: tools/scripts/generated-unchanged.sh docs/reference/cli.md
 
@@ -1642,7 +1646,7 @@ jobs:
       - name: Regenerate docs/reference/requirements.md
         run: |
           chmod +x gen-requirements-docs
-          ./gen-requirements-docs --repo-root "${{ github.workspace }}"
+          ./gen-requirements-docs --repo-root "$GITHUB_WORKSPACE"
       - name: Fail if generated docs differ from committed files
         run: tools/scripts/generated-unchanged.sh docs/reference/requirements.md
 
@@ -1683,7 +1687,7 @@ jobs:
       - name: Regenerate the CLI transcript goldens
         run: |
           chmod +x regen-cli-transcripts
-          ./regen-cli-transcripts --repo-root "${{ github.workspace }}" \
+          ./regen-cli-transcripts --repo-root "$GITHUB_WORKSPACE" \
             --ipe-bin "$RUNNER_TEMP/ipe-release/ipe"
       - name: Fail if the regenerated goldens differ from the committed ones
         run: tools/scripts/generated-unchanged.sh src/ipe-cli/tests/golden/cli/

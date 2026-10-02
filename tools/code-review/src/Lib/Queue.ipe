@@ -1,4 +1,4 @@
-module Lib.Queue exposing (Progress, QueuePage, QueueState(..), QueuedUnit, ResyncBound, UnitPageState(..), decide, loadPage, loadUnitView, pageHeaderText, queueStatusText, resyncBound, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
+module Lib.Queue exposing (HistoryPage, HistoryRow, HistoryState(..), LoadTicket, Progress, QueuePage, QueueState(..), QueuedUnit, ResyncBound, UnitPageState(..), decide, firstTicket, historyStateFromResult, historyStatusText, isCurrentLoad, loadHistoryPage, loadPage, nextTicket, loadUnitView, pageHeaderText, queueStatusText, resyncBound, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
 
 import Ipe.Db as Db
 import Ipe.Error as Error
@@ -7,7 +7,8 @@ import Ipe.Maybe as Maybe
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Task as Task
-import Lib.Db as LibDb
+import Ipe.Time.Timestamp exposing (Timestamp)
+import Lib.Db as LibDb exposing (HistoryCursor(..))
 import Lib.Format as Format
 -- `Index.Unit` names `Highlight.Lang`, and an imported alias resolves its
 -- qualified names in this module.
@@ -194,6 +195,133 @@ type QueueState
     = Loading
     | Loaded QueuePage
     | Failed Error
+
+
+-- The number of one load of a page slot (the queue, a History page, a unit
+-- page). Each load a slot starts takes the ticket after the slot's latest,
+-- and a result settles the slot only under the slot's latest ticket, so a
+-- slower earlier load never replaces the result of a later one. Opaque:
+-- built only by `firstTicket` and `nextTicket`.
+type LoadTicket
+    = LoadTicket Int
+
+
+firstTicket : LoadTicket
+firstTicket =
+    LoadTicket 0
+
+
+nextTicket : LoadTicket -> LoadTicket
+nextTicket ticket =
+    case ticket of
+        LoadTicket n ->
+            LoadTicket (n + 1)
+
+
+-- True when a result carrying `load` is the slot's latest load.
+isCurrentLoad : LoadTicket -> LoadTicket -> Bool
+isCurrentLoad load latest =
+    ticketNumber load == ticketNumber latest
+
+
+ticketNumber : LoadTicket -> Int
+ticketNumber ticket =
+    case ticket of
+        LoadTicket n ->
+            n
+
+
+-- A decided unit as the History page shows it: the review row plus the unit's
+-- qualified name resolved from the index db, rendered (Nothing when the unit
+-- no longer exists there).
+type alias HistoryRow =
+    { uid : String
+    , bodyHash : String
+    , decision : String
+    , reason : Maybe LibDb.StoredReason
+    , reviewedAt : Timestamp
+    , name : Maybe SafeText
+    }
+
+
+-- One loaded History page: its rows, the cursor it was read from, and the
+-- cursor of the page after it (Nothing on the last page).
+type alias HistoryPage =
+    { rows : List HistoryRow
+    , at : LibDb.HistoryCursor
+    , next : Maybe LibDb.HistoryCursor
+    }
+
+
+-- The History view's state. An empty history is only `HistoryLoaded` with
+-- no rows from `HistoryStart`, so a load in flight or a failed load can
+-- never render as "no reviews".
+type HistoryState
+    = HistoryLoading
+    | HistoryLoaded HistoryPage
+    | HistoryFailed Error
+
+
+historyStateFromResult : Result Error HistoryPage -> HistoryState
+historyStateFromResult result =
+    case result of
+        Ok page ->
+            HistoryLoaded page
+
+        Err e ->
+            HistoryFailed e
+
+
+-- The one-line text for a History state that has no rows to show; Nothing
+-- for a loaded page that holds rows.
+historyStatusText : HistoryState -> Maybe String
+historyStatusText state =
+    case state of
+        HistoryLoading ->
+            Just "Loading history…"
+
+        HistoryFailed e ->
+            Just ("History load failed: " ++ SafeText.toString (SafeText.renderForeign (Error.toString e)))
+
+        HistoryLoaded page ->
+            if List.isEmpty page.rows then
+                case page.at of
+                    HistoryStart ->
+                        Just "No reviews yet."
+
+                    HistoryAfter _ _ _ ->
+                        Just "No more reviews."
+
+            else
+                Nothing
+
+
+-- One History page from `cursor`, newest first, each row with the unit's
+-- qualified name resolved from the index db. At most
+-- `LibDb.historyPageSize` rows are read, and one name lookup runs per row.
+loadHistoryPage : LibDb.HistoryCursor -> Task.Task Error HistoryPage
+loadHistoryPage cursor =
+    do
+        db <- LibDb.open
+        page <- LibDb.historyPage db LibDb.historyPageSize cursor
+        conn <- Index.openRead
+        rows <- Task.sequence (List.map (historyRow conn) page.rows)
+        Task.succeed { rows = rows, at = cursor, next = page.next }
+
+
+historyRow : Db.Db -> LibDb.ReviewRow -> Task.Task Error HistoryRow
+historyRow conn row =
+    Task.map
+        (\name ->
+            { uid = row.uid
+            , bodyHash = row.bodyHash
+            , decision = row.decision
+            , reason = row.reason
+            , reviewedAt = row.reviewedAt
+            , name = name
+            }
+        )
+        (Index.nameFor conn row.uid)
 
 
 -- The one way a decision is recorded: only a shown source can be decided,

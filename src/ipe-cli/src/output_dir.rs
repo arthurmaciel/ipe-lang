@@ -4332,8 +4332,66 @@ public static int Main(string[] args) {
     const SHARING_VIOLATION: i32 = 32;
 
     /// Ceiling on waiting for another test process to finish building the helper.
-    #[cfg(windows)]
-    const BUILD_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
+    ///
+    /// It stays under the `ci` nextest profile's per-test cap, so a starved
+    /// wait fails with its own reason instead of a terminate; the pin is
+    /// `build_lock_wait_stays_under_the_ci_test_cap`.
+    const BUILD_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(240);
+
+    /// The workspace nextest configuration this module's waits are held under.
+    const NEXTEST_CONFIG: &str = include_str!("../../../.config/nextest.toml");
+
+    /// Seconds in a nextest duration of the form `<n>s`.
+    fn nextest_seconds(value: &toml::Value) -> Option<u64> {
+        value.as_str()?.strip_suffix('s')?.parse().ok()
+    }
+
+    /// The `ci` profile's per-test cap stays above [`BUILD_LOCK_WAIT`], and the junction group exists.
+    ///
+    /// Every test that calls `junction_in_place` names `junction`, so the
+    /// `windows-junction` group's `test(/junction/)` filter serializes them.
+    #[test]
+    fn build_lock_wait_stays_under_the_ci_test_cap() {
+        let config: toml::Table = NEXTEST_CONFIG.parse().expect("parse nextest config");
+        let ci = config
+            .get("profile")
+            .and_then(|p| p.get("ci"))
+            .expect("ci profile");
+        let slow = ci.get("slow-timeout").expect("ci slow-timeout");
+        let period = slow
+            .get("period")
+            .and_then(nextest_seconds)
+            .expect("ci slow-timeout period");
+        let periods = slow
+            .get("terminate-after")
+            .and_then(toml::Value::as_integer)
+            .and_then(|n| u64::try_from(n).ok())
+            .expect("ci slow-timeout terminate-after");
+        let cap = period.checked_mul(periods).expect("ci test cap fits u64");
+        assert!(
+            BUILD_LOCK_WAIT.as_secs() < cap,
+            "BUILD_LOCK_WAIT {}s must stay under the ci per-test cap {cap}s",
+            BUILD_LOCK_WAIT.as_secs()
+        );
+        assert_eq!(
+            config
+                .get("test-groups")
+                .and_then(|g| g.get("windows-junction"))
+                .and_then(|g| g.get("max-threads"))
+                .and_then(toml::Value::as_integer),
+            Some(2)
+        );
+        let grouped = ci
+            .get("overrides")
+            .and_then(toml::Value::as_array)
+            .expect("ci overrides")
+            .iter()
+            .any(|o| o.get("test-group").and_then(toml::Value::as_str) == Some("windows-junction"));
+        assert!(
+            grouped,
+            "the ci profile routes the junction tests into windows-junction"
+        );
+    }
 
     /// The compiled junction helper, built at most once per test build directory.
     ///

@@ -1,20 +1,27 @@
 name: nightly-green
 
 # A red nightly blocks the next merge. `nightly-green` is a required context:
-# it passes only on proof the full gate ("Build & test" dispatched by
-# nightly-full-gate.yml, which runs every `nightly-gate` job) is green — either
-# the latest completed nightly on main concluded `success` within 48h, or this
-# change's own commit passed a dispatched full gate (the recovery path for the
-# PR that fixes a red nightly: `gh workflow run 'Build & test' --ref <branch>`,
-# then re-run this check). Absence is not a pass. The rule lives in
-# `.github/ci/nightly_green.py`; its `--lint` (manifest-guard) pins this wiring.
+# it passes only when every workflow producing a `nightly-gate` context in
+# `.github/ci/check-manifest.yml` (admission-sandbox.yml, ci.yml dispatched by
+# nightly-full-gate.yml, ruleset-admin-read.yml, static.yml) is proven green,
+# each in one of two ways: its newest concluded nightly run on main is at most
+# 48h old and every `nightly-gate` job in it concluded `success` (every other
+# job `success` or `skipped`, a non-blocking one aside), or a run of it
+# dispatched on this change's own commit passed (the recovery path for the PR
+# that fixes a red nightly: `gh workflow run <workflow> --ref <branch>`, then
+# re-run this check; ruleset-admin-read.yml runs on main only, see
+# `.github/ci/RECONCILIATION.md`). Absence is not a pass. The rule and its
+# producer table live in `.github/ci/nightly_green.py`, the one file the sparse
+# checkout below materialises; its `--lint` (manifest-guard) pins this wiring
+# and asserts the table equal to what the manifest and each producer's
+# triggers derive.
 on:
   pull_request:
   merge_group:
 
 permissions:
-  actions: read     # list the "Build & test" runs
-  contents: read
+  actions: read     # list every producer's runs and read their jobs (repository-wide)
+  contents: read    # compare a run's commit against main
   pull-requests: read  # merge_group: resolve the queued PR's head commit
 
 concurrency:

@@ -1,23 +1,26 @@
 module Lib.SafeText exposing (SafeText, concat, isHazard, literal, quoted, render, renderForeign, toString)
 
 -- Text that is safe to write to an operator's terminal or show on a page:
--- every log-hazard character is spelled out as a visible escape. Untrusted
+-- every display-hazard character is spelled out as a visible escape. Untrusted
 -- text (index rows, environment values, an error message built from either)
 -- enters only through `render`, `quoted` or `renderForeign`; `literal` is for
 -- text this tool writes itself, so its callers pass string literals only.
 -- `toString` is the one exit, used at a sink. The tool constants `key` and
 -- `hint` that `Main.requireEnv` prints are such literals.
 --
--- The hazard set mirrors the runtime's `is_log_hazard`
--- (`src/runtime/rust/src/system.rs`), and the escapes mirror
--- `scrub_log_controls`: `\n`, `\r` and `\t` by name, every other hazard as
--- `\u{hex}` in lowercase. One deliberate deviation: `render` also escapes a
--- literal `\` as `\\`, so untrusted text cannot pre-forge an escape that reads
--- as an innocent character, and a `"` as `\"`, so a `quoted` value cannot
--- close its own quotes. With `\` escaped the mapping stays injective.
--- `renderForeign` leaves `\` and `"` alone: it is the
--- sink-side pass over text that may already be rendered, where doubling every
--- `\` again would garble it.
+-- The hazard set is the review-display set: a strict superset of the
+-- runtime's log-hazard set (`is_log_hazard`, `src/runtime/rust/src/system.rs`)
+-- that adds every code point that renders as nothing or as a plain space.
+-- Tests pin it to `tools/ipe-index/tests/display_hazard_vectors.json` (itself
+-- pinned to the UCD) and check that it contains the runtime's
+-- `log_hazard_ranges.json`. The escapes follow `scrub_log_controls`: `\n`,
+-- `\r` and `\t` by name, every other hazard as `\u{hex}` in lowercase. One
+-- deliberate deviation: `render` also escapes a literal `\` as `\\`, so
+-- untrusted text cannot pre-forge an escape that reads as an innocent
+-- character, and a `"` as `\"`, so a `quoted` value cannot close its own
+-- quotes. With `\` escaped the mapping stays injective. `renderForeign` leaves
+-- `\` and `"` alone: it is the sink-side pass over text that may already be
+-- rendered, where doubling every `\` again would garble it.
 
 import Ipe.Bitwise as Bitwise
 import Ipe.Char as Char
@@ -29,23 +32,74 @@ type SafeText
     = SafeText String
 
 
--- A character that must never reach a terminal or page raw: every Unicode
--- `Cc` control (C0 0x00-0x1F incl. CR/LF/ESC, DEL 0x7F, C1 0x80-0x9F), the
--- line/paragraph separators U+2028/U+2029, and the bidirectional formatting
--- controls U+061C, U+200E/F, U+202A-E and U+2066-9.
+-- A character that must never reach a terminal or review page raw: the
+-- union of Unicode `Cc`, `Cf`, `Zl`, `Zp`, `Zs` except U+0020,
+-- `Default_Ignorable_Code_Point` (the whole tag block and the reserved
+-- ignorable ranges included) and U+2800 BRAILLE PATTERN BLANK.
 isHazard : Char -> Bool
 isHazard c =
     let
         code =
             Char.toCode c
     in
-    -- 0x00-0x1F, 0x7F-0x9F, U+061C, U+200E-U+200F, U+2028-U+202E, U+2066-U+2069
-    (code <= 31)
-        || (code >= 127 && code <= 159)
-        || (code == 1564)
-        || (code >= 8206 && code <= 8207)
-        || (code >= 8232 && code <= 8238)
-        || (code >= 8294 && code <= 8297)
+    if code >= 32 && code <= 126 then
+        False
+
+    else
+        List.any (\( lo, hi ) -> code >= lo && code <= hi) hazardRanges
+
+
+-- The hazard set as sorted, disjoint, inclusive code-point ranges: row for
+-- row the `lo`/`hi` of `display_hazard_vectors.json`, whose `why` names each
+-- row's Unicode class.
+hazardRanges : List ( Int, Int )
+hazardRanges =
+    [ ( 0, 31 )
+    , ( 127, 159 )
+    , ( 160, 160 )
+    , ( 173, 173 )
+    , ( 847, 847 )
+    , ( 1536, 1541 )
+    , ( 1564, 1564 )
+    , ( 1757, 1757 )
+    , ( 1807, 1807 )
+    , ( 2192, 2193 )
+    , ( 2274, 2274 )
+    , ( 4447, 4448 )
+    , ( 5760, 5760 )
+    , ( 6068, 6069 )
+    , ( 6155, 6157 )
+    , ( 6158, 6158 )
+    , ( 6159, 6159 )
+    , ( 8192, 8202 )
+    , ( 8203, 8207 )
+    , ( 8232, 8232 )
+    , ( 8233, 8233 )
+    , ( 8234, 8238 )
+    , ( 8239, 8239 )
+    , ( 8287, 8287 )
+    , ( 8288, 8292 )
+    , ( 8293, 8293 )
+    , ( 8294, 8303 )
+    , ( 10240, 10240 )
+    , ( 12288, 12288 )
+    , ( 12644, 12644 )
+    , ( 65024, 65039 )
+    , ( 65279, 65279 )
+    , ( 65440, 65440 )
+    , ( 65520, 65528 )
+    , ( 65529, 65531 )
+    , ( 69821, 69821 )
+    , ( 69837, 69837 )
+    , ( 78896, 78911 )
+    , ( 113824, 113827 )
+    , ( 119155, 119162 )
+    , ( 917504, 917504 )
+    , ( 917505, 917505 )
+    , ( 917506, 917535 )
+    , ( 917536, 917631 )
+    , ( 917632, 921599 )
+    ]
 
 
 -- Untrusted text with every hazard, every `\` and every `"` escaped.
