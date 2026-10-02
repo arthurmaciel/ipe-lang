@@ -718,6 +718,59 @@ fn is_safe_keyframe_selector(sel: &str) -> bool {
         })
 }
 
+/// The SOLE CSS identifier (`<ident-token>`) constructor.
+///
+/// Every char outside `[A-Za-z0-9_-]` maps to `_` (mapped, never dropped, so a
+/// non-empty input never yields an empty ident). The map is not injective:
+/// `a:b`, `a.b` and `a_b` all yield `a_b`. A leading digit, a lone `-`, or a
+/// leading `-` immediately followed by a digit is not a legal identifier start
+/// (`-1a` is not a valid CSS identifier) and gets a `_` prefix. Empty input
+/// stays empty; a caller that needs a name treats an empty result as "drop",
+/// the same posture an empty source name already gets.
+#[cfg(feature = "web-core")]
+pub(crate) fn css_ident(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    let mut out: String = s
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => c,
+            _ => '_',
+        })
+        .collect();
+    let bytes = out.as_bytes();
+    let invalid_start = bytes.first().is_some_and(u8::is_ascii_digit)
+        || (bytes.first() == Some(&b'-') && bytes.get(1).is_none_or(u8::is_ascii_digit));
+    if invalid_start {
+        out.insert(0, '_');
+    }
+    out
+}
+
+/// True when every `(`/`[` closes with its mirror in order and every `"`/`'`
+/// string closes, outside strings. An unclosed block or string in a prelude
+/// makes the CSS tokenizer consume the rule's own `{ … }` and every rule after
+/// it in the same stylesheet, so a selector or media query that fails this is
+/// refused. Callers have already refused `\`, so no escaped quote exists.
+fn blocks_balanced(s: &str) -> bool {
+    let mut open: Vec<u8> = Vec::new();
+    let mut quote: Option<u8> = None;
+    for b in s.bytes() {
+        match (quote, b) {
+            (Some(q), _) if b == q => quote = None,
+            (Some(_), _) => {}
+            (None, b'"' | b'\'') => quote = Some(b),
+            (None, b'(') => open.push(b')'),
+            (None, b'[') => open.push(b']'),
+            // The guard pops: a matching close is consumed and falls through.
+            (None, b')' | b']') if open.pop() != Some(b) => return false,
+            (None, _) => {}
+        }
+    }
+    quote.is_none() && open.is_empty()
+}
+
 /// A validated CSS selector / media-query string (NEW — strict, drop-on-doubt).
 ///
 /// Allowed charset: ASCII letters, digits, and the CSS structural set
@@ -735,8 +788,9 @@ pub(crate) struct SafeCssSelector<'a>(&'a str);
 impl<'a> SafeCssSelector<'a> {
     /// Parse and validate a CSS selector / media-query string.
     ///
-    /// Returns `None` (drop the rule) when `sel` is empty (after trimming) or
-    /// contains any byte outside the conservative structural allowlist.
+    /// Returns `None` (drop the rule) when `sel` is empty (after trimming),
+    /// contains any byte outside the conservative structural allowlist, or
+    /// leaves a `(`, `[` or string unclosed ([`blocks_balanced`]).
     pub(crate) fn parse(sel: &'a str) -> Option<Self> {
         let s = sel.trim();
         if s.is_empty() {
@@ -779,7 +833,11 @@ impl<'a> SafeCssSelector<'a> {
                         | b' '
                 )
         });
-        if ok { Some(SafeCssSelector(s)) } else { None }
+        if ok && blocks_balanced(s) {
+            Some(SafeCssSelector(s))
+        } else {
+            None
+        }
     }
 
     pub(crate) fn as_str(&self) -> &str {
@@ -845,8 +903,8 @@ impl<'a> SafeCssMediaQuery<'a> {
     /// Parse and validate a CSS media-query condition string.
     ///
     /// Returns `None` (drop the media-query styling) when `q` is empty after
-    /// trimming or contains any byte outside the media-query grammar, in either
-    /// its raw or CSS-escape-decoded form.
+    /// trimming, contains any byte outside the media-query grammar in either
+    /// its raw or CSS-escape-decoded form, or leaves a `(` unclosed.
     pub(crate) fn parse(q: &'a str) -> Option<Self> {
         let s = q.trim();
         if s.is_empty() {
@@ -863,7 +921,7 @@ impl<'a> SafeCssMediaQuery<'a> {
         // rejected above; the decoded pass closes the theoretical gap where the
         // decoder collapses an escape into an in-grammar-looking string.
         let decoded_low = css_unescape(&low);
-        if !Self::charset_ok(&decoded_low) {
+        if !Self::charset_ok(&decoded_low) || !blocks_balanced(s) {
             return None;
         }
         Some(SafeCssMediaQuery(s))
@@ -1098,6 +1156,44 @@ mod tests {
     }
 
     #[test]
+    fn selector_refuses_unclosed_block_or_string() {
+        // Each would swallow the rule's own `{ … }` and every later rule.
+        for sel in [
+            "a[x=\"b", "a[x='b", "a[x", ":not(.a", "a]", ".a)", ":is([x)]",
+        ] {
+            assert!(
+                SafeCssSelector::parse(sel).is_none(),
+                "unbalanced selector must be refused: {sel:?}"
+            );
+        }
+        for sel in [
+            "a[title=\"it's (x]\"]",
+            "a[title='say \"hi\"']",
+            ":is(.a, [data-x])",
+            "li:nth-child(2n+1)",
+        ] {
+            assert!(
+                SafeCssSelector::parse(sel).is_some(),
+                "balanced selector must pass: {sel:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn media_query_refuses_unclosed_paren() {
+        for q in [
+            "(min-width: 768px",
+            "(min-width: 1px) and (hover: hover",
+            "screen)",
+        ] {
+            assert!(
+                SafeCssMediaQuery::parse(q).is_none(),
+                "unbalanced media query must be refused: {q:?}"
+            );
+        }
+    }
+
+    #[test]
     fn media_query_accepts_real_queries_including_level4_ranges() {
         for q in [
             "(min-width: 768px)",
@@ -1157,6 +1253,30 @@ mod tests {
                 "breakout media query must be dropped: {q:?}"
             );
         }
+    }
+
+    #[cfg(feature = "web")]
+    #[test]
+    fn css_ident_maps_rather_than_drops_and_fixes_invalid_starts() {
+        // A leading `-` followed by a digit is not a legal identifier start:
+        // prefix with `_` rather than emit an ident the browser silently
+        // ignores.
+        assert_eq!(css_ident("-1a"), "_-1a");
+        // Empty input stays empty — the caller's own "drop" posture.
+        assert_eq!(css_ident(""), "");
+        // Every out-of-charset char maps to `_` (never dropped).
+        assert_eq!(css_ident("a:b"), "a_b");
+        // A bare leading digit also gets the `_` prefix.
+        assert_eq!(css_ident("1x"), "_1x");
+        // A lone `-` is a delimiter token, not an identifier.
+        assert_eq!(css_ident("-"), "_-");
+        // `-` followed by a name-start is already legal: unchanged.
+        assert_eq!(css_ident("-a"), "-a");
+        // `--x` already has a legal start (two dashes, no digit): unchanged.
+        assert_eq!(css_ident("--x"), "--x");
+        // Non-ASCII input is mapped, never panics, never empty for non-empty
+        // input.
+        assert_eq!(css_ident("é"), "_");
     }
 
     #[cfg(feature = "web")]
