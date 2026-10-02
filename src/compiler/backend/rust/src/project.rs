@@ -1950,7 +1950,41 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         rust_sources.push((RelPath::new("src/main.rs")?, out));
     }
 
-    assemble_project_files(ctx, rust_sources)
+    let project = assemble_project_files(ctx, rust_sources)?;
+    refuse_lexer_hazards(&project)?;
+    Ok(project)
+}
+
+/// Refuse a project whose emitted Rust holds a character the Rust lexer
+/// refuses raw.
+///
+/// The output-side half of the lexable seal: every text spliced into emitted
+/// Rust goes through an `ipe_intern::rust_literal` renderer, and this total
+/// scan over every emitted `.rs` file turns a site that bypassed them into an
+/// `ipe`-time [`Diagnostic::CompilerBug`], never a `cargo` lexer error. The
+/// detail names the codepoint as `U+XXXX`, never raw.
+///
+/// # Errors
+///
+/// [`Diagnostic::CompilerBug`] at [`ipe_intern::EMIT_LEXABLE`] on the first
+/// hazard found.
+fn refuse_lexer_hazards(project: &EmittedProject) -> DResult<()> {
+    for (path, text) in &project.files {
+        if !path.as_str().ends_with(".rs") {
+            continue;
+        }
+        if let Some(hazard) = ipe_intern::find_lexer_hazard(text) {
+            return Err(Diagnostic::CompilerBug {
+                where_: ipe_intern::EMIT_LEXABLE,
+                detail: format!(
+                    "emitted {:?} holds {hazard}; every text spliced into emitted Rust must \
+                     go through an `ipe_intern::rust_literal` renderer",
+                    path.as_str()
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Assemble the final [`EmittedProject`] from the already-rendered Rust source
@@ -6813,5 +6847,69 @@ mod non_serde_tests {
             &IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)),
             &table
         ));
+    }
+
+    /// A project of the given `(path, text)` files.
+    fn project_of(files: &[(&str, &str)]) -> ipe_backend::EmittedProject {
+        let mut map = BTreeMap::new();
+        for (path, text) in files {
+            let Ok(path) = RelPath::new(*path) else {
+                return ipe_backend::EmittedProject {
+                    files: BTreeMap::new(),
+                    cargo_toml: String::new(),
+                    uses_webview: false,
+                };
+            };
+            map.insert(path, (*text).to_owned());
+        }
+        ipe_backend::EmittedProject {
+            files: map,
+            cargo_toml: String::new(),
+            uses_webview: false,
+        }
+    }
+
+    /// The output-side lexable seal `emit_program` ends with refuses a raw bidi
+    /// control and a bare CR in any emitted `.rs` file, naming the codepoint as
+    /// `U+XXXX` and never raw; a clean project, CRLF and a hazard in a
+    /// non-Rust file are accepted.
+    #[test]
+    fn emit_program_refuses_a_raw_lexer_hazard() {
+        for (path, text, shown) in [
+            (
+                "src/main.rs",
+                "fn main() { let _ = \"a\u{202E}b\"; }\n",
+                "U+202E",
+            ),
+            (
+                "src/ipe_runtime/x.rs",
+                "// line one\rpub fn f() {}\n",
+                "U+000D",
+            ),
+        ] {
+            let project = project_of(&[("src/lib_ok.rs", "pub fn ok() {}\n"), (path, text)]);
+            assert_eq!(project.files.len(), 2, "{path}");
+            let refused = super::refuse_lexer_hazards(&project);
+            assert!(
+                matches!(
+                    &refused,
+                    Err(ipe_diagnostics::Diagnostic::CompilerBug { where_, detail })
+                        if *where_ == ipe_intern::EMIT_LEXABLE
+                            && detail.contains(shown)
+                            && detail.contains(path)
+                            && ipe_intern::find_lexer_hazard(detail).is_none()
+                ),
+                "{path}: {refused:?}"
+            );
+        }
+        let clean = project_of(&[
+            (
+                "src/main.rs",
+                "fn main() {\r\n    let _ = \"\\u{202e}\";\r\n}\r\n",
+            ),
+            ("assets/notes.txt", "a\u{202E}b\r"),
+        ]);
+        assert_eq!(clean.files.len(), 2);
+        assert!(super::refuse_lexer_hazards(&clean).is_ok());
     }
 }
