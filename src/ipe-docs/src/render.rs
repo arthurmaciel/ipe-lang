@@ -14,6 +14,8 @@ use ipe_annotate::{DefKey, TokenClass, annotate_syntax_only};
 use ipe_intern::Interner;
 use ipe_parse::parse_module;
 
+use crate::html;
+
 // ── CSS class mapping ─────────────────────────────────────────────────────────
 
 /// Map a [`TokenClass`] to its CSS class name.
@@ -80,7 +82,7 @@ pub fn highlight_snippet(source: &str) -> String {
     // the snippet is not a complete module (most doc-string examples are not).
     let mut interner = Interner::default();
     let Ok(syntax) = parse_module(source, &mut interner) else {
-        return format!("<code>{}</code>", html_escape(source));
+        return format!("<code>{}</code>", html::escape(source));
     };
     let tokens = annotate_syntax_only(&syntax, &interner);
     build_highlighted(source, &tokens)
@@ -110,7 +112,7 @@ pub fn build_highlighted(source: &str, tokens: &[ipe_annotate::AnnotatedToken]) 
         // Emit any text between the previous token and this one.
         if cursor < start {
             let gap = source.get(cursor..start).unwrap_or("");
-            out.push_str(&html_escape(gap));
+            out.push_str(&html::escape(gap));
         }
 
         // Retrieve the source slice for this token.
@@ -118,13 +120,13 @@ pub fn build_highlighted(source: &str, tokens: &[ipe_annotate::AnnotatedToken]) 
         let class = css_class(tok.class);
 
         if let Some(def) = &tok.def {
-            let url = def_url(def);
-            let escaped = html_escape(text);
+            let url = html::escape(&def_url(def));
+            let escaped = html::escape(text);
             // `write!` on a `String` is infallible; the `Result` is intentionally
             // discarded rather than suppressed with `#[allow]`.
             let _ = write!(out, r#"<a href="{url}" class="{class}">{escaped}</a>"#);
         } else {
-            let escaped = html_escape(text);
+            let escaped = html::escape(text);
             let _ = write!(out, r#"<span class="{class}">{escaped}</span>"#);
         }
 
@@ -134,29 +136,10 @@ pub fn build_highlighted(source: &str, tokens: &[ipe_annotate::AnnotatedToken]) 
     // Emit any trailing text after the last token.
     if cursor < source.len() {
         let tail = source.get(cursor..).unwrap_or("");
-        out.push_str(&html_escape(tail));
+        out.push_str(&html::escape(tail));
     }
 
     out.push_str("</code>");
-    out
-}
-
-// ── HTML helpers ──────────────────────────────────────────────────────────────
-
-/// Escape `<`, `>`, `&`, `"` for safe embedding in HTML attribute values or
-/// element content.
-#[must_use]
-pub fn html_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            other => out.push(other),
-        }
-    }
     out
 }
 
@@ -193,7 +176,7 @@ pub fn markdown_to_html(md: &str) -> String {
 /// pre-rendered HTML and is inserted verbatim.
 #[must_use]
 pub fn page(title: &str, body_html: &str) -> String {
-    let escaped_title = html_escape(title);
+    let escaped_title = html::escape(title);
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -303,7 +286,7 @@ ul.index-list li { padding: 0.2rem 0; }
 mod tests {
     use ipe_annotate::{AnnotatedToken, DefKey, TokenClass};
 
-    use super::{build_highlighted, css_class, def_url, html_escape, page};
+    use super::{build_highlighted, css_class, def_url, page};
 
     // ── css_class ────────────────────────────────────────────────────────────
 
@@ -365,23 +348,6 @@ mod tests {
         assert_eq!(def_url(&key), "/symbol/Ipe.Maybe.Maybe.Just/");
     }
 
-    // ── html_escape ───────────────────────────────────────────────────────────
-
-    #[test]
-    fn html_escape_no_special() {
-        assert_eq!(html_escape("hello"), "hello");
-    }
-
-    #[test]
-    fn html_escape_all_special() {
-        assert_eq!(html_escape("<>&\""), "&lt;&gt;&amp;&quot;");
-    }
-
-    #[test]
-    fn html_escape_empty() {
-        assert_eq!(html_escape(""), "");
-    }
-
     // ── build_highlighted ────────────────────────────────────────────────────
 
     /// The core test mandated by the spec: a snippet's `List.map` token
@@ -407,6 +373,26 @@ mod tests {
         assert!(
             html.contains("href=\"/symbol/List.map/\""),
             "kernel token must link to /symbol/List.map/; got: {html}"
+        );
+    }
+
+    /// A definition name holding a quote cannot close the `href` attribute.
+    #[test]
+    fn def_link_href_is_attribute_escaped() {
+        let source = "a";
+        let tokens = vec![AnnotatedToken {
+            byte_start: 0,
+            byte_len: 1,
+            class: TokenClass::Kernel,
+            def: Some(DefKey::Kernel {
+                module: "M".into(),
+                name: "a\"b".into(),
+            }),
+        }];
+        let html = build_highlighted(source, &tokens);
+        assert!(
+            html.contains("href=\"/symbol/M.a&quot;b/\""),
+            "href must escape the quote; got: {html}"
         );
     }
 
