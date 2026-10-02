@@ -2,8 +2,8 @@
 //! Pins which workspace Rust files write the HTML less-than entity.
 //!
 //! An HTML escaper is the code that writes the `lt` entity for `<`. Each side
-//! of the compiler/runtime boundary has one owner (`ipe_runtime::escape` on the
-//! runtime side), and every other site calls it. A pasted copy is the bug class
+//! of the compiler/runtime boundary has one owner (`ipe_docs::html::escape` on
+//! the compiler side, `ipe_runtime::escape` on the runtime side), and every other site calls it. A pasted copy is the bug class
 //! this scan closes: a copy that misses `'` or `"` is an attribute-injection
 //! foothold. The scan is an inventory, never a denylist of spellings: every
 //! tracked `.rs` file under `src/`, `tools/`, `examples/` and `editors/` that
@@ -38,20 +38,25 @@ const ENTITY_SPELLINGS: [&str; 3] = [NAMED, DECIMAL, HEX];
 /// Test occurrences are those in a `tests/` tree or after a file's first
 /// inline `#[cfg(test)]` module.
 const INVENTORY: &[(&str, usize, usize)] = &[
-    // Doc CLI: a copy of the walker's escaper, and the JS search script's
-    // `esc()` (browser-side source).
-    ("src/ipe-cli/src/doc.rs", 2, 1),
-    // Doc bundle HTML reference escaper (a copy of the walker's).
-    ("src/ipe-cli/src/doc_bundle.rs", 1, 0),
+    // Doc CLI: the JS search script's `esc()` (browser-side source).
+    ("src/ipe-cli/src/doc.rs", 1, 1),
+    // Tests of the doc bundle's escaped reference pages.
+    ("src/ipe-cli/src/doc_bundle.rs", 0, 2),
     // XML escaping for plists and manifests (a different grammar).
     ("src/ipe-cli/src/pack.rs", 1, 5),
     // Golden tests asserting rendered HTML.
     ("src/ipe-cli/tests/g_stdui/golden_html_attrs.rs", 0, 2),
     ("src/ipe-cli/tests/g_stdui/golden_html_render_raw.rs", 0, 1),
-    // Markdown-to-HTML walker escaper (the compiler-side reference form).
-    ("src/ipe-docs/src/markdown/walker.rs", 1, 4),
-    // Highlighted-code escaper (four entities, no `'`).
-    ("src/ipe-docs/src/render.rs", 1, 3),
+    // Tests of the docs site generator's escaped headings.
+    ("src/ipe-docs/src/bin/gen_site.rs", 0, 1),
+    // The compiler-side owner (`ipe_docs::html::escape`).
+    ("src/ipe-docs/src/html.rs", 1, 0),
+    // Tests of the Markdown walker's escaping.
+    ("src/ipe-docs/src/markdown/walker.rs", 0, 3),
+    // Tests of the highlighted-code escaping.
+    ("src/ipe-docs/src/render.rs", 0, 2),
+    // The compiler-side owner's byte contract.
+    ("src/ipe-docs/tests/html_escape_contract.rs", 0, 3),
     // Tests of the debugger overlay's escaped label.
     ("src/runtime/rust/src/debugger/server.rs", 0, 2),
     // The runtime owner: its byte-contract doc and the escaper itself.
@@ -261,7 +266,7 @@ fn html_entity_writers_are_exactly_the_inventory() {
     assert!(
         drift.is_empty(),
         "HTML entity writers drifted from the inventory. Call the sink's one \
-         escaper (runtime `escape::html_text`/`html_attr`) instead of pasting \
+         escaper (`ipe_docs::html::escape`, runtime `escape::html_text`/`html_attr`) instead of pasting \
          one; update INVENTORY only for a new owner:\n{}",
         drift.join("\n")
     );
