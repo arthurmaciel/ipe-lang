@@ -19,6 +19,8 @@ use ipe::CliError;
 
 use crate::support::repo_root;
 
+const GOLDEN: &str = "db_store_upsert";
+
 /// Build and run the `db_store_upsert` golden under `IPE_E2E=1`, asserting its
 /// stdout matches the oracle.
 ///
@@ -29,7 +31,6 @@ use crate::support::repo_root;
 /// accepting `Store.upsert` is proven to `cargo build`.
 #[test]
 fn upsert_matches_oracle() {
-    const GOLDEN: &str = "db_store_upsert";
     if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
