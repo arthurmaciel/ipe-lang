@@ -2793,7 +2793,12 @@ mod env_ceiling_tests {
     /// a listed non-ceiling read. A listed read that no longer exists fails too.
     #[test]
     fn no_env_numeric_parse_bypasses_the_ceiling_parser() {
-        let triggers = ["read_env_var(", "std::env::var(", "ExporterEnv::"];
+        let triggers = [
+            "read_env_var(",
+            "read_env_var_os(",
+            "std::env::var(",
+            "ExporterEnv::",
+        ];
         let mut seen = Vec::new();
         let mut bypasses = Vec::new();
         for (file, text) in runtime_sources() {
