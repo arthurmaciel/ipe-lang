@@ -155,9 +155,11 @@ pub struct WatchOptions {
     pub entry: PathBuf,
     pub out_dir: PathBuf,
     pub runtime_dir: PathBuf,
-    /// The port injected as `IPE_WEB_PORT` for the spawned child and probed
-    /// for `/_ipe/readyz` when the emitted project is detected as a
-    /// Ipe.Web app. Harmless (ignored) for every other app shape.
+    /// The port the user reaches the app on: the spawned child's listen port in
+    /// direct mode (injected through the listener relocation var
+    /// [`ipe_runtime_rust::LISTEN_PORT_RELOCATION_ENV`]), the proxy's port in
+    /// blue-green mode, and the port probed for `/_ipe/readyz` when the emitted
+    /// project is a Ipe.Web app. Ignored by app shapes that never listen.
     pub port: u16,
     pub debounce: ipe_watch::DebounceConfig,
     pub restart_timeouts: ipe_watch::RestartTimeouts,
@@ -2078,11 +2080,13 @@ fn prove_green_crate(building: Option<OwnedDir>, reported: &Path) -> Result<Owne
 
 /// Build the child process's environment.
 ///
-/// Sets both `IPE_WEB_PORT` and `IPE_SERVER_PORT` to the SAME configured
-/// port — harmless (ignored) for whichever app shape didn't ask for it, and
-/// what lets a `Ipe.Http.Server` fixture that reads `IPE_SERVER_PORT` (the
-/// convention this repo's own `server_e2e.rs` test suite already
-/// establishes) be driven by `--port` exactly like a Ipe.Web app is.
+/// Places the child's HTTP listener (`Ipe.Web` or `Ipe.Http.Server`) on
+/// `port` through the listener relocation var
+/// [`ipe_runtime_rust::LISTEN_PORT_RELOCATION_ENV`], which outranks the
+/// operator port vars (`IPE_WEB_PORT`, `IPE_SERVER_PORT`) and the source port.
+/// The operator vars are never written: an inherited operator value stays as
+/// the operator set it and loses by precedence. Ignored by app shapes that
+/// never listen.
 ///
 /// Also provides the watch-scoped half of session continuity —
 /// default the dev session store to `file` (persisted beside the claimed
@@ -2100,13 +2104,13 @@ fn child_env(
     bluegreen: bool,
     reset_state: bool,
 ) -> Vec<(String, String)> {
-    let mut env = vec![
-        ("IPE_WEB_PORT".to_owned(), port.to_string()),
-        ("IPE_SERVER_PORT".to_owned(), port.to_string()),
-    ];
+    let mut env = vec![(
+        ipe_runtime_rust::LISTEN_PORT_RELOCATION_ENV.to_owned(),
+        port.to_string(),
+    )];
     // The loopback control-socket port for the shape-agnostic control channel
     // (tui/cli/worker hot-swap + time-travel debugger). Allocated by `ipe watch`
-    // and injected like the port vars above; the child opens its control listener
+    // and injected like the relocation var above; the child opens its control listener
     // only when BOTH this and `IPE_WATCH_HOT_TOKEN` are present (fail-closed to no
     // control surface). A release build's runtime never reads it.
     if let Some(cp) = control_port {
@@ -3716,6 +3720,33 @@ mod tests {
         );
     }
 
+    /// Direct and blue-green children alike are placed through the relocation
+    /// var alone: no operator port var is ever written, so an operator value
+    /// can neither collide with nor stand in for the supervisor's port.
+    #[test]
+    fn child_env_relocates_only_through_the_internal_port_var() {
+        for bluegreen in [false, true] {
+            let env = child_env(
+                3000,
+                Path::new("/tmp/ipe-out"),
+                None,
+                None,
+                bluegreen,
+                false,
+            );
+            assert!(
+                env.iter()
+                    .any(|(k, v)| k == ipe_runtime_rust::LISTEN_PORT_RELOCATION_ENV && v == "3000"),
+                "bluegreen {bluegreen}: the child must be relocated to the supervisor port"
+            );
+            assert!(
+                !env.iter()
+                    .any(|(k, _)| k == "IPE_WEB_PORT" || k == "IPE_SERVER_PORT"),
+                "bluegreen {bluegreen}: an operator port var must never be written"
+            );
+        }
+    }
+
     /// No hot token (hot-swap off) means no overlay-activating flag reaches the
     /// child — the emitted app stays inert.
     #[test]
@@ -4038,7 +4069,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn child_command_env_reaches_the_hardened_child() {
-        let env = vec![("IPE_WEB_PORT".to_string(), "4321".to_string())];
+        let env = vec![(
+            ipe_runtime_rust::LISTEN_PORT_RELOCATION_ENV.to_string(),
+            "4321".to_string(),
+        )];
         let mut cmd = child_command(Path::new("/usr/bin/env"), &env);
         cmd.stdout(std::process::Stdio::piped());
         let child = ipe_runtime_rust::system::spawn_hardened(cmd)
@@ -4048,7 +4082,9 @@ mod tests {
         assert!(out.status.success(), "/usr/bin/env must exit 0");
         let printed = String::from_utf8_lossy(&out.stdout);
         assert!(
-            printed.lines().any(|l| l == "IPE_WEB_PORT=4321"),
+            printed
+                .lines()
+                .any(|l| l == format!("{}=4321", ipe_runtime_rust::LISTEN_PORT_RELOCATION_ENV)),
             "child env must carry the requested port: {printed}"
         );
     }

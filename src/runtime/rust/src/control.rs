@@ -246,7 +246,8 @@ pub mod transport {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     /// The env var carrying the loopback control-socket port `ipe watch`
-    /// allocated for the child (mirrors `IPE_SERVER_PORT` / `IPE_WEB_PORT`).
+    /// allocated for the child, beside the listener relocation var
+    /// [`crate::LISTEN_PORT_RELOCATION_ENV`].
     pub const CONTROL_PORT_ENV: &str = "IPE_CONTROL_PORT";
 
     /// The env var carrying the per-session control token. Reuses the same

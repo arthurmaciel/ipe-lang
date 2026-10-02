@@ -99,7 +99,7 @@ fn console_command(
     token: &super::push_exporter::IngestToken,
 ) -> Command {
     let mut cmd = Command::new(bin);
-    cmd.env("IPE_WEB_PORT", child_port.to_string())
+    cmd.env(crate::LISTEN_PORT_RELOCATION_ENV, child_port.to_string())
         .env("IPE_WEB_BASE_PATH", "/_ipe/console")
         .env("IPE_HTTP_BIND", "127.0.0.1")
         .env(INGEST_TOKEN_ENV, token.expose())
@@ -593,6 +593,29 @@ mod tests {
                 "store {store:?} collects {collects}"
             );
         }
+    }
+
+    // The child is placed on its port through the supervisor relocation var,
+    // which outranks an inherited operator `IPE_WEB_PORT` (or a relocation the
+    // parent itself received); the operator var is never written.
+    #[test]
+    fn console_child_is_relocated_through_the_internal_port_var() {
+        let bin = std::path::Path::new("/nonexistent/ipe-console");
+        let token = super::super::push_exporter::IngestToken::mint().expect("entropy");
+        let cmd = console_command(bin, 9931, "", false, &token);
+        let env_of = |name: &str| {
+            cmd.as_std()
+                .get_envs()
+                .find(|(key, _)| *key == std::ffi::OsStr::new(name))
+        };
+        assert_eq!(
+            env_of(crate::LISTEN_PORT_RELOCATION_ENV).and_then(|(_, value)| value),
+            Some(std::ffi::OsStr::new("9931"))
+        );
+        assert!(
+            env_of("IPE_WEB_PORT").is_none(),
+            "the operator var is never written"
+        );
     }
 
     // The child's ingest demands the token the parent minted for it, on every

@@ -37,8 +37,8 @@ const WATCH_SERVE_BUDGET: Duration = Duration::from_mins(2);
 const DEP_WARM_BUDGET: Duration = Duration::from_mins(10);
 
 /// The same minimal `Ipe.Http.Server` fixture `watch_integration.rs` uses:
-/// long-running (never exits on its own), reads its port from
-/// `IPE_SERVER_PORT` (what `watch::child_env` injects from `--port`).
+/// long-running (never exits on its own); passes `IPE_SERVER_PORT` as its
+/// source port, which the relocation var `watch::child_env` sets outranks.
 fn server_fixture(body: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
@@ -194,7 +194,7 @@ fn pid_is_alive(pid: u32) -> bool {
 
 /// The supervised app binary is a direct child of the `ipe watch` process. In
 /// blue-green mode the child binds an INTERNAL loopback port (the proxy holds
-/// the user-facing one), so it cannot be found by the configured `IPE_WEB_PORT`;
+/// the user-facing one), so it cannot be found by the configured `--port`;
 /// discover it by parent PID instead. Returns the first `/proc` entry whose
 /// `PPid` is `ipe_pid`.
 #[cfg(target_os = "linux")]
