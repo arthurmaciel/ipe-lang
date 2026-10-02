@@ -132,8 +132,7 @@ scan lang chars acc =
                                 spanWhile
                                     (\ch ->
                                         ch
-                                            /= '
-'
+                                            /= '\n'
                                     )
                                     rest2
                         in
