@@ -173,11 +173,17 @@ units it rebuilt against the units the queue was last reconciled with. A full
 unchanged keeps its row, or stays drained. Only the first `index` of an empty
 database queues every unit as `new`.
 
-A `file` unit covers its whole file, but its change key is the residual: the
-lines no other unit of the file covers (imports, attributes, top-level glue).
-An edit inside a function queues that function alone; an edit to a top-level
-line queues the file. A pending file row still follows the file's current body
-hash, so it stays drainable after a child edit.
+A `file` unit spans its whole file but reviews only its residual: the
+non-blank lines no other unit of the file covers (imports, attributes,
+top-level glue), each run of covered lines marked by one gap. An edit inside a
+function queues that function alone; an edit to a top-level line queues the
+file. A file whose units cover every non-blank line has no residual, so it gets
+no file unit and nothing of it is queued beyond its units.
+
+An index built before file units attested their residual is rebuilt in full by
+the next `update`. A pending file row is then re-pointed at its residual
+attestation, so it stays drainable. A file unit decided under its whole-file
+hash counts in neither progress number until its residual next changes.
 
 A `reviewed` table holds the code-review app's decided `(uid, body_hash)`
 pairs, so the app counts review progress with one SQL aggregate. The app is
@@ -191,10 +197,12 @@ ipe-index pending --limit N       # cap the output
 ```
 
 Every unit's `body_hash` is `sha256:` plus the lowercase hex SHA-256 of the
-unit's whole-line view: lines `line_start..=line_end` of the file, split on
-`\n` with any `\r` kept, joined with `\n` (`src/extract/view.rs`). The
-code-review app re-derives that hash before it shows a unit, so the two sides
-share the vectors in `tests/view_hash_vectors.json`.
+text it reviews. For a `file` unit that is its residual (`residual_text` in
+`src/extract/mod.rs`); for every other unit it is the whole-line view: lines
+`line_start..=line_end` of the file, split on `\n` with any `\r` kept, joined
+with `\n` (`src/extract/view.rs`). The code-review app re-derives that hash
+before it shows a unit, so the two sides share the vectors in
+`tests/view_hash_vectors.json` and `tests/residual_vectors.json`.
 
 ### Rename planning (read-only)
 
