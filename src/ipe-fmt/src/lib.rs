@@ -2644,6 +2644,7 @@ impl Doc {
         let mut layout = Layout {
             out: String::new(),
             fresh: false,
+            margin: None,
         };
         layout.doc(self, 0);
         #[cfg(test)]
@@ -2657,6 +2658,10 @@ struct Layout {
     out: String,
     /// Whether the next text starts a new line.
     fresh: bool,
+    /// The column the current line still owes its first text: a line opened
+    /// by empty text stays blank until text lands on it, then starts at the
+    /// column of the box that opened it.
+    margin: Option<usize>,
 }
 
 impl Layout {
@@ -2664,10 +2669,14 @@ impl Layout {
     fn text(&mut self, t: &str, base: usize) {
         if self.fresh {
             self.out.push('\n');
-            if !t.is_empty() {
-                self.out.extend(std::iter::repeat_n(' ', base));
-            }
+            self.margin = Some(base);
             self.fresh = false;
+        }
+        if t.is_empty() {
+            return;
+        }
+        if let Some(col) = self.margin.take() {
+            self.out.extend(std::iter::repeat_n(' ', col));
         }
         self.out.push_str(t);
     }
@@ -3367,6 +3376,25 @@ mod tests {
         assert_fixed_point(
             "module M exposing (xs)\n\n\nxs =\n    [ [ { a = 1\n        , b = 2\n        }\n      , { a = 3 }\n      ]\n    ]\n",
         );
+    }
+
+    /// A line opened by empty text still starts at its box's column.
+    ///
+    /// Blank lines print no indentation, and text that later lands on a line
+    /// an empty box opened is indented like any other line of that box.
+    /// Compiled and run by the CI `test` job (workspace nextest).
+    #[test]
+    fn line_opened_by_empty_text_keeps_its_box_column() {
+        let doc = Doc::stack(vec![
+            Doc::line("f ="),
+            Doc::stack(vec![
+                Doc::line("a"),
+                Doc::line(""),
+                Doc::row(vec![Doc::line(""), Doc::line("b")]),
+            ])
+            .indent(),
+        ]);
+        assert_eq!(doc.flatten(), "f =\n    a\n\n    b");
     }
 
     /// Layout work is linear in the output it lays out.
