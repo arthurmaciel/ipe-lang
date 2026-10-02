@@ -2780,7 +2780,7 @@ fn child_command(exe_path: &Path, env: &[(String, String)]) -> Command {
 /// Spawn the dev child through the runtime's parent-death floor.
 ///
 /// The supervisor reaps this child on every GRACEFUL path (shutdown /
-/// SIGTERM-forwarder / Drop), but a SIGKILL/OOM/panic-abort of `ipe watch`
+/// termination request / Drop), but a SIGKILL/OOM/panic-abort of `ipe watch`
 /// would otherwise orphan it holding the dev port. `spawn_hardened` forks it
 /// from the runtime's process-lifetime spawner thread, so on Linux the kernel
 /// SIGTERMs it when `ipe watch` dies by ANY means, and never earlier (the

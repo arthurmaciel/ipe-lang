@@ -1095,8 +1095,13 @@ enum Mode {
     /// Its own process group: a refusal kills every process it started.
     Detached,
     /// The CLI's process group, keeping the terminal for a prompt (a signing
-    /// passphrase); a refusal kills the direct child.
+    /// passphrase); a refusal or a termination request kills the direct child.
     Attached,
+    /// A probe the signal owners run while reading the dispositions they act
+    /// on: in the CLI's process group and known to no signal owner, since
+    /// none is installed yet.
+    #[cfg(all(unix, any(not(target_os = "linux"), test)))]
+    Probe,
 }
 
 /// Run `command`, killing it the moment it crosses a ceiling of `limits`.
@@ -1201,7 +1206,7 @@ pub(crate) fn run_probe(command: Command, stdout_bytes: u64, wall: Duration) -> 
         stdout_bytes,
         wall,
     };
-    run_core(command, None, None, &limits, Instant::now(), Mode::Attached).ok()
+    run_core(command, None, None, &limits, Instant::now(), Mode::Probe).ok()
 }
 
 /// Kill every transfer's process group and refuse every later one.
@@ -1216,7 +1221,7 @@ pub(crate) fn end_transfers() {
 /// The process-group primitives, for the signal owners' tests.
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) mod test_group {
-    pub use super::group::{exited, forget, kill, spawn_detached};
+    pub use super::group::{exited, forget, forget_attached, kill, spawn_attached, spawn_detached};
 }
 
 /// A spawned child that is killed and reaped however the watcher leaves it.
@@ -1227,6 +1232,8 @@ pub(crate) mod test_group {
 struct Running {
     child: Child,
     group: Option<group::GroupId>,
+    /// The attached child, while the termination owner may kill it.
+    attached: Option<group::AttachedId>,
     reaped: bool,
 }
 
@@ -1234,13 +1241,26 @@ impl Running {
     /// Spawn `command` in `mode` through the runtime's hardened spawner, bound
     /// to the CLI's lifetime where the platform allows.
     fn spawn(command: Command, mode: Mode) -> std::io::Result<Self> {
-        let (child, group) = match mode {
-            Mode::Detached => group::spawn_detached(command)?,
-            Mode::Attached => (ipe_runtime_rust::system::spawn_hardened(command)?, None),
+        let (child, group, attached) = match mode {
+            Mode::Detached => {
+                let (child, group) = group::spawn_detached(command)?;
+                (child, group, None)
+            }
+            Mode::Attached => {
+                let (child, attached) = group::spawn_attached(command)?;
+                (child, None, attached)
+            }
+            #[cfg(all(unix, any(not(target_os = "linux"), test)))]
+            Mode::Probe => (
+                ipe_runtime_rust::system::spawn_hardened(command)?,
+                None,
+                None,
+            ),
         };
         Ok(Self {
             child,
             group,
+            attached,
             reaped: false,
         })
     }
@@ -1264,6 +1284,9 @@ impl Running {
             group::kill(id);
             group::forget(id);
         }
+        if let Some(id) = self.attached.take() {
+            group::forget_attached(id);
+        }
         let status = self.child.wait();
         self.reaped = true;
         if group::ended() {
@@ -1280,6 +1303,9 @@ impl Running {
         if let Some(id) = self.group.take() {
             group::kill(id);
             group::forget(id);
+        }
+        if let Some(id) = self.attached.take() {
+            group::forget_attached(id);
         }
         // The child may already have exited; either way it is reaped below.
         let _ = self.child.kill();
@@ -1306,10 +1332,17 @@ mod group {
     /// A live group's ID: its leader's process ID.
     pub type GroupId = Pid;
 
-    /// The groups spawned and not yet killed, for the signal relay.
+    /// A live attached child's process ID.
+    pub type AttachedId = Pid;
+
+    /// The groups and attached children spawned and not yet reaped, for the
+    /// signal owners.
     struct Registry {
         /// Every live group.
         live: Vec<Pid>,
+        /// Every live attached child; it shares the CLI's group, so it is
+        /// killed by its own ID.
+        attached: Vec<Pid>,
         /// Whether a signal ended every transfer; no group starts after it.
         ended: bool,
     }
@@ -1326,6 +1359,7 @@ mod group {
 
     static REGISTRY: Mutex<Registry> = Mutex::new(Registry {
         live: Vec::new(),
+        attached: Vec::new(),
         ended: false,
     });
 
@@ -1349,6 +1383,36 @@ mod group {
         registry.live.push(pid);
         drop(registry);
         Ok((child, Some(pid)))
+    }
+
+    /// Spawn `command` in the CLI's process group, known to the termination owner.
+    ///
+    /// The child is registered while the registry is held, so a termination
+    /// request either sees it or is answered before it exists. Its ID stays
+    /// its own until it is reaped, which happens only after
+    /// [`forget_attached`].
+    ///
+    /// # Errors
+    /// The termination owner could not be installed, a signal ended every
+    /// transfer ([`std::io::ErrorKind::Interrupted`]), or the spawn failed.
+    pub fn spawn_attached(command: Command) -> std::io::Result<(Child, Option<Pid>)> {
+        crate::terminate::ensure()?;
+        let mut registry = REGISTRY.lock().unwrap_or_else(PoisonError::into_inner);
+        registry.admit()?;
+        let child = ipe_runtime_rust::system::spawn_hardened(command)?;
+        let pid = Pid::from_child(&child);
+        registry.attached.push(pid);
+        drop(registry);
+        Ok((child, Some(pid)))
+    }
+
+    /// Deregister attached child `id`; it is reaped only after this.
+    pub fn forget_attached(id: Pid) {
+        REGISTRY
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .attached
+            .retain(|live| *live != id);
     }
 
     /// Whether the leader `id` has exited, without reaping it.
@@ -1386,12 +1450,15 @@ mod group {
         }
     }
 
-    /// Kill every registered group and refuse every later one.
+    /// Kill every registered group and attached child, and refuse every later one.
     pub fn end_all() {
         let mut registry = REGISTRY.lock().unwrap_or_else(PoisonError::into_inner);
         registry.ended = true;
         for id in &registry.live {
             let _ = rustix::process::kill_process_group(*id, Signal::Kill);
+        }
+        for id in &registry.attached {
+            let _ = rustix::process::kill_process(*id, Signal::Kill);
         }
     }
 
@@ -1411,6 +1478,7 @@ mod group {
         fn an_ended_registry_refuses_every_new_group() {
             let mut registry = Registry {
                 live: Vec::new(),
+                attached: Vec::new(),
                 ended: false,
             };
             assert!(registry.admit().is_ok());
@@ -1432,9 +1500,23 @@ mod group {
     #[derive(Debug, Clone, Copy)]
     pub enum GroupId {}
 
+    /// Uninhabited: no attached child is tracked on this platform.
+    #[derive(Debug, Clone, Copy)]
+    pub enum AttachedId {}
+
     /// Spawn `command` as a plain child.
     pub fn spawn_detached(command: Command) -> std::io::Result<(Child, Option<GroupId>)> {
         Ok((ipe_runtime_rust::system::spawn_hardened(command)?, None))
+    }
+
+    /// Spawn `command` as a plain child.
+    pub fn spawn_attached(command: Command) -> std::io::Result<(Child, Option<AttachedId>)> {
+        Ok((ipe_runtime_rust::system::spawn_hardened(command)?, None))
+    }
+
+    /// Unreachable: no `AttachedId` exists.
+    pub const fn forget_attached(id: AttachedId) {
+        match id {}
     }
 
     /// Unreachable: no `GroupId` exists.
@@ -1576,6 +1658,7 @@ mod relay {
         use super::{Handling, Inherited, plan};
         use crate::terminate::SignalSet;
         use signal_hook::consts::{SIGCONT, SIGHUP, SIGINT, SIGQUIT, SIGTSTP};
+        #[cfg(target_os = "linux")]
         use std::io::Write as _;
 
         /// The set holding exactly `signals`.
@@ -1639,7 +1722,7 @@ mod relay {
         #[cfg(target_os = "linux")]
         #[test]
         fn an_inherited_ignored_hangup_leaves_the_cli_and_its_transfer_running() {
-            let output = crate::terminate::test_child::run(
+            let output = crate::terminate::tests::test_child::run(
                 "trap '' HUP;",
                 "remote_ingest::relay::tests::hangup_child",
             );
@@ -1658,7 +1741,7 @@ mod relay {
             {
                 return;
             }
-            let output = crate::terminate::test_child::run(
+            let output = crate::terminate::tests::test_child::run(
                 "trap - HUP;",
                 "remote_ingest::relay::tests::hangup_child_default",
             );
@@ -3106,7 +3189,11 @@ mod tests {
     fn a_setsid_grandchild_holding_stdout_returns_within_the_grace_and_leaves_no_thread() {
         let dir = scratch();
         let pid_file = dir.path().join("escaped.pid");
-        let mut command = sh("setsid sleep 30 & echo $! > \"$0\"; exit 0");
+        // The escaped process writes its own ID once it has left the group, and
+        // the child exits only then: the group kill at exit cannot reach it.
+        let mut command = sh(
+            "setsid sh -c 'echo $$ > \"$0\"; exec sleep 30' \"$0\" & i=0; while [ ! -s \"$0\" ] && [ $i -lt 500 ]; do sleep 0.01; i=$((i+1)); done; exit 0",
+        );
         command.arg(&pid_file);
         let started = Instant::now();
         let run = run(command, None, None, &budget(0, 0));
@@ -3128,8 +3215,9 @@ mod tests {
     fn a_grandchild_that_never_reads_stdin_leaves_no_feeding_thread() {
         let dir = scratch();
         let pid_file = dir.path().join("escaped.pid");
-        let mut command =
-            sh("exec 3<&0; setsid sleep 30 <&3 3<&- >/dev/null 2>&1 & echo $! > \"$0\"; exit 0");
+        let mut command = sh(
+            "exec 3<&0; setsid sh -c 'echo $$ > \"$0\"; exec sleep 30' \"$0\" <&3 3<&- >/dev/null 2>&1 & i=0; while [ ! -s \"$0\" ] && [ $i -lt 500 ]; do sleep 0.01; i=$((i+1)); done; exit 0",
+        );
         command.arg(&pid_file);
         let input = vec![b'x'; 1024 * 1024];
         let run = run(command, Some(&input), None, &budget(0, 0));

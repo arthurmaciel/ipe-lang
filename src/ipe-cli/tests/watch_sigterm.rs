@@ -13,9 +13,14 @@
 //!    by the signal, unless the teardown already finished cleanly — and the
 //!    supervised child is gone either way.
 
+#[cfg(target_os = "linux")]
 use std::io::{Read, Write};
+#[cfg(target_os = "linux")]
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(target_os = "linux")]
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -28,15 +33,18 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// the watch only pays a link step plus server startup — well under a minute on
 /// any loaded box. The functional guard is the SIGTERM assertion that follows,
 /// not this wait.
+#[cfg(target_os = "linux")]
 const WATCH_SERVE_BUDGET: Duration = Duration::from_mins(2);
 
 /// Budget for the one-shot dep warm-up in [`warm_server_fixture_deps`]: a full
 /// cold cargo build of the axum/tokio server fixture on a sccache-off box.
+#[cfg(target_os = "linux")]
 const DEP_WARM_BUDGET: Duration = Duration::from_mins(10);
 
 /// The same minimal `Ipe.Http.Server` fixture `watch_integration.rs` uses:
 /// long-running (never exits on its own); passes `IPE_SERVER_PORT` as its
 /// source port, which the relocation var `watch::child_env` sets outranks.
+#[cfg(target_os = "linux")]
 fn server_fixture(body: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
@@ -147,6 +155,7 @@ fn try_warm(timeout: Duration) -> Result<(), BoxError> {
     rx.recv_timeout(timeout).unwrap_or_else(|_| Ok(()))
 }
 
+#[cfg(target_os = "linux")]
 fn http_get_body(port: u16) -> Option<String> {
     let mut stream = TcpStream::connect_timeout(
         &format!("127.0.0.1:{port}").parse().ok()?,
@@ -165,6 +174,7 @@ fn http_get_body(port: u16) -> Option<String> {
     text.split("\r\n\r\n").nth(1).map(str::to_owned)
 }
 
+#[cfg(target_os = "linux")]
 fn wait_for_body(port: u16, want: &str, timeout: Duration) -> bool {
     e2e_support::wait_for(timeout, || {
         http_get_body(port).is_some_and(|body| body.contains(want))
@@ -172,6 +182,7 @@ fn wait_for_body(port: u16, want: &str, timeout: Duration) -> bool {
 }
 
 /// PID-only SIGTERM via `kill(1)` — never a process-group signal.
+#[cfg(target_os = "linux")]
 fn sigterm(pid: u32) -> Result<(), BoxError> {
     let status = std::process::Command::new("kill")
         .arg("-TERM")
@@ -321,6 +332,7 @@ fn watch_marker_seen(
 }
 
 /// Poll `child.try_wait()` until it exits or `timeout` elapses.
+#[cfg(target_os = "linux")]
 fn wait_for_exit(
     child: &mut std::process::Child,
     timeout: Duration,
@@ -405,11 +417,12 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process() ->
 #[cfg(unix)]
 #[test]
 fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
-    static HOST_SIGTERM: AtomicBool = AtomicBool::new(false);
+    let host_sigterm = Arc::new(AtomicBool::new(false));
 
     // The host's own SIGTERM handling — what `spawn()` must leave untouched.
-    ipe_watch::install_sigterm_forwarder(|| HOST_SIGTERM.store(true, Ordering::Relaxed))
+    signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&host_sigterm))
         .map_err(|e| -> BoxError { format!("host handler registration: {e}").into() })?;
 
     let (ipe_dir, out_dir) = fresh_dirs("spawn_no_forwarder")?;
@@ -437,11 +450,11 @@ fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
 
     // The host's handler must observe the signal…
     let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline && !HOST_SIGTERM.load(Ordering::Relaxed) {
+    while Instant::now() < deadline && !host_sigterm.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(
-        HOST_SIGTERM.load(Ordering::Relaxed),
+        host_sigterm.load(Ordering::Relaxed),
         "the HOST's own SIGTERM handler must fire — spawn() must not have \
          swallowed or replaced the host's signal handling"
     );

@@ -24,7 +24,7 @@
 //! and from `/bin/ps` elsewhere; both owners decide from that one reading.
 
 use std::ffi::c_int;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, OnceLock, PoisonError, mpsc};
 
 use signal_hook::consts::SIGTERM;
 use signal_hook::iterator::Signals;
@@ -238,26 +238,41 @@ pub fn on_shutdown(subscriber: impl FnOnce() + Send + 'static) -> std::io::Resul
     Ok(())
 }
 
-/// Register the termination request and start the thread that answers it.
+/// Register the termination request and start the threads that answer it.
+///
+/// The signal thread answers every request; the shutdown thread runs the
+/// subscribers the first request hands it. A subscriber that hangs therefore
+/// never stops a later request from being answered.
 fn install() -> Result<(), std::io::ErrorKind> {
     let handling = inherited().handling(SIGTERM, Effect::Ends);
     if handling == Handling::Unregistered {
         return Ok(());
     }
+    let (shutdown_tx, shutdown_rx) = mpsc::channel::<Vec<Subscriber>>();
+    std::thread::Builder::new()
+        .name("ipe-shutdown".to_owned())
+        .spawn(move || {
+            if let Ok(subscribers) = shutdown_rx.recv() {
+                for subscriber in subscribers {
+                    subscriber();
+                }
+            }
+        })
+        .map_err(|e| e.kind())?;
     let mut signals = Signals::new([SIGTERM]).map_err(|e| e.kind())?;
     std::thread::Builder::new()
         .name("ipe-terminate".to_owned())
         .spawn(move || {
             for _ in signals.forever() {
-                respond(handling);
+                respond(handling, &shutdown_tx);
             }
         })
         .map(drop)
         .map_err(|e| e.kind())
 }
 
-/// Answer one termination request.
-fn respond(handling: Handling) {
+/// Answer one termination request, handing the first one's subscribers to `shutdown`.
+fn respond(handling: Handling, shutdown: &mpsc::Sender<Vec<Subscriber>>) {
     crate::remote_ingest::end_transfers();
     let subscribers = {
         let mut requests = REQUESTS.lock().unwrap_or_else(PoisonError::into_inner);
@@ -273,42 +288,43 @@ fn respond(handling: Handling) {
         if handling == Handling::RelayThenDefault {
             let _ = signal_hook::low_level::emulate_default_handler(SIGTERM);
         }
-    } else {
-        for subscriber in subscribers {
+    } else if let Err(mpsc::SendError(unrun)) = shutdown.send(subscribers) {
+        // The shutdown thread is gone, so the teardown runs here.
+        for subscriber in unrun {
             subscriber();
         }
     }
 }
 
-/// Runs an ignored test of this binary as a child process.
-#[cfg(all(test, target_os = "linux"))]
-pub mod test_child {
-    /// Run the ignored test `name` of this binary as a child, through `sh`
-    /// running `prelude` first.
-    pub fn run(prelude: &str, name: &str) -> std::process::Output {
-        let exe = std::env::current_exe().expect("the test binary");
-        std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(format!("{prelude} exec \"$0\" \"$@\""))
-            .arg(exe)
-            .args([
-                "--exact",
-                name,
-                "--ignored",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .output()
-            .expect("run the child test")
-    }
-}
-
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::{Effect, Handling, Inherited, SignalSet, hex_field, ps_fields};
     #[cfg(target_os = "linux")]
     use crate::remote_ingest::test_group;
     use signal_hook::consts::{SIGCONT, SIGHUP, SIGINT, SIGTERM, SIGTSTP};
+
+    /// Runs an ignored test of this binary as a child process.
+    #[cfg(target_os = "linux")]
+    pub mod test_child {
+        /// Run the ignored test `name` of this binary as a child, through `sh`
+        /// running `prelude` first.
+        pub fn run(prelude: &str, name: &str) -> std::process::Output {
+            let exe = std::env::current_exe().expect("the test binary");
+            std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("{prelude} exec \"$0\" \"$@\""))
+                .arg(exe)
+                .args([
+                    "--exact",
+                    name,
+                    "--ignored",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .output()
+                .expect("run the child test")
+        }
+    }
 
     /// The set holding exactly `signals`.
     fn set(signals: &[i32]) -> SignalSet {
@@ -516,7 +532,7 @@ mod tests {
         if parent_holds_termination() {
             return;
         }
-        let output = super::test_child::run(
+        let output = test_child::run(
             "trap - TERM;",
             "terminate::tests::default_termination_child",
         );
@@ -524,7 +540,7 @@ mod tests {
         assert_eq!(output.status.signal(), Some(SIGTERM), "{output:?}");
         let group = stdout
             .lines()
-            .find_map(|line| line.strip_prefix(ARMED))
+            .find_map(|line| line.split_once(ARMED).map(|(_, pid)| pid))
             .and_then(|pid| pid.trim().parse::<i32>().ok())
             .expect("the child reports its transfer group");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -537,7 +553,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn an_ignored_termination_request_leaves_the_cli_and_its_transfer_running() {
-        let output = super::test_child::run(
+        let output = test_child::run(
             "trap '' TERM;",
             "terminate::tests::ignored_termination_child",
         );
@@ -549,16 +565,87 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_second_termination_request_during_shutdown_ends_the_cli() {
+        // The child's shutdown subscriber never returns, so only a second
+        // request answered beside it can end the child by the signal.
         use std::os::unix::process::ExitStatusExt as _;
         if parent_holds_termination() {
             return;
         }
-        let output =
-            super::test_child::run("trap - TERM;", "terminate::tests::second_request_child");
+        let output = test_child::run("trap - TERM;", "terminate::tests::second_request_child");
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains(SHUTDOWN_RAN), "child output: {output:?}");
         assert!(stdout.contains(FIRST_ANSWERED), "child output: {output:?}");
         assert_eq!(output.status.signal(), Some(SIGTERM), "{output:?}");
+    }
+
+    /// Printed by [`attached_child_end`] once ending every transfer killed its attached child.
+    #[cfg(target_os = "linux")]
+    const ATTACHED_ENDED: &str = "ipe-terminate-attached-ended";
+
+    /// Printed by [`probe_child`] once its probe ran and no signal owner was installed.
+    #[cfg(target_os = "linux")]
+    const PROBE_UNOWNED: &str = "ipe-terminate-probe-unowned";
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ending_every_transfer_kills_a_child_attached_to_the_cli_group() {
+        let output = test_child::run("", "terminate::tests::attached_child_end");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "child failed: {output:?}");
+        assert!(stdout.contains(ATTACHED_ENDED), "child output: {output:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_disposition_probe_installs_no_signal_owner() {
+        let output = test_child::run("", "terminate::tests::probe_child");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "child failed: {output:?}");
+        assert!(stdout.contains(PROBE_UNOWNED), "child output: {output:?}");
+    }
+
+    /// The child half of the attached-child test.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "child half of ending_every_transfer_kills_a_child_attached_to_the_cli_group"]
+    fn attached_child_end() {
+        let mut sleeper = std::process::Command::new("sleep");
+        sleeper.arg("30");
+        let (mut child, id) = test_group::spawn_attached(sleeper).expect("spawn sleep");
+        let id = id.expect("an attached child known to the termination owner");
+        crate::remote_ingest::end_transfers();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut ended = false;
+        while !ended && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            ended = test_group::exited(id).expect("probe the child");
+        }
+        test_group::forget_attached(id);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            ended,
+            "ending every transfer left the attached child running"
+        );
+        report(ATTACHED_ENDED);
+    }
+
+    /// The child half of the probe test.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "child half of the_disposition_probe_installs_no_signal_owner"]
+    fn probe_child() {
+        let mut probe = std::process::Command::new("/bin/sh");
+        probe.args(["-c", "echo 0 0"]);
+        let captured =
+            crate::remote_ingest::run_probe(probe, super::PS_STDOUT_MAX_BYTES, super::PS_WALL)
+                .expect("the probe runs");
+        assert_eq!(super::ps_fields(&captured.stdout), Some((0, 0)));
+        assert!(
+            super::INSTALLED.get().is_none(),
+            "the probe installed a signal owner"
+        );
+        report(PROBE_UNOWNED);
     }
 
     /// The child half of the default termination test: the request kills the
@@ -599,12 +686,22 @@ mod tests {
     }
 
     /// The child half of the second-request test: the first request ends the
-    /// transfer and runs the subscriber; the second ends the CLI.
+    /// transfer and starts a subscriber that never returns; the second ends
+    /// the CLI.
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "child half of a_second_termination_request_during_shutdown_ends_the_cli"]
     fn second_request_child() {
-        super::on_shutdown(|| report(SHUTDOWN_RAN)).expect("subscribe to the shutdown");
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static STARTED: AtomicBool = AtomicBool::new(false);
+        super::on_shutdown(|| {
+            report(SHUTDOWN_RAN);
+            STARTED.store(true, Ordering::SeqCst);
+            loop {
+                std::thread::park();
+            }
+        })
+        .expect("subscribe to the shutdown");
         let (mut child, id) = spawn_sleeper();
         signal_hook::low_level::raise(SIGTERM).expect("raise the first request");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -616,6 +713,9 @@ mod tests {
         test_group::forget(id);
         let _ = child.wait();
         assert!(ended, "the first request left the transfer group running");
+        while !STARTED.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         report(FIRST_ANSWERED);
         signal_hook::low_level::raise(SIGTERM).expect("raise the second request");
         std::thread::sleep(std::time::Duration::from_secs(5));
