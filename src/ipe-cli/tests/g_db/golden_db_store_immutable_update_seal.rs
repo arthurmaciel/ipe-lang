@@ -8,7 +8,7 @@
 //!
 //! Two proofs:
 //!   * emit-content — the emitted `Ipe.Db.Store` module's `update_as` calls
-//!     `drop_immutable_columns` on the SET binds (the load-bearing omission), so
+//!     `drop_columns` on the SET binds (the load-bearing omission), so
 //!     the immutable column can never be written by an update;
 //!   * THE SEAL — under `IPE_E2E=1` the emitted crate must `cargo build` (the
 //!     `jwt`/`db` features the authed + store-update surface requires are
@@ -56,20 +56,28 @@ fn immutable_update_drops_immutable_column_from_set() {
     // this call an update would write the immutable column, breaking the
     // `immutable` guarantee — so its presence is the enforcement point.
     assert!(
-        src.contains("user_ipe_db_store_drop_immutable_columns"),
+        src.contains("user_ipe_db_store_drop_columns"),
         "emitted `update_as` must drop immutable-policy columns from the SET \
-         (call to `drop_immutable_columns` absent) — the immutable column would \
+         (call to `drop_columns` absent) — the immutable column would \
          otherwise be writable by an update"
     );
     // Prove the drop is wired INTO the update path, not merely defined.
-    let update_as = src
+    let (_, after_update_as) = src
         .split_once("fn user_ipe_db_store_update_as")
-        .and_then(|(_, rest)| rest.split_once("\npub(crate) fn ").map(|(body, _)| body))
-        .unwrap_or(&src);
+        .expect("emitted store module must define `update_as`");
+    let update_as = after_update_as
+        .split_once("\npub(crate) fn ")
+        .map_or(after_update_as, |(body, _)| body);
     assert!(
-        update_as.contains("user_ipe_db_store_drop_immutable_columns"),
+        update_as.contains("user_ipe_db_store_drop_columns"),
         "the immutable-drop must be applied inside `update_as`'s SET projection, \
          not only defined elsewhere"
+    );
+    // The update runs through the policy-checked kernel, whose savepoint keeps
+    // the row only when the update predicate holds over it as stored.
+    assert!(
+        update_as.contains("db_update_where_checked"),
+        "`update_as` must write through the policy-checked update kernel"
     );
 }
 
