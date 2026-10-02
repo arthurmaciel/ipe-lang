@@ -1,0 +1,65 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.String
+import Ipe.Task as Task
+import Ipe.Tuple as Tuple
+
+
+-- Accepted: each rebuilt closure below moves the destructure-bound `h` but is
+-- called at most once, or `h` is shared through a plain `let`.
+inc : Int -> Task Error Int
+inc n =
+    Task.succeed (n + 1)
+
+
+applyTask : (Int -> Task Error Int) -> Int -> Task Error Int
+applyTask g n =
+    g (n * 10)
+
+
+-- A pipe into `Task.andThen`: the continuation runs once.
+piped : ( Int -> Task Error Int, Int ) -> Task Error Int
+piped ( h, seed ) =
+    Task.succeed seed |> Task.andThen (\x -> h x)
+
+
+-- `Task.andThen`'s continuation is a partial that moves `h`: it runs once.
+continued : ( Int -> Task Error Int, Int ) -> Task Error Int
+continued ( h, seed ) =
+    Task.andThen (applyTask h) (Task.succeed seed)
+
+
+-- The IPE-L0126 advice: bind the function with a plain `let` so it is shared.
+viaLet : ( Int -> Task Error Int, Int ) -> List (Task Error Int) -> List (Task Error Int)
+viaLet pair ts =
+    let
+        h =
+            Tuple.first pair
+    in
+    List.map (Task.andThen (\x -> h x)) ts
+
+
+main : Task Error ()
+main =
+    piped ( inc, 4 )
+        |> Task.andThen
+            (\a ->
+                continued ( inc, 4 )
+                    |> Task.andThen
+                        (\b ->
+                            Task.sequence (viaLet ( inc, 0 ) [ Task.succeed 1, Task.succeed 2 ])
+                                |> Task.andThen
+                                    (\xs ->
+                                        Io.println
+                                            ("once="
+                                                ++ String.fromInt a
+                                                ++ ","
+                                                ++ String.fromInt b
+                                                ++ " let="
+                                                ++ String.join "," (List.map String.fromInt xs)
+                                            )
+                                    )
+                        )
+            )

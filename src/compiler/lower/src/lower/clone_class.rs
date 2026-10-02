@@ -513,7 +513,7 @@ impl CaptureWalk {
     }
 
     /// The first capture a recording walk saw moved, if any.
-    pub(super) fn first_moved(&self) -> Option<Symbol> {
+    pub(super) const fn first_moved(&self) -> Option<Symbol> {
         match &self.policy {
             NonCloneCapture::Refuse => None,
             NonCloneCapture::Record(slot) => slot.get(),

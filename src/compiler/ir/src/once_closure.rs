@@ -68,16 +68,16 @@ pub const fn admits_once(site: &ClosureSite<'_>) -> bool {
     }
 }
 
+/// A closure's parameters, return type and body, borrowed from its IR node.
+pub type ClosureParts<'e> = (&'e [(Symbol, IrType)], &'e IrType, &'e Expr);
+
 /// The parameters, return type and body of an [`Expr::OnceLambda`] at an admitted `site`.
 ///
 /// `None` for any other expression, and for an `OnceLambda` at a position
 /// [`admits_once`] refuses. The backend's admitted emit paths read a once
 /// closure only through this, so they share the lowerer's verdict.
 #[must_use]
-pub fn admitted_once_parts<'e>(
-    expr: &'e Expr,
-    site: &ClosureSite<'_>,
-) -> Option<(&'e [(Symbol, IrType)], &'e IrType, &'e Expr)> {
+pub fn admitted_once_parts<'e>(expr: &'e Expr, site: &ClosureSite<'_>) -> Option<ClosureParts<'e>> {
     if let Expr::OnceLambda {
         params, ret, body, ..
     } = expr
