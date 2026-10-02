@@ -867,10 +867,10 @@ fn canon_open_imports_bare_ctor_use_is_ambiguous() {
 #[test]
 fn canon_open_import_sweep_over_the_stdlib_registry_compiles() {
     use ipe_canon::shape_runtime::{Admissibility, Placement, Shape, allowed_in, classify};
-    let Some(script) = Placement::sole_for(Shape::Script) else {
-        assert!(false_marker(), "a plain-`main` script has one placement");
-        return;
-    };
+    let script = Placement::sole_for(Shape::Script);
+    assert!(script.is_some(), "a plain-`main` script has one placement");
+    #[allow(clippy::expect_used)] // `is_some` is asserted just above
+    let script = script.expect("asserted present above");
     let mut src = format!("{HEAD}\nimport Ipe.Io as Io\n");
     let mut joined: Vec<&str> = Vec::new();
     for module in ipe_stdlib::COMPILED_STD_MODULES {
