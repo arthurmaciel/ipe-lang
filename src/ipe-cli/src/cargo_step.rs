@@ -559,12 +559,12 @@ impl CargoPipes {
             stderr_mode,
         } = self;
         std::thread::scope(|scope| {
-            let stdout = scope.spawn(move || {
+            let stdout = std::thread::Builder::new().spawn_scoped(scope, move || {
                 stdout
                     .map(|pipe| stdout_drain(read_capped(pipe, stdout_cap), stdout_cap))
                     .unwrap_or_default()
             });
-            let stderr = scope.spawn(move || {
+            let stderr = std::thread::Builder::new().spawn_scoped(scope, move || {
                 stderr
                     .map(|pipe| match stderr_mode {
                         StderrMode::Relay => relay_stderr(pipe, STDERR_KEEP_CAP),
@@ -581,21 +581,31 @@ impl CargoPipes {
             let waited = wait();
             Drained {
                 waited,
-                stdout: joined(stdout.join(), "stdout"),
-                stderr: joined(stderr.join(), "stderr"),
+                stdout: joined(stdout, "stdout"),
+                stderr: joined(stderr, "stderr"),
             }
         })
     }
 }
 
-/// A drain thread's result, a panic in it reported as a read error.
-fn joined(result: std::thread::Result<Drain>, pipe: &str) -> Drain {
-    result.unwrap_or_else(|_| Drain {
-        text: String::new(),
-        error: Some(std::io::Error::other(format!(
-            "cargo {pipe} drain panicked"
-        ))),
-    })
+/// A drain thread's result: a thread that could not start, or that panicked,
+/// is reported as a read error.
+///
+/// A drain that never started dropped its pipe with its closure, so cargo's
+/// next write to it fails rather than stalling on a pipe nobody reads.
+fn joined(spawned: std::io::Result<std::thread::ScopedJoinHandle<'_, Drain>>, pipe: &str) -> Drain {
+    match spawned {
+        Ok(handle) => handle.join().unwrap_or_else(|_| Drain {
+            text: String::new(),
+            error: Some(std::io::Error::other(format!(
+                "cargo {pipe} drain panicked"
+            ))),
+        }),
+        Err(error) => Drain {
+            text: String::new(),
+            error: Some(error),
+        },
+    }
 }
 
 /// The bytes a capped read kept.
@@ -860,6 +870,36 @@ mod tests {
         assert_eq!(env(&cmd, "CARGO_TARGET_DIR"), Env::Set(OsStr::new("/t")));
         assert_eq!(env(&cmd, "CARGO_INCREMENTAL"), Env::Set(OsStr::new("1")));
         assert_eq!(args(&cmd), ["build", "--message-format=json", "-q"]);
+    }
+
+    #[test]
+    fn a_drain_thread_that_cannot_start_is_a_read_error_not_a_panic() {
+        let drain = std::thread::scope(|_| {
+            super::joined(
+                Err(std::io::Error::from(std::io::ErrorKind::OutOfMemory)),
+                "stdout",
+            )
+        });
+        assert!(drain.text.is_empty());
+        assert_eq!(
+            drain.error.map(|e| e.kind()),
+            Some(std::io::ErrorKind::OutOfMemory)
+        );
+    }
+
+    #[test]
+    fn a_drain_thread_that_panics_is_a_read_error() {
+        let drain = std::thread::scope(|scope| {
+            let handle = std::thread::Builder::new().spawn_scoped(scope, || -> super::Drain {
+                std::panic::resume_unwind(Box::new("drain"))
+            });
+            super::joined(handle, "stderr")
+        });
+        assert!(
+            drain
+                .error
+                .is_some_and(|e| e.to_string().contains("stderr drain panicked"))
+        );
     }
 
     #[test]
