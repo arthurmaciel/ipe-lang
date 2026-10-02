@@ -2075,15 +2075,21 @@ impl<'a> Printer<'a> {
         // multi-line, so the block form is the one a second pass would pick.
         // Any other body stays inline after the arrow.
         //
-        // Rendered exactly ONCE, at the block indent: a result with no
-        // embedded newline reads identically at any indent (padding is only
-        // ever inserted at a newline), so that single render serves both the
-        // inline and the block candidate. Trying an inline render, rejecting
-        // it, and re-rendering at the block indent — as elm-format's own
-        // two-pass check would — costs one render per node per ENCLOSING
-        // level; for a right-nested lambda chain (a `do` block's desugared
-        // binds, one level per statement) that is exponential in the number
-        // of statements.
+        // Rendered exactly ONCE, at the block indent, and reused for both the
+        // inline and the block candidate: a result with no embedded newline
+        // reads identically at any indent (padding is only ever inserted
+        // after a newline), so that one string serves either placement.
+        // Trying an inline render at this indent, rejecting it, and
+        // re-rendering at the block indent — as elm-format's own two-pass
+        // check would — costs one render per node per ENCLOSING level; for a
+        // right-nested lambda chain (a `do` block's desugared binds, one
+        // level per statement) that is exponential in the number of
+        // statements. Budgeting the fits-inline check at the block indent
+        // (one narrower than the inline placement actually occupies) is
+        // conservative-only: a narrower width budget can only ever wrap a
+        // body the wider one would have kept on one line, never the reverse,
+        // so this can pick block form a body would have fit on the arrow's
+        // line, but never the other way around.
         let block_body = matches!(body.value, Expr_::Let(..) | Expr_::Case(..) | Expr_::If(..))
             || !self.anchored(body.span.lo as usize).is_empty();
         let body_s = self.expr(body, indent + 1);
