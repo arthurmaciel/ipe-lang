@@ -1546,6 +1546,14 @@ messages! {
     output_reparse_point(path) = "output-reparse-point";
     /// An entry another program holds open, so ipe cannot remove or replace it.
     output_in_use(path) = "output-in-use";
+    /// An output-directory claim another ipe process kept holding past the wait bound.
+    output_claim_busy(path, seconds) = "output-claim-busy";
+    /// A filesystem that refused the advisory lock an output-directory claim takes.
+    output_claim_lock_unavailable(path, kind) = "output-claim-lock-unavailable";
+    /// A crashed output-directory claim whose marker now sits beside foreign entries.
+    output_claim_interrupted(path, marker, claim) = "output-claim-interrupted";
+    /// An output directory whose claim is still running or awaits takeover.
+    output_claim_in_flight(path) = "output-claim-in-flight";
     /// A GitHub login with nothing before its optional `[bot]` suffix.
     login_empty = "login-empty";
     /// A GitHub login past the length ceiling.

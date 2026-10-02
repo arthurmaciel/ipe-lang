@@ -36,8 +36,9 @@
 //! delete, and claiming it marks no ancestor, so once its own marker is dropped
 //! nothing ipe later cleans can contain it.
 
-use std::io::{Read as _, Write as _};
+use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use crate::{CliError, io_err, text};
 
@@ -50,6 +51,18 @@ use proven::{ProvenOutPath, prove_parent_steps};
 
 /// The file whose presence marks a directory as ipe-owned.
 pub const OWNERSHIP_MARKER: &str = ".ipe-output";
+
+/// The file a claim creates, locks, and removes while it decides a directory's ownership.
+///
+/// Its presence means a claim is running, or a crashed one awaits takeover; a
+/// directory holding it is not owned yet.
+pub const CLAIM_FILE: &str = ".ipe-output.claim";
+
+/// How long a claim sleeps before it polls a lock another claim holds again.
+const CLAIM_POLL: Duration = Duration::from_millis(50);
+
+/// How many times a claim polls a held lock before it refuses busy.
+const MAX_CLAIM_POLLS: u32 = 200;
 
 /// The per-project namespace directory ipe keeps its caches in.
 pub const CACHE_NAMESPACE_DIR: &str = ".ipe";
@@ -201,6 +214,30 @@ pub enum OutputRefusal {
     /// On Windows an editor, a file indexer, or antivirus holding a file or
     /// directory without delete sharing blocks its removal until released.
     InUse(PathBuf),
+    /// Another ipe process held the directory's claim for the whole wait bound.
+    ClaimBusy {
+        /// The directory being claimed.
+        dir: PathBuf,
+        /// How long the claim waited before giving up.
+        waited: Duration,
+    },
+    /// The filesystem refused the advisory lock a claim takes.
+    ///
+    /// A network filesystem may answer the lock with `ENOLCK`; without the lock
+    /// two claims could interleave, so there is no unlocked fallback.
+    ClaimLockUnavailable {
+        /// The directory being claimed.
+        dir: PathBuf,
+        /// The error kind the lock attempt failed with.
+        kind: std::io::ErrorKind,
+    },
+    /// A crashed claim left its marker, and something foreign now sits beside it.
+    ///
+    /// Both the marker and the claim file are kept, for the user to remove once
+    /// the contents are checked.
+    ClaimInterrupted(PathBuf),
+    /// A claim of the directory is running, or a crashed one awaits takeover.
+    ClaimInFlight(PathBuf),
 }
 
 impl std::fmt::Display for OutputRefusal {
@@ -239,6 +276,16 @@ impl std::fmt::Display for OutputRefusal {
             Self::TooDeep { path, limit } => text::output_too_deep(&path.display(), limit),
             Self::ReparsePoint(p) => text::output_reparse_point(&p.display()),
             Self::InUse(p) => text::output_in_use(&p.display()),
+            Self::ClaimBusy { dir, waited } => {
+                text::output_claim_busy(&dir.display(), &waited.as_secs())
+            }
+            Self::ClaimLockUnavailable { dir, kind } => {
+                text::output_claim_lock_unavailable(&dir.display(), kind)
+            }
+            Self::ClaimInterrupted(p) => {
+                text::output_claim_interrupted(&p.display(), &OWNERSHIP_MARKER, &CLAIM_FILE)
+            }
+            Self::ClaimInFlight(p) => text::output_claim_in_flight(&p.display()),
         };
         f.write_str(&message)
     }
@@ -415,7 +462,7 @@ fn claim_owned(path: ProvenOutPath) -> Result<OwnedDir, CliError> {
 #[cfg(test)]
 fn claim_held(path: &ProvenOutPath) -> Result<held::HeldDir, CliError> {
     if let Some(dir) = held::HeldDir::open(path.as_path())? {
-        dir.adopt()?;
+        let _claimed = dir.claim()?;
         return Ok(dir);
     }
     let (Some(name), Some(parent_path)) = (path.as_path().file_name(), path.parent()) else {
@@ -492,7 +539,7 @@ impl<'a> ClaimPlan<'a> {
         }
         dir = match self.root {
             RootStep::Anchor => {
-                dir.adopt()?;
+                let _claimed = dir.claim()?;
                 dir
             }
             RootStep::Named(name) => {
@@ -514,26 +561,34 @@ impl<'a> ClaimPlan<'a> {
     }
 }
 
-/// Enter the intermediate level `name` of the held `parent`: created and marked when absent.
+/// Enter the intermediate level `name` of the held `parent`: claimed when this call created it.
 ///
-/// An existing directory is traversed without an ownership check; a link or a
-/// non-directory is refused.
+/// An existing directory is traversed without an ownership check, so a shared
+/// ancestor is never adopted; a link or a non-directory is refused. A created
+/// level that a concurrent claim filled before this claim's lock is passed
+/// through unmarked, as an existing one is.
 fn enter_in(parent: &held::HeldDir, name: &std::ffi::OsStr) -> Result<held::HeldDir, CliError> {
     let (dir, created) = parent.create_child(name)?;
     if created {
-        dir.write_marker()?;
+        held::claim_point(held::ClaimPoint::Created, dir.path());
+        match dir.claim() {
+            Ok(_) | Err(CliError::OutputRefused(OutputRefusal::NotIpeOwned(_))) => {}
+            Err(e) => return Err(e),
+        }
     }
     Ok(dir)
 }
 
-/// Claim the entry `name` of the held `parent`: created and marked when absent, else adopted.
+/// Claim the entry `name` of the held `parent`, creating it when absent.
+///
+/// A created level runs the same [`held::HeldDir::claim`] as an existing one,
+/// under the same lock.
 fn claim_in(parent: &held::HeldDir, name: &std::ffi::OsStr) -> Result<held::HeldDir, CliError> {
     let (dir, created) = parent.create_child(name)?;
     if created {
-        dir.write_marker()?;
-    } else {
-        dir.adopt()?;
+        held::claim_point(held::ClaimPoint::Created, dir.path());
     }
+    let _claimed = dir.claim()?;
     Ok(dir)
 }
 
@@ -770,14 +825,18 @@ pub fn contained_in(root: &Path, path: &Path) -> Result<PathBuf, CliError> {
 
 /// Decide, without writing, whether the held level at `path` may become ipe output.
 ///
-/// Absent (`None`) or a directory that is marked or empty passes.
+/// Absent (`None`) or a directory that is marked, being claimed, or empty
+/// passes; the claim itself decides a claim in flight.
 ///
 /// # Errors
 /// [`OutputRefusal::NotIpeOwned`] for a non-empty unmarked directory;
 /// [`CliError::Io`] on a filesystem failure.
 fn check_claimable(dir: Option<&held::HeldDir>, path: &Path) -> Result<(), CliError> {
     match dir.map(held::HeldDir::ownership).transpose()? {
-        None | Some(held::Ownership::Marked | held::Ownership::Empty) => Ok(()),
+        None
+        | Some(held::Ownership::Marked | held::Ownership::Claiming | held::Ownership::Empty) => {
+            Ok(())
+        }
         Some(held::Ownership::User) => Err(OutputRefusal::NotIpeOwned(path.to_path_buf()).into()),
     }
 }
@@ -807,55 +866,58 @@ fn check_exists(path: &Path) -> Result<bool, CliError> {
     }
 }
 
-/// Whether `dir` carries a genuine ownership marker.
+/// Whether `dir` is ipe's now, as [`held::HeldDir::owned_now`] reads it.
 ///
-/// The marker must be a regular file (never a symlink) whose first line is
-/// [`MARKER_HEADER`].
+/// `dir` is held without following a link at its final component; a claim
+/// still in flight is not ownership.
 ///
 /// # Errors
-/// [`CliError::Io`] on a read failure other than absence.
+/// [`OutputRefusal::Symlink`] or [`OutputRefusal::NotADirectory`] at `dir`;
+/// [`CliError::Io`] on a filesystem failure.
 pub fn has_marker(dir: &Path) -> Result<bool, CliError> {
-    let marker = dir.join(OWNERSHIP_MARKER);
-    match std::fs::symlink_metadata(&marker) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(io_err(&marker, e)),
-        Ok(meta) if !meta.file_type().is_file() => return Ok(false),
-        Ok(_) => {}
-    }
-    let file = std::fs::File::open(&marker).map_err(|e| io_err(&marker, e))?;
-    let mut head = Vec::new();
-    file.take(MARKER_READ_CAP)
-        .read_to_end(&mut head)
-        .map_err(|e| io_err(&marker, e))?;
-    Ok(head.starts_with(MARKER_HEADER.as_bytes()))
+    held::HeldDir::open(dir)?.map_or(Ok(false), |dir| dir.has_marker())
 }
 
-/// Whether `name` is the marker or an in-flight marker temp file.
+/// How a claim's listing treats one directory entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tolerated {
+    /// A regular file at the marker name; its genuineness is checked separately.
+    Marker,
+    /// A regular file at the claim file name.
+    ClaimFile,
+    /// Anything else: user territory.
+    Foreign,
+}
+
+/// The one listing classifier: how a claim treats the entry `name` of kind `kind`.
 ///
-/// The temp form is exactly `.ipe-output.<digits>.<digits>.tmp`.
-fn is_marker_name(name: &str) -> bool {
-    if name == OWNERSHIP_MARKER {
-        return true;
+/// Only a regular-file [`OWNERSHIP_MARKER`] and a regular-file [`CLAIM_FILE`]
+/// are tolerated. Every other entry is foreign, a marker or claim name of
+/// another kind and a leftover `.ipe-output.<n>.<n>.tmp` included.
+fn tolerated_entry(name: &std::ffi::OsStr, kind: held::ListedKind) -> Tolerated {
+    match kind {
+        held::ListedKind::RegularFile if name == OWNERSHIP_MARKER => Tolerated::Marker,
+        held::ListedKind::RegularFile if name == CLAIM_FILE => Tolerated::ClaimFile,
+        held::ListedKind::Absent | held::ListedKind::RegularFile | held::ListedKind::Other => {
+            Tolerated::Foreign
+        }
     }
-    let Some(middle) = name
-        .strip_prefix(OWNERSHIP_MARKER)
-        .and_then(|rest| rest.strip_prefix('.'))
-        .and_then(|rest| rest.strip_suffix(".tmp"))
-    else {
-        return false;
-    };
-    let mut fields = middle.split('.');
-    let digits =
-        |s: Option<&str>| s.is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()));
-    digits(fields.next()) && digits(fields.next()) && fields.next().is_none()
 }
 
-/// Whether `dir` holds nothing but the marker or an in-flight marker temp file.
+/// Whether `dir` holds nothing but a regular-file marker or claim file.
+///
+/// Each entry's kind is read without following a link.
 fn is_empty_dir(dir: &Path) -> Result<bool, CliError> {
     let entries = std::fs::read_dir(dir).map_err(|e| io_err(dir, e))?;
     for entry in entries {
         let entry = entry.map_err(|e| io_err(dir, e))?;
-        if !is_marker_name(&entry.file_name().to_string_lossy()) {
+        let kind = match entry.file_type() {
+            Ok(kind) if kind.is_file() => held::ListedKind::RegularFile,
+            Ok(_) => held::ListedKind::Other,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(io_err(&entry.path(), e)),
+        };
+        if tolerated_entry(&entry.file_name(), kind) == Tolerated::Foreign {
             return Ok(false);
         }
     }
@@ -1226,9 +1288,20 @@ impl EmitTarget {
 /// Absent is left absent.
 fn adopt_checked(checked: &Disjoint) -> Result<(), CliError> {
     if checked.anchor.tail.is_empty() {
-        checked.anchor.dir.adopt()?;
+        let _claimed = checked.anchor.dir.claim()?;
     }
     Ok(())
+}
+
+/// Whether the held `dir` is ipe's or being claimed: a genuine marker, with or without a claim file.
+///
+/// A handover refuses either, so no claim in flight above it can finish
+/// around the user's tree.
+///
+/// # Errors
+/// [`CliError::Io`] on a filesystem failure.
+fn owned_or_claiming(dir: &held::HeldDir) -> Result<bool, CliError> {
+    Ok(!matches!(dir.owned_now()?, held::OwnedNow::Unowned))
 }
 
 /// A fresh destination for a tree handed over to the user, proven outside ipe's trees.
@@ -1281,7 +1354,7 @@ impl HandoverRoot {
                 for name in above {
                     dir = dir.create_child(name)?.0;
                     held::level_held(dir.path());
-                    if dir.has_marker()? {
+                    if owned_or_claiming(&dir)? {
                         return Err(OutputRefusal::InsideIpeOwned {
                             out: self.raw.clone(),
                             owner: dir.path().to_path_buf(),
@@ -1297,7 +1370,7 @@ impl HandoverRoot {
         if !dir.is_empty()? {
             return Err(OutputRefusal::NotFresh(self.raw.clone()).into());
         }
-        dir.adopt()?;
+        let _claimed = dir.claim()?;
         Ok(HandoverDir(OwnedDir {
             path: checked.absolute.into_path_buf(),
             id: dir.id()?,
@@ -1397,7 +1470,7 @@ fn check_no_reserved_component(raw: &Path, resolved: &Path) -> Result<(), CliErr
 /// ancestor is checked, bounded by its component count.
 fn check_no_marked_ancestor(raw: &Path, resolved: &Path) -> Result<(), CliError> {
     for ancestor in resolved.ancestors().skip(1) {
-        if has_marker(ancestor)? {
+        if held::HeldDir::open(ancestor)?.map_or(Ok(false), |dir| owned_or_claiming(&dir))? {
             return Err(OutputRefusal::InsideIpeOwned {
                 out: raw.to_path_buf(),
                 owner: ancestor.to_path_buf(),
@@ -1422,7 +1495,7 @@ fn check_no_marked_ancestor_held(raw: &Path, anchor: &Anchor) -> Result<(), CliE
         }
         .into()
     };
-    if !anchor.tail.is_empty() && anchor.dir.has_marker()? {
+    if !anchor.tail.is_empty() && owned_or_claiming(&anchor.dir)? {
         return Err(marked(&anchor.real));
     }
     let mut level = anchor.dir.parent()?;
@@ -1430,7 +1503,7 @@ fn check_no_marked_ancestor_held(raw: &Path, anchor: &Anchor) -> Result<(), CliE
         let Some(dir) = level else {
             return Err(OutputRefusal::Replaced(raw.to_path_buf()).into());
         };
-        if dir.has_marker()? {
+        if owned_or_claiming(&dir)? {
             return Err(marked(owner));
         }
         level = dir.parent()?;
@@ -2524,17 +2597,39 @@ mod tests {
 
     #[test]
     fn only_the_exact_marker_names_count_as_empty() {
-        assert!(is_marker_name(".ipe-output"));
-        assert!(is_marker_name(".ipe-output.123.4.tmp"));
+        use std::ffi::OsStr;
+        let file = held::ListedKind::RegularFile;
+        assert!(matches!(
+            tolerated_entry(OsStr::new(OWNERSHIP_MARKER), file),
+            Tolerated::Marker
+        ));
+        assert!(matches!(
+            tolerated_entry(OsStr::new(CLAIM_FILE), file),
+            Tolerated::ClaimFile
+        ));
+        for name in [OWNERSHIP_MARKER, CLAIM_FILE] {
+            for kind in [held::ListedKind::Other, held::ListedKind::Absent] {
+                assert!(
+                    matches!(tolerated_entry(OsStr::new(name), kind), Tolerated::Foreign),
+                    "{name:?} of a non-file kind is user data"
+                );
+            }
+        }
         for name in [
             ".ipe-output-evil",
             ".ipe-output.tmp",
             ".ipe-output.1.tmp",
+            ".ipe-output.123.4.tmp",
             ".ipe-output.1.2.3.tmp",
             ".ipe-output.a.b.tmp",
             ".ipe-outputs",
+            ".IPE-OUTPUT",
+            ".ipe-output.claim.tmp",
         ] {
-            assert!(!is_marker_name(name), "{name:?} must not count as a marker");
+            assert!(
+                matches!(tolerated_entry(OsStr::new(name), file), Tolerated::Foreign),
+                "{name:?} must not count as a marker"
+            );
         }
         let base = scratch("marker_names");
         let dir = base.join("d");
@@ -2830,6 +2925,108 @@ mod tests {
         assert!(
             !parent.join("app").exists(),
             "a refused claim writes nothing"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A marker beside a claim file above a handover refuses it, as a committed marker does.
+    #[test]
+    fn a_claiming_ancestor_refuses_a_handover() {
+        let base = scratch("handover_claiming");
+        let proj = project(&base);
+        let parent = base.join("being-claimed");
+        let fresh =
+            OutputRoot::fresh(&parent.join("app").to_string_lossy(), &proj).expect("fresh target");
+        std::fs::create_dir(&parent).expect("make parent");
+        std::fs::write(parent.join(OWNERSHIP_MARKER), MARKER_TEXT).expect("marker");
+        std::fs::write(parent.join(CLAIM_FILE), b"").expect("claim in flight");
+        let result = fresh.claim();
+        assert!(
+            matches!(refused(&result), Some(OutputRefusal::InsideIpeOwned { .. })),
+            "a claim in flight above must refuse, got {result:?}"
+        );
+        assert!(
+            !parent.join("app").exists(),
+            "a refused claim writes nothing"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A level this claim creates is claimed under the claim lock, so a racing claim never unmarks it.
+    #[test]
+    fn a_created_level_is_claimed_under_the_lock() {
+        use std::io::Write as _;
+        use std::sync::mpsc;
+
+        let base = scratch("created_level");
+        let parent = held::HeldDir::open(&base)
+            .expect("open base")
+            .expect("base exists");
+        let (published_tx, published_rx) = mpsc::channel::<()>();
+        let (written_tx, written_rx) = mpsc::channel::<()>();
+        let racer = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let spawned = std::rc::Rc::clone(&racer);
+        let mut written_rx = Some(written_rx);
+        let mut published_tx = Some(published_tx);
+        held::set_claim_hook(Some(Box::new(
+            move |point: held::ClaimPoint, path: &Path| {
+                if point != held::ClaimPoint::Created {
+                    return;
+                }
+                let (Some(written_rx), Some(published_tx)) =
+                    (written_rx.take(), published_tx.take())
+                else {
+                    return;
+                };
+                let level = path.to_path_buf();
+                let handle = std::thread::Builder::new()
+                    .spawn(move || {
+                        let mut published_tx = Some(published_tx);
+                        held::set_claim_hook(Some(Box::new(
+                            move |point: held::ClaimPoint, _: &Path| {
+                                if point == held::ClaimPoint::AfterPublish
+                                    && let Some(published_tx) = published_tx.take()
+                                {
+                                    let _ = published_tx.send(());
+                                    let _ = written_rx.recv_timeout(Duration::from_millis(300));
+                                }
+                            },
+                        )));
+                        held::HeldDir::open(&level)
+                            .and_then(|dir| {
+                                dir.ok_or_else(|| {
+                                    io_err(&level, std::io::ErrorKind::NotFound.into())
+                                })
+                            })
+                            .and_then(|dir| dir.claim().map(|_| ()))
+                            .map_err(|e| format!("{e:?}"))
+                    })
+                    .expect("spawn racing claim");
+                let _ = published_rx.recv_timeout(Duration::from_secs(10));
+                *spawned.borrow_mut() = Some(handle);
+            },
+        )));
+        let level = claim_in(&parent, std::ffi::OsStr::new("lvl"));
+        held::set_claim_hook(None);
+        let level = level.expect("the created level is claimed");
+        level
+            .write_file(std::ffi::OsStr::new("a.txt"), None, |file| {
+                file.write_all(b"built")
+            })
+            .expect("write into the claimed level");
+        let _ = written_tx.send(());
+        let handle = racer.borrow_mut().take().expect("the racing claim ran");
+        let raced = handle.join().expect("racing claim thread");
+        assert!(raced.is_ok(), "the racing claim succeeds, got {raced:?}");
+        let now = level.owned_now();
+        assert!(
+            matches!(now, Ok(held::OwnedNow::Owned)),
+            "the level stays ipe's, got {now:?}"
+        );
+        assert!(base.join("lvl").join("a.txt").is_file(), "the file is kept");
+        assert!(
+            std::fs::symlink_metadata(base.join("lvl").join(CLAIM_FILE)).is_err(),
+            "no claim file survives"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -3451,21 +3648,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// A marker whose rename fails (a directory holds its name) leaves no temp file behind.
-    #[cfg(unix)]
+    /// A directory at the marker name is refused as not ipe's, and the claim leaves no claim file.
     #[test]
-    fn a_failed_marker_rename_removes_its_temp_file() {
-        let base = scratch("marker_tmp");
+    fn a_directory_at_the_marker_name_is_refused_without_a_stray_claim_file() {
+        let base = scratch("marker_dir");
         let dir = base.join("out");
         std::fs::create_dir_all(dir.join(OWNERSHIP_MARKER)).expect("directory at the marker name");
         let claimed = OwnedDir::claim(&dir);
         assert!(
-            matches!(claimed, Err(CliError::Io { .. })),
-            "the rename over a directory fails, got {claimed:?}"
+            matches!(
+                claimed,
+                Err(CliError::OutputRefused(OutputRefusal::NotIpeOwned(_)))
+            ),
+            "a directory at the marker name is not ipe's, got {claimed:?}"
         );
         assert!(
-            !holds_temp(&dir, &format!("{OWNERSHIP_MARKER}."), ".tmp"),
-            "no `{OWNERSHIP_MARKER}.*.tmp` survives the failed rename"
+            dir.join(OWNERSHIP_MARKER).is_dir(),
+            "the user's directory is kept"
+        );
+        assert!(
+            std::fs::symlink_metadata(dir.join(CLAIM_FILE)).is_err(),
+            "no `{CLAIM_FILE}` survives the refusal"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -3910,9 +4113,19 @@ mod tests {
                     "round {round}: sibling {n}'s leaf is marked"
                 );
             }
+            let shared_now = held::HeldDir::open(&shared)
+                .expect("open shared parent")
+                .map(|dir| dir.owned_now().expect("shared ownership"));
             assert!(
-                has_marker(&shared).expect("shared marker"),
-                "round {round}: the shared parent one claim created is marked"
+                matches!(
+                    shared_now,
+                    Some(held::OwnedNow::Owned | held::OwnedNow::Unowned)
+                ),
+                "round {round}: the shared parent is settled, got {shared_now:?}"
+            );
+            assert!(
+                std::fs::symlink_metadata(shared.join(CLAIM_FILE)).is_err(),
+                "round {round}: no claim file survives on the shared parent"
             );
         }
         let _ = std::fs::remove_dir_all(&base);

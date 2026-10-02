@@ -1036,6 +1036,22 @@ the source root {path} cannot be resolved — ipe cannot prove the output stays 
 
 {path} is held open by another program (an editor, a file indexer, or antivirus) — close it there or let that program finish, then run the command again
 
+## output-claim-busy
+
+another ipe process is claiming {path} and still held it after {seconds}s — let that build finish, then run the command again
+
+## output-claim-lock-unavailable
+
+the filesystem holding {path} refused the lock ipe takes to claim it ({kind}) — ipe never claims an output directory unlocked; point --out at a local disk
+
+## output-claim-interrupted
+
+an earlier ipe claim of {path} stopped midway, and the directory now holds files besides its `{marker}` marker — check the contents, then delete `{marker}` and `{claim}` from it and run the command again
+
+## output-claim-in-flight
+
+an ipe claim of {path} is still running or was interrupted — let that build finish, or run a build to complete it, then run the command again
+
 # Publisher identity
 
 ## login-empty

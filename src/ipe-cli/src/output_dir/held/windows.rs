@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use cap_primitives::fs::{OpenOptions, OpenOptionsExt as _};
 
 use super::super::win32_name;
-use super::{DirId, EntryKind};
+use super::{DirId, EntryKind, ListedKind};
 
 /// `FILE_FLAG_BACKUP_SEMANTICS`: allows opening a directory handle.
 const BACKUP_SEMANTICS: u32 = 0x0200_0000;
@@ -59,6 +59,10 @@ const ERROR_REPARSE_POINT_ENCOUNTERED: i32 = 4395;
 const ERROR_SHARING_VIOLATION: i32 = 32;
 /// `ERROR_LOCK_VIOLATION`: another process has locked a region of the file.
 const ERROR_LOCK_VIOLATION: i32 = 33;
+/// `ERROR_ACCESS_DENIED`: how Win32 reports an open of a name whose file is delete-pending.
+const ERROR_ACCESS_DENIED: i32 = 5;
+/// `ERROR_DELETE_PENDING`: the file named is already scheduled for deletion.
+const ERROR_DELETE_PENDING: i32 = 303;
 /// The name prefix of a pin sentinel; entries carrying it are never listed.
 const PIN_PREFIX: &str = ".ipe-pin-";
 /// How many sentinel names a pin tries before giving up.
@@ -198,6 +202,26 @@ pub fn id_of_path(path: &Path) -> io::Result<DirId> {
     id_of(&file)
 }
 
+/// Whether `error` reports a name whose entry is being deleted.
+///
+/// A delete-pending file stays listed until its last handle closes, and every
+/// open of its name fails with access denied meanwhile.
+#[must_use]
+pub fn is_delete_pending(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(ERROR_ACCESS_DENIED | ERROR_DELETE_PENDING)
+    )
+}
+
+/// The identity of the object the open `file` holds.
+///
+/// # Errors
+/// When the handle cannot be queried.
+pub fn file_id(file: &File) -> io::Result<DirId> {
+    id_of(file)
+}
+
 /// The volume serial number and file index of the object `file` holds.
 fn id_of(file: &File) -> io::Result<DirId> {
     let info = winapi_util::file::information(file)?;
@@ -326,6 +350,53 @@ impl Dir {
                     EntryKind::Other
                 }
             }))
+    }
+
+    /// Classify the entry `name` for an ownership listing, without following a reparse point.
+    ///
+    /// A directory holds no FIFO, socket, or device entry, so every entry that
+    /// is neither a directory nor a reparse point is a regular file.
+    pub fn listed_kind(&self, name: &OsStr) -> io::Result<ListedKind> {
+        Ok(match self.kind(name)? {
+            EntryKind::Absent => ListedKind::Absent,
+            EntryKind::Other => ListedKind::RegularFile,
+            EntryKind::Directory | EntryKind::Symlink => ListedKind::Other,
+        })
+    }
+
+    /// The identity of the entry `name`, read without following a reparse point.
+    pub fn entry_id(&self, name: &OsStr) -> io::Result<DirId> {
+        id_of(&self.open_at(name, &stat_options())?)
+    }
+
+    /// Exclusively create the new claim file `name` for reading and writing.
+    ///
+    /// Every share mode is granted, so a second claimant can open it to wait
+    /// on its lock and the holder can remove it while it is open.
+    pub fn create_claim(&self, name: &OsStr) -> io::Result<File> {
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .share_mode(SHARE_ALL)
+            .custom_flags(OPEN_REPARSE_POINT);
+        self.open_at(name, &options)
+    }
+
+    /// Open the existing claim file `name` for reading and writing, failing on a reparse point.
+    pub fn open_claim(&self, name: &OsStr) -> io::Result<File> {
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .write(true)
+            .share_mode(SHARE_ALL)
+            .custom_flags(OPEN_REPARSE_POINT);
+        let file = self.open_at(name, &options)?;
+        if file.metadata()?.file_attributes() & ATTR_REPARSE_POINT != 0 {
+            return Err(reparse_point());
+        }
+        Ok(file)
     }
 
     /// Create the subdirectory `name`.

@@ -9,7 +9,7 @@ use std::path::Path;
 
 use rustix::fs::{AtFlags, CWD, FileType, Mode, OFlags};
 
-use super::{DirId, EntryKind};
+use super::{DirId, EntryKind, ListedKind};
 
 /// An open directory descriptor.
 #[derive(Debug)]
@@ -30,6 +30,16 @@ fn new_file_flags() -> OFlags {
     OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC
 }
 
+/// Flags for exclusively creating a new claim file, read and write, that is never a link.
+fn new_claim_flags() -> OFlags {
+    OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC
+}
+
+/// Flags for opening an existing claim file for reading and writing, never through a link.
+fn claim_flags() -> OFlags {
+    OFlags::RDWR | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC
+}
+
 /// Permission bits a new file is created with, before the umask.
 fn file_mode() -> Mode {
     Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::WGRP | Mode::ROTH | Mode::WOTH
@@ -46,6 +56,33 @@ fn id_of(meta: &std::fs::Metadata) -> DirId {
         dev: meta.dev(),
         ino: meta.ino(),
     }
+}
+
+/// The identity of the object the open `file` holds.
+///
+/// # Errors
+/// When the handle cannot be stat'd.
+pub fn file_id(file: &File) -> io::Result<DirId> {
+    stat_id(&rustix::fs::fstat(file)?)
+}
+
+/// The identity a `stat` record carries.
+///
+/// [`file_id`] and [`Dir::entry_id`] both read it here, so a held file and a
+/// linked entry compare in one representation.
+#[allow(clippy::useless_conversion)] // `dev_t` is `u64` on Linux and `i32` on macOS
+fn stat_id(stat: &rustix::fs::Stat) -> io::Result<DirId> {
+    let dev =
+        u64::try_from(stat.st_dev).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+    let ino =
+        u64::try_from(stat.st_ino).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+    Ok(DirId { dev, ino })
+}
+
+/// Whether `error` reports a name whose entry is being deleted, which only Windows has.
+#[must_use]
+pub const fn is_delete_pending(_error: &io::Error) -> bool {
+    false
 }
 
 /// Open `path` as a directory, following links on the way.
@@ -90,6 +127,45 @@ impl Dir {
             Err(e) if e == rustix::io::Errno::NOENT => Ok(EntryKind::Absent),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Classify the entry `name` for an ownership listing, without following a link.
+    pub fn listed_kind(&self, name: &OsStr) -> io::Result<ListedKind> {
+        match rustix::fs::statat(&self.0, name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => Ok(match FileType::from_raw_mode(stat.st_mode) {
+                FileType::RegularFile => ListedKind::RegularFile,
+                FileType::Directory
+                | FileType::Symlink
+                | FileType::Fifo
+                | FileType::Socket
+                | FileType::CharacterDevice
+                | FileType::BlockDevice
+                | FileType::Unknown => ListedKind::Other,
+            }),
+            Err(e) if e == rustix::io::Errno::NOENT => Ok(ListedKind::Absent),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// The identity of the entry `name`, read without following a link.
+    pub fn entry_id(&self, name: &OsStr) -> io::Result<DirId> {
+        stat_id(&rustix::fs::statat(
+            &self.0,
+            name,
+            AtFlags::SYMLINK_NOFOLLOW,
+        )?)
+    }
+
+    /// Exclusively create the new claim file `name` for reading and writing.
+    pub fn create_claim(&self, name: &OsStr) -> io::Result<File> {
+        let fd = rustix::fs::openat(&self.0, name, new_claim_flags(), file_mode())?;
+        Ok(File::from(fd))
+    }
+
+    /// Open the existing claim file `name` for reading and writing, failing on a link.
+    pub fn open_claim(&self, name: &OsStr) -> io::Result<File> {
+        let fd = rustix::fs::openat(&self.0, name, claim_flags(), Mode::empty())?;
+        Ok(File::from(fd))
     }
 
     /// Create the subdirectory `name`.
