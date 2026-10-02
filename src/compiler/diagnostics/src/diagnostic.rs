@@ -1356,6 +1356,13 @@ pub enum Feature {
     /// bind it with a plain `let`, or write an explicit lambda that builds the
     /// `Task` or `Decoder` inside its body. [IPE-L0126]
     RebuiltClosureMovesCapture,
+    /// A `Task.loop` whose state type `s` embeds a function. The state is both
+    /// the loop's direct `init` argument and the payload of the `Step`
+    /// constructor `Continue`, and a function takes a different carrier in each
+    /// position (the direct `Box<dyn Fn>` versus the constructor-payload
+    /// `Arc<dyn Fn>`), so the two cannot meet in one runtime state type.
+    /// [IPE-L0114]
+    TaskLoopFunctionState,
 }
 
 /// The app shape whose entry point rejected an inadmissible Model. Drives the
@@ -2449,7 +2456,7 @@ const fn feature_code(f: Feature) -> Code {
         Feature::AliasOverRefutablePayload => IPE_L0128,
         Feature::WasmRoutedApp => IPE_L0129,
         Feature::CtorAsFunction => IPE_L0113,
-        Feature::CtorPayloadFunction => IPE_L0114,
+        Feature::CtorPayloadFunction | Feature::TaskLoopFunctionState => IPE_L0114,
         Feature::TuplePatternMatch => IPE_L0115,
         Feature::NestedCtorDiscrimination => IPE_L0116,
         Feature::FloatKeyedCollection => IPE_L0117,

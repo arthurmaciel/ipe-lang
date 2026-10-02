@@ -6,8 +6,8 @@ use super::{
     emit_http_builder_call, emit_http_call, emit_json_decoder_call, emit_lambda,
     emit_lambda_unboxed, emit_match_scrutinee, emit_process_run_in_pty_call,
     emit_process_run_with_call, emit_record, emit_server_call, emit_shared_lambda,
-    emit_task_retry_call, emit_tea_call, emit_ui_call, emit_ui_template, emit_update,
-    float_literal, free_vars, indent_of, inlined_let_body, ir_type_is_definitely_copy,
+    emit_task_loop_call, emit_task_retry_call, emit_tea_call, emit_ui_call, emit_ui_template,
+    emit_update, float_literal, free_vars, indent_of, inlined_let_body, ir_type_is_definitely_copy,
     once_closure_bug, op_str, render_type, rust_string_literal, swapped_container_clone_rewrite,
 };
 use crate::EmitCtx;
@@ -392,6 +392,13 @@ pub fn emit_expr_at(
                         // construction / move-update / runtime call.
                         if let Some(result) =
                             emit_task_retry_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        // `Task.loop`: the runtime loop plus the `Step` → `LoopStep`
+                        // classifier the generic tail cannot synthesise.
+                        if let Some(result) =
+                            emit_task_loop_call(ctx, callee, args, indent, child, generics)?
                         {
                             return Ok(result);
                         }

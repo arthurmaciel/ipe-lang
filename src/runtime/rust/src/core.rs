@@ -987,6 +987,16 @@ pub(crate) fn stack_floor_for_test() -> Option<usize> {
     STACK_FLOOR.with(std::cell::Cell::get)
 }
 
+/// Read the calling frame's approximate stack pointer.
+///
+/// Test-only accessor for the constant-stack-depth regressions, which compare
+/// the pointer across the steps of a repeated task.
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn stack_pointer_for_test() -> usize {
+    approx_stack_pointer()
+}
+
 /// Read this thread's current guarded recursion depth. Test-only accessor for
 /// the RAII-balance regressions.
 #[cfg(test)]

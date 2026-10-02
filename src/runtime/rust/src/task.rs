@@ -567,6 +567,128 @@ pub fn task_sequence<E: Send + 'static, A: Send + 'static>(
     })
 }
 
+/// The outcome of one `Task.loop` step: carry a new state, or finish with a result.
+///
+/// The runtime-side twin of `Ipe.Task.Step`; the emitter bridges the emitted
+/// `Step` enum to it variant for variant.
+pub enum LoopStep<S, A> {
+    Continue(S),
+    Done(A),
+}
+
+/// A `Task.loop` ceiling: the most times the step may run.
+///
+/// Non-zero by construction, so a ceiling below one has no representation once
+/// [`LoopCeiling::parse`] has accepted it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoopCeiling(std::num::NonZeroU64);
+
+impl LoopCeiling {
+    /// Parse the caller's raw ceiling; anything below 1 is refused.
+    ///
+    /// # Errors
+    /// [`LoopRefusal::CeilingBelowOne`] carrying `raw` when `raw < 1`.
+    pub fn parse(raw: i64) -> Result<Self, LoopRefusal> {
+        u64::try_from(raw)
+            .ok()
+            .and_then(std::num::NonZeroU64::new)
+            .map(Self)
+            .ok_or(LoopRefusal::CeilingBelowOne(raw))
+    }
+
+    /// The ceiling as a step count.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// Why a `Task.loop` stopped without a `Done`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopRefusal {
+    /// The declared ceiling is below 1; no step ran.
+    CeilingBelowOne(i64),
+    /// The step ran `ceiling` times and still returned `Continue`.
+    Exhausted(LoopCeiling),
+}
+
+/// Opening text of the below-one refusal; the raw ceiling and `)` follow.
+const LOOP_CEILING_BELOW_ONE: &str = "Task.loop needs a step ceiling of at least 1 (got ";
+/// Opening text of the exhaustion refusal; the ceiling follows.
+const LOOP_EXHAUSTED_PREFIX: &str = "Task.loop ran its step ";
+/// Closing text of the exhaustion refusal.
+const LOOP_EXHAUSTED_SUFFIX: &str = " times, its ceiling, without reaching Done";
+
+impl From<LoopRefusal> for IpeError {
+    /// The one place a loop refusal becomes an `Error`.
+    ///
+    /// Both refusals are `InvalidInput`: neither is retryable, since re-running
+    /// the same loop reaches the same outcome. The message carries only the
+    /// ceiling, never the loop state (which may hold a secret).
+    fn from(refusal: LoopRefusal) -> Self {
+        match refusal {
+            LoopRefusal::CeilingBelowOne(raw) => {
+                Self::invalid_input(format!("{LOOP_CEILING_BELOW_ONE}{raw})"))
+            }
+            LoopRefusal::Exhausted(ceiling) => Self::invalid_input(format!(
+                "{LOOP_EXHAUSTED_PREFIX}{}{LOOP_EXHAUSTED_SUFFIX}",
+                ceiling.get()
+            )),
+        }
+    }
+}
+
+/// `Task.loop : Int -> s -> (s -> Task Error (Step s a)) -> Task Error a`.
+///
+/// Runs `step` from `init` until it returns `Done`, at most `ceiling` times.
+/// The ceiling is parsed before the first step, so a ceiling below 1 runs no
+/// step. Each step's future is awaited to completion and dropped before the
+/// next one is built, so the poll stack holds this driver plus one step future
+/// at every step: the depth never grows with the step count. A failing step
+/// ends the loop with its error unchanged. `classify` maps the emitted `Step`
+/// value onto [`LoopStep`].
+pub fn task_loop<S, A, T>(
+    ceiling: i64,
+    init: S,
+    step: impl Fn(S) -> IpeTask<IpeError, T> + Send + 'static,
+    classify: impl Fn(T) -> LoopStep<S, A> + Send + 'static,
+) -> IpeTask<IpeError, A>
+where
+    S: Send + 'static,
+    A: Send + 'static,
+    T: Send + 'static,
+{
+    Box::pin(async move {
+        let ceiling = match LoopCeiling::parse(ceiling) {
+            Ok(c) => c,
+            Err(refusal) => return IpeResult::Err(refusal.into()),
+        };
+        let mut state = init;
+        let mut ran: u64 = 0;
+        loop {
+            // `ran` never exceeds the ceiling (at most `i64::MAX`), so the add
+            // cannot overflow; the checked form keeps the loop panic-free anyway.
+            let Some(count) = ran.checked_add(1) else {
+                return IpeResult::Err(LoopRefusal::Exhausted(ceiling).into());
+            };
+            ran = count;
+            let outcome = match step(state).await {
+                IpeResult::Ok(t) => classify(t),
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            };
+            match outcome {
+                LoopStep::Done(a) => return ok_res(a),
+                LoopStep::Continue(next) => {
+                    if ran >= ceiling.get() {
+                        return IpeResult::Err(LoopRefusal::Exhausted(ceiling).into());
+                    }
+                    state = next;
+                }
+            }
+        }
+    })
+}
+
 // `Task.run` drives an entry task to completion through `block_on`. Native-ish
 // (host native AND co-located WASI); only the browser `wasm-client` sink runs
 // its entry differently (`spawn_local`), so it is excluded there but present on
@@ -1397,5 +1519,258 @@ mod stack_floor_tests {
     fn record_stack_floor_writes_and_reads_same_thread_tls() {
         let task: IpeTask<String, bool> = Box::pin(RecordThenRead);
         assert!(matches!(block_on(task), IpeResult::Ok(true)));
+    }
+}
+
+// `Task.loop` driver: the ceiling is the exact step bound, refusals are typed
+// and fixed-text, a failing step's error passes through unchanged, and the poll
+// stack stays flat however many steps run. `block_on` is the entry on both the
+// tokio and the std-only builds, so these run in either feature set.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
+mod loop_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    type Outcome = IpeResult<IpeError, u64>;
+    /// The lowest and highest stack pointer a probe has seen.
+    type Probes = Arc<Mutex<(usize, usize)>>;
+
+    const fn identity(step: LoopStep<u64, u64>) -> LoopStep<u64, u64> {
+        step
+    }
+
+    /// Run a loop from 0 whose step counts its own invocations and returns
+    /// `Done` with the step number on step `done_at`.
+    ///
+    /// Returns the loop's result and the number of step invocations.
+    fn run_counting(ceiling: i64, done_at: u64) -> (Outcome, u64) {
+        let calls = Arc::new(AtomicU64::new(0));
+        let seen = Arc::clone(&calls);
+        let task = task_loop(
+            ceiling,
+            0_u64,
+            move |n: u64| {
+                seen.fetch_add(1, Ordering::SeqCst);
+                let next = n.saturating_add(1);
+                let step = if next >= done_at {
+                    LoopStep::Done(next)
+                } else {
+                    LoopStep::Continue(next)
+                };
+                task_succeed::<IpeError, LoopStep<u64, u64>>(step)
+            },
+            identity,
+        );
+        let result = block_on(task);
+        (result, calls.load(Ordering::SeqCst))
+    }
+
+    /// The kind and message of a refused loop, or `None` when it succeeded.
+    fn refusal(result: Outcome) -> Option<(IpeErrorKind, String)> {
+        match result {
+            IpeResult::Err(IpeError::Error(kind, info)) => Some((kind, info.message)),
+            IpeResult::Ok(_) => None,
+        }
+    }
+
+    #[test]
+    fn ceiling_exact_steps_succeeds() {
+        let (result, calls) = run_counting(7, 7);
+        assert!(matches!(result, IpeResult::Ok(7)), "got {result:?}");
+        assert_eq!(calls, 7);
+    }
+
+    #[test]
+    fn ceiling_one_short_is_typed_limit() {
+        let (result, calls) = run_counting(6, 7);
+        assert_eq!(
+            refusal(result),
+            Some((
+                IpeErrorKind::InvalidInput,
+                "Task.loop ran its step 6 times, its ceiling, without reaching Done".to_owned()
+            ))
+        );
+        assert_eq!(calls, 6, "the seventh step must never run");
+    }
+
+    #[test]
+    fn ceiling_zero_refused_before_first_step() {
+        let (result, calls) = run_counting(0, 1);
+        assert_eq!(
+            refusal(result),
+            Some((
+                IpeErrorKind::InvalidInput,
+                "Task.loop needs a step ceiling of at least 1 (got 0)".to_owned()
+            ))
+        );
+        assert_eq!(calls, 0, "no step may run under a refused ceiling");
+    }
+
+    #[test]
+    fn ceiling_negative_and_min_refused() {
+        for raw in [-1, i64::MIN] {
+            let (result, calls) = run_counting(raw, 1);
+            assert_eq!(
+                refusal(result),
+                Some((
+                    IpeErrorKind::InvalidInput,
+                    format!("Task.loop needs a step ceiling of at least 1 (got {raw})")
+                )),
+                "ceiling {raw}"
+            );
+            assert_eq!(calls, 0, "ceiling {raw}: no step may run");
+        }
+    }
+
+    #[test]
+    fn ceiling_i64_max_no_overflow() {
+        let (result, calls) = run_counting(i64::MAX, 3);
+        assert!(matches!(result, IpeResult::Ok(3)), "got {result:?}");
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn erroring_step_stops_loop_verbatim() {
+        let failure = IpeError::conflict("x".to_owned())
+            .with_details(IpeErrorDetails::Custom("detail".to_owned()));
+        let expected = failure.clone();
+        let calls = Arc::new(AtomicU64::new(0));
+        let seen = Arc::clone(&calls);
+        let task = task_loop(
+            10,
+            0_u64,
+            move |n: u64| {
+                seen.fetch_add(1, Ordering::SeqCst);
+                let next = n.saturating_add(1);
+                if next == 4 {
+                    task_fail::<IpeError, LoopStep<u64, u64>>(failure.clone())
+                } else {
+                    task_succeed::<IpeError, LoopStep<u64, u64>>(LoopStep::Continue(next))
+                }
+            },
+            identity,
+        );
+        let result = block_on(task);
+        assert_eq!(result, IpeResult::Err(expected));
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn done_first_step_short_circuits() {
+        let (result, calls) = run_counting(1, 1);
+        assert!(matches!(result, IpeResult::Ok(1)), "got {result:?}");
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn ceiling_parse_keeps_the_raw_refused_value() {
+        assert_eq!(LoopCeiling::parse(0), Err(LoopRefusal::CeilingBelowOne(0)));
+        assert_eq!(
+            LoopCeiling::parse(i64::MIN),
+            Err(LoopRefusal::CeilingBelowOne(i64::MIN))
+        );
+        assert_eq!(LoopCeiling::parse(1).map(LoopCeiling::get), Ok(1));
+    }
+
+    fn new_probes() -> Probes {
+        Arc::new(Mutex::new((usize::MAX, 0)))
+    }
+
+    /// Record the calling frame's stack pointer into `probes`.
+    fn record(probes: &Probes) {
+        let sp = crate::core::stack_pointer_for_test();
+        if let Ok(mut seen) = probes.lock() {
+            seen.0 = seen.0.min(sp);
+            seen.1 = seen.1.max(sp);
+        }
+    }
+
+    /// The distance between the lowest and highest pointer `probes` recorded.
+    fn spread(probes: &Probes) -> usize {
+        probes
+            .lock()
+            .map_or(0, |seen| seen.1.saturating_sub(seen.0))
+    }
+
+    /// A self-recursive `task_and_then` walk `depth` levels deep that records
+    /// the stack pointer at every level: the nesting `Task.loop` replaces.
+    fn nested_walk(depth: usize, probes: Probes) -> IpeTask<IpeError, ()> {
+        task_and_then(task_succeed::<IpeError, ()>(()), move |()| {
+            record(&probes);
+            if depth == 0 {
+                task_succeed::<IpeError, ()>(())
+            } else {
+                nested_walk(depth.saturating_sub(1), probes)
+            }
+        })
+    }
+
+    #[test]
+    fn constant_stack_depth_far_past_guard() {
+        // Far past both the guard's depth budget (10,000) and the red-zone trip
+        // a nested walk hits near 5,000 steps on an 8 MiB stack.
+        const STEPS: u64 = 200_000;
+        // Every nested level adds at least one non-inlinable poll frame (a
+        // return address plus alignment: 16 bytes or more), so the control's
+        // spread exceeds this whenever the probe measures real nesting.
+        const CONTROL_DEPTH: usize = 4_000;
+        const CONTROL_MIN_SPREAD: usize = CONTROL_DEPTH * 16;
+        const LOOP_MAX_SPREAD: usize = 4 * 1024;
+
+        // The std-only `block_on` polls on the calling thread; give that thread
+        // a stack that holds the nested control comfortably.
+        let worker = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let probes = new_probes();
+                let seen = Arc::clone(&probes);
+                let task = task_loop(
+                    i64::try_from(STEPS).unwrap_or(i64::MAX),
+                    0_u64,
+                    move |n: u64| {
+                        record(&seen);
+                        let next = n.saturating_add(1);
+                        let step = if next >= STEPS {
+                            LoopStep::Done(next)
+                        } else {
+                            LoopStep::Continue(next)
+                        };
+                        task_succeed::<IpeError, LoopStep<u64, u64>>(step)
+                    },
+                    identity,
+                );
+                let looped = block_on(task);
+                let control = new_probes();
+                let nested = block_on(nested_walk(CONTROL_DEPTH, Arc::clone(&control)));
+                (looped, spread(&probes), nested, spread(&control))
+            });
+        let joined = worker.map(std::thread::JoinHandle::join);
+        assert!(
+            matches!(joined, Ok(Ok(_))),
+            "the measuring thread must run to completion"
+        );
+        let Ok(Ok((looped, loop_spread, nested, control_spread))) = joined else {
+            return;
+        };
+        assert!(
+            matches!(looped, IpeResult::Ok(STEPS)),
+            "the loop must finish: {looped:?}"
+        );
+        assert!(
+            matches!(nested, IpeResult::Ok(())),
+            "the control walk must finish: {nested:?}"
+        );
+        assert!(
+            control_spread > CONTROL_MIN_SPREAD,
+            "the probe must see a nested walk grow the stack \
+             (spread {control_spread} bytes over {CONTROL_DEPTH} levels)"
+        );
+        assert!(
+            loop_spread <= LOOP_MAX_SPREAD,
+            "Task.loop must hold the stack flat across {STEPS} steps \
+             (spread {loop_spread} bytes)"
+        );
     }
 }

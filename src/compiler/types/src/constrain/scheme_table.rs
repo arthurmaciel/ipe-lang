@@ -198,6 +198,7 @@ impl Builtins {
             BuiltinTag::WebRoute => self.live_route_con,
             BuiltinTag::EmailProvider => self.email_provider,
             BuiltinTag::BackoffStrategy => self.backoffstrategy,
+            BuiltinTag::TaskStep => self.task_step,
             BuiltinTag::WebApp => self.web_app,
             BuiltinTag::TuiApp => self.tui_app,
             BuiltinTag::CliApp => self.cli_app,
@@ -314,7 +315,8 @@ impl Builtins {
     /// [`BuiltinTag::HtmlAttribute`] (the `Html` constructor symbol, so
     /// `ir_type_from_ty`'s disambiguation selects the `Html` attribute variant
     /// distinct from the unqualified [`BuiltinTag::UiAttribute`]),
-    /// [`BuiltinTag::EmailProvider`], [`BuiltinTag::Duration`], the
+    /// [`BuiltinTag::EmailProvider`], [`BuiltinTag::Duration`],
+    /// [`BuiltinTag::TaskStep`], the
     /// `Ipe.Db.Store` query-algebra ADTs, and [`BuiltinTag::Codec`].
     #[must_use]
     pub fn builtin_con_module(&self, tag: BuiltinTag) -> &[Symbol] {
@@ -331,6 +333,11 @@ impl Builtins {
             // the real `["Ipe", "Duration"]` home so a point-free use lowers to the
             // emitted enum, exactly as `EmailProvider` does.
             BuiltinTag::Duration => &self.duration_home,
+            // `Step` is a compiled-source ADT (`Ipe.Task.Step`) — the `Task.loop`
+            // scheme carries the real `["Ipe", "Task"]` home so its `Step` is the
+            // type `Ipe.Task` declares and a point-free use lowers to the emitted
+            // enum, exactly as `Duration` does.
+            BuiltinTag::TaskStep => &self.task_home,
             // The `Ipe.Db.Store` query-algebra ADTs carry the store home so a
             // point-free reference lowers to the emitted enum, exactly as the
             // hand-built `store` / `draft` / … helpers did.
