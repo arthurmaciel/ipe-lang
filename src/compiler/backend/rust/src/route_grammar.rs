@@ -28,7 +28,7 @@ const EXCERPT_CHARS: usize = 64;
 
 /// A bounded, visibly escaped quote of `raw` for a diagnostic: control and
 /// format characters are escaped, and text past [`EXCERPT_CHARS`] is elided.
-fn excerpt(raw: &str) -> Box<str> {
+pub fn excerpt(raw: &str) -> Box<str> {
     let mut out = String::new();
     let mut chars = raw.chars();
     for c in chars.by_ref().take(EXCERPT_CHARS) {
@@ -87,7 +87,7 @@ const fn hex_value(b: u8) -> Option<u8> {
 }
 
 /// Strictly percent-decode one literal path segment (`+` stays literal).
-fn literal_segment(raw: &str) -> Result<(), RoutePatternDefect> {
+fn literal_segment(raw: &str) -> Result<String, RoutePatternDefect> {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -108,11 +108,11 @@ fn literal_segment(raw: &str) -> Result<(), RoutePatternDefect> {
             i += 1;
         }
     }
-    match std::str::from_utf8(&out) {
-        Ok(_) => Ok(()),
+    match String::from_utf8(out) {
+        Ok(decoded) => Ok(decoded),
         Err(e) => Err(RoutePatternDefect::InvalidUtf8 {
             segment: excerpt(raw),
-            at: raw_offset_of(bytes, e.valid_up_to()),
+            at: raw_offset_of(bytes, e.utf8_error().valid_up_to()),
         }),
     }
 }
@@ -140,18 +140,42 @@ fn raw_offset_of(raw: &[u8], decoded: usize) -> usize {
 /// The defect of the first malformed segment, or `TooLong` for a pattern over
 /// [`MAX_PATH_LEN`] bytes.
 pub fn web_route_pattern(pattern: &str) -> Result<(), RoutePatternDefect> {
+    web_route_segments(pattern).map(drop)
+}
+
+/// One segment of a `Web.route` pattern, as the runtime matches it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SegmentShape {
+    /// A `:name` parameter: matches any one segment its field type parses.
+    Param,
+    /// A literal segment, held percent-decoded.
+    Literal(String),
+}
+
+/// Split a literal `Web.route` pattern into the segments the runtime matches.
+/// A root pattern (`/`, or empty) has no segments.
+///
+/// # Errors
+///
+/// As [`web_route_pattern`].
+pub fn web_route_segments(pattern: &str) -> Result<Vec<SegmentShape>, RoutePatternDefect> {
     if pattern.len() > MAX_PATH_LEN {
         return Err(RoutePatternDefect::TooLong { cap: MAX_PATH_LEN });
     }
     let trimmed = pattern.trim_matches('/');
     if trimmed.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let mut names = Names::default();
-    trimmed.split('/').try_for_each(|raw| {
-        raw.strip_prefix(':')
-            .map_or_else(|| literal_segment(raw), |name| names.admit(name))
-    })
+    trimmed
+        .split('/')
+        .map(|raw| {
+            raw.strip_prefix(':').map_or_else(
+                || literal_segment(raw).map(SegmentShape::Literal),
+                |name| names.admit(name).map(|()| SegmentShape::Param),
+            )
+        })
+        .collect()
 }
 
 /// Check a literal `Server.*` route path against the runtime's server
@@ -538,10 +562,13 @@ mod walk_tests {
 mod agreement_tests {
     use ipe_runtime_rust::encoding::{DecodeRefusal, ParamNameRefusal};
     use ipe_runtime_rust::server::{api_spec_parts, path_param_names};
-    use ipe_runtime_rust::web::route::{RoutePattern, RouteSegmentRefusal};
+    use ipe_runtime_rust::web::route::{
+        DecodedPath, RoutePattern, RouteSegmentRefusal, match_route,
+    };
 
     use super::{
-        MAX_PATH_LEN, RoutePatternDefect, server_api_path, server_route_path, web_route_pattern,
+        MAX_PATH_LEN, RoutePatternDefect, SegmentShape, server_api_path, server_route_path,
+        web_route_pattern, web_route_segments,
     };
 
     /// Kind + offset of a verdict, erasing the excerpt text only this side keeps.
@@ -554,6 +581,7 @@ mod agreement_tests {
         MalformedEscape(usize),
         InvalidUtf8(usize),
         TooLong(usize),
+        Unrenderable,
     }
 
     fn ours(r: Result<(), RoutePatternDefect>) -> Verdict {
@@ -565,6 +593,7 @@ mod agreement_tests {
             Err(RoutePatternDefect::MalformedEscape { at, .. }) => Verdict::MalformedEscape(at),
             Err(RoutePatternDefect::InvalidUtf8 { at, .. }) => Verdict::InvalidUtf8(at),
             Err(RoutePatternDefect::TooLong { cap }) => Verdict::TooLong(cap),
+            Err(RoutePatternDefect::UnrenderableLiteral { .. }) => Verdict::Unrenderable,
         }
     }
 
@@ -657,6 +686,66 @@ mod agreement_tests {
         ] {
             let (_, path) = api_spec_parts(spec);
             assert_eq!(server_api_path(spec), path, "{spec:?}");
+        }
+    }
+
+    /// Whether a pattern read as `segments` matches a path of `decoded`
+    /// segments, by shape alone: a parameter takes any one segment, a literal
+    /// its decoded text.
+    fn shape_matches(segments: &[SegmentShape], decoded: &[&str]) -> bool {
+        segments.len() == decoded.len()
+            && segments.iter().zip(decoded).all(|pair| match pair {
+                (SegmentShape::Param, _) => true,
+                (SegmentShape::Literal(l), seg) => l == seg,
+            })
+    }
+
+    /// The compiler's segment reading (which the routed-table equivalence and
+    /// coverage checks compare) matches exactly the paths the runtime's
+    /// `RoutePattern` matches.
+    #[test]
+    #[allow(clippy::expect_used)] // test table: every pattern and probe is well-formed
+    fn segment_reading_matches_runtime_matching() {
+        let patterns = [
+            "/",
+            "/a",
+            "/a/",
+            "/A",
+            "/a/:x",
+            "/a/%41",
+            "/a/A",
+            "/a/b",
+            "/:x",
+            "/:x/:y",
+            "/caf%C3%A9",
+            "/a+b",
+            "/%2F",
+            "/a/%3Ax",
+        ];
+        let probes: &[(&str, &[&str])] = &[
+            ("/", &[]),
+            ("/a", &["a"]),
+            ("/A", &["A"]),
+            ("/a/A", &["a", "A"]),
+            ("/a/%41", &["a", "A"]),
+            ("/a/b", &["a", "b"]),
+            ("/caf%C3%A9", &["café"]),
+            ("/a+b", &["a+b"]),
+            ("/%2F", &["/"]),
+            ("/a/%3Ax", &["a", ":x"]),
+            ("/x/y", &["x", "y"]),
+        ];
+        for pattern in patterns {
+            let ours = web_route_segments(pattern).expect("well-formed pattern");
+            let theirs = RoutePattern::parse(pattern).expect("well-formed pattern");
+            for (raw, decoded) in probes {
+                let path = DecodedPath::parse(raw).expect("well-formed probe");
+                assert_eq!(
+                    shape_matches(&ours, decoded),
+                    match_route(&theirs, &path).is_some(),
+                    "{pattern:?} against {raw:?}"
+                );
+            }
         }
     }
 
