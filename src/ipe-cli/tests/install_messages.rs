@@ -575,6 +575,37 @@ fn an_install_directory_that_cannot_be_created_is_named() -> io::Result<()> {
 }
 
 #[test]
+fn a_binary_that_cannot_be_copied_into_place_is_named() -> io::Result<()> {
+    let r = root("install-msg-install-copy")?;
+    let dir = leaf(&r, "inst")?;
+    std::fs::create_dir(&dir)?;
+    let failing = "#!/bin/sh\nexit 1\n";
+    let run = run_installer_with(
+        &r,
+        &[
+            ("IPE_VERSION", OsStr::new("v9.9.9")),
+            ("IPE_INSTALL_DIR", dir.as_os_str()),
+        ],
+        &[
+            ("curl", RELEASE_CURL),
+            ("install", failing),
+            ("cp", failing),
+        ],
+    )?;
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert_eq!(
+        run.status.and_then(|status| status.code()),
+        Some(1),
+        "a binary neither `install` nor `cp` can place must stop the installer; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Could not install ipe into") && !stderr.contains(UNREPORTED),
+        "the failure must name the binary and the install directory, not end in the exit trap's line: {stderr}"
+    );
+    Ok(())
+}
+
+#[test]
 fn release_tag_ok_table() -> io::Result<()> {
     let longest = format!("v1.{}", "0".repeat(125));
     let too_long = format!("v1.{}", "0".repeat(126));
