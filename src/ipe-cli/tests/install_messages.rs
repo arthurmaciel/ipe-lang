@@ -11,7 +11,6 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;
-use std::iter::Peekable;
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -104,19 +103,24 @@ fn marked<'s>(script: &'s str, (begin, end): (&str, &str)) -> io::Result<&'s str
 /// The output of `sh` running `body` after the message and input-parser
 /// blocks in `locale`, with `args` as `$@`.
 fn run_block(body: &str, args: &[&OsStr], locale: &str) -> io::Result<Output> {
+    block_command(body, locale)?.args(args).output()
+}
+
+/// The `sh` command `run_block` runs, before its `$@`.
+fn block_command(body: &str, locale: &str) -> io::Result<Command> {
     let script = installer_script()?;
     let program = format!(
         "{}\n{}\n{body}\n",
         marked(&script, (BEGIN, END))?,
         marked(&script, PARSERS)?
     );
-    Command::new("sh")
+    let mut command = Command::new("sh");
+    command
         .env("LC_ALL", locale)
         .arg("-c")
         .arg(program)
-        .arg("sh")
-        .args(args)
-        .output()
+        .arg("sh");
+    Ok(command)
 }
 
 /// `safe_text` of each input in `locale`, one output per input.
@@ -140,7 +144,14 @@ fn safe_text_each(inputs: &[&[u8]], locale: &str) -> io::Result<Vec<Vec<u8>>> {
 
 /// `bytes` written as the `\ooo` octal escapes `safe_text` prints.
 fn octal(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("\\{byte:03o}")).collect()
+    let mut out = String::new();
+    for byte in bytes {
+        out.push('\\');
+        for shift in [6, 3, 0] {
+            out.push(char::from(b'0' + ((byte >> shift) & 7)));
+        }
+    }
+    out
 }
 
 /// Whether `safe_text` must escape the code point `cp` (>= U+0080).
@@ -445,6 +456,43 @@ fn c1_and_invalid_bytes_are_escaped_in_utf8_locale() -> io::Result<()> {
 }
 
 #[test]
+fn safe_text_is_independent_of_awk_character_semantics() -> io::Result<()> {
+    let r = root("awk-bytes")?;
+    let bin = leaf(&r, "bin")?;
+    std::fs::create_dir(&bin)?;
+    let log = leaf(&r, "awk-input")?;
+    let found = Command::new("sh").args(["-c", "command -v awk"]).output()?;
+    let real_awk = OsStr::from_bytes(found.stdout.trim_ascii_end()).to_owned();
+    assert!(!real_awk.is_empty(), "the test needs an awk on PATH");
+    let fake = bin.join("awk");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\ntee -a \"$AWK_LOG\" | \"$REAL_AWK\" \"$@\"\n",
+    )?;
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))?;
+    let output = block_command("PATH=\"$FAKE_BIN:$PATH\"; safe_text \"$1\"", "C.UTF-8")?
+        .env("FAKE_BIN", &bin)
+        .env("AWK_LOG", &log)
+        .env("REAL_AWK", &real_awk)
+        .arg("\u{c3}\u{90}\u{e9}\u{202e}")
+        .output()?;
+    assert!(output.status.success(), "safe_text failed: {output:?}");
+    let fed = std::fs::read(&log)?;
+    assert!(!fed.is_empty(), "safe_text must run awk from PATH");
+    assert!(
+        fed.is_ascii(),
+        "awk must see the text as byte numbers, never as raw bytes it may \
+         decode as characters: {fed:?}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "\u{c3}\\302\\220\u{e9}\\342\\200\\256",
+        "printable characters stay raw and C1/Cf code points escape"
+    );
+    Ok(())
+}
+
+#[test]
 fn backslash_and_style_token_in_value_stay_literal() -> io::Result<()> {
     let output = run_block(
         "C_BOLD=BOLD; render 'x @B@%s|%s' \"$1\" \"$2\"",
@@ -483,20 +531,41 @@ struct Word {
     substitutions: Vec<String>,
 }
 
+/// A control operator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sep {
+    /// `|`: the command's stdout feeds the next command.
+    Pipe,
+    /// `(`.
+    Open,
+    /// `)`.
+    Close,
+    /// `;;`, which ends a `case` arm.
+    CaseArm,
+    /// A newline, `;`, `&`, `&&` or `||`.
+    End,
+}
+
 /// One lexed shell token.
 #[derive(Debug)]
 enum Token {
     Word(Word),
-    /// A newline, `;`, `&`, `|`, `(` or `)`.
-    Separator,
+    Sep(Sep),
     /// A redirection operator (with any fd prefix) and its target.
     Redirect {
         op: String,
         target: String,
     },
+    /// A here-document body, and whether its delimiter was unquoted (so the
+    /// body expands `$(…)` and `` `…` ``).
+    Heredoc {
+        expands: bool,
+        body: String,
+    },
+    /// Input the lexer cannot follow: an unclosed quote, substitution or
+    /// here-document. The scan refuses it rather than guess.
+    Unterminated,
 }
-
-type Chars<'s> = Peekable<std::str::Chars<'s>>;
 
 /// Whether `c` ends a word.
 const fn ends_word(c: char) -> bool {
@@ -506,186 +575,412 @@ const fn ends_word(c: char) -> bool {
     )
 }
 
-/// Lex `source` with `\`-continued lines joined and comments skipped.
-fn lex(source: &str) -> Vec<Token> {
-    let joined = source.replace("\\\n", "");
-    let mut chars = joined.chars().peekable();
-    let mut tokens = Vec::new();
-    while let Some(&c) = chars.peek() {
-        match c {
-            ' ' | '\t' => {
-                chars.next();
+/// A here-document whose body starts after the current line.
+struct Pending {
+    delimiter: String,
+    strip_tabs: bool,
+    expands: bool,
+}
+
+/// A POSIX-sh lexer precise enough for the message scan. A `\`-newline is a
+/// line continuation outside single quotes and comments, as in the shell.
+struct Lexer {
+    chars: Vec<char>,
+    at: usize,
+    pending: Vec<Pending>,
+    broken: bool,
+}
+
+impl Lexer {
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.at).copied()
+    }
+
+    fn peek_at(&self, ahead: usize) -> Option<char> {
+        self.chars.get(self.at + ahead).copied()
+    }
+
+    fn bump(&mut self) -> Option<char> {
+        let c = self.peek();
+        if c.is_some() {
+            self.at += 1;
+        }
+        c
+    }
+
+    fn bump_if(&mut self, want: char) -> bool {
+        let hit = self.peek() == Some(want);
+        if hit {
+            self.at += 1;
+        }
+        hit
+    }
+
+    /// Whether a `\`-newline continuation starts here; consume it if so.
+    fn continuation(&mut self) -> bool {
+        let hit = self.peek() == Some('\\') && self.peek_at(1) == Some('\n');
+        if hit {
+            self.at += 2;
+        }
+        hit
+    }
+
+    fn tokens(mut self) -> Vec<Token> {
+        let mut tokens = Vec::new();
+        while let Some(c) = self.peek() {
+            if self.continuation() {
+                continue;
             }
-            '\n' | ';' | '&' | '|' | '(' | ')' => {
-                chars.next();
-                tokens.push(Token::Separator);
-            }
-            '#' => while chars.next_if(|&n| n != '\n').is_some() {},
-            '<' | '>' => tokens.push(redirect(&mut chars, String::new())),
-            _ => {
-                let word = word(&mut chars);
-                let fd = word.unit == Unit::Bare && word.text.bytes().all(|b| b.is_ascii_digit());
-                if fd && matches!(chars.peek(), Some(&('<' | '>'))) {
-                    tokens.push(redirect(&mut chars, word.text));
-                } else {
-                    tokens.push(Token::Word(word));
+            match c {
+                ' ' | '\t' => self.at += 1,
+                '\n' => {
+                    self.at += 1;
+                    tokens.push(Token::Sep(Sep::End));
+                    self.heredoc_bodies(&mut tokens);
+                }
+                ';' => {
+                    self.at += 1;
+                    let arm = self.bump_if(';');
+                    tokens.push(Token::Sep(if arm { Sep::CaseArm } else { Sep::End }));
+                }
+                '&' => {
+                    self.at += 1;
+                    self.bump_if('&');
+                    tokens.push(Token::Sep(Sep::End));
+                }
+                '|' => {
+                    self.at += 1;
+                    let or = self.bump_if('|');
+                    tokens.push(Token::Sep(if or { Sep::End } else { Sep::Pipe }));
+                }
+                '(' => {
+                    self.at += 1;
+                    tokens.push(Token::Sep(Sep::Open));
+                }
+                ')' => {
+                    self.at += 1;
+                    tokens.push(Token::Sep(Sep::Close));
+                }
+                '#' => {
+                    while self.peek().is_some_and(|n| n != '\n') {
+                        self.at += 1;
+                    }
+                }
+                '<' | '>' => tokens.push(self.redirect(String::new())),
+                _ => {
+                    let word = self.word();
+                    let fd = word.unit == Unit::Bare
+                        && !word.text.is_empty()
+                        && word.text.bytes().all(|b| b.is_ascii_digit());
+                    if fd && matches!(self.peek(), Some('<' | '>')) {
+                        tokens.push(self.redirect(word.text));
+                    } else {
+                        tokens.push(Token::Word(word));
+                    }
                 }
             }
         }
-    }
-    tokens
-}
-
-/// Lex a redirection whose operator starts at the next char, after the fd
-/// prefix `op`.
-fn redirect(chars: &mut Chars<'_>, mut op: String) -> Token {
-    if let Some(first) = chars.next() {
-        op.push(first);
-        op.extend(chars.next_if_eq(&first));
-        op.extend(chars.next_if(|&n| matches!(n, '&' | '|')));
-    }
-    let mut target = String::new();
-    if op.ends_with('&') {
-        while let Some(d) = chars.next_if(|&n| n.is_ascii_digit() || n == '-') {
-            target.push(d);
+        if !self.pending.is_empty() {
+            self.broken = true;
         }
-    } else {
-        while chars.next_if(|&n| n == ' ' || n == '\t').is_some() {}
-        if chars.peek().is_some_and(|&n| !ends_word(n)) {
-            target = word(chars).text;
+        if self.broken {
+            tokens.push(Token::Unterminated);
         }
+        tokens
     }
-    Token::Redirect { op, target }
-}
 
-/// Lex one word starting at the next char.
-fn word(chars: &mut Chars<'_>) -> Word {
-    let mut text = String::new();
-    let mut substitutions = Vec::new();
-    let mut segments = 0_usize;
-    let mut quote = Unit::Bare;
-    let mut bare = false;
-    while let Some(c) = chars.next_if(|&n| !ends_word(n)) {
-        text.push(c);
-        match c {
-            '\'' => {
-                single(chars, &mut text);
-                segments += 1;
-                quote = Unit::Single;
+    /// Read the bodies of the here-documents opened on the line just ended.
+    fn heredoc_bodies(&mut self, tokens: &mut Vec<Token>) {
+        for doc in std::mem::take(&mut self.pending) {
+            let mut body = String::new();
+            let mut closed = false;
+            while self.peek().is_some() {
+                let mut line = String::new();
+                while let Some(c) = self.bump() {
+                    if c == '\n' {
+                        break;
+                    }
+                    line.push(c);
+                }
+                let compared = if doc.strip_tabs {
+                    line.trim_start_matches('\t')
+                } else {
+                    line.as_str()
+                };
+                if compared == doc.delimiter {
+                    closed = true;
+                    break;
+                }
+                body.push_str(&line);
+                body.push('\n');
             }
-            '"' => {
-                double(chars, &mut text, &mut substitutions);
-                segments += 1;
-                quote = Unit::Double;
+            if !closed {
+                self.broken = true;
             }
-            '\\' => {
-                bare = true;
-                text.extend(chars.next());
-            }
-            '$' => {
-                bare = true;
-                dollar(chars, &mut text, &mut substitutions);
-            }
-            '`' => {
-                bare = true;
-                backtick(chars, &mut text, &mut substitutions);
-            }
-            _ => bare = true,
+            tokens.push(Token::Heredoc {
+                expands: doc.expands,
+                body,
+            });
         }
     }
-    let unit = if !bare && segments == 1 {
-        quote
-    } else {
-        Unit::Bare
-    };
-    Word {
-        text,
-        unit,
-        substitutions,
-    }
-}
 
-/// Copy the rest of a `'…'` segment, closing quote included.
-fn single(chars: &mut Chars<'_>, out: &mut String) {
-    for c in chars.by_ref() {
-        out.push(c);
-        if c == '\'' {
-            return;
+    /// Lex a redirection whose operator starts at the next char, after the fd
+    /// prefix `op`.
+    fn redirect(&mut self, mut op: String) -> Token {
+        let mut heredoc = false;
+        if let Some(first) = self.bump() {
+            op.push(first);
+            if first == '<' && self.bump_if('<') {
+                op.push('<');
+                heredoc = true;
+                if self.bump_if('-') {
+                    op.push('-');
+                }
+            } else if first == '>' && self.bump_if('>') {
+                op.push('>');
+            }
+            if let Some(n) = self
+                .peek()
+                .filter(|&n| !heredoc && matches!(n, '&' | '|' | '>'))
+            {
+                self.at += 1;
+                op.push(n);
+            }
         }
-    }
-}
-
-/// Copy the rest of a `"…"` segment, closing quote included, recording its
-/// command substitutions.
-fn double(chars: &mut Chars<'_>, out: &mut String, substitutions: &mut Vec<String>) {
-    while let Some(c) = chars.next() {
-        out.push(c);
-        match c {
-            '"' => return,
-            '\\' => out.extend(chars.next()),
-            '$' => dollar(chars, out, substitutions),
-            '`' => backtick(chars, out, substitutions),
-            _ => {}
+        while self.peek().is_some_and(|n| n == ' ' || n == '\t') || self.continuation() {
+            if !self.continuation() {
+                self.at += 1;
+            }
         }
-    }
-}
-
-/// Copy the expansion after a `$`: `$((…))`, `$(…)` (recorded as a command
-/// substitution) or `${…}`; a plain `$name` is left to the caller.
-fn dollar(chars: &mut Chars<'_>, out: &mut String, substitutions: &mut Vec<String>) {
-    if chars.next_if_eq(&'(').is_some() {
-        out.push('(');
-        if chars.next_if_eq(&'(').is_some() {
-            out.push('(');
-            nested(chars, out, ')');
-            out.extend(chars.next_if_eq(&')'));
+        let target = if self.peek().is_some_and(|n| !ends_word(n)) {
+            self.word().text
         } else {
-            let start = out.len();
-            nested(chars, out, ')');
-            let end = out.len().saturating_sub(1);
-            substitutions.push(out.get(start..end).unwrap_or_default().to_owned());
+            String::new()
+        };
+        if heredoc {
+            let delimiter: String = target
+                .chars()
+                .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+                .collect();
+            if delimiter.is_empty() {
+                self.broken = true;
+            }
+            self.pending.push(Pending {
+                delimiter,
+                strip_tabs: op.ends_with('-'),
+                expands: !target.contains(['\'', '"', '\\']),
+            });
         }
-    } else if chars.next_if_eq(&'{').is_some() {
-        out.push('{');
-        nested(chars, out, '}');
+        Token::Redirect { op, target }
+    }
+
+    /// Lex one word starting at the next char.
+    fn word(&mut self) -> Word {
+        let mut text = String::new();
+        let mut substitutions = Vec::new();
+        let mut segments = 0_usize;
+        let mut quote = Unit::Bare;
+        let mut bare = false;
+        while self.peek().is_some_and(|n| !ends_word(n)) {
+            if self.continuation() {
+                continue;
+            }
+            let Some(c) = self.bump() else { break };
+            text.push(c);
+            match c {
+                '\'' => {
+                    self.single(&mut text);
+                    segments += 1;
+                    quote = Unit::Single;
+                }
+                '"' => {
+                    self.double(&mut text, &mut substitutions);
+                    segments += 1;
+                    quote = Unit::Double;
+                }
+                '\\' => {
+                    bare = true;
+                    text.extend(self.bump());
+                }
+                '$' => {
+                    bare = true;
+                    self.dollar(&mut text, &mut substitutions);
+                }
+                '`' => {
+                    bare = true;
+                    self.backtick(&mut text, &mut substitutions);
+                }
+                _ => bare = true,
+            }
+        }
+        let unit = if !bare && segments == 1 {
+            quote
+        } else {
+            Unit::Bare
+        };
+        Word {
+            text,
+            unit,
+            substitutions,
+        }
+    }
+
+    /// Copy the rest of a `'…'` segment, closing quote included.
+    fn single(&mut self, out: &mut String) {
+        while let Some(c) = self.bump() {
+            out.push(c);
+            if c == '\'' {
+                return;
+            }
+        }
+        self.broken = true;
+    }
+
+    /// Copy the rest of a `"…"` segment, closing quote included, recording
+    /// its command substitutions.
+    fn double(&mut self, out: &mut String, substitutions: &mut Vec<String>) {
+        loop {
+            if self.continuation() {
+                continue;
+            }
+            let Some(c) = self.bump() else { break };
+            out.push(c);
+            match c {
+                '"' => return,
+                '\\' => out.extend(self.bump()),
+                '$' => self.dollar(out, substitutions),
+                '`' => self.backtick(out, substitutions),
+                _ => {}
+            }
+        }
+        self.broken = true;
+    }
+
+    /// Copy the expansion after a `$`: `$((…))`, `$(…)` (recorded as a
+    /// command substitution) or `${…}` (whose own substitutions are
+    /// recorded); a plain `$name` is left to the caller.
+    fn dollar(&mut self, out: &mut String, substitutions: &mut Vec<String>) {
+        if self.bump_if('(') {
+            out.push('(');
+            if self.bump_if('(') {
+                out.push('(');
+                self.nested(out, ')', true, substitutions);
+                if self.bump_if(')') {
+                    out.push(')');
+                } else {
+                    self.broken = true;
+                }
+            } else {
+                let start = out.len();
+                // The body is lexed again as a whole, so its own
+                // substitutions are found there.
+                self.nested(out, ')', false, &mut Vec::new());
+                let end = out.len().saturating_sub(1);
+                substitutions.push(out.get(start..end).unwrap_or_default().to_owned());
+            }
+        } else if self.bump_if('{') {
+            out.push('{');
+            self.nested(out, '}', false, substitutions);
+        }
+    }
+
+    /// Copy the rest of a `` `…` `` command substitution and record its body.
+    fn backtick(&mut self, out: &mut String, substitutions: &mut Vec<String>) {
+        let start = out.len();
+        let mut closed = false;
+        while let Some(c) = self.bump() {
+            out.push(c);
+            if c == '`' {
+                closed = true;
+                break;
+            }
+            if c == '\\' {
+                out.extend(self.bump());
+            }
+        }
+        if !closed {
+            self.broken = true;
+        }
+        let end = out.len().saturating_sub(1);
+        substitutions.push(out.get(start..end).unwrap_or_default().to_owned());
+    }
+
+    /// Copy up to and including the `close` that balances an already-copied
+    /// opener, honouring quotes, comments and nested groups, and recording
+    /// the substitutions inside. A here-document inside a command
+    /// substitution is refused: its body is not shell syntax, so copying it
+    /// as such could misplace the substitution's end. `arithmetic` marks a
+    /// `$((…))`, where `<<` is a shift.
+    fn nested(
+        &mut self,
+        out: &mut String,
+        close: char,
+        arithmetic: bool,
+        substitutions: &mut Vec<String>,
+    ) {
+        loop {
+            if self.continuation() {
+                continue;
+            }
+            let prev = out.chars().next_back();
+            let Some(c) = self.bump() else { break };
+            if c == '#'
+                && close == ')'
+                && !arithmetic
+                && prev.is_none_or(|p| matches!(p, ' ' | '\t' | '\n' | ';' | '&' | '|' | '('))
+            {
+                while self.peek().is_some_and(|n| n != '\n') {
+                    self.at += 1;
+                }
+                continue;
+            }
+            out.push(c);
+            if c == close {
+                return;
+            }
+            if c == '<' && close == ')' && !arithmetic && self.peek() == Some('<') {
+                self.broken = true;
+            }
+            match c {
+                '\\' => out.extend(self.bump()),
+                '\'' => self.single(out),
+                '"' => self.double(out, substitutions),
+                '`' => self.backtick(out, substitutions),
+                '$' => self.dollar(out, substitutions),
+                '(' if close == ')' => self.nested(out, ')', arithmetic, substitutions),
+                '{' if close == '}' => self.nested(out, '}', false, substitutions),
+                _ => {}
+            }
+        }
+        self.broken = true;
     }
 }
 
-/// Copy the rest of a `` `…` `` command substitution and record its body.
-fn backtick(chars: &mut Chars<'_>, out: &mut String, substitutions: &mut Vec<String>) {
-    let start = out.len();
-    while let Some(c) = chars.next() {
-        out.push(c);
-        if c == '`' {
-            break;
-        }
-        if c == '\\' {
-            out.extend(chars.next());
-        }
+/// Lex `source` as shell tokens.
+fn lex(source: &str) -> Vec<Token> {
+    Lexer {
+        chars: source.chars().collect(),
+        at: 0,
+        pending: Vec::new(),
+        broken: false,
     }
-    let end = out.len().saturating_sub(1);
-    substitutions.push(out.get(start..end).unwrap_or_default().to_owned());
+    .tokens()
 }
 
-/// Copy up to and including the `close` that balances an already-copied
-/// opener, honouring quotes and nested groups.
-fn nested(chars: &mut Chars<'_>, out: &mut String, close: char) {
-    while let Some(c) = chars.next() {
-        out.push(c);
-        if c == close {
-            return;
-        }
-        match c {
-            '\\' => out.extend(chars.next()),
-            '\'' => single(chars, out),
-            '"' => double(chars, out, &mut Vec::new()),
-            '`' => backtick(chars, out, &mut Vec::new()),
-            '(' if close == ')' => nested(chars, out, ')'),
-            '{' if close == '}' => nested(chars, out, '}'),
-            _ => {}
-        }
-    }
-}
+/// The shell builtins that write to stdout.
+const WRITERS: [&str; 3] = ["printf", "echo", "cat"];
+
+/// The functions outside the message block whose stdout is their return
+/// value: each prints only inside its own body, and every call is captured or
+/// redirected.
+const VALUE_PRINTERS: [&str; 2] = ["scratch_base_reason", "trusted_tmp_base"];
+
+/// The commands that run text the scan cannot see.
+const OPAQUE: [&str; 6] = ["eval", "alias", "builtin", ".", "source", "function"];
+
+/// The one file the installer sources, on the user's say-so: rustup's own
+/// `env` script, which puts cargo on `PATH`.
+const SOURCED: &str = "\"$HOME/.cargo/env\"";
 
 /// What the message scan found.
 #[derive(Debug, Default)]
@@ -700,33 +995,118 @@ struct Scan {
 ///
 /// Its message block must appear exactly once. Outside it, every
 /// message-helper call must take a single-quoted format plus one double-quoted
-/// value per `%s`, and nothing may write to the terminal.
+/// value per `%s`, and nothing may write to the terminal: no stderr or
+/// `/dev/tty` redirection, and no stdout write that is not captured, piped
+/// into a redirected command, or redirected to a file.
 fn scan_script(script: &str) -> Scan {
     let mut scan = Scan::default();
     let once = script.matches(BEGIN).count() == 1 && script.matches(END).count() == 1;
-    let outside = match (script.find(BEGIN), script.find(END)) {
-        (Some(begin), Some(end)) if once && begin < end => format!(
-            "{}{}",
-            script.get(..begin).unwrap_or_default(),
-            script.get(end + END.len()..).unwrap_or_default()
+    let (outside, block) = match (script.find(BEGIN), script.find(END)) {
+        (Some(begin), Some(end)) if once && begin < end => (
+            format!(
+                "{}{}",
+                script.get(..begin).unwrap_or_default(),
+                script.get(end + END.len()..).unwrap_or_default()
+            ),
+            script.get(begin..end).unwrap_or_default(),
         ),
         _ => {
             scan.violations.push(format!(
                 "the `{BEGIN}` and `{END}` markers must each appear once, in order"
             ));
-            script.to_owned()
+            (script.to_owned(), "")
         }
     };
-    scan_tokens(&lex(&outside), &mut scan);
+    let reserved = block_words(block);
+    scan_source(&outside, false, &reserved, &mut scan);
     scan
+}
+
+/// Every literal word of the message block: the helpers it defines and the
+/// commands it runs. A function of one of these names defined outside the
+/// block would change what the helpers do.
+fn block_words(block: &str) -> Vec<String> {
+    let mut words: Vec<String> = HELPERS
+        .iter()
+        .chain(INTERNAL.iter())
+        .map(|name| (*name).to_owned())
+        .collect();
+    literal_words(block, &mut words);
+    words
+}
+
+/// Push every literal word of `source`, command substitutions included.
+fn literal_words(source: &str, words: &mut Vec<String>) {
+    for token in lex(source) {
+        if let Token::Word(word) = token {
+            for body in &word.substitutions {
+                literal_words(body, words);
+            }
+            if is_literal_name(&word) {
+                words.push(word.text);
+            }
+        }
+    }
+}
+
+/// Scan one source text; `captured` when its stdout is a command
+/// substitution's value rather than the terminal.
+fn scan_source(source: &str, captured: bool, reserved: &[String], scan: &mut Scan) {
+    let tokens = lex(source);
+    if captured
+        && tokens
+            .iter()
+            .any(|token| matches!(token, Token::Word(word) if word.text == "case"))
+    {
+        scan.violations.push(format!(
+            "`case` inside a command substitution is not scanned: `{source}`"
+        ));
+    }
+    Scanner::new(captured, reserved, scan).run(&tokens);
 }
 
 /// Whether `op target` writes to the terminal.
 fn writes_terminal(op: &str, target: &str) -> bool {
     let target = target.trim_matches(['"', '\'']);
     op.contains('>')
-        && ((op.ends_with('&') && target == "2")
-            || matches!(target, "/dev/tty" | "/dev/stderr" | "/dev/fd/2"))
+        && ((op.ends_with('&') && target.starts_with('2'))
+            || matches!(
+                target,
+                "/dev/tty"
+                    | "/dev/stderr"
+                    | "/dev/stdout"
+                    | "/dev/fd/1"
+                    | "/dev/fd/2"
+                    | "/proc/self/fd/1"
+                    | "/proc/self/fd/2"
+            ))
+}
+
+/// Why `op target` is refused for the descriptors it names, if it is: a
+/// descriptor above 2 can alias the terminal unseen, and a duplication must
+/// name its source literally.
+fn fd_refusal(op: &str, target: &str) -> Option<String> {
+    let fd = op.trim_end_matches(['<', '>', '&', '|', '-']);
+    let high = |n: &str| n.parse::<u32>().is_ok_and(|n| n > 2);
+    if high(fd) {
+        return Some(format!("`{op}{target}` opens descriptor {fd}"));
+    }
+    if op.ends_with('&') {
+        let source = target.trim_matches(['"', '\'']).trim_end_matches('-');
+        if !(source.is_empty() || matches!(source, "0" | "1" | "2")) {
+            return Some(format!(
+                "`{op}{target}` duplicates a descriptor other than 0, 1 or 2"
+            ));
+        }
+    }
+    None
+}
+
+/// Whether `op target` sends stdout somewhere other than the terminal.
+fn redirects_stdout(op: &str, target: &str) -> bool {
+    let fd = op.trim_end_matches(['<', '>', '&', '|', '-']);
+    let target = target.trim_matches(['"', '\'']);
+    op.contains('>') && matches!(fd, "" | "1") && !(op.ends_with('&') && target == "1")
 }
 
 /// Whether `text` is a `NAME=value` assignment word.
@@ -739,58 +1119,328 @@ fn is_assignment(text: &str) -> bool {
     })
 }
 
-fn scan_tokens(tokens: &[Token], scan: &mut Scan) {
-    let mut command = true;
-    for (at, token) in tokens.iter().enumerate() {
-        match token {
-            Token::Separator => command = true,
-            Token::Redirect { op, target } => {
-                if writes_terminal(op, target) {
-                    scan.violations.push(format!(
-                        "`{op}{target}` writes to the terminal outside the message block"
-                    ));
+/// Whether a command name is a fixed literal (no quoting, escape or
+/// expansion), so the scan knows which command runs.
+fn is_literal_name(word: &Word) -> bool {
+    word.unit == Unit::Bare && !word.text.contains(['$', '`', '\\', '\'', '"'])
+}
+
+/// A `{ … }` group, `( … )` subshell or function body whose stdout is
+/// decided by what follows its close.
+struct Frame {
+    /// The function this frame is the body of, if any.
+    function: Option<String>,
+    /// Closed by `)` rather than `}`.
+    paren: bool,
+    /// The stdout writes inside it that reach its own stdout.
+    writes: Vec<String>,
+}
+
+/// The simple command being read.
+#[derive(Default)]
+struct Cmd {
+    /// The stdout writes it makes (its own, or a closed frame's).
+    writes: Vec<String>,
+    redirected: bool,
+}
+
+/// Where a token sits relative to a `case` header.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaseAt {
+    /// Ordinary commands.
+    Body,
+    /// Between `case` and its `in`.
+    Subject,
+    /// Reading patterns, up to the `)` that ends them.
+    Patterns,
+}
+
+/// The token walk behind `scan_source`.
+struct Scanner<'a> {
+    scan: &'a mut Scan,
+    /// The names no function outside the message block may take.
+    reserved: &'a [String],
+    captured: bool,
+    frames: Vec<Frame>,
+    cmd: Cmd,
+    /// The stdout writes earlier in the current pipeline.
+    piped: Vec<String>,
+    /// The next word is in command position.
+    command: bool,
+    /// Nesting depth of `case … esac`.
+    cases: usize,
+    /// Where the walk is inside a `case` header.
+    case: CaseAt,
+    /// The name of a function whose `{` body is about to open.
+    defining: Option<String>,
+}
+
+impl<'a> Scanner<'a> {
+    fn new(captured: bool, reserved: &'a [String], scan: &'a mut Scan) -> Self {
+        Scanner {
+            scan,
+            reserved,
+            captured,
+            frames: Vec::new(),
+            cmd: Cmd::default(),
+            piped: Vec::new(),
+            command: true,
+            cases: 0,
+            case: CaseAt::Body,
+            defining: None,
+        }
+    }
+
+    fn refuse(&mut self, why: String) {
+        self.scan.violations.push(why);
+    }
+
+    fn run(mut self, tokens: &[Token]) {
+        let mut at = 0;
+        while let Some(token) = tokens.get(at) {
+            at += 1;
+            match token {
+                Token::Unterminated => self.refuse(
+                    "an unclosed quote, substitution or here-document stops the scan".to_owned(),
+                ),
+                Token::Heredoc { expands, body } => {
+                    if *expands && (body.contains("$(") || body.contains('`')) {
+                        self.refuse(format!(
+                            "an expanding here-document runs a command substitution: `{body}`"
+                        ));
+                    }
                 }
-            }
-            Token::Word(word) => {
-                for body in &word.substitutions {
-                    scan_tokens(&lex(body), scan);
+                Token::Redirect { op, target } => {
+                    if let Some(why) = fd_refusal(op, target) {
+                        self.refuse(why);
+                    }
+                    if writes_terminal(op, target) {
+                        self.refuse(format!(
+                            "`{op}{target}` writes to the terminal outside the message block"
+                        ));
+                    }
+                    if redirects_stdout(op, target) {
+                        self.cmd.redirected = true;
+                    }
                 }
-                if command {
-                    command = KEYWORDS.contains(&word.text.as_str()) || is_assignment(&word.text);
-                    if !command {
-                        let rest = tokens.get(at + 1..).unwrap_or_default();
-                        check_command(word, rest, scan);
+                Token::Sep(sep) => self.sep(*sep),
+                Token::Word(word) => {
+                    for body in &word.substitutions {
+                        scan_source(body, true, self.reserved, self.scan);
+                    }
+                    if self.case == CaseAt::Patterns {
+                        if word.text == "esac" {
+                            self.case = CaseAt::Body;
+                            self.cases = self.cases.saturating_sub(1);
+                            self.command = false;
+                        }
+                        continue;
+                    }
+                    if self.case == CaseAt::Subject {
+                        if word.text == "in" {
+                            self.case = CaseAt::Patterns;
+                        }
+                        continue;
+                    }
+                    if self.command {
+                        at += self.command_word(word, tokens.get(at..).unwrap_or_default());
                     }
                 }
             }
         }
+        self.end_command(false);
+        if !self.frames.is_empty() {
+            self.refuse("an unclosed `{` or `(` group stops the scan".to_owned());
+        }
+    }
+
+    fn sep(&mut self, sep: Sep) {
+        match sep {
+            Sep::Pipe if self.case != CaseAt::Patterns => self.end_command(true),
+            Sep::Pipe | Sep::Open if self.case == CaseAt::Patterns => {}
+            Sep::Close if self.case == CaseAt::Patterns => {
+                self.case = CaseAt::Body;
+                self.command = true;
+            }
+            Sep::Open => {
+                self.frames.push(Frame {
+                    function: None,
+                    paren: true,
+                    writes: Vec::new(),
+                });
+                self.command = true;
+            }
+            Sep::Close => self.close_frame(true),
+            Sep::CaseArm => {
+                self.end_command(false);
+                if self.cases > 0 {
+                    self.case = CaseAt::Patterns;
+                }
+            }
+            Sep::End | Sep::Pipe => self.end_command(false),
+        }
+    }
+
+    /// Handle the word `word` in command position, followed by `rest`;
+    /// return how many tokens of `rest` it consumed.
+    fn command_word(&mut self, word: &Word, rest: &[Token]) -> usize {
+        let name = word.text.as_str();
+        if KEYWORDS.contains(&name) || is_assignment(name) {
+            match name {
+                "{" => {
+                    self.frames.push(Frame {
+                        function: self.defining.take(),
+                        paren: false,
+                        writes: Vec::new(),
+                    });
+                }
+                "}" => self.close_frame(false),
+                _ => {}
+            }
+            return 0;
+        }
+        self.command = false;
+        if !is_literal_name(word) {
+            self.refuse(format!(
+                "`{name}` is a quoted, escaped or expanded command name"
+            ));
+            return 0;
+        }
+        if matches!(
+            (rest.first(), rest.get(1)),
+            (Some(Token::Sep(Sep::Open)), Some(Token::Sep(Sep::Close)))
+        ) {
+            if self.reserved.iter().any(|word| word == name) {
+                self.refuse(format!(
+                    "`{name}` is defined outside the message block, which uses that name"
+                ));
+            }
+            self.defining = Some(name.to_owned());
+            self.command = true;
+            return 2;
+        }
+        match name {
+            "case" => {
+                self.cases += 1;
+                self.case = CaseAt::Subject;
+            }
+            "esac" => self.cases = self.cases.saturating_sub(1),
+            "trap" => self.trap(rest),
+            "command" if matches!(first_word(rest), Some("-v" | "-V")) => {
+                self.cmd.writes.push("`command -v`".to_owned());
+            }
+            "command" => self.refuse("`command` hides which command runs".to_owned()),
+            "." if first_word(rest) == Some(SOURCED) => {}
+            _ if OPAQUE.contains(&name) => {
+                self.refuse(format!("`{name}` runs text the scan cannot see"));
+            }
+            _ if INTERNAL.contains(&name) => {
+                self.refuse(format!("`{name}` is internal to the message block"));
+            }
+            _ if HELPERS.contains(&name) => self.helper_call(name, rest),
+            _ if WRITERS.contains(&name) || VALUE_PRINTERS.contains(&name) => {
+                self.cmd.writes.push(format!("`{name}`"));
+            }
+            _ => {}
+        }
+        0
+    }
+
+    /// Scan a `trap` action: it runs later, outside any capture.
+    fn trap(&mut self, rest: &[Token]) {
+        match rest.first() {
+            Some(Token::Word(action)) if action.unit == Unit::Single => {
+                let body = action
+                    .text
+                    .strip_prefix('\'')
+                    .and_then(|text| text.strip_suffix('\''))
+                    .unwrap_or_default();
+                scan_source(body, false, self.reserved, self.scan);
+            }
+            Some(Token::Word(action)) if action.text == "-" => {}
+            _ => self.refuse("a `trap` action must be one single-quoted literal".to_owned()),
+        }
+    }
+
+    fn helper_call(&mut self, name: &str, rest: &[Token]) {
+        self.scan.calls += 1;
+        let args: Vec<&Word> = rest
+            .iter()
+            .take_while(|token| !matches!(token, Token::Sep(_)))
+            .filter_map(|token| match token {
+                Token::Word(word) => Some(word),
+                _ => None,
+            })
+            .collect();
+        if let Some(why) = call_refusal(&args) {
+            let call: Vec<&str> = args.iter().map(|word| word.text.as_str()).collect();
+            self.refuse(format!("`{name} {}`: {why}", call.join(" ")));
+        }
+    }
+
+    /// End the current simple command; `piped` when its stdout feeds the
+    /// next command of the pipeline.
+    fn end_command(&mut self, piped: bool) {
+        let cmd = std::mem::take(&mut self.cmd);
+        self.command = true;
+        if piped {
+            if !cmd.redirected {
+                self.piped.extend(cmd.writes);
+            }
+            return;
+        }
+        let mut writes = std::mem::take(&mut self.piped);
+        writes.extend(cmd.writes);
+        if cmd.redirected || writes.is_empty() {
+            return;
+        }
+        match self.frames.last_mut() {
+            Some(frame) => frame.writes.extend(writes),
+            None if self.captured => {}
+            None => {
+                let what = writes.join(", ");
+                self.refuse(format!(
+                    "{what} writes to stdout, which is the terminal, outside the message block"
+                ));
+            }
+        }
+    }
+
+    /// Close the innermost frame; its writes become the closing command's,
+    /// so a redirection after the close still applies to them.
+    fn close_frame(&mut self, paren: bool) {
+        self.end_command(false);
+        let Some(frame) = self.frames.pop() else {
+            self.refuse("an unbalanced `}` or `)` stops the scan".to_owned());
+            return;
+        };
+        if frame.paren != paren {
+            self.refuse("mismatched `{`/`(` groups stop the scan".to_owned());
+        }
+        let value_printer = frame
+            .function
+            .as_deref()
+            .is_some_and(|name| VALUE_PRINTERS.contains(&name));
+        if frame.function.is_some() {
+            if !value_printer && !frame.writes.is_empty() {
+                let name = frame.function.unwrap_or_default();
+                self.refuse(format!(
+                    "function `{name}` writes to stdout ({}) but is not a value printer",
+                    frame.writes.join(", ")
+                ));
+            }
+        } else {
+            self.cmd.writes = frame.writes;
+        }
+        self.command = false;
     }
 }
 
-/// Check the command named by `name`, whose arguments start `rest`.
-fn check_command(name: &Word, rest: &[Token], scan: &mut Scan) {
-    let name = name.text.as_str();
-    if INTERNAL.contains(&name) {
-        scan.violations
-            .push(format!("`{name}` is internal to the message block"));
-        return;
-    }
-    if !HELPERS.contains(&name) {
-        return;
-    }
-    scan.calls += 1;
-    let args: Vec<&Word> = rest
-        .iter()
-        .take_while(|token| !matches!(token, Token::Separator))
-        .filter_map(|token| match token {
-            Token::Word(word) => Some(word),
-            Token::Separator | Token::Redirect { .. } => None,
-        })
-        .collect();
-    if let Some(why) = call_refusal(&args) {
-        let call: Vec<&str> = args.iter().map(|word| word.text.as_str()).collect();
-        scan.violations
-            .push(format!("`{name} {}`: {why}", call.join(" ")));
+/// The text of the first word of `rest`, if it starts with one.
+const fn first_word(rest: &[Token]) -> Option<&str> {
+    match rest.first() {
+        Some(Token::Word(word)) => Some(word.text.as_str()),
+        _ => None,
     }
 }
 
@@ -856,34 +1506,107 @@ fn installer_messages_take_values_as_arguments() -> io::Result<()> {
     Ok(())
 }
 
+/// Shapes the message scan must refuse outside the block.
+const REFUSED_SHAPES: &[&str] = &[
+    "die \"x $y\"",
+    "die \"$(f)\"",
+    "die $x",
+    "die 'x %s'",
+    "die 'x %d' \"$v\"",
+    "printf '%s' \"$x\" >&2",
+    "{ die \"a $b\"; }",
+    "foo || die \"$c\"",
+    "die \\\n\"$x\"",
+    "die 'x' \"$y\"",
+    "die 'a'\\''b'",
+    "die 'cost $5'",
+    "say 'x %s' $v",
+    "say 'x %s' \"$a\"b",
+    "x=\"$(die \"$y\")\"",
+    "if true; then info \"$m\"; fi",
+    "echo hi 1>&2",
+    "printf x >/dev/tty",
+    "printf x >/dev/stderr",
+    "msg_text 'x'",
+    "stage_settle_ok \"$x\"",
+    "die() { :; }",
+    "# note \\\ndie \"$x\"",
+    "printf x >& 2",
+    "printf x >&\"2\"",
+    "printf x >&2-",
+    "printf x >/proc/self/fd/2",
+    "printf x >/dev/stdout",
+    "printf x >/dev/fd/1",
+    "exec 3>&1",
+    "printf x >&3",
+    "printf x >&\"$fd\"",
+    "eval \"die \\\"\\$x\\\"\"",
+    "\"die\" \"$x\"",
+    "\\die \"$x\"",
+    "command die \"$x\"",
+    "$f \"$x\"",
+    "builtin printf x",
+    ". \"$f\"",
+    "function g { :; }",
+    "alias d=die",
+    "printf() { :; }",
+    "trap 'die \"$x\"' EXIT",
+    "trap \"$t\" EXIT",
+    "cat >\"$f\" <<EOF\nit's\nEOF\ndie \"$x\"",
+    "cat >\"$f\" <<EOF\n$(die \"$x\")\nEOF",
+    "cat <<EOF\nhi\nEOF",
+    "cat >\"$f\" <<EOF\nhi",
+    "say 'a %s' \"${x:-$(die \"$y\")}\"",
+    "x=$(: # it's\n) ; die \"$x\" ; : ')'",
+    "x=$(cat <<E\n)\nE\n)",
+    "x=$(case $y in a) die \"$z\" ;; esac)",
+    "case $a in\nx) :;;\nesac\ndie \"$x\"",
+    "printf '%s\\n' \"$x\"",
+    "echo \"$x\"",
+    "cat \"$f\"",
+    "printf x | sed 1d",
+    "( printf x )",
+    "while :; do printf x; done",
+    "command -v cargo",
+    "trusted_tmp_base \"$b\"",
+    "f() { printf x; }\nf >/dev/null",
+    "printf 'x",
+    "x=$(printf x",
+];
+
+/// Shapes the message scan must accept outside the block.
+const ACCEPTED_SHAPES: &[&str] = &[
+    "",
+    "die 'x %s' \"$y\"",
+    "foo || die 'a %s %%' \"$b\"",
+    "stage_ok 'Found %s.' \"$(f \"$t\" | cut -d' ' -f2)\"",
+    "printf '%s' \"$x\" >\"$file\" 2>/dev/null",
+    "IFS= read -r ans </dev/tty",
+    "case $x in\n  *) die 'y %s' \"$x\" ;;\nesac",
+    "# die \"$x\" in a comment",
+    "die 'a %s' \\\n  \"$b\"",
+    "x=\"$(printf '%s' \"$y\")\"",
+    "printf x >\"$f\"",
+    "printf x 2>&1 >\"$f\"",
+    "printf x | sed 1d >\"$f\"",
+    "{ printf a; printf b; } >>\"$f\"",
+    "( curl x; echo $? > \"$tmp/rc\" ) 2>/dev/null",
+    "trusted_tmp_base() { printf x; }",
+    "trusted_tmp_base \"$b\" >/dev/null",
+    "x=$(trusted_tmp_base \"$b\")",
+    "case $a in\n''|[Yy]) die 'q' ;;\nesac\ndie 'r'",
+    "read -r a b <<EOF\n$v\nEOF",
+    "cat <<EOF >\"$f\"\nit's\nEOF",
+    "command -v cargo >/dev/null 2>&1",
+    "x=$((1 << 2))",
+    "trap 'rm -rf \"$tmp\"' EXIT",
+    ". \"$HOME/.cargo/env\"",
+];
+
 #[test]
 fn message_scan_refuses_every_bypass() {
     let braced = "info \"${".to_owned() + "A}\"";
-    let refused = [
-        "die \"x $y\"",
-        "die \"$(f)\"",
-        "die $x",
-        braced.as_str(),
-        "die 'x %s'",
-        "die 'x %d' \"$v\"",
-        "printf '%s' \"$x\" >&2",
-        "{ die \"a $b\"; }",
-        "foo || die \"$c\"",
-        "die \\\n\"$x\"",
-        "die 'x' \"$y\"",
-        "die 'a'\\''b'",
-        "die 'cost $5'",
-        "say 'x %s' $v",
-        "say 'x %s' \"$a\"b",
-        "x=\"$(die \"$y\")\"",
-        "if true; then info \"$m\"; fi",
-        "echo hi 1>&2",
-        "printf x >/dev/tty",
-        "printf x >/dev/stderr",
-        "msg_text 'x'",
-        "stage_settle_ok \"$x\"",
-        "die() { :; }",
-    ];
+    let refused = REFUSED_SHAPES.iter().copied().chain([braced.as_str()]);
     for fixture in refused {
         let scan = scan_script(&with_block(fixture));
         assert!(
@@ -892,17 +1615,7 @@ fn message_scan_refuses_every_bypass() {
         );
     }
 
-    let accepted = [
-        "",
-        "die 'x %s' \"$y\"",
-        "foo || die 'a %s %%' \"$b\"",
-        "stage_ok 'Found %s.' \"$(f \"$t\" | cut -d' ' -f2)\"",
-        "printf '%s' \"$x\" >\"$file\" 2>/dev/null",
-        "IFS= read -r ans </dev/tty",
-        "case $x in\n  *) die 'y %s' \"$x\" ;;\nesac",
-        "# die \"$x\" in a comment",
-        "die 'a %s' \\\n  \"$b\"",
-    ];
+    let accepted = ACCEPTED_SHAPES;
     for fixture in accepted {
         let scan = scan_script(&with_block(fixture));
         assert!(
@@ -928,4 +1641,20 @@ fn message_scan_refuses_every_bypass() {
             "the scan must refuse {why}"
         );
     }
+}
+
+#[test]
+fn message_scan_refuses_redefining_what_the_block_runs() -> io::Result<()> {
+    let installer = installer_script()?;
+    for name in ["safe_text", "printf", "od", "awk"] {
+        let scan = scan_script(&format!("{installer}\n{name}() {{ :; }}\n"));
+        assert!(
+            scan.violations
+                .iter()
+                .any(|why| why.contains(&format!("`{name}` is defined outside"))),
+            "the scan must refuse redefining `{name}`: {:?}",
+            scan.violations
+        );
+    }
+    Ok(())
 }
