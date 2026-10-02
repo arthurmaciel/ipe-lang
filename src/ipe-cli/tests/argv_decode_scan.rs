@@ -5,8 +5,8 @@
 //! UTF-8, so a workspace binary reads its command line through
 //! `ipe_docs::argv::host_args`, which refuses such an argument with a typed
 //! error naming its position. The scan is an inventory, never a denylist of one
-//! spelling: it lexes every tracked `.rs` file under `src/`, `tools/`,
-//! `examples/` and `editors/` (comments and literals dropped) and refuses
+//! spelling: it lexes every tracked `.rs` file under [`SCANNED_ROOTS`]
+//! (comments and literals dropped) and refuses
 //!
 //! - an `env::args` path in any form (a call, an import, a function value),
 //!   outside the pinned [`ARGS_DEBT`] sites;
@@ -279,6 +279,30 @@ fn group_hiding(rest: &[Token]) -> Vec<&'static str> {
     hiding
 }
 
+/// The top-level directories whose tracked `.rs` files the scan reads: every
+/// directory of the checkout that holds Rust source, emitted goldens included.
+const SCANNED_ROOTS: &[&str] = &["src", "tools", "examples", "editors", "tests"];
+
+/// The top-level directory of every tracked `.rs` file in the checkout.
+fn tracked_rust_roots() -> std::collections::BTreeSet<String> {
+    let listed = std::process::Command::new("git")
+        .arg("-C")
+        .arg(workspace())
+        .args(["ls-files", "-z", "--cached", "--", "*.rs"])
+        .output();
+    assert!(
+        matches!(&listed, Ok(out) if out.status.success()),
+        "git ls-files must list the tracked Rust files: {listed:?}"
+    );
+    let stdout = listed.map(|out| out.stdout).unwrap_or_default();
+    String::from_utf8_lossy(&stdout)
+        .split('\0')
+        .filter(|rel| !rel.is_empty())
+        .filter_map(|rel| rel.split('/').next())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The workspace root.
 fn workspace() -> PathBuf {
     e2e_support::manifest_dir!().join("../..")
@@ -300,7 +324,8 @@ fn scanned_files() -> Vec<(String, String)> {
             "--others",
             "--exclude-standard",
         ])
-        .args(["--", "src", "tools", "examples", "editors"])
+        .arg("--")
+        .args(SCANNED_ROOTS)
         .output();
     assert!(
         matches!(&listed, Ok(out) if out.status.success()),
@@ -347,6 +372,13 @@ fn every_command_line_read_goes_through_a_pinned_decode_point() {
             .iter()
             .any(|(rel, _)| rel == "src/ipe-docs/src/argv.rs"),
         "the scan must see the decode point it pins"
+    );
+    let tracked_rust_roots = tracked_rust_roots();
+    assert!(
+        tracked_rust_roots
+            .iter()
+            .all(|root| SCANNED_ROOTS.contains(&root.as_str())),
+        "a top-level directory holds tracked Rust the scan skips: {tracked_rust_roots:?}"
     );
     let mut args: BTreeMap<String, usize> = BTreeMap::new();
     let mut args_os: BTreeMap<String, usize> = BTreeMap::new();

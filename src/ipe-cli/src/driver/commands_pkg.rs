@@ -1200,9 +1200,9 @@ pub enum AnalysisTarget {
 
 /// Resolve a `check`/analysis `<path>` argument to its [`AnalysisTarget`].
 ///
-/// A directory (or no) argument names the project's own entry
-/// ([`resolve_analysis_entry`]); that entry is then resolved exactly as a file
-/// argument naming it would be, so the directory form analyses the same
+/// A directory (or no) argument names its own manifest's entry
+/// ([`analysis_root_of`]), classified against that same manifest's roots (never
+/// one nested nearer the entry), so the directory form analyses the same
 /// `src`-rooted module set the build compiles rather than a closure rooted at
 /// the entry's own directory. A FILE argument is canonicalised once; the
 /// manifest governing that canonical path is found, and the file is
@@ -1217,19 +1217,36 @@ pub enum AnalysisTarget {
 /// under a governing manifest.
 pub fn resolve_analysis_target(path: &Path) -> Result<AnalysisTarget, CliError> {
     if path.is_dir() {
-        return resolve_file_target(&resolve_analysis_entry(path)?);
+        let Some(manifest_path) = discover_manifest(path)? else {
+            return resolve_file_target(path);
+        };
+        // The directory's own manifest roots its entry, as it roots the build;
+        // the entry is never re-governed by a manifest nested beneath it.
+        let parsed = project::parse_manifest(&manifest_path)?;
+        let entry = analysis_root_of(&parsed)?;
+        let file = ResolvedPath::of(&entry).map_err(|e| io_err(&entry, e))?;
+        return classify_under_manifest(file, &parsed);
     }
     resolve_file_target(path)
 }
 
-/// Classify a FILE against the manifest governing its canonical path — the one
-/// root resolution every [`resolve_analysis_target`] form routes through.
+/// Classify a FILE against the manifest governing its canonical path.
 fn resolve_file_target(path: &Path) -> Result<AnalysisTarget, CliError> {
     let file = ResolvedPath::of(path).map_err(|e| io_err(path, e))?;
     let Some(manifest_path) = discover_manifest(file.as_path())? else {
         return Ok(AnalysisTarget::Loose(file));
     };
     let parsed = project::parse_manifest(&manifest_path)?;
+    classify_under_manifest(file, &parsed)
+}
+
+/// Classify a canonical `file` against `parsed`'s canonical `tests/` and `src/`
+/// roots: the one root resolution every [`resolve_analysis_target`] form
+/// routes through.
+fn classify_under_manifest(
+    file: ResolvedPath,
+    parsed: &project::ProjectManifest,
+) -> Result<AnalysisTarget, CliError> {
     let project_root = ResolvedPath::of(&parsed.root).map_err(|e| io_err(&parsed.root, e))?;
     let src_root = ResolvedPath::of(&parsed.src_root).map_err(|e| io_err(&parsed.src_root, e))?;
     let tests_dir = parsed.root.join(TESTS_DIR_NAME);

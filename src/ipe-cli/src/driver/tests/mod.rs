@@ -2669,6 +2669,32 @@ fn type_check_of_a_directory_still_resolves_the_project_entry() {
     );
 }
 
+/// A DIRECTORY argument classifies its entry against the directory's own
+/// manifest, the one the build compiles from, never a manifest nested between
+/// the project root and the entry file.
+#[test]
+fn a_directory_entry_is_classified_by_its_own_manifest_not_a_nested_one() {
+    let tmp = analysis_project("ipe_type_check_directory_ignores_nested_manifest");
+    let src = tmp.join("src");
+    fs::create_dir_all(src.join("src")).expect("create nested src/src/");
+    fs::write(
+        src.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"nested\" }\n",
+    )
+    .expect("nested src/package.ipe");
+    let expected = AnalysisTarget::Source {
+        file: resolved(&src.join("Main.ipe")),
+        src_root: resolved(&src),
+    };
+    let target = resolve_analysis_target(&tmp);
+    let _ = fs::remove_dir_all(&tmp);
+    assert_eq!(
+        target.ok(),
+        Some(expected),
+        "the directory form must analyse its entry over the build's src root"
+    );
+}
+
 /// A file under the manifest's `tests/` tree resolves to `AnalysisTarget::Test`, carrying
 /// the canonical `src/` and `tests/` roots.
 #[test]
