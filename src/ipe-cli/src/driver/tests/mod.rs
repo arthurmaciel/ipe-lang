@@ -2518,44 +2518,50 @@ fn version_flags_alias_the_version_command() {
 
 #[test]
 fn analysis_root_rejects_a_program_entry_that_escapes_the_source_root() {
-    // A manifest whose declared program entry is an absolute path (or a `..`
-    // traversal) must not let `ipe type-check` read a file outside the
-    // project: analysis_root_of routes the entry through the same containment
-    // gate the build path uses, so the escape is a typed refusal.
-    let proj = ipe_test_temp::temp_root().join("ipe_analysis_root_escape");
-    let _ = fs::remove_dir_all(&proj);
-    let proj_src = proj.join("src");
-    fs::create_dir_all(&proj_src).expect("create src/");
-    fs::write(
-        proj.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    { name = \"escape\"\n    , programs = [ { name = \"x\", entry = \"/etc/passwd\" } ]\n    }\n",
-    )
-    .expect("pkg");
-    // No src/Main.ipe: the program entry is the analysis root candidate.
-    let manifest = project::parse_manifest(&proj.join("package.ipe")).expect("parses");
-    assert!(
-        matches!(
-            analysis_root_of(&manifest),
-            Err(CliError::PathEscape { .. })
-        ),
-        "an absolute program entry must be refused, not joined and read"
-    );
+    // An absolute or `..` program entry names no module, so the build's own
+    // entry parse refuses it before any path is joined; analysis_root_of
+    // refuses it with that same error, never a read outside the project.
+    for entry in [
+        "/etc/passwd",
+        "/etc/Main.ipe",
+        "../../secret.ipe",
+        "../../Secret.ipe",
+    ] {
+        let proj = declared_entry_project("ipe_analysis_root_escape", entry, &[]);
+        let manifest = project::parse_manifest(&proj.join("package.ipe")).expect("parses");
+        assert!(
+            matches!(manifest.resolved_entry(), Err(CliError::Usage(_))),
+            "the build refuses entry {entry:?}"
+        );
+        assert!(
+            matches!(analysis_root_of(&manifest), Err(CliError::Usage(_))),
+            "analysis refuses entry {entry:?} like the build"
+        );
+        let _ = fs::remove_dir_all(&proj);
+    }
+}
 
-    // A `..` traversal is refused the same way.
-    fs::write(
-        proj.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    { name = \"escape\"\n    , programs = [ { name = \"x\", entry = \"../../secret.ipe\" } ]\n    }\n",
-    )
-    .expect("pkg");
+#[cfg(unix)]
+#[test]
+fn analysis_root_refuses_an_entry_module_file_linked_outside_the_source_root() {
+    // A well-formed entry module whose file is a symlink out of `src/` is
+    // refused by the containment gate, not read.
+    let outside = ipe_test_temp::temp_root().join("ipe_analysis_root_link_target.ipe");
+    fs::write(&outside, "module Main exposing (main)\n\nmain = 1\n").expect("outside file");
+    let proj = declared_entry_project("ipe_analysis_root_link", "Main", &[]);
     let manifest = project::parse_manifest(&proj.join("package.ipe")).expect("parses");
+    let link = proj.join("src").join("Main.ipe");
+    let _ = fs::remove_file(&link);
+    std::os::unix::fs::symlink(&outside, link).expect("symlink entry out of src/");
     assert!(
         matches!(
             analysis_root_of(&manifest),
             Err(CliError::PathEscape { .. })
         ),
-        "a dot-dot program entry must be refused, not joined and read"
+        "an entry file linked outside src/ must be refused"
     );
     let _ = fs::remove_dir_all(&proj);
+    let _ = fs::remove_file(&outside);
 }
 
 /// Write a manifest-governed project with a clean default `src/Main.ipe` under
@@ -2760,11 +2766,11 @@ fn resolve_analysis_target_refuses_a_symlink_escaping_the_project_roots() {
     let _ = fs::remove_dir_all(&base);
     assert!(
         matches!(&via_tests, Ok(AnalysisTarget::Loose(_))),
-        "a tests/ symlink leaving the project must not be a AnalysisTarget::Test: {via_tests:?}"
+        "a tests/ symlink leaving the project must not be an AnalysisTarget::Test: {via_tests:?}"
     );
     assert!(
         matches!(&via_src, Ok(AnalysisTarget::Loose(_))),
-        "a src/ symlink leaving the project must not be a AnalysisTarget::Source: {via_src:?}"
+        "a src/ symlink leaving the project must not be an AnalysisTarget::Source: {via_src:?}"
     );
 }
 
@@ -2833,7 +2839,7 @@ fn resolve_analysis_target_drops_a_tests_root_that_is_the_project_root() {
     assert!(
         matches!(&target, Ok(AnalysisTarget::Loose(p)) if p.as_path() == canonical),
         "a tests root equal to the project root must be dropped, so the file \
-         is not a AnalysisTarget::Test: {target:?}"
+         is not an AnalysisTarget::Test: {target:?}"
     );
 }
 
