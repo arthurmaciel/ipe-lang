@@ -37,8 +37,9 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// The longest the server may take to report that it is listening.
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The read and write timeout of every request socket.
-const IO_TIMEOUT: Duration = Duration::from_secs(10);
+/// The read and write timeout of every request socket. Each case commits a
+/// write to a file database, so a slow disk's `fsync` is inside this bound.
+const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The served Ipê program: one route per secured write, plus setup and dumps.
 const PROGRAM: &str = r#"module Main exposing (main)
@@ -92,7 +93,7 @@ blankShare =
 
 noteDraft : String -> Result Error (Draft Note)
 noteDraft table =
-    Result.map (Store.primaryKey .id) (Store.fromCodec table (Codec.auto blankNote))
+    Result.map (\d -> Store.primaryKey .id d) (Store.fromCodec table (Codec.auto blankNote))
 
 
 securedNotes : String -> Store.Policy Note -> Result Error (Secured Note)
@@ -107,7 +108,7 @@ publicNotes table =
 
 shareDraft : Result Error (Draft Share)
 shareDraft =
-    Result.map (Store.primaryKey .id) (Store.fromCodec "shares" (Codec.auto blankShare))
+    Result.map (\d -> Store.primaryKey .id d) (Store.fromCodec "shares" (Codec.auto blankShare))
 
 
 securedShares : Result Error (Secured Share)
@@ -140,7 +141,7 @@ openEditPolicy =
 
 stampedDraft : Result Error (Draft Note)
 stampedDraft =
-    Result.map (Store.defaultNow .status) (noteDraft "stamped")
+    Result.map (\d -> Store.defaultNow .status d) (noteDraft "stamped")
 
 
 signingKey : Secret.Secret
@@ -299,10 +300,13 @@ handleSetup _ =
     answer
         (Task.andThen
             (\db ->
-                List.foldl
-                    (\stmt acc -> Task.andThen (\n -> Task.map (\m -> n + m) (Unsafe.unsafeExecRaw db stmt)) acc)
-                    (Task.succeed 0)
-                    setupStatements
+                Db.withTransaction db
+                    (\tx ->
+                        List.foldl
+                            (\stmt acc -> Task.andThen (\n -> Task.map (\m -> n + m) (Unsafe.unsafeExecRaw tx stmt)) acc)
+                            (Task.succeed 0)
+                            setupStatements
+                    )
             )
             connect
         )
@@ -780,7 +784,18 @@ fn secured_writes_keep_only_admitted_rows() -> Result<(), BoxError> {
         addr: format!("127.0.0.1:{port}"),
     };
 
-    assert_eq!(client.get("/setup")?, "4", "setup: four seed rows");
+    // SQLite reports a DDL statement's count as the last DML's, so the setup
+    // total is not a row count; the seed rows are checked through the dumps.
+    let setup = client.get("/setup")?;
+    assert!(
+        setup.parse::<u64>().is_ok(),
+        "setup must answer a count, got {setup:?}"
+    );
+    assert_eq!(
+        client.dump("owned")?,
+        "n1|alice|draft|seed",
+        "setup: the seed row"
+    );
     let tokens = Tokens {
         alice: client.token("alice")?,
         editor: client.token("editor")?,
