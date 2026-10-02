@@ -152,8 +152,8 @@ pub(crate) const LOG_FORMAT_HAZARDS: &[std::ops::RangeInclusive<char>] = &[
 ///
 /// The set is Unicode `Cc`, `Cf`, `Zl` and `Zp`, the compiler's terminal set:
 /// every control (C0 incl. CR/LF/ESC, DEL, C1 incl. NEL/CSI) plus
-/// [`LOG_FORMAT_HAZARDS`]. The one runtime text-hazard predicate: every
-/// runtime sanitiser calls it rather than keeping a local list.
+/// [`LOG_FORMAT_HAZARDS`]. The predicate behind [`scrub_log_controls`] and
+/// the console ingest filter.
 pub(crate) fn is_log_hazard(c: char) -> bool {
     if matches!(c, ' '..='~') {
         return false;
