@@ -1,5 +1,7 @@
 mod coverage;
 mod diff;
+#[cfg(test)]
+mod display_hazard_vectors;
 mod extract;
 mod model;
 mod pipeline;

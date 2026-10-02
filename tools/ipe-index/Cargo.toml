@@ -16,6 +16,10 @@ tree-sitter = "0.22"
 tree-sitter-rust = "0.21"
 tree-sitter-typescript = "0.21"
 
+[dev-dependencies]
+icu_properties = "2"
+unicode-general-category = "1"
+
 [lints.rust]
 # Mirrors the compiler workspace's `unsafe_code` deny for this standalone tool.
 unsafe_code = "deny"

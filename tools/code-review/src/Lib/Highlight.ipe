@@ -1,4 +1,4 @@
-module Lib.Highlight exposing (Lang(..), Token(..), langFor, tokenText, tokenize)
+module Lib.Highlight exposing (Lang(..), Token(..), langFor, sourceTokenStyle, tokenText, tokenize)
 
 import Ipe.Char as Char
 import Ipe.List as List
@@ -48,12 +48,21 @@ langFor kind =
             Unknown
 
 
--- A token's text as it may be shown: every control and bidi character is
--- spelled as a visible escape, so a source line cannot render reordered
--- (Trojan Source). `\` and `"` stay as the source wrote them.
+-- A token's text as it may be shown: every display hazard (`SafeText.isHazard`)
+-- is spelled as a visible escape, so a source line cannot render reordered
+-- (Trojan Source) or hide a code point that draws as nothing. `\` and `"` stay
+-- as the source wrote them.
 tokenText : Token -> SafeText
 tokenText tok =
     SafeText.renderForeign (tokenSource tok)
+
+
+-- The CSS every displayed source token carries: its characters are drawn in
+-- byte (logical) order, so strong right-to-left letters cannot reorder the
+-- neutral characters around them inside one token.
+sourceTokenStyle : List ( String, String )
+sourceTokenStyle =
+    [ ( "unicode-bidi", "bidi-override" ), ( "direction", "ltr" ) ]
 
 
 tokenSource : Token -> String
@@ -123,8 +132,7 @@ scan lang chars acc =
                                 spanWhile
                                     (\ch ->
                                         ch
-                                            /= '
-'
+                                            /= '\n'
                                     )
                                     rest2
                         in

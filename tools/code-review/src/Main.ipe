@@ -14,12 +14,12 @@ import Ipe.Task as Task
 import Ipe.Tea.Web as Web
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
+import Ipe.Time.Timestamp exposing (Timestamp)
 import Ipe.Ui as Ui
 import Ipe.Ui.Background as Background
 import Ipe.Ui.Border as Border
 import Ipe.Ui.Font as Font
 import Ipe.Ui.Input as Input
-import Ipe.Time.Timestamp exposing (Timestamp)
 import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Token(..))
@@ -1005,6 +1005,7 @@ sourceBlock unit =
         , Background.color (Ui.rgb 12 12 18)
         , Border.rounded 4
         , Ui.padding 12
+        , Ui.style "direction" "ltr"
         ]
         (Ui.column
             [ Ui.width Ui.fill, Ui.spacing 2 ]
@@ -1058,10 +1059,12 @@ numberedLine lang ( n, line ) =
 tokenEl : Highlight.Token -> Ui.Element Msg
 tokenEl tok =
     Ui.el
-        [ Font.family Font.monospace
+        ([ Font.family Font.monospace
         , Font.size 12
         , Font.color (tokenColor tok)
         ]
+            ++ List.map (\( k, v ) -> Ui.style k v) Highlight.sourceTokenStyle
+        )
         (safeText (Highlight.tokenText tok))
 
 
