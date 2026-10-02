@@ -2137,7 +2137,10 @@ fn download_installer() -> Result<crate::scratch::ScratchFile, CliError> {
         })?;
     let output = Curl::https()
         .args(["--silent", "--show-error", "--fail", "--location"])
-        .args(remote_ingest::curl_limit_args(budget.disk_bytes(), budget))
+        .args(remote_ingest::curl_limit_args(
+            remote_ingest::INSTALLER_MAX_BYTES,
+            budget,
+        ))
         .arg("-o")
         .arg(script.path())
         .arg(INSTALL_SH_URL)
@@ -2149,7 +2152,9 @@ fn download_installer() -> Result<crate::scratch::ScratchFile, CliError> {
             RunError::Exceeded(refusal) => CliError::RemoteIngestExceeded(refusal),
             RunError::PipeDrainTimeout(stream) => CliError::ChildPipeHeld(stream),
         })?;
-    if let Some(refusal) = remote_ingest::curl_refusal(output.status, budget.disk_bytes(), budget) {
+    if let Some(refusal) =
+        remote_ingest::curl_refusal(output.status, remote_ingest::INSTALLER_MAX_BYTES, budget)
+    {
         return Err(CliError::RemoteIngestExceeded(refusal));
     }
     if !output.status.success() {
