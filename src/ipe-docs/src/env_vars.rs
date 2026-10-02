@@ -1265,6 +1265,7 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_PDEATH_PROBE", // parent-death spawner test: selects the re-executed probe mode
     "IPE_RUN_WITH_TEST_VAR",
     "IPE_SECRET_E2E",                   // Windows jail e2e test sentinel
+    "IPE_SMOKE_ASKPASS_USER", // registry smoke: git askpass helper's internal user-name channel
     "IPE_TEMP_ROOT_ENV_TEST_NEIGHBOUR", // temp-root refusal test: a key that only contains a temp-root name
     "IPE_TEST_BOOL_BAD",
     "IPE_TEST_BOOL_F",
