@@ -106,18 +106,29 @@ impl ExporterEnv {
         self.raw().ok()
     }
 
-    /// The numeric ceiling this tuning name carries; `0` is refused.
+    /// The numeric ceiling this tuning name carries; `0` is refused, and a
+    /// queue depth is bounded by what a `tokio` channel can hold.
     pub(crate) const fn ceiling(
         self,
         default: u64,
         unit: &'static str,
     ) -> crate::system::EnvCeiling {
-        crate::system::EnvCeiling::new(
+        let ceiling = crate::system::EnvCeiling::new(
             self.name(),
             default,
             crate::system::ZeroCeiling::Refused,
             unit,
-        )
+        );
+        match self {
+            Self::PushBuffer => ceiling.at_most(tokio::sync::Semaphore::MAX_PERMITS as u64),
+            Self::ParentUrl
+            | Self::IngestToken
+            | Self::PushInterval
+            | Self::HubUrl
+            | Self::HubToken
+            | Self::HubInterval
+            | Self::ServiceName => ceiling,
+        }
     }
 
     /// This process's value for the name, parsed as [`Self::ceiling`].
@@ -1117,6 +1128,19 @@ mod tests {
             assert_eq!(env.role(), ExporterEnvRole::Tuning);
             crate::system::assert_env_ceiling_contract(env.ceiling(2000, "decimal count"));
         }
+    }
+
+    #[test]
+    fn a_push_buffer_past_the_tokio_permit_limit_is_refused() {
+        let ceiling = ExporterEnv::PushBuffer.ceiling(DEFAULT_QUEUE_CAP as u64, "decimal count");
+        let limit = tokio::sync::Semaphore::MAX_PERMITS as u64;
+        assert_eq!(ceiling.parse(Ok(limit.to_string())), Ok(limit));
+        assert!(
+            ceiling
+                .parse(Ok((limit + 1).to_string()))
+                .is_err_and(|r| r.defect() == crate::system::CeilingDefect::TooLarge),
+            "a queue depth tokio cannot hold must be refused, not reach mpsc::channel"
+        );
     }
 
     #[test]

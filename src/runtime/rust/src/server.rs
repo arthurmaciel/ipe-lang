@@ -797,7 +797,8 @@ const MAX_INFLIGHT_CEILING: crate::system::EnvCeiling = crate::system::EnvCeilin
     1024,
     crate::system::ZeroCeiling::Refused,
     "decimal request count",
-);
+)
+.at_most(tokio::sync::Semaphore::MAX_PERMITS as u64);
 
 fn max_body() -> Result<usize, crate::system::EnvCeilingRefusal> {
     MAX_BODY_CEILING.read()
@@ -1538,7 +1539,8 @@ const WS_SEND_BUFFER_CEILING: crate::system::EnvCeiling = crate::system::EnvCeil
     256,
     crate::system::ZeroCeiling::Refused,
     "decimal frame count",
-);
+)
+.at_most(tokio::sync::Semaphore::MAX_PERMITS as u64);
 
 /// Live-peer ceiling. Each accepted upgrade pins a registry slot, an mpsc
 /// channel, and a heartbeat task; without a ceiling a peer can open connections
@@ -2196,6 +2198,26 @@ mod ws_adapter_tests {
             refused.is_err_and(|r| r.name() == "IPE_WS_HEARTBEAT"),
             "a malformed per-socket ceiling must refuse Server.listen"
         );
+    }
+
+    #[test]
+    fn a_queue_ceiling_past_the_tokio_permit_limit_refuses_the_listen_preflight() {
+        let past = (tokio::sync::Semaphore::MAX_PERMITS as u64 + 1).to_string();
+        let at = tokio::sync::Semaphore::MAX_PERMITS.to_string();
+        for name in ["IPE_HTTP_MAX_INFLIGHT", "IPE_WS_SEND_BUFFER"] {
+            crate::system::locked_set_var(name, &past);
+            let refused = listen_ceilings();
+            crate::system::locked_set_var(name, &at);
+            let accepted = listen_ceilings();
+            crate::system::locked_remove_var(name);
+            assert!(
+                refused
+                    .is_err_and(|r| r.name() == name
+                        && r.defect() == crate::system::CeilingDefect::TooLarge),
+                "{name} past the permit limit must refuse Server.listen"
+            );
+            assert!(accepted.is_ok(), "{name} at the permit limit is accepted");
+        }
     }
 
     #[test]

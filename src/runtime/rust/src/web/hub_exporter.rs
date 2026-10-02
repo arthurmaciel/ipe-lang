@@ -108,7 +108,7 @@ pub async fn enable_from_env() {
         return;
     }
     let interval_ms: u64 = match ExporterEnv::HubInterval
-        .read_ceiling(DEFAULT_INTERVAL_MS, "decimal millisecond count")
+        .read_ceiling::<u64>(DEFAULT_INTERVAL_MS, "decimal millisecond count")
     {
         Ok(ms) => ms.max(MIN_INTERVAL_MS),
         Err(refusal) => return super::push_exporter::log_refused_ceiling("hub", &refusal),
