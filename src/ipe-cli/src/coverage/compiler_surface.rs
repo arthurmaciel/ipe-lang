@@ -52,6 +52,7 @@ static COMPILER_CRATES: &[(&str, &str)] = &[
     ("ipe_db", "db"),
     ("ipe_diagnostics", "diagnostics"),
     ("ipe_ffi", "ffi"),
+    ("ipe_fs_open", "fs_open"),
     ("ipe_intern", "intern"),
     ("ipe_ir", "ir"),
     ("ipe_kernels", "kernels"),
