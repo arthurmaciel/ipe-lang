@@ -9,8 +9,9 @@ module Main exposing (main)
 --
 --   * refusals, each clearing every earlier guard: no key and no `unique`
 --     column; several `unique` columns; an illegal key declaration; an unknown
---     target column; a target column that is not a valid identifier (its text
---     never echoed); a DB-filled (`serial`) key; a `NULL` key;
+--     target column; a target column, declared or renamed, that is not a valid
+--     identifier (its text never echoed); a DB-filled (`serial`) key; a `NULL`
+--     key;
 --   * the row counts of every refused table, read before and after the
 --     refusals, are equal: no refused upsert reached the database;
 --   * a raw-column row with no key cell binds the empty string (the `rowCodec`
@@ -289,9 +290,15 @@ refusalChecks conn fx =
             )
         say
             (refusedWithout "invalid-target"
-                "upsert refused a conflict-target column whose declared name is not a valid SQL identifier"
+                "upsert refused a conflict-target column whose name is not a valid SQL identifier"
                 "bad name"
                 (Store.upsert conn (Store.public (StoreU.unique "bad name" fx.contacts)) row)
+            )
+        say
+            (refusedWithout "invalid-renamed-target"
+                "upsert refused a conflict-target column whose name is not a valid SQL identifier"
+                "bad name"
+                (Store.upsert conn (Store.renameColumn "email" "bad name" (Store.public (StoreU.unique "email" fx.contacts))) row)
             )
         say
             (refused "serial-key"

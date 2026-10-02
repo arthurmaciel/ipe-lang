@@ -2133,11 +2133,22 @@ resolveConflictColumns view names =
 
 -- One declared target column: a valid plain identifier first (so no refusal
 -- echoes unchecked text), then a declared column of the store, mapped to its
--- current name. An unknown name fails closed; it never maps to itself.
+-- current name, which must be a valid plain identifier too (a rename target is
+-- checked only by `migrations`). An unknown name fails closed; it never maps to
+-- itself.
 resolveConflictColumn : ColumnView -> String -> Result Error String
 resolveConflictColumn view name =
     if validSqlIdentPlain name then
-        liveName view name
+        Result.andThen requirePlainIdent (liveName view name)
+
+    else
+        Err invalidConflictColumnError
+
+
+requirePlainIdent : String -> Result Error String
+requirePlainIdent name =
+    if validSqlIdentPlain name then
+        Ok name
 
     else
         Err invalidConflictColumnError
@@ -7162,7 +7173,7 @@ ambiguousConflictTargetError =
 invalidConflictColumnError : Error
 invalidConflictColumnError =
     Error.invalidInput
-        "Ipe.Db.Store: upsert refused a conflict-target column whose declared name is not a valid SQL identifier — fix the name given to Store.primaryKeyNamed / Store.uniqueNamed"
+        "Ipe.Db.Store: upsert refused a conflict-target column whose name is not a valid SQL identifier — fix the name given to Store.primaryKeyNamed / Store.uniqueNamed / Store.renameColumn"
 
 
 dbFilledConflictColumnError : String -> Error
