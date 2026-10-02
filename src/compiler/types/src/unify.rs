@@ -384,17 +384,22 @@ pub fn con_heads_compatible(
 ///
 /// Everything else — a name with a *user* home (`type Order` in `Main` →
 /// `[Main]`), or a stdlib union listed in [`STDLIB_DISTINCT_UNIONS`] — is a
-/// genuinely distinct type and does NOT unify.
+/// genuinely distinct type and does NOT unify. A listed stdlib union is
+/// distinct even when its name is reserved (`Ipe.Css`'s `Length`): the listing
+/// is checked before either admitting shape.
 fn empty_home_compat(
     other_home: &[ipe_intern::Symbol],
     name: ipe_intern::Symbol,
     interner: &Interner,
 ) -> bool {
+    if is_stdlib_distinct_union(other_home, name, interner) {
+        return false;
+    }
     let ipe_rooted = other_home
         .first()
         .and_then(|s| interner.resolve(*s))
         .is_some_and(|root| root == IPE_STDLIB_ROOT);
-    (ipe_rooted && !is_stdlib_distinct_union(other_home, name, interner))
+    ipe_rooted
         || interner
             .resolve(name)
             .is_some_and(ipe_canon::is_user_type_declaration_forbidden)
@@ -406,16 +411,26 @@ fn empty_home_compat(
 /// user shadow.
 const IPE_STDLIB_ROOT: &str = "Ipe";
 
-/// Stdlib unions that share a builtin type name but declare their own constructors.
+/// Stdlib unions that share a builtin type name but are a different type.
 ///
 /// Each entry is `(home, name)`. Such a union is its own head: its `Ipe`-rooted
 /// home must never merge with the empty-home builtin of the same name, or a
 /// value of one type would type-check where the other is expected
-/// (`Store.Asc == LT`). A test scans every stdlib source and fails when a union
-/// named like a builtin union carries a constructor set different from the
-/// builtin's without an entry here, so a new colliding declaration cannot
-/// silently merge.
-pub const STDLIB_DISTINCT_UNIONS: &[(&[&str], &str)] = &[(&["Ipe", "Db", "Store"], "Order")];
+/// (`Store.Asc == LT`, a `Css.Color` passed to `Color.toHex`). A test scans
+/// every stdlib source and fails when a union named like any builtin type
+/// (a builtin union, a reserved builtin name, or an empty-home type a kernel
+/// scheme mints) is neither that builtin's own spelling nor listed here, so a
+/// new colliding declaration cannot silently merge.
+pub const STDLIB_DISTINCT_UNIONS: &[(&[&str], &str)] = &[
+    // The CSS colour ADT, distinct from the opaque runtime `Color`.
+    (&["Ipe", "Css"], "Color"),
+    // The CSS length ADT, distinct from the opaque `Ipe.Ui` `Length`.
+    (&["Ipe", "Css"], "Length"),
+    // The join sort direction `Asc | Desc`, distinct from the comparison `Order`.
+    (&["Ipe", "Db", "Store"], "Order"),
+    // The typed table handle, distinct from the opaque web-session `Store`.
+    (&["Ipe", "Db", "Store"], "Store"),
+];
 
 /// Whether `home.name` is listed in [`STDLIB_DISTINCT_UNIONS`].
 fn is_stdlib_distinct_union(
@@ -1510,5 +1525,33 @@ mod tests {
         assert!(!is_stdlib_distinct_union(&prefix, order, &interner));
         assert!(!is_stdlib_distinct_union(&longer, order, &interner));
         assert!(is_stdlib_distinct_union(&exact, order, &interner));
+    }
+
+    /// Every listed distinct union is its own head, including one whose name is
+    /// reserved (`Ipe.Css`'s `Length`) or an opaque builtin (`Ipe.Css`'s
+    /// `Color`, `Ipe.Db.Store`'s `Store`).
+    #[test]
+    fn every_listed_distinct_union_is_its_own_head() {
+        let mut interner = Interner::new();
+        for (owner_path, name) in STDLIB_DISTINCT_UNIONS {
+            let owner: Vec<ipe_intern::Symbol> = owner_path
+                .iter()
+                .map(|seg| interner.intern(seg).unwrap())
+                .collect();
+            let owner = &owner;
+            let sym = interner.intern(name).unwrap();
+            assert!(
+                !con_heads_compatible(owner, sym, &[], sym, &interner),
+                "a stdlib `{name}` ADT must not merge with the builtin `{name}`"
+            );
+            assert!(
+                !con_heads_compatible(&[], sym, owner, sym, &interner),
+                "the `{name}` refusal must hold with the builtin on either side"
+            );
+            assert!(
+                con_heads_compatible(owner, sym, owner, sym, &interner),
+                "a stdlib `{name}` ADT is still identical to itself"
+            );
+        }
     }
 }
