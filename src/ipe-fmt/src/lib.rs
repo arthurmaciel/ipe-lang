@@ -16,10 +16,11 @@ use std::fmt::Write as _;
 
 use ipe_diagnostics::{Diagnostic, Located, TokenKind, render};
 use ipe_intern::Interner;
-use ipe_parse::{LiteralQuote, TokenClass, literal_source};
+use ipe_parse::TokenClass;
 use ipe_syntax::{
     Ctor, Exposed, Exposing, Expr, Expr_, ForeignDecl, Import, LetBinding, Module, Pattern,
-    Pattern_, Privacy, TypeAlias, TypeAnnotation, Union, Value, strip_anchor_margin,
+    Pattern_, Privacy, TypeAlias, TypeAnnotation, Union, Value, escape_char_body, escape_str_body,
+    strip_anchor_margin,
 };
 
 /// The column budget elm-format targets before breaking a construct onto
@@ -1482,8 +1483,8 @@ impl<'a> Printer<'a> {
             Pattern_::PVar(s) => self.sym(*s),
             Pattern_::PInt(n) => n.to_string(),
             Pattern_::PBool(b) => if *b { "True" } else { "False" }.to_owned(),
-            Pattern_::PChar(c) => format!("'{}'", literal_source(c, LiteralQuote::Char)),
-            Pattern_::PStr(s) => format!("\"{}\"", literal_source(s, LiteralQuote::Str)),
+            Pattern_::PChar(c) => format!("'{}'", escape_char_body(c)),
+            Pattern_::PStr(s) => format!("\"{}\"", escape_str_body(s)),
             Pattern_::PCtor(name, segs, args) => {
                 let head = if segs.is_empty() {
                     self.sym(*name)
@@ -1755,7 +1756,7 @@ impl<'a> Printer<'a> {
             Expr_::VarQual(q, n) => format!("{}.{}", self.sym(*q), self.sym(*n)),
             Expr_::Int(n) => n.to_string(),
             Expr_::Float(f) => format_float(*f),
-            Expr_::Str(s) => format!("\"{}\"", literal_source(s, LiteralQuote::Str)),
+            Expr_::Str(s) => format!("\"{}\"", escape_str_body(s)),
             // The equivalence projection (no source) prints the string's value,
             // its margin stripped at its anchor column: a printed string moved to
             // another column strips another margin, and must read as different.
@@ -1763,7 +1764,7 @@ impl<'a> Printer<'a> {
                 Some(_) => format!("\"\"\"{raw}\"\"\""),
                 None => format!("\"\"\"{}\"\"\"", strip_anchor_margin(raw, *anchor)),
             },
-            Expr_::Char(c) => format!("'{}'", literal_source(c, LiteralQuote::Char)),
+            Expr_::Char(c) => format!("'{}'", escape_char_body(c)),
             Expr_::Unit => "()".to_owned(),
             Expr_::Call(head, args) => self.call(head, args, indent, e.span),
             Expr_::Binops(chain, last) => self.binops(chain, last, indent, e.span),
@@ -3277,6 +3278,38 @@ mod tests {
     fn escaped_literals_round_trip() {
         let src = "module M exposing (cs, s)\n\n\ncs =\n    [ '\\\\', '\"', '\\'', '\\n', '\\t', '\\r', '\\0' ]\n\n\ns =\n    \"q\\\" b\\\\ a' n\\n\"\n";
         assert_fixed_point(src);
+    }
+
+    /// Every escapable value in a char PATTERN prints back as a literal
+    /// that lexes to the same value, exactly as it does in expression
+    /// position.
+    #[test]
+    fn escaped_char_patterns_round_trip() {
+        let src = "module M exposing (f)\n\n\nf c =\n    case c of\n        '\\n' ->\n            0\n\n        '\\t' ->\n            1\n\n        '\\r' ->\n            2\n\n        '\\\\' ->\n            3\n\n        '\"' ->\n            4\n\n        '\\'' ->\n            5\n\n        '\\0' ->\n            6\n\n        _ ->\n            7\n";
+        assert_fixed_point(src);
+    }
+
+    /// Every escapable value in a string PATTERN prints back as a literal
+    /// that lexes to the same value; a bare `'` inside a string pattern
+    /// stays unescaped.
+    #[test]
+    fn escaped_str_patterns_round_trip() {
+        let src = "module M exposing (f)\n\n\nf s =\n    case s of\n        \"\\0\" ->\n            0\n\n        \"a\\\"b\\\\c\" ->\n            1\n\n        \"line\\ntab\\t\" ->\n            2\n\n        \"cr\\r\" ->\n            3\n\n        \"it's\" ->\n            4\n\n        _ ->\n            5\n";
+        assert_fixed_point(src);
+    }
+
+    /// `"\0"` formats as the two-character escape `\0`, never a raw NUL
+    /// byte spliced into the source (a raw NUL still re-lexes to the same
+    /// value, so `assert_fixed_point` alone would not catch it).
+    #[test]
+    fn nul_string_literal_formats_as_its_escape() {
+        let src = "module M exposing (s)\n\n\ns =\n    \"\\0\"\n";
+        assert_fixed_point(src);
+        let out = format_source(src).expect("formats");
+        assert!(
+            !out.contains('\0'),
+            "raw NUL byte in formatted output:\n{out}"
+        );
     }
 
     /// A `foreign` declaration is printed, never silently deleted.

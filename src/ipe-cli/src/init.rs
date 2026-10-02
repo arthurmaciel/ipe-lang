@@ -356,20 +356,14 @@ struct IpeStringLiteral(String);
 impl IpeStringLiteral {
     /// Escape `raw` into the body of a single-line Ipê string literal.
     fn escaped(raw: &str) -> Self {
-        let mut body = String::with_capacity(raw.len());
-        for ch in raw.chars() {
-            match ch {
-                '\\' => body.push_str("\\\\"),
-                '"' => body.push_str("\\\""),
-                '\n' => body.push_str("\\n"),
-                '\r' => body.push_str("\\r"),
-                '\t' => body.push_str("\\t"),
-                '\0' => body.push_str("\\0"),
-                other if other.is_control() => {}
-                other => body.push(other),
-            }
-        }
-        Self(body)
+        // Drop every control scalar `ipe_syntax::ESCAPES` has no escape for —
+        // a single-line literal has no way to write one — then escape the
+        // rest through that shared table, the lexer's own escape set.
+        let kept: String = raw
+            .chars()
+            .filter(|c| !c.is_control() || ipe_syntax::ESCAPES.iter().any(|(_, v)| v == c))
+            .collect();
+        Self(ipe_syntax::escape_str_body(&kept))
     }
 
     fn as_str(&self) -> &str {
