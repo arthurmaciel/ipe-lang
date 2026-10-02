@@ -24,6 +24,7 @@ use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use ipe_docs::markdown_text;
 use ipe_kernels::Capability;
 
 fn main() -> ExitCode {
@@ -95,16 +96,11 @@ fn emit_class_section(out: &mut String, class: &str, caps: &[Capability]) {
     out.push_str("| Wire name | Grants |\n");
     out.push_str("|-----------|--------|\n");
     for cap in caps {
-        let wire = escape_cell(cap.as_str());
-        let grants = escape_cell(cap.grants());
+        let wire = markdown_text::table_cell(cap.as_str());
+        let grants = markdown_text::table_cell(cap.grants());
         let _ = writeln!(out, "| `{wire}` | {grants} |");
     }
     out.push('\n');
-}
-
-/// Escape a string for use inside a Markdown table cell.
-fn escape_cell(s: &str) -> String {
-    s.replace('|', "\\|")
 }
 
 /// Collect unique boundary-class strings in `ALL` order.

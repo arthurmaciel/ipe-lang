@@ -18,7 +18,7 @@ use std::fmt;
 use std::path::Path;
 
 use include_dir::{Dir, include_dir};
-use ipe_docs::html;
+use ipe_docs::{html, markdown_text};
 
 use crate::cli_args::json;
 
@@ -838,8 +838,9 @@ pub fn rewrite_refs(
 /// Produce the format-aware rewriting of one resolved cross-reference.
 ///
 /// Every markup target escapes `key` and `display` for its own grammar: HTML
-/// through [`html::escape`] (attribute and text alike), JSON through
-/// [`json::string`].
+/// through [`html::escape`] (attribute and text alike), Markdown through
+/// [`markdown_text::link_text`] and [`markdown_text::link_destination`], JSON
+/// through [`json::string`].
 fn format_ref(kind: DocKind, key: &str, display: &str, target: RefTarget) -> String {
     match target {
         RefTarget::Html => format!(
@@ -848,7 +849,11 @@ fn format_ref(kind: DocKind, key: &str, display: &str, target: RefTarget) -> Str
             html::escape(key),
             html::escape(display)
         ),
-        RefTarget::Markdown => format!("[{}]({}/{}.md)", display, kind.prefix(), key),
+        RefTarget::Markdown => format!(
+            "[{}]({})",
+            markdown_text::link_text(display),
+            markdown_text::link_destination(&format!("{}/{}.md", kind.prefix(), key))
+        ),
         RefTarget::Json => format!(
             "{{\"ref\":{{\"kind\":{},\"key\":{}}},\"text\":{}}}",
             json::string(kind.prefix()),
@@ -1268,7 +1273,7 @@ mod tests {
             "test",
         )
         .expect("rewrite");
-        assert_eq!(out, "See [the store](module/Ipe.Db.Store.md).");
+        assert_eq!(out, "See [the store](<module/Ipe.Db.Store.md>).");
     }
 
     #[test]
@@ -1668,5 +1673,96 @@ mod tests {
         assert_eq!(field("/ref/kind"), Some("module"));
         assert_eq!(field("/ref/key"), Some("k\"\\\n"));
         assert_eq!(field("/text"), Some("a\u{1}b"));
+    }
+
+    /// Percent-decode an ASCII `%XX`-escaped string.
+    ///
+    /// The inverse of [`markdown_text::link_destination`]'s encoding, used by
+    /// a test that checks the Markdown output without a Markdown parser
+    /// dependency.
+    fn percent_decode(s: &str) -> String {
+        let bytes = s.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+                let byte = hex.and_then(|h| u8::from_str_radix(h, 16).ok());
+                match byte {
+                    Some(b) => {
+                        out.push(b);
+                        i += 3;
+                    }
+                    None => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// The index of the first `target` in `s` not preceded by an unescaped
+    /// `\`.
+    ///
+    /// A faithful-enough stand-in for how a Markdown parser finds the `]`
+    /// that closes link text: it must not be the backslash-escaped kind.
+    fn first_unescaped(s: &str, target: char) -> Option<usize> {
+        let mut escaped = false;
+        for (i, c) in s.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if c == '\\' {
+                escaped = true;
+                continue;
+            }
+            if c == target {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// A `]` in the display and a `)` or space in the key cannot end the
+    /// Markdown link early.
+    ///
+    /// The link text decodes back to the display, and the angle-bracket
+    /// destination decodes back to the key, unmangled. Red before the fix:
+    /// the raw splice put an unescaped `]` right after the display's `a`
+    /// (not followed by `(`, so no parser would even read the rest as a
+    /// link), and the key's `)` would end an unwrapped destination early.
+    #[test]
+    fn markdown_ref_escapes_link_text_and_destination() {
+        let out = format_ref(DocKind::Module, "k) x", "a]b", RefTarget::Markdown);
+
+        let rest = out.strip_prefix('[').expect("starts with [");
+        let close = first_unescaped(rest, ']').expect("link text has a closing ]");
+        assert_eq!(
+            rest.as_bytes().get(close + 1),
+            Some(&b'('),
+            "the real closing ] of the link text must be followed by ( — an \
+             earlier unescaped ] (from an unescaped display) breaks the link"
+        );
+
+        let decoded_text = rest[..close]
+            .replace("\\]", "]")
+            .replace("\\[", "[")
+            .replace("\\\\", "\\");
+        assert_eq!(decoded_text, "a]b");
+
+        let dest_part = rest[close + 2..]
+            .strip_suffix(')')
+            .expect("link ends with a closing )");
+        let dest_inner = dest_part
+            .strip_prefix('<')
+            .and_then(|s| s.strip_suffix('>'))
+            .expect("destination is wrapped in <...>");
+        assert_eq!(percent_decode(dest_inner), "module/k) x.md");
     }
 }
