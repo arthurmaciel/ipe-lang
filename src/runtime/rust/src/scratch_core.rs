@@ -1706,19 +1706,37 @@ mod tests {
         );
     }
 
+    /// A host-absolute path built from role segments.
+    ///
+    /// Judged `is_absolute`/`starts_with` under the SAME regime as the
+    /// function under test on every host, never a Unix-only `/` literal on
+    /// Windows.
+    #[cfg(windows)]
+    fn host_abs(segments: &[&str]) -> PathBuf {
+        let mut p = PathBuf::from(r"C:\");
+        p.extend(segments);
+        p
+    }
+
+    /// See the Windows twin above.
+    #[cfg(not(windows))]
+    fn host_abs(segments: &[&str]) -> PathBuf {
+        let mut p = PathBuf::from("/");
+        p.extend(segments);
+        p
+    }
+
     #[test]
     fn root_inside_or_equal_to_profile_is_accepted() {
-        let profile = Path::new("/home/alice");
-        assert_eq!(
-            root_within_profile(Path::new("/home/alice/AppData/Local/Temp"), profile),
-            Ok(())
-        );
-        assert_eq!(root_within_profile(profile, profile), Ok(()));
+        let profile = host_abs(&["home", "alice"]);
+        let nested = host_abs(&["home", "alice", "AppData", "Local", "Temp"]);
+        assert_eq!(root_within_profile(&nested, &profile), Ok(()));
+        assert_eq!(root_within_profile(&profile, &profile), Ok(()));
     }
 
     #[test]
     fn root_outside_profile_is_refused() {
-        let refused = root_within_profile(Path::new("/tmp"), Path::new("/home/alice"));
+        let refused = root_within_profile(&host_abs(&["tmp"]), &host_abs(&["home", "alice"]));
         assert!(matches!(
             refused,
             Err(ScratchRootRefusal::OutsideProfile { .. })
@@ -1727,8 +1745,10 @@ mod tests {
 
     #[test]
     fn sibling_sharing_a_name_prefix_is_refused() {
-        let refused =
-            root_within_profile(Path::new("/home/alice-shared"), Path::new("/home/alice"));
+        let refused = root_within_profile(
+            &host_abs(&["home", "alice-shared"]),
+            &host_abs(&["home", "alice"]),
+        );
         assert!(matches!(
             refused,
             Err(ScratchRootRefusal::OutsideProfile { .. })
@@ -1737,8 +1757,11 @@ mod tests {
 
     #[test]
     fn parent_dir_escape_is_refused() {
-        let refused =
-            root_within_profile(Path::new("/home/alice/../bob"), Path::new("/home/alice"));
+        let profile = host_abs(&["home", "alice"]);
+        let mut root = profile.clone();
+        root.push("..");
+        root.push("bob");
+        let refused = root_within_profile(&root, &profile);
         assert!(matches!(
             refused,
             Err(ScratchRootRefusal::OutsideProfile { .. })
@@ -1747,7 +1770,7 @@ mod tests {
 
     #[test]
     fn relative_root_is_refused() {
-        let refused = root_within_profile(Path::new("alice/temp"), Path::new("/home/alice"));
+        let refused = root_within_profile(Path::new("alice/temp"), &host_abs(&["home", "alice"]));
         assert!(matches!(
             refused,
             Err(ScratchRootRefusal::OutsideProfile { .. })

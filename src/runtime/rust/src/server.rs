@@ -905,10 +905,67 @@ fn gate_listener(app: axum::Router) -> axum::Router {
     app.layer(axum::middleware::from_fn(refuse_malformed_url))
 }
 
-/// A static file service behind the strict URL gate.
+/// What a static-file mount may serve for one request path.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum StaticRequest {
+    /// The mount's own directory (no segment).
+    Root,
+    /// A path beneath the directory whose every segment is a plain name.
+    File(crate::path_core::RelPath),
+}
+
+/// Why a static-file request path may not reach the filesystem.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum StaticRefusal {
+    /// The strict core refused the path text itself.
+    Malformed(crate::encoding::DecodeRefusal),
+    /// A decoded segment is not a plain name under the serving regime.
+    Segment(crate::path_core::RelPathRefusal),
+    /// The served directory is not UTF-8 text, so no join beneath it is judged.
+    RootNotText,
+    /// The checked join of the parsed path beneath the directory refused.
+    Join(crate::path::PathRefusal),
+}
+
+/// Parse a static-file request path under the serving `regime`, or say why it
+/// may not reach the filesystem beneath `root`.
 ///
-/// `ServeDir` percent-decodes the path itself; the gate makes that decode run
-/// only on a path the strict core already accepted.
+/// The path is decoded once by the strict core (`DecodedPath::parse`; a
+/// malformed one was already answered 400 by [`refuse_malformed_url`]), then
+/// parsed into a `RelPath`, so a segment that climbs, re-anchors, names a
+/// device or a stream, or aliases another entry under the regime is refused
+/// before any join. An empty segment (`/a//b`) names no entry and is refused
+/// too. The join itself ([`crate::path::join_rel`]) then re-checks the joined
+/// text independently; its result is discarded here.
+///
+/// # Errors
+///
+/// The [`StaticRefusal`] of the first boundary that refused the path.
+pub(crate) fn static_request(
+    uri_path: &str,
+    root: &std::path::Path,
+    regime: crate::path_core::Regime,
+) -> Result<StaticRequest, StaticRefusal> {
+    let decoded =
+        crate::encoding::DecodedPath::parse(uri_path).map_err(StaticRefusal::Malformed)?;
+    if decoded.is_root() {
+        return Ok(StaticRequest::Root);
+    }
+    let rel = crate::path_core::RelPath::from_segments(
+        decoded.segments().iter().map(String::as_str),
+        regime,
+    )
+    .map_err(StaticRefusal::Segment)?;
+    let root = root.to_str().ok_or(StaticRefusal::RootNotText)?;
+    crate::path::join_rel(root, &rel).map_err(StaticRefusal::Join)?;
+    Ok(StaticRequest::File(rel))
+}
+
+/// A static file service behind the strict URL gate and the static path gate.
+///
+/// `ServeDir` percent-decodes the path itself; the gates make that decode run
+/// only on a path the strict core already accepted and [`static_request`]
+/// admits under the host regime.
 pub(crate) fn strict_serve_dir(
     dir: std::path::PathBuf,
 ) -> impl tower::Service<
@@ -919,9 +976,42 @@ pub(crate) fn strict_serve_dir(
 > + Clone
 + Send
 + 'static {
+    strict_serve_dir_with(dir, crate::path_core::HOST)
+}
+
+/// [`strict_serve_dir`] under an explicit `regime`, so any host proves the
+/// Windows refusals.
+///
+/// A request path [`static_request`] refuses is answered a bare 404 that never
+/// echoes the path, whether or not the entry exists.
+fn strict_serve_dir_with(
+    dir: std::path::PathBuf,
+    regime: crate::path_core::Regime,
+) -> impl tower::Service<
+    axum::extract::Request,
+    Response = axum::response::Response,
+    Error = std::convert::Infallible,
+    Future: Send + 'static,
+> + Clone
++ Send
++ 'static {
+    use axum::response::IntoResponse;
+    let root = dir.clone();
+    let static_gate = axum::middleware::from_fn(
+        move |req: axum::extract::Request, next: axum::middleware::Next| {
+            let admitted = static_request(req.uri().path(), &root, regime).is_ok();
+            async move {
+                if admitted {
+                    next.run(req).await
+                } else {
+                    axum::http::StatusCode::NOT_FOUND.into_response()
+                }
+            }
+        },
+    );
     tower::Layer::layer(
         &axum::middleware::from_fn(refuse_malformed_url),
-        tower_http::services::ServeDir::new(dir),
+        tower::Layer::layer(&static_gate, tower_http::services::ServeDir::new(dir)),
     )
 }
 
@@ -2995,18 +3085,27 @@ mod tests {
         }
     }
 
-    /// Serve `uri` through `strict_serve_dir` mounted at `/static` over a
-    /// fresh directory holding `hello.txt`. Returns the status and body.
-    async fn serve_static(uri: &str) -> (axum::http::StatusCode, String) {
-        use tower::ServiceExt;
+    /// A fresh scratch directory for one static-serving test.
+    fn static_fixture_dir(tag: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
         let dir = crate::scratch_core::test_temp_root()
-            .join(format!("ipe-strict-static-{}-{nanos}", std::process::id()));
+            .join(format!("ipe-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp static dir");
-        std::fs::write(dir.join("hello.txt"), "hi").expect("static fixture file");
-        let app = axum::Router::new().nest_service("/static", strict_serve_dir(dir.clone()));
+        dir
+    }
+
+    /// Serve `uri` through `strict_serve_dir_with(dir, regime)` mounted at
+    /// `/static`. Returns the status and body.
+    async fn serve_static_dir(
+        dir: &std::path::Path,
+        regime: crate::path_core::Regime,
+        uri: &str,
+    ) -> (axum::http::StatusCode, String) {
+        use tower::ServiceExt;
+        let app = axum::Router::new()
+            .nest_service("/static", strict_serve_dir_with(dir.to_path_buf(), regime));
         let wire = axum::http::Request::builder()
             .method("GET")
             .uri(uri)
@@ -3018,8 +3117,157 @@ mod tests {
         };
         let status = resp.status();
         let body = axum_body_string(resp).await;
-        let _ = std::fs::remove_dir_all(&dir);
         (status, body)
+    }
+
+    /// Serve `uri` through `strict_serve_dir` mounted at `/static` over a
+    /// fresh directory holding `hello.txt`. Returns the status and body.
+    async fn serve_static(uri: &str) -> (axum::http::StatusCode, String) {
+        let dir = static_fixture_dir("strict-static");
+        std::fs::write(dir.join("hello.txt"), "hi").expect("static fixture file");
+        let out = serve_static_dir(&dir, crate::path_core::HOST, uri).await;
+        let _ = std::fs::remove_dir_all(&dir);
+        out
+    }
+
+    #[test]
+    fn static_request_windows_refuses_escaping_paths() {
+        use crate::path_core::{ElementRefusal, Regime, RelPathRefusal};
+        let root = std::path::Path::new("C:\\site");
+        let element = |why| StaticRefusal::Segment(RelPathRefusal::Element(why));
+        let segment = StaticRefusal::Segment;
+        for (uri, want) in [
+            ("/a%5C..%5Cx", segment(RelPathRefusal::Separator)),
+            ("/C:x", element(ElementRefusal::Colon)),
+            ("/x:stream", element(ElementRefusal::Colon)),
+            ("/CON", element(ElementRefusal::DosDevice)),
+            ("/nul.txt", element(ElementRefusal::DosDevice)),
+            ("/a/COM1", element(ElementRefusal::DosDevice)),
+            ("/a%5CCOM1", segment(RelPathRefusal::Separator)),
+            ("/LPT9.log", element(ElementRefusal::DosDevice)),
+            ("/..%20", element(ElementRefusal::DotSpaceRun)),
+            ("/..", element(ElementRefusal::Parent)),
+            ("/a.", element(ElementRefusal::StrippedTail)),
+            ("/a%2Fb", segment(RelPathRefusal::Separator)),
+            ("/a%00b", segment(RelPathRefusal::Nul)),
+            // An empty inner segment names no entry: `/a//b.css` is refused,
+            // not collapsed to `a/b.css` as `ServeDir` alone would.
+            ("/a//b.css", segment(RelPathRefusal::NotAName)),
+        ] {
+            assert_eq!(
+                static_request(uri, root, Regime::Windows),
+                Err(want),
+                "{uri:?}"
+            );
+        }
+        assert_eq!(
+            static_request("/", root, Regime::Windows),
+            Ok(StaticRequest::Root)
+        );
+        let file = static_request("/a/b.css/", root, Regime::Windows);
+        assert!(
+            matches!(&file, Ok(StaticRequest::File(rel)) if rel.as_str() == "a\\b.css"),
+            "{file:?}"
+        );
+    }
+
+    #[test]
+    fn static_request_unix_accepts_legal_names() {
+        use crate::path_core::{ElementRefusal, Regime, RelPathRefusal};
+        let root = std::path::Path::new("/srv/site");
+        for (uri, want) in [
+            ("/CON", "CON"),
+            ("/nul.txt", "nul.txt"),
+            ("/x:stream", "x:stream"),
+            ("/a.", "a."),
+            ("/a%5Cb", "a\\b"),
+            ("/fav%69con.ico", "favicon.ico"),
+        ] {
+            let got = static_request(uri, root, Regime::Unix);
+            assert!(
+                matches!(&got, Ok(StaticRequest::File(rel)) if rel.as_str() == want),
+                "{uri:?}: {got:?}"
+            );
+        }
+        for (uri, want) in [
+            (
+                "/a%2F..%2Fx",
+                StaticRefusal::Segment(RelPathRefusal::Separator),
+            ),
+            (
+                "/a/../x",
+                StaticRefusal::Segment(RelPathRefusal::Element(ElementRefusal::Parent)),
+            ),
+            (
+                "/a//b.css",
+                StaticRefusal::Segment(RelPathRefusal::NotAName),
+            ),
+            (
+                "/a/./b.css",
+                StaticRefusal::Segment(RelPathRefusal::NotAName),
+            ),
+            ("/a%00b", StaticRefusal::Segment(RelPathRefusal::Nul)),
+        ] {
+            assert_eq!(
+                static_request(uri, root, Regime::Unix),
+                Err(want),
+                "{uri:?}"
+            );
+        }
+        let malformed = static_request("/a%zz", root, Regime::Unix);
+        assert!(
+            matches!(
+                malformed,
+                Err(StaticRefusal::Malformed(
+                    crate::encoding::DecodeRefusal::MalformedEscape { .. }
+                ))
+            ),
+            "{malformed:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn static_request_refuses_a_non_text_root() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/srv/\xff"));
+        assert_eq!(
+            static_request("/a.css", root, crate::path_core::Regime::Unix),
+            Err(StaticRefusal::RootNotText)
+        );
+    }
+
+    #[tokio::test]
+    async fn serve_dir_gate_refuses_a_present_device_name_under_windows() {
+        use crate::path_core::Regime;
+        // Each name is a legal Linux file, so only the gate can refuse it.
+        let names = ["CON", "nul.txt", "x:stream", "a."];
+        let dir = static_fixture_dir("static-gate");
+        for name in names {
+            std::fs::write(dir.join(name), format!("body of {name}")).expect("static fixture file");
+        }
+        for name in names {
+            let uri = format!("/static/{name}");
+            let (status, body) = serve_static_dir(&dir, Regime::Windows, &uri).await;
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{uri:?}");
+            assert!(!body.contains(name), "{uri:?} must not echo the path");
+            let (status, body) = serve_static_dir(&dir, Regime::Unix, &uri).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{uri:?}");
+            assert_eq!(body, format!("body of {name}"), "{uri:?}");
+        }
+        // `/a//b` names no entry, so it is refused on both regimes even though
+        // `ServeDir` alone would serve `a/b`.
+        std::fs::create_dir_all(dir.join("a")).expect("static fixture dir");
+        std::fs::write(dir.join("a").join("b"), "b body").expect("static fixture file");
+        for regime in [Regime::Windows, Regime::Unix] {
+            let (status, body) = serve_static_dir(&dir, regime, "/static/a//b").await;
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{regime:?}");
+            assert!(body.is_empty(), "{regime:?}: {body:?}");
+            let (status, body) = serve_static_dir(&dir, regime, "/static/a/b").await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{regime:?}");
+            assert_eq!(body, "b body", "{regime:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
