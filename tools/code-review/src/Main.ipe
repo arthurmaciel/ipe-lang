@@ -44,7 +44,7 @@ type alias HistoryRow =
     { uid : String
     , bodyHash : String
     , decision : String
-    , reason : Maybe LibDb.Reason
+    , reason : Maybe LibDb.StoredReason
     , reviewedAt : Timestamp
     , name : Maybe SafeText
     }
@@ -628,7 +628,7 @@ historyCard row =
             ]
         , case row.reason of
             Just r ->
-                Ui.el [ Font.size 12, Font.color (Ui.rgb 200 120 120) ] (safeText (LibDb.reasonText r))
+                Ui.el [ Font.size 12, Font.color (Ui.rgb 200 120 120) ] (safeText (LibDb.storedReasonText r))
 
             Nothing ->
                 Ui.none
@@ -880,7 +880,7 @@ previousLabel row =
         "refuse" ->
             case row.reason of
                 Just r ->
-                    SafeText.concat [ SafeText.literal "Previously Refused (", LibDb.reasonText r, SafeText.literal ")" ]
+                    SafeText.concat [ SafeText.literal "Previously Refused (", LibDb.storedReasonText r, SafeText.literal ")" ]
 
                 Nothing ->
                     SafeText.literal "Previously Refused"

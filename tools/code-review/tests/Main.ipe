@@ -91,18 +91,18 @@ duplicateInsertIsNoop db =
 
 -- Re-reviewing the same pair must succeed (any Err here fails
 -- the check loudly) and must keep the first decision.
-isApproved : Maybe Decision -> Bool
+isApproved : Maybe LibDb.ReviewRow -> Bool
 isApproved m =
     case m of
         Nothing ->
             False
 
-        Just d ->
-            case d of
-                Approved ->
-                    True
+        Just row ->
+            case row.reason of
+                Nothing ->
+                    row.decision == "approve"
 
-                Refused _ ->
+                Just _ ->
                     False
 
 
@@ -125,7 +125,7 @@ reasonShown reason =
 
 -- `parseReason` is the only way to a refusal: blank and over-long reasons
 -- have no `Reason`, the bound itself is accepted, and a stored row whose
--- reason breaks the bound fails to decode rather than reaching a page.
+-- reason breaks the bound still decodes, its reason shown by length only.
 reasonBounded : Db -> Task.Task Error Bool
 reasonBounded db =
     let
@@ -142,7 +142,7 @@ reasonBounded db =
     in
     do
         Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString "long-uid", SqlString "hL", SqlString "refuse", SqlString (atBound ++ "x"), SqlInt 0 ]
-        storedRefused <- LibDb.findDecision db "long-uid" "hL" |> Task.map (\_ -> False) |> Task.onError (\e -> Task.succeed (String.contains "at most" (Error.toString e) && String.contains "unit \"long-uid\" at hash \"hL\"" (Error.toString e)))
+        storedRefused <- LibDb.findDecision db "long-uid" "hL" |> Task.map (storedReasonShown "reason not shown: 501 characters, over the 500-character limit")
         Db.exec db "DELETE FROM review WHERE uid = ?" [ SqlString "long-uid" ]
         Task.succeed
             (rejected ""
@@ -160,32 +160,25 @@ reasonBounded db =
             )
 
 
-checkPair : Maybe Decision -> Maybe Decision -> Bool
+checkPair : Maybe LibDb.ReviewRow -> Maybe LibDb.ReviewRow -> Bool
 checkPair approved refused =
-    case approved of
+    isApproved approved && storedReasonShown "too big" refused
+
+
+-- True when the row is a refusal whose reason shows exactly as `expected`.
+storedReasonShown : String -> Maybe LibDb.ReviewRow -> Bool
+storedReasonShown expected found =
+    case found of
         Nothing ->
             False
 
-        Just Approved ->
-            case refused of
+        Just row ->
+            case row.reason of
                 Nothing ->
                     False
 
-                Just d ->
-                    matchRefused d
-
-        Just (Refused _) ->
-            False
-
-
-matchRefused : Decision -> Bool
-matchRefused d =
-    case d of
-        Approved ->
-            False
-
-        Refused reason ->
-            reasonShown reason == "too big"
+                Just r ->
+                    row.decision == "refuse" && SafeText.toString (LibDb.storedReasonText r) == expected
 
 
 decisionRoundtrip : Db -> Task.Task Error Bool
@@ -200,6 +193,40 @@ decisionRoundtrip db =
             )
 
 
+-- ── stored rows ─────────────────────────────────────────────────────────
+--
+-- A stored refusal whose reason breaks the bound — written before the bound,
+-- or edited outside this tool — still decodes through every read of the
+-- review table, and shows its length, never its text. Red if a stored reason
+-- is parsed by `parseReason` at the decode point.
+storedOverlongReasonDecodes : Db -> Task.Task Error Bool
+storedOverlongReasonDecodes db =
+    let
+        expected =
+            "reason not shown: 5000 characters, over the 500-character limit"
+    in
+    do
+        Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString "huge-uid", SqlString "hH", SqlString "refuse", SqlString (String.repeat 5000 "y"), SqlInt 0 ]
+        byPair <- LibDb.findDecision db "huge-uid" "hH"
+        byUid <- LibDb.findLatestForUid db "huge-uid"
+        Db.exec db "DELETE FROM review WHERE uid = ?" [ SqlString "huge-uid" ]
+        Task.succeed (storedReasonShown expected byPair && storedReasonShown expected byUid)
+
+
+-- A stored reason the table's check accepts but that is blank to the tool
+-- (SQLite's `trim` strips only spaces) decodes as blank, not as a `Reason`.
+storedBlankReasonDecodes : Db -> Task.Task Error Bool
+storedBlankReasonDecodes db =
+    do
+        Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString "blank-uid", SqlString "hB", SqlString "refuse", SqlString "\n\t", SqlInt 0 ]
+        found <- LibDb.findDecision db "blank-uid" "hB"
+        Db.exec db "DELETE FROM review WHERE uid = ?" [ SqlString "blank-uid" ]
+        Task.succeed (storedReasonShown "reason not shown: it is blank" found)
+
+
+-- ── end stored rows ─────────────────────────────────────────────────────
+
+
 allChecks : Db -> Task.Task Error (List ( String, Bool ))
 allChecks db =
     Task.sequence
@@ -207,6 +234,8 @@ allChecks db =
         , Task.map (\ok -> ( "re-migrate idempotent", ok )) (idempotent db)
         , Task.map (\ok -> ( "duplicate (uid,body_hash) no-op", ok )) (duplicateInsertIsNoop db)
         , Task.map (\ok -> ( "refusal reason is non-blank and bounded", ok )) (reasonBounded db)
+        , Task.map (\ok -> ( "a stored over-long reason decodes and shows its length", ok )) (storedOverlongReasonDecodes db)
+        , Task.map (\ok -> ( "a stored blank reason decodes as blank", ok )) (storedBlankReasonDecodes db)
         , Task.map (\ok -> ( "decision roundtrip", ok )) (decisionRoundtrip db)
         , Task.succeed
             ( "formatReviewedAt renders UTC"
@@ -2150,7 +2179,7 @@ openReadOnlyAt path =
         |> Task.andThen (\loc -> Db.open "sqlite" (Settings.indexReadUrl loc))
 
 
-hasDecision : Maybe Decision -> Bool
+hasDecision : Maybe LibDb.ReviewRow -> Bool
 hasDecision m =
     case m of
         Just _ ->
@@ -2447,7 +2476,7 @@ historyRoundtrip =
                                 == 2
                                 && List.member ( "u-a", "approve" ) (List.map (\r -> ( r.uid, r.decision )) rows)
                                 && List.member ( "u-b", "refuse" ) (List.map (\r -> ( r.uid, r.decision )) rows)
-                                && List.member (Just "too big") (List.map (\r -> Maybe.map reasonShown r.reason) rows)
+                                && List.member (Just "too big") (List.map (\r -> Maybe.map (\s -> SafeText.toString (LibDb.storedReasonText s)) r.reason) rows)
                         )
             )
         |> Task.andThen
