@@ -2852,12 +2852,20 @@ mod process_run_with_tests {
         assert!(matches!(res, IpeResult::Err(_)));
     }
 
-    /// cwd override is honoured: `pwd` must echo the target directory.
+    /// A cwd override is honoured: the child's own idea of its directory
+    /// must echo the target.
+    ///
+    /// `cmd /C cd` on Windows, never `sh`/`pwd` — Git Bash's `sh` rewrites
+    /// the native path through its own MSYS translation, so its `pwd`
+    /// output would never match the native override we set and check.
     #[test]
     fn cwd_override_is_honoured() {
         let tmp = crate::scratch_core::test_temp_root();
         let tmp_str = tmp.to_string_lossy().into_owned();
+        #[cfg(not(windows))]
         let mut c = cfg("sh", &["-c", "pwd"]);
+        #[cfg(windows)]
+        let mut c = cfg("cmd", &["/C", "cd"]);
         c.cwd = IpeMaybe::Just(tmp_str.clone());
         let res: IpeResult<String, ProcessRunOutput> = block(process_run_with::<String>(c));
         match res {
