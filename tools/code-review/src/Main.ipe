@@ -45,9 +45,11 @@ type alias Model =
     , refuseDraft : String
     , refuseError : Maybe Error
     , decisionError : Maybe Error
+    , queueLoad : Queue.LoadTicket
     , history : Queue.HistoryState
-    , historyLoads : Int
+    , historyLoad : Queue.LoadTicket
     , unitPage : Queue.UnitPageState
+    , unitLoad : Queue.LoadTicket
     , selected : Int
     }
 
@@ -64,9 +66,11 @@ init _req =
       , refuseDraft = ""
       , refuseError = Nothing
       , decisionError = Nothing
+      , queueLoad = Queue.firstTicket
       , history = HistoryLoading
-      , historyLoads = 0
+      , historyLoad = Queue.firstTicket
       , unitPage = UnitLoading
+      , unitLoad = Queue.firstTicket
       , selected = 0
       }
     , Cmd.none
@@ -86,50 +90,78 @@ enterPage page model =
     in
     case page of
         QueuePage ->
-            ( entered, loadQueue model )
+            loadQueue entered.queueCursor entered
 
         HistoryPage ->
-            loadHistory HistoryStart entered
+            withQueue (loadHistory HistoryStart entered)
 
         UnitPage uid ->
-            ( { entered | unitPage = UnitLoading }
-            , Cmd.batch [ queueIfUnloaded model, Cmd.perform (Queue.loadUnitView uid) (UnitViewLoaded uid) ]
-            )
+            withQueue (loadUnit uid entered)
 
 
-loadQueue : Model -> Cmd Msg
-loadQueue model =
-    Cmd.perform (Queue.loadPage model.queueCursor) PendingLoaded
+-- The queue page from `cursor`, under the queue's next load ticket; the shown
+-- page stays until the result settles it.
+loadQueue : Index.Cursor -> Model -> ( Model, Cmd Msg )
+loadQueue cursor model =
+    let
+        load =
+            Queue.nextTicket model.queueLoad
+    in
+    ( { model | queueCursor = cursor, queueLoad = load }
+    , Cmd.perform (Queue.loadPage cursor) (PendingLoaded load)
+    )
 
 
-queueIfUnloaded : Model -> Cmd Msg
-queueIfUnloaded model =
+-- An entry, plus a queue load while the queue is not loaded.
+withQueue : ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
+withQueue ( model, cmd ) =
     case model.queueState of
         Loaded _ ->
-            Cmd.none
+            ( model, cmd )
 
         Loading ->
-            loadQueue model
+            alsoQueue cmd model
 
         Failed _ ->
-            loadQueue model
+            alsoQueue cmd model
 
 
--- One History page loaded from `cursor`. Each load is numbered, and only the
--- latest load's result is shown, so a slower earlier page never replaces it.
+alsoQueue : Cmd Msg -> Model -> ( Model, Cmd Msg )
+alsoQueue cmd model =
+    let
+        ( queued, queueCmd ) =
+            loadQueue model.queueCursor model
+    in
+    ( queued, Cmd.batch [ cmd, queueCmd ] )
+
+
+-- One History page loaded from `cursor`, under the History slot's next load
+-- ticket.
 loadHistory : LibDb.HistoryCursor -> Model -> ( Model, Cmd Msg )
 loadHistory cursor model =
     let
         load =
-            model.historyLoads + 1
+            Queue.nextTicket model.historyLoad
     in
-    ( { model | history = HistoryLoading, historyLoads = load }
-    , Cmd.batch [ queueIfUnloaded model, Cmd.perform (Queue.loadHistoryPage cursor) (HistoryPageLoaded load) ]
+    ( { model | history = HistoryLoading, historyLoad = load }
+    , Cmd.perform (Queue.loadHistoryPage cursor) (HistoryPageLoaded load)
+    )
+
+
+-- One unit page loaded, under the unit slot's next load ticket.
+loadUnit : String -> Model -> ( Model, Cmd Msg )
+loadUnit uid model =
+    let
+        load =
+            Queue.nextTicket model.unitLoad
+    in
+    ( { model | unitPage = UnitLoading, unitLoad = load }
+    , Cmd.perform (Queue.loadUnitView uid) (UnitViewLoaded load)
     )
 
 
 type Msg
-    = PendingLoaded (Result Error Queue.QueuePage)
+    = PendingLoaded Queue.LoadTicket (Result Error Queue.QueuePage)
     | NextPage Index.Cursor
     | ApproveUnit String
     | RefuseStart String
@@ -140,9 +172,9 @@ type Msg
     | Navigated Page
     | ShowQueue
     | ShowHistory
-    | HistoryPageLoaded Int (Result Error Queue.HistoryPage)
+    | HistoryPageLoaded Queue.LoadTicket (Result Error Queue.HistoryPage)
     | HistoryNext LibDb.HistoryCursor
-    | UnitViewLoaded String (Result Error (Maybe ( Index.Unit, List Links.Link )))
+    | UnitViewLoaded Queue.LoadTicket (Result Error (Maybe ( Index.Unit, List Links.Link )))
     | KeyDown String
     | SelectUnit Int
 
@@ -150,17 +182,19 @@ type Msg
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        PendingLoaded result ->
-            let
-                loaded =
-                    { model | queueState = Queue.stateFromResult result, refusingUid = Nothing }
-            in
-            ( { loaded | selected = clampIndex model.selected (List.length (queueList loaded)) }, Cmd.none )
+        PendingLoaded load result ->
+            if Queue.isCurrentLoad load model.queueLoad then
+                let
+                    loaded =
+                        { model | queueState = Queue.stateFromResult result, refusingUid = Nothing }
+                in
+                ( { loaded | selected = clampIndex model.selected (List.length (queueList loaded)) }, Cmd.none )
+
+            else
+                ( model, Cmd.none )
 
         NextPage cursor ->
-            ( { model | queueState = Loading, queueCursor = cursor, selected = 0 }
-            , Cmd.perform (Queue.loadPage cursor) PendingLoaded
-            )
+            loadQueue cursor { model | queueState = Loading, selected = 0 }
 
         ApproveUnit uid ->
             ( model, saveDecision model uid Approved )
@@ -180,7 +214,11 @@ update msg model =
         DecisionSaved uid result ->
             case result of
                 Ok ( attested, _ ) ->
-                    ( { model | decisionError = Nothing }, drainAndReload model attested )
+                    let
+                        load =
+                            Queue.nextTicket model.queueLoad
+                    in
+                    ( { model | decisionError = Nothing, queueLoad = load }, drainAndReload model attested load )
 
                 Err e ->
                     ( { model | decisionError = Just e }, Cmd.none )
@@ -195,7 +233,7 @@ update msg model =
             enterPage HistoryPage model
 
         HistoryPageLoaded load result ->
-            if load == model.historyLoads then
+            if Queue.isCurrentLoad load model.historyLoad then
                 ( { model | history = Queue.historyStateFromResult result }, Cmd.none )
 
             else
@@ -204,8 +242,8 @@ update msg model =
         HistoryNext cursor ->
             loadHistory cursor model
 
-        UnitViewLoaded uid result ->
-            if model.page == UnitPage uid then
+        UnitViewLoaded load result ->
+            if Queue.isCurrentLoad load model.unitLoad then
                 ( { model | unitPage = Queue.unitPageFromResult result }, Cmd.none )
 
             else
@@ -322,8 +360,8 @@ saveDecision model uid decision =
 -- the hand-off, both under the attested hash the decision was written with.
 -- A failure anywhere fails closed with the queue unchanged — the unit stays
 -- visible with its badge and the next click retries.
-drainAndReload : Model -> Index.Attested -> Cmd Msg
-drainAndReload model attested =
+drainAndReload : Model -> Index.Attested -> Queue.LoadTicket -> Cmd Msg
+drainAndReload model attested load =
     Cmd.perform
         (do
             db <- LibDb.open
@@ -331,7 +369,7 @@ drainAndReload model attested =
             Index.drainUnit attested
             Queue.loadPage model.queueCursor
         )
-        PendingLoaded
+        (PendingLoaded load)
 
 
 header : Model -> Ui.Element Msg

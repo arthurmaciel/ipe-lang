@@ -286,8 +286,8 @@ historyWalkStep db state =
                 Task.succeed (Task.Continue { next | cursor = cursor })
 
 
-isLastPage : Maybe LibDb.HistoryCursor -> Bool
-isLastPage next =
+isLastHistoryPage : Maybe LibDb.HistoryCursor -> Bool
+isLastHistoryPage next =
     case next of
         Nothing ->
             True
@@ -338,6 +338,41 @@ historyStateTextsDistinct =
         ]
 
 
+-- Both History page shapes read in the order of the `review_history_order`
+-- index: the first page scans it from the top, a later page seeks into it at
+-- its cursor, and neither sorts the table. Red without the index migration,
+-- or if the cursor predicate loses its seekable `reviewed_at <=` bound.
+historyPagesUseIndex : Db -> Task.Task Error Bool
+historyPagesUseIndex db =
+    let
+        indexed plan =
+            List.any (String.contains "USING INDEX review_history_order") plan
+                && not (List.any (String.contains "TEMP B-TREE") plan)
+    in
+    do
+        first <- LibDb.historyPlan db HistoryStart
+        later <- LibDb.historyPlan db (HistoryAfter (Timestamp.fromUnixMillis 5) "u" "h")
+        Task.succeed (indexed first && indexed later && List.any (String.startsWith "SEARCH") later)
+
+
+-- A slot's load tickets: each load takes a ticket no earlier load holds, and
+-- only the latest ticket settles the slot. Red if a later load could share
+-- an earlier load's ticket, so a slower earlier result would replace it.
+loadTicketsSettleLatest : Bool
+loadTicketsSettleLatest =
+    let
+        first =
+            Queue.nextTicket Queue.firstTicket
+
+        second =
+            Queue.nextTicket first
+    in
+    Queue.isCurrentLoad second second
+        && not (Queue.isCurrentLoad first second)
+        && not (Queue.isCurrentLoad Queue.firstTicket first)
+        && not (Queue.isCurrentLoad second first)
+
+
 -- ── end stored rows ─────────────────────────────────────────────────────
 
 
@@ -352,6 +387,8 @@ allChecks db =
         , Task.map (\ok -> ( "a stored blank reason decodes as blank", ok )) (storedBlankReasonDecodes db)
         , Task.map (\ok -> ( "history pages walk every row once in order", ok )) (historyWalkMatchesOrder db)
         , Task.map (\ok -> ( "a history page below one row is refused", ok )) (historyPageSizeRefused db)
+        , Task.map (\ok -> ( "history pages read in index order", ok )) (historyPagesUseIndex db)
+        , Task.succeed ( "only the latest load settles a page slot", loadTicketsSettleLatest )
         , Task.succeed ( "history state texts distinguish loading/empty/failed/loaded", historyStateTextsDistinct )
         , Task.map (\ok -> ( "decision roundtrip", ok )) (decisionRoundtrip db)
         , Task.succeed
@@ -2593,7 +2630,7 @@ historyRoundtrip =
                                 rows =
                                     page.rows
                             in
-                            isLastPage page.next
+                            isLastHistoryPage page.next
                                 && List.length rows
                                 == 2
                                 && List.member ( "u-a", "approve" ) (List.map (\r -> ( r.uid, r.decision )) rows)

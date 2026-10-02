@@ -1,4 +1,4 @@
-module Lib.Queue exposing (HistoryPage, HistoryRow, HistoryState(..), Progress, QueuePage, QueueState(..), QueuedUnit, ResyncBound, UnitPageState(..), decide, historyStateFromResult, historyStatusText, loadHistoryPage, loadPage, loadUnitView, pageHeaderText, queueStatusText, resyncBound, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
+module Lib.Queue exposing (HistoryPage, HistoryRow, HistoryState(..), LoadTicket, Progress, QueuePage, QueueState(..), QueuedUnit, ResyncBound, UnitPageState(..), decide, firstTicket, historyStateFromResult, historyStatusText, isCurrentLoad, loadHistoryPage, loadPage, nextTicket, loadUnitView, pageHeaderText, queueStatusText, resyncBound, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
 
 import Ipe.Db as Db
 import Ipe.Error as Error
@@ -195,6 +195,40 @@ type QueueState
     = Loading
     | Loaded QueuePage
     | Failed Error
+
+
+-- The number of one load of a page slot (the queue, a History page, a unit
+-- page). Each load a slot starts takes the ticket after the slot's latest,
+-- and a result settles the slot only under the slot's latest ticket, so a
+-- slower earlier load never replaces the result of a later one. Opaque:
+-- built only by `firstTicket` and `nextTicket`.
+type LoadTicket
+    = LoadTicket Int
+
+
+firstTicket : LoadTicket
+firstTicket =
+    LoadTicket 0
+
+
+nextTicket : LoadTicket -> LoadTicket
+nextTicket ticket =
+    case ticket of
+        LoadTicket n ->
+            LoadTicket (n + 1)
+
+
+-- True when a result carrying `load` is the slot's latest load.
+isCurrentLoad : LoadTicket -> LoadTicket -> Bool
+isCurrentLoad load latest =
+    ticketNumber load == ticketNumber latest
+
+
+ticketNumber : LoadTicket -> Int
+ticketNumber ticket =
+    case ticket of
+        LoadTicket n ->
+            n
 
 
 -- A decided unit as the History page shows it: the review row plus the unit's

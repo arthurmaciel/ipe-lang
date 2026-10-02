@@ -1,4 +1,4 @@
-module Lib.Db exposing (Decision(..), Reason, ReviewRow, StoredReason, countDecisions, decidedPairsAfter, findDecision, findLatestForUid, HistoryCursor(..), HistoryRows, historyPage, historyPageSize, insertDecision, insertDrainCursor, migrate, open, openAt, pairPageSize, parseReason, probe, reasonMaxChars, reasonText, recordDrain, storedReasonText)
+module Lib.Db exposing (Decision(..), Reason, ReviewRow, StoredReason, countDecisions, decidedPairsAfter, findDecision, findLatestForUid, HistoryCursor(..), HistoryRows, historyPage, historyPageSize, historyPlan, insertDecision, insertDrainCursor, migrate, open, openAt, pairPageSize, parseReason, probe, reasonMaxChars, reasonText, recordDrain, storedReasonText)
 
 import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
 import Ipe.Config as Config
@@ -573,6 +573,18 @@ historyPage db pageSize cursor =
             |> Task.map (\rows -> { rows = rows, next = historyNext pageSize rows })
 
 
+-- The query plan SQLite chooses for the History page from `cursor`, one
+-- detail line per step. The page order is the `review_history_order` index
+-- order, so a page seeks into the index and reads at most its size, never
+-- the whole table nor a sort of it.
+historyPlan : Db -> HistoryCursor -> Task.Task Error (List String)
+historyPlan db cursor =
+    Db.queryDecode db
+        ("EXPLAIN QUERY PLAN " ++ historySql cursor)
+        (historyParams historyPageSize cursor)
+        (Db.Decode.succeed identity |> Db.Decode.required "detail" (Db.Decode.string "detail"))
+
+
 historySql : HistoryCursor -> String
 historySql cursor =
     case cursor of
@@ -580,7 +592,7 @@ historySql cursor =
             historyColumns ++ historyOrder
 
         HistoryAfter _ _ _ ->
-            historyColumns ++ " WHERE reviewed_at < ? OR (reviewed_at = ? AND (uid, body_hash) > (?, ?))" ++ historyOrder
+            historyColumns ++ " WHERE reviewed_at <= ? AND (reviewed_at < ? OR (uid, body_hash) > (?, ?))" ++ historyOrder
 
 
 historyParams : Int -> HistoryCursor -> List SqlValue
