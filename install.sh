@@ -673,6 +673,13 @@ die_no_prebuilt() {
 # refuse rather than try to quote it perfectly at each use. Backslash and the
 # drive-letter colon ARE allowed — Windows paths (`D:\...`) need them, and both
 # are inert inside the single-quoted `export PATH='…'` the env file emits.
+# HOME is written into the line the login shell's rc sources (`. "$HOME/.ipe/env"`),
+# inside double quotes, so a quote, `$`, backtick, backslash or control byte in it
+# would turn that line into shell code. Spaces and non-ASCII stay legal.
+case "$HOME" in
+  *[\"\$\`\\]*|*[[:cntrl:]]*)
+    die 'Your HOME path holds a character the installer cannot write into a shell startup file (a quote, $, backtick, backslash or control character): %s' "$HOME" ;;
+esac
 case "$INSTALL_DIR" in
   *[!A-Za-z0-9._/+@:\\-]*)
     die 'The install directory contains unsupported characters: %s' "$INSTALL_DIR" ;;
@@ -954,7 +961,7 @@ download_with_progress() {
   # Terminal: curl in background (its own subshell so `set -e` can't trip on the
   # spinner loop); poll DEST size for the animation. Pre-create DEST so the
   # poller's `< DEST` never hits a not-yet-opened file mid-race.
-  : > "$dl_dest"
+  true > "$dl_dest" || die 'Could not write the download to %s.' "$dl_dest"
   ( curl -fsSL "$dl_url" -o "$dl_dest"; echo $? > "$tmp/curl.rc" ) &
   dl_pid=$!
 

@@ -606,6 +606,38 @@ fn a_binary_that_cannot_be_copied_into_place_is_named() -> io::Result<()> {
 }
 
 #[test]
+fn a_home_that_would_become_shell_code_in_the_rc_line_is_refused() -> io::Result<()> {
+    for home in ["/h/a\"b", "/h/a$(id)", "/h/a`id`", "/h/a\\b", "/h/a\tb"] {
+        let r = root("install-msg-home")?;
+        let dir = leaf(&r, "dest")?;
+        let run = run_installer(
+            &r,
+            &[
+                ("HOME", OsStr::new(home)),
+                ("IPE_INSTALL_DIR", dir.as_os_str()),
+            ],
+        )?;
+        assert_refused_escaped(&run, "Your HOME path holds a character", home);
+    }
+    for home in ["/c/Users/John Doe", "/home/jo\u{e3}o"] {
+        let r = root("install-msg-home-ok")?;
+        let dir = leaf(&r, "dest")?;
+        let run = run_installer(
+            &r,
+            &[
+                ("HOME", OsStr::new(home)),
+                ("IPE_INSTALL_DIR", dir.as_os_str()),
+            ],
+        )?;
+        assert!(
+            !String::from_utf8_lossy(&run.stderr).contains("Your HOME path holds"),
+            "HOME `{home}` holds only path characters and must pass the gate"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn release_tag_ok_table() -> io::Result<()> {
     let longest = format!("v1.{}", "0".repeat(125));
     let too_long = format!("v1.{}", "0".repeat(126));
