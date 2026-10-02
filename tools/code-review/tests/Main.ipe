@@ -561,6 +561,22 @@ execIndex indexDb sql params =
         Task.succeed ()
 
 
+-- Like `execIndex`, with the schema's CHECK constraints off on the one
+-- connection the transaction holds: a tampered or foreign index can hold a `kind` or `facing` the
+-- real schema refuses, and the decode point must still render it safely.
+execIndexUnchecked : String -> String -> List SqlValue -> Task.Task Error ()
+execIndexUnchecked indexDb sql params =
+    do
+        conn <- Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rw")
+        Db.withTransaction conn
+            (\tx ->
+                do
+                    Db.exec tx "PRAGMA ignore_check_constraints = ON" []
+                    Db.exec tx sql params
+                    Task.succeed ()
+            )
+
+
 -- ── source attestation ──────────────────────────────────────────────────
 --
 -- A unit's source is shown only when its lines re-hash to the stored
@@ -2954,7 +2970,7 @@ indexTextRendered =
     do
         removeFileIfAny at.indexDb
         seedIndex at.indexDb at.repo
-        execIndex at.indexDb
+        execIndexUnchecked at.indexDb
             "UPDATE units SET name = ?, qualified = ?, kind = ?, facing = ?, purpose = ? WHERE uid = ?"
             [ SqlString ("an" ++ rlo ++ "swer")
             , SqlString ("Lib." ++ rlo ++ "answer")
