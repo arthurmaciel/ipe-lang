@@ -125,7 +125,9 @@ pub enum OutputFormat {
 /// rule for strings. A command builds its verdict from these and never
 /// hand-writes JSON punctuation.
 pub mod json {
-    /// Encode a string as a JSON string literal through the display escaper
+    /// Encode a string as a JSON string literal.
+    ///
+    /// The body comes from the display escaper
     /// [`ipe_diagnostics::json::string_body`]: `"`, `\`, and every terminal
     /// hazard (controls, bidi and other format characters) are escaped.
     #[must_use]
