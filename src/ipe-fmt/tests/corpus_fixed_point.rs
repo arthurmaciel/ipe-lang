@@ -45,7 +45,7 @@ const KNOWN_PARSE_REFUSALS: &[&str] = &[
 const MIN_FORMATTED_FILES: usize = 1200;
 
 fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+    Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).to_path_buf()
 }
 
 /// Collects every `.ipe` file under `root`.

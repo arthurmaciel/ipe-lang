@@ -812,12 +812,18 @@ fn host_triple_from_rustc_vv(text: &str) -> Option<&str> {
 /// `rustc` is not on `PATH`, exits non-zero, or its output does not carry a
 /// parseable `host:` line.
 fn rustc_host_triple() -> Option<String> {
+    let text = rustc_vv_text()?;
+    host_triple_from_rustc_vv(&text).map(str::to_owned)
+}
+
+/// The running toolchain's `rustc -vV` text. `None` when `rustc` is not on
+/// `PATH`, exits non-zero, or prints non-UTF-8.
+fn rustc_vv_text() -> Option<String> {
     let out = Command::new("rustc").arg("-vV").output().ok()?;
     if !out.status.success() {
         return None;
     }
-    let text = String::from_utf8(out.stdout).ok()?;
-    host_triple_from_rustc_vv(&text).map(str::to_owned)
+    String::from_utf8(out.stdout).ok()
 }
 
 /// The running toolchain's link driver, derived from its host triple. `None`
@@ -830,11 +836,7 @@ fn host_link_driver() -> Option<LinkDriver> {
 /// The `rustc -vV` release line, used as the cache invalidation key. `None`
 /// when `rustc` is not on PATH or its output cannot be parsed.
 fn rustc_version_string() -> Option<String> {
-    let out = Command::new("rustc").arg("-vV").output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8(out.stdout).ok()?;
+    let text = rustc_vv_text()?;
     // The "release:" line uniquely identifies the toolchain version.
     text.lines()
         .find(|l| l.starts_with("release:"))
