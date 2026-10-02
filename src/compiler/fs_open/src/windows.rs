@@ -36,6 +36,10 @@ const ATTR_DIRECTORY: u32 = 0x10;
 const ATTR_REPARSE_POINT: u32 = 0x400;
 /// `ERROR_REPARSE_POINT_ENCOUNTERED`: the typed refusal of a reparse point.
 const ERROR_REPARSE_POINT_ENCOUNTERED: i32 = 4395;
+/// `ERROR_SHARING_VIOLATION`: another open handle denies the access asked for.
+const ERROR_SHARING_VIOLATION: i32 = 32;
+/// `ERROR_LOCK_VIOLATION`: another process has locked a region of the file.
+const ERROR_LOCK_VIOLATION: i32 = 33;
 
 /// A held directory handle and the reparse-free path proven to name it.
 #[derive(Debug)]
@@ -48,6 +52,7 @@ pub struct Dir {
 fn refusal_of(error: &io::Error) -> OpenRefusal {
     match (error.raw_os_error(), error.kind()) {
         (Some(ERROR_REPARSE_POINT_ENCOUNTERED), _) => OpenRefusal::Link,
+        (Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION), _) => OpenRefusal::InUse,
         (_, io::ErrorKind::NotFound) => OpenRefusal::Absent,
         (_, io::ErrorKind::PermissionDenied) => OpenRefusal::Denied,
         (_, kind) => OpenRefusal::Io(kind),

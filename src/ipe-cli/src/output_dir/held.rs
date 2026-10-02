@@ -175,8 +175,14 @@ fn act_err(path: &Path, error: io::Error) -> CliError {
 }
 
 /// The error for an open or read of `path` that `refusal` turned back.
+///
+/// An entry another program holds open is refused with
+/// [`OutputRefusal::InUse`], as [`act_err`] refuses a write act on one.
 fn refused(path: &Path, refusal: OpenRefusal) -> CliError {
-    act_err(path, refusal.into_io())
+    match refusal {
+        OpenRefusal::InUse => OutputRefusal::InUse(path.to_path_buf()).into(),
+        refusal => act_err(path, refusal.into_io()),
+    }
 }
 
 impl HeldDir {
@@ -318,20 +324,19 @@ impl HeldDir {
     /// Whether this directory carries a genuine ownership marker.
     ///
     /// The marker must be a regular file (never a link) whose first line is
-    /// [`MARKER_HEADER`]; a link or a non-file at the marker name is no
-    /// marker.
+    /// [`MARKER_HEADER`]; a link at the marker name is no marker.
     ///
     /// # Errors
-    /// [`CliError::Io`] on an open or read failure other than absence.
+    /// [`CliError::Io`] for a directory or special file at the marker name,
+    /// which no claim may take for an empty directory's marker, and on an
+    /// open or read failure other than absence.
     pub fn has_marker(&self) -> Result<bool, CliError> {
         let name = OsStr::new(OWNERSHIP_MARKER);
         let entry = self.entry(name)?;
         let path = self.path.join(name);
         let file = match self.dir.open_regular(&entry) {
             Ok(file) => file,
-            Err(OpenRefusal::Absent | OpenRefusal::Link | OpenRefusal::NotRegular(_)) => {
-                return Ok(false);
-            }
+            Err(OpenRefusal::Absent | OpenRefusal::Link) => return Ok(false),
             Err(refusal) => return Err(refused(&path, refusal)),
         };
         let head = file
@@ -1129,6 +1134,81 @@ mod tests {
         assert_eq!(listed.err(), Some(OpenRefusal::Link));
         assert!(victim.join("keep.txt").is_file(), "the target is untouched");
         drop(held);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A directory at the marker name is refused, never read as an empty directory awaiting its marker.
+    #[test]
+    fn a_directory_at_the_marker_name_refuses_ownership() {
+        let base = scratch("marker_dir");
+        let marker = base.join(OWNERSHIP_MARKER);
+        std::fs::create_dir(&marker).expect("make marker-named dir");
+        std::fs::write(marker.join("keep.txt"), "keep").expect("user file");
+        let held = HeldDir::open(&base)
+            .expect("open base")
+            .expect("base exists");
+        let ownership = held.ownership();
+        assert!(
+            matches!(ownership, Err(CliError::Io { .. })),
+            "a directory at the marker name is refused, got {ownership:?}"
+        );
+        let adopted = held.adopt();
+        assert!(adopted.is_err(), "no claim adopts it, got {adopted:?}");
+        assert!(
+            marker.join("keep.txt").is_file(),
+            "the user file is untouched"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A symbolic link at the marker name is no marker, and never followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_at_the_marker_name_is_no_marker() {
+        let base = scratch("marker_link");
+        let elsewhere = base.join("elsewhere");
+        std::fs::write(&elsewhere, MARKER_TEXT).expect("write lookalike marker");
+        let level = base.join("level");
+        std::fs::create_dir(&level).expect("make level");
+        std::os::unix::fs::symlink(&elsewhere, level.join(OWNERSHIP_MARKER)).expect("link marker");
+        let held = HeldDir::open(&level)
+            .expect("open level")
+            .expect("level exists");
+        let marked = held.has_marker();
+        assert!(
+            matches!(marked, Ok(false)),
+            "a linked marker is not followed, got {marked:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A subdirectory another program holds open without sharing is refused, in use, when entered.
+    #[cfg(windows)]
+    #[test]
+    fn a_child_held_open_elsewhere_is_in_use() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        /// `FILE_FLAG_BACKUP_SEMANTICS`: allows opening a directory handle.
+        const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+        let base = scratch("win_child_in_use");
+        let busy = base.join("busy");
+        std::fs::create_dir(&busy).expect("make busy");
+        let other = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .custom_flags(BACKUP_SEMANTICS)
+            .open(&busy)
+            .expect("hold busy open elsewhere");
+        let parent = HeldDir::open(&base)
+            .expect("open base")
+            .expect("base exists");
+        let child = parent.child(OsStr::new("busy"));
+        assert!(
+            matches!(child, Err(CliError::OutputRefused(OutputRefusal::InUse(_)))),
+            "the in-use subdirectory is refused, got {child:?}"
+        );
+        drop(other);
         let _ = std::fs::remove_dir_all(&base);
     }
 }

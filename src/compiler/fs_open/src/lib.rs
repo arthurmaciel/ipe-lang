@@ -135,6 +135,8 @@ pub enum OpenRefusal {
     NotRegular(FileKind),
     /// The entry exists but may not be opened.
     Denied,
+    /// Another program holds the entry open or locked without sharing the access asked for (Windows).
+    InUse,
     /// The content is longer than this cap.
     TooLarge(ByteCap),
     /// The directory holds more entries than this cap.
@@ -154,6 +156,7 @@ impl fmt::Display for OpenRefusal {
             Self::Link => f.write_str("it is a symbolic link, which is never followed here"),
             Self::NotRegular(kind) => write!(f, "it is {kind}, not the kind expected"),
             Self::Denied => f.write_str("permission denied"),
+            Self::InUse => f.write_str("another program holds it open"),
             Self::TooLarge(cap) => write!(f, "it is larger than {} bytes", cap.get()),
             Self::TooManyEntries(cap) => write!(f, "it holds more than {} entries", cap.get()),
             Self::BadName => f.write_str("it is not one plain entry name"),
@@ -172,6 +175,7 @@ impl OpenRefusal {
         match self {
             Self::Absent => io::ErrorKind::NotFound,
             Self::Denied => io::ErrorKind::PermissionDenied,
+            Self::InUse => io::ErrorKind::ResourceBusy,
             Self::NotRegular(FileKind::Dir) => io::ErrorKind::IsADirectory,
             Self::TooLarge(_) => io::ErrorKind::FileTooLarge,
             Self::NotUtf8 => io::ErrorKind::InvalidData,
@@ -239,8 +243,9 @@ impl HeldDir {
     ///
     /// # Errors
     /// [`OpenRefusal::Absent`]; [`OpenRefusal::Link`] for a link;
-    /// [`OpenRefusal::NotRegular`] for a non-directory; another refusal on
-    /// another failure.
+    /// [`OpenRefusal::NotRegular`] for a non-directory; [`OpenRefusal::InUse`]
+    /// for a directory another program holds open (Windows); another refusal
+    /// on another failure.
     pub fn child_dir(&self, name: &EntryName) -> Result<Self, OpenRefusal> {
         self.dir.child_dir(name).map(|dir| Self { dir })
     }
@@ -250,7 +255,8 @@ impl HeldDir {
     /// # Errors
     /// [`OpenRefusal::Absent`]; [`OpenRefusal::Link`] for a link;
     /// [`OpenRefusal::NotRegular`] for a directory, FIFO, socket, or device;
-    /// [`OpenRefusal::Denied`]; another refusal on another failure.
+    /// [`OpenRefusal::Denied`]; [`OpenRefusal::InUse`] for a file another
+    /// program holds open (Windows); another refusal on another failure.
     pub fn open_regular(&self, name: &EntryName) -> Result<RegularFile, OpenRefusal> {
         self.dir.open_regular(name).and_then(RegularFile::prove)
     }

@@ -252,7 +252,7 @@ fn is_one_name(name: &OsStr) -> bool {
 #[cfg(windows)]
 fn opens_as_spelled(name: &OsStr) -> bool {
     name.to_str()
-        .is_some_and(super::win32_name::opens_as_spelled)
+        .is_some_and(ipe_fs_open::win32_name::opens_as_spelled)
 }
 
 /// Whether the platform opens `name` as the entry it spells: always, off Windows.

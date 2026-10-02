@@ -352,8 +352,29 @@ fn a_file_is_not_a_child_directory() {
     );
 }
 
+/// Zero is not a cap: no constructor turns it into an unbounded read.
 #[test]
-fn zero_is_no_cap() {
+fn zero_is_not_a_cap() {
     assert!(ByteCap::new(0).is_none());
     assert!(EntryCap::new(0).is_none());
+}
+
+/// A file another program holds open without sharing is refused, in use.
+#[cfg(windows)]
+#[test]
+fn a_file_held_open_elsewhere_is_in_use() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let dir = scratch("in_use");
+    std::fs::write(dir.join("busy.txt"), "busy").unwrap();
+    let other = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(dir.join("busy.txt"))
+        .unwrap();
+    let opened = held(&dir).open_regular(&name("busy.txt"));
+    assert!(
+        matches!(opened, Err(OpenRefusal::InUse)),
+        "a file held without sharing is refused, got {opened:?}"
+    );
+    drop(other);
 }
