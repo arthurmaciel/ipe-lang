@@ -1,5 +1,5 @@
-//! The one owner of every `cargo` child the CLI spawns to build a crate or
-//! read its target directory.
+//! The one owner of every `cargo` child the CLI spawns to build a crate,
+//! resolve its lock, or read its target directory.
 //!
 //! A cargo build is described as a typed value — the crate it builds, its
 //! profile, its target and its output mode — and this module alone turns that
@@ -22,6 +22,10 @@ use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use ipe_backend_rust::static_build::StaticTriple;
 
 use crate::output_dir::OwnedDir;
+use crate::remote_ingest::{
+    LOCK_FETCH_LIMITS, LOCK_RESOLVE_LIMITS, LocalCeiling, LocalRefusal, LocalSource, RunError,
+    run_local,
+};
 use crate::style::TerminalSafe;
 use crate::toolchain::CargoBin;
 use crate::watch::{BuildAccel, apply_build_accel_env};
@@ -418,16 +422,29 @@ fn run_to_exit(
 /// the build command's program, directory and environment, so the lock comes
 /// from the toolchain that consumes it.
 ///
-/// The resolve is the one silent gap before cargo's own progress starts, so a
-/// [`Verbosity::Progress`] build covers it with a stage, settled before the
-/// relay starts. Its stderr is kept (up to [`STDERR_KEEP_CAP`]) for the
-/// failure diagnostic, never relayed.
+/// The resolve may fetch the registry index, so it runs under
+/// [`LOCK_FETCH_LIMITS`]. It is the one silent gap before cargo's own progress
+/// starts, so a [`Verbosity::Progress`] build covers it with a stage, settled
+/// before the relay starts. Its stderr is kept for the failure diagnostic,
+/// never relayed.
 ///
 /// # Errors
-/// [`CliError::Io`] if the resolve cannot be spawned, waited on or read;
-/// [`CliError::EmittedBuildFailed`] if it exits non-zero (the registry
-/// unreachable, for one).
+/// - [`CliError::LocalLimitExceeded`] if the resolve crosses a ceiling.
+/// - [`CliError::Io`] if the resolve cannot be spawned or waited on.
+/// - [`CliError::ChildPipeHeld`] if a process it started holds a pipe open.
+/// - [`CliError::EmittedBuildFailed`] if it exits non-zero (the registry
+///   unreachable, for one).
 fn lock_dependencies(build: &Command, dir: &Path, verbosity: Verbosity) -> Result<(), CliError> {
+    lock_dependencies_within(build, dir, verbosity, LOCK_FETCH_LIMITS)
+}
+
+/// [`lock_dependencies`] held to `ceiling`.
+fn lock_dependencies_within(
+    build: &Command,
+    dir: &Path,
+    verbosity: Verbosity,
+    ceiling: LocalCeiling,
+) -> Result<(), CliError> {
     let stage = (verbosity == Verbosity::Progress).then(|| {
         crate::progress::Stage::start(
             std::io::stderr(),
@@ -435,30 +452,22 @@ fn lock_dependencies(build: &Command, dir: &Path, verbosity: Verbosity) -> Resul
         )
     });
     let mut lock = Command::new(build.get_program());
-    lock.arg("generate-lockfile")
-        .current_dir(dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+    lock.arg("generate-lockfile").current_dir(dir);
     for (key, val) in build.get_envs() {
         match val {
             Some(v) => lock.env(key, v),
             None => lock.env_remove(key),
         };
     }
-    let io_err = |source: std::io::Error| CliError::Io {
-        path: dir.to_path_buf(),
-        source,
-    };
-    let resolved = match run_to_exit(&mut lock, StderrMode::Keep, 0) {
-        Ok(drained) if drained.waited.success() => Ok(()),
-        Ok(drained) => Err(CliError::EmittedBuildFailed {
+    let resolved = match run_local(lock, ceiling, LocalSource::LockFetch) {
+        Ok(captured) if captured.status.success() => Ok(()),
+        Ok(captured) => Err(CliError::EmittedBuildFailed {
             what: "the emitted crate's dependency lockfile",
-            code: drained.waited.code().unwrap_or(1),
-            stderr: TerminalSafe::sanitize(&drained.stderr.text),
+            code: captured.status.code().unwrap_or(1),
+            stderr: TerminalSafe::sanitize(&String::from_utf8_lossy(&captured.stderr)),
             runtime: None,
         }),
-        Err(source) => Err(io_err(source)),
+        Err(e) => Err(local_run_error(dir, e)),
     };
     if let Some(stage) = stage {
         if resolved.is_ok() {
@@ -468,6 +477,68 @@ fn lock_dependencies(build: &Command, dir: &Path, verbosity: Verbosity) -> Resul
         }
     }
     resolved
+}
+
+/// How an offline `cargo generate-lockfile` that ran within its ceilings ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockOutcome {
+    /// cargo exited zero: the lock is written.
+    Resolved,
+    /// cargo exited non-zero, or was ended by a signal (`code` is `None`).
+    Unresolved {
+        /// cargo's exit code, when it exited.
+        code: Option<i32>,
+    },
+}
+
+/// Resolve `manifest`'s dependency graph into its `Cargo.lock` offline, from the local registry cache.
+///
+/// The child runs under [`LOCK_RESOLVE_LIMITS`] with stdin closed. A
+/// non-zero exit is a [`LockOutcome::Unresolved`], not an error: the caller
+/// decides whether an unresolved lock is fatal.
+///
+/// # Errors
+/// - [`CliError::LocalLimitExceeded`] if cargo crosses a ceiling; its process
+///   group is killed.
+/// - [`CliError::Io`] (naming `manifest`) if cargo cannot be spawned or waited on.
+/// - [`CliError::ChildPipeHeld`] if a process cargo started holds a pipe open.
+pub fn lock_offline(cargo: &Path, manifest: &Path) -> Result<LockOutcome, CliError> {
+    lock_offline_within(cargo, manifest, LOCK_RESOLVE_LIMITS)
+}
+
+/// [`lock_offline`] held to `ceiling`.
+fn lock_offline_within(
+    cargo: &Path,
+    manifest: &Path,
+    ceiling: LocalCeiling,
+) -> Result<LockOutcome, CliError> {
+    let mut lock = Command::new(cargo);
+    lock.arg("generate-lockfile")
+        .arg("--offline")
+        .arg("--manifest-path")
+        .arg(manifest);
+    let captured = run_local(lock, ceiling, LocalSource::LockResolve)
+        .map_err(|e| local_run_error(manifest, e))?;
+    Ok(if captured.status.success() {
+        LockOutcome::Resolved
+    } else {
+        LockOutcome::Unresolved {
+            code: captured.status.code(),
+        }
+    })
+}
+
+/// The CLI error of a local cargo child that produced no result, naming `path` on an I/O failure.
+fn local_run_error(path: &Path, e: RunError<LocalRefusal>) -> CliError {
+    match e {
+        RunError::Exceeded(refusal) => CliError::LocalLimitExceeded(refusal),
+        RunError::Spawn(source) | RunError::Wait(source) => CliError::Io {
+            path: path.to_path_buf(),
+            source,
+        },
+        RunError::Measure(path, source) => CliError::Io { path, source },
+        RunError::PipeDrainTimeout(stream) => CliError::ChildPipeHeld(stream),
+    }
 }
 
 /// What a drain does with a child's stderr.
@@ -972,14 +1043,18 @@ mod tests {
         //! Builds driven through a stub `cargo` that logs every invocation.
 
         use super::super::{
-            CargoBuild, CargoCrate, CargoOutput, CargoProfile, CargoTarget, Verbosity,
-            target_directory,
+            CargoBuild, CargoCrate, CargoOutput, CargoProfile, CargoTarget, LockOutcome, Verbosity,
+            lock_dependencies_within, lock_offline, lock_offline_within, target_directory,
         };
         use crate::CliError;
         use crate::output_dir::OwnedDir;
+        use crate::remote_ingest::{
+            IngestLimit, LOCK_FETCH_LIMITS, LOCK_RESOLVE_LIMITS, LocalRefusal, LocalSource,
+        };
         use crate::toolchain::CargoBin;
         use std::os::unix::fs::PermissionsExt as _;
         use std::path::{Path, PathBuf};
+        use std::time::Duration;
 
         /// A fresh scratch base for `tag`.
         fn scratch(tag: &str) -> PathBuf {
@@ -1025,6 +1100,144 @@ mod tests {
                 runtime: None,
             }
             .run()
+        }
+
+        /// Whether the process whose pid is written to `file`, or any process of its group, still exists.
+        fn alive(file: &Path) -> bool {
+            let raw: i32 = std::fs::read_to_string(file)
+                .expect("pid file")
+                .trim()
+                .parse()
+                .expect("pid");
+            let pid = rustix::process::Pid::from_raw(raw).expect("non-zero pid");
+            let gone = Err(rustix::io::Errno::SRCH);
+            rustix::process::test_kill_process(pid) != gone
+                || rustix::process::test_kill_process_group(pid) != gone
+        }
+
+        /// A stub cargo that records its pid in `base/pid`, then sleeps far past any test wall.
+        fn sleeping_stub(base: &Path) -> CargoBin {
+            stub(
+                base,
+                &format!("echo $$ > '{}'\nexec sleep 30", base.join("pid").display()),
+            )
+        }
+
+        #[test]
+        fn an_offline_lock_past_its_wall_is_refused_and_killed() {
+            let base = scratch("lock-wall");
+            let cargo = sleeping_stub(&base);
+            let started = std::time::Instant::now();
+            let locked = lock_offline_within(
+                cargo.path(),
+                &base.join("Cargo.toml"),
+                LOCK_RESOLVE_LIMITS.with_wall(Duration::from_secs(1)),
+            );
+            assert!(
+                matches!(
+                    &locked,
+                    Err(CliError::LocalLimitExceeded(LocalRefusal {
+                        source: LocalSource::LockResolve,
+                        limit: IngestLimit::Time(_),
+                        ..
+                    }))
+                ),
+                "a resolve past its wall is a typed refusal, got {locked:?}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "the refusal lands at the wall, not at the child's exit"
+            );
+            assert!(
+                !alive(&base.join("pid")),
+                "the refused cargo is killed and reaped"
+            );
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn an_offline_lock_flooding_stdout_is_refused() {
+            let base = scratch("lock-stdout");
+            let cargo = stub(&base, "head -c 1048576 /dev/zero");
+            let locked = lock_offline(cargo.path(), &base.join("Cargo.toml"));
+            assert!(
+                matches!(
+                    &locked,
+                    Err(CliError::LocalLimitExceeded(LocalRefusal {
+                        source: LocalSource::LockResolve,
+                        limit: IngestLimit::Bytes(_),
+                        ..
+                    }))
+                ),
+                "a resolve past its stdout ceiling is a typed refusal, got {locked:?}"
+            );
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn an_offline_lock_that_fails_is_unresolved_not_an_error() {
+            let base = scratch("lock-fail");
+            let cargo = stub(&base, "exit 101");
+            let manifest = base.join("Cargo.toml");
+            let locked = lock_offline(cargo.path(), &manifest);
+            assert_eq!(
+                locked.ok(),
+                Some(LockOutcome::Unresolved { code: Some(101) })
+            );
+            assert_eq!(
+                invocations(&base).first().map(String::as_str),
+                Some(
+                    format!(
+                        "generate-lockfile --offline --manifest-path {}",
+                        manifest.display()
+                    )
+                    .as_str()
+                )
+            );
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn an_offline_lock_that_succeeds_is_resolved() {
+            let base = scratch("lock-ok");
+            let cargo = stub(&base, "true");
+            let locked = lock_offline(cargo.path(), &base.join("Cargo.toml"));
+            assert_eq!(locked.ok(), Some(LockOutcome::Resolved));
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn an_emitted_crate_lock_past_its_wall_is_refused_and_killed() {
+            let base = scratch("fetch-wall");
+            let cargo = sleeping_stub(&base);
+            let build = std::process::Command::new(cargo.path());
+            let started = std::time::Instant::now();
+            let locked = lock_dependencies_within(
+                &build,
+                &base,
+                Verbosity::Quiet,
+                LOCK_FETCH_LIMITS.with_wall(Duration::from_secs(1)),
+            );
+            assert!(
+                matches!(
+                    &locked,
+                    Err(CliError::LocalLimitExceeded(LocalRefusal {
+                        source: LocalSource::LockFetch,
+                        limit: IngestLimit::Time(_),
+                        ..
+                    }))
+                ),
+                "a networked resolve past its wall is a typed refusal, got {locked:?}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "the refusal lands at the wall, not at the child's exit"
+            );
+            assert!(
+                !alive(&base.join("pid")),
+                "the refused cargo is killed and reaped"
+            );
+            let _ = std::fs::remove_dir_all(&base);
         }
 
         #[test]

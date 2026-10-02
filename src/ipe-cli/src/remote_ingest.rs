@@ -240,16 +240,78 @@ pub const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// CLI wait longer; the wait ends in [`RunError::PipeDrainTimeout`].
 const PIPE_DRAIN_GRACE: Duration = Duration::from_secs(5);
 
+/// The ceilings of a local child run through [`run_local`].
+///
+/// Opaque: every production value is a named constant of this module, so a
+/// caller can neither build a ceiling nor widen one.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LocalCeiling(Limits);
+
+impl LocalCeiling {
+    /// This ceiling with its wall time set, for a test to drive the refusals.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn with_wall(self, wall: Duration) -> Self {
+        let Self(limits) = self;
+        Self(Limits { wall, ..limits })
+    }
+}
+
 /// The ceilings of a local `git` query, which stages nothing on disk.
 ///
 /// Its stdout (a revision, a remote URL, a porcelain status) is held to 4 MiB
 /// and its run to one minute.
-const QUERY_LIMITS: Limits = Limits {
+const QUERY_LIMITS: LocalCeiling = LocalCeiling(Limits {
     disk_bytes: 0,
     disk_entries: 0,
     stdout_bytes: 4 * MIB,
     wall: Duration::from_secs(60),
-};
+});
+
+/// The ceilings of an offline `cargo generate-lockfile`, which reads only the local registry cache.
+///
+/// Its stdout is held to 64 KiB and its run to two minutes, so a held
+/// `.package-cache` lock or a wedged resolve cannot hold the CLI.
+pub(crate) const LOCK_RESOLVE_LIMITS: LocalCeiling = LocalCeiling(Limits {
+    disk_bytes: 0,
+    disk_entries: 0,
+    stdout_bytes: 64 * KIB,
+    wall: Duration::from_secs(120),
+});
+
+/// The ceilings of a networked `cargo generate-lockfile`, which may fetch the registry index.
+///
+/// Its stdout is held to 64 KiB and its run to ten minutes, the wall of
+/// [`INDEX_CLONE`].
+pub(crate) const LOCK_FETCH_LIMITS: LocalCeiling = LocalCeiling(Limits {
+    disk_bytes: 0,
+    disk_entries: 0,
+    stdout_bytes: 64 * KIB,
+    wall: INDEX_CLONE.wall,
+});
+
+/// Run a local `command` detached in its own process group, held to `ceiling`.
+///
+/// Stdin is the null device; stdout is held to the ceiling and stderr
+/// truncated at [`CHILD_STDERR_MAX_BYTES`]. A crossed ceiling kills the
+/// child's group and is a [`LocalRefusal`] naming `source`.
+///
+/// # Errors
+/// See [`RunError`].
+pub(crate) fn run_local(
+    command: Command,
+    ceiling: LocalCeiling,
+    source: LocalSource,
+) -> Result<Captured, RunError<LocalRefusal>> {
+    let LocalCeiling(limits) = ceiling;
+    run_core(command, None, None, &limits, Instant::now(), Mode::Detached).map_err(|e| {
+        e.map_refusal(|limit| LocalRefusal {
+            source,
+            limit,
+            name: None,
+        })
+    })
+}
 
 /// The declared ingest ceilings of one remote surface.
 ///
@@ -773,6 +835,10 @@ pub enum LocalSource {
     PackageTree,
     /// A `git` query on a local repository.
     GitQuery,
+    /// An offline `cargo generate-lockfile` resolving from the local registry cache.
+    LockResolve,
+    /// A networked `cargo generate-lockfile` resolving an emitted crate's graph.
+    LockFetch,
 }
 
 impl std::fmt::Display for LocalSource {
@@ -780,6 +846,8 @@ impl std::fmt::Display for LocalSource {
         f.write_str(match self {
             Self::PackageTree => "package source tree",
             Self::GitQuery => "git query",
+            Self::LockResolve => "offline cargo lock resolve",
+            Self::LockFetch => "cargo lock resolve",
         })
     }
 }
@@ -2167,21 +2235,7 @@ impl Git {
     /// # Errors
     /// See [`RunError`]; a crossed ceiling is a [`LocalRefusal`] naming `source`.
     pub fn query(self, source: LocalSource) -> Result<Captured, RunError<LocalRefusal>> {
-        run_core(
-            self.command,
-            None,
-            None,
-            &QUERY_LIMITS,
-            Instant::now(),
-            Mode::Detached,
-        )
-        .map_err(|e| {
-            e.map_refusal(|limit| LocalRefusal {
-                source,
-                limit,
-                name: None,
-            })
-        })
+        run_local(self.command, QUERY_LIMITS, source)
     }
 
     /// The arguments given so far.

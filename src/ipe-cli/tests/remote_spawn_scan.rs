@@ -43,13 +43,12 @@ const COMMAND_ALIAS: &str = "Commandas";
 /// empty expression.
 const SPAWN_INVENTORY: &[(&str, &str, usize)] = &[
     ("audit.rs", "\"cargo-deny\"", 2),
-    ("audit_native.rs", "&cargo", 1),
     ("build_plan.rs", "\"rustup\"", 1),
     ("cache.rs", "\"mkfifo\"", 1),
     ("cache.rs", "\"rustc\"", 1),
     ("cargo_step.rs", "build.get_program()", 1),
-    ("cargo_step.rs", "cargo", 1),
-    ("cargo_step.rs", "cargo.path()", 1),
+    ("cargo_step.rs", "cargo", 2),
+    ("cargo_step.rs", "cargo.path()", 2),
     ("coverage/probe.rs", "&ipe_bin", 1),
     ("doc.rs", "&ipe_bin", 1),
     ("doc.rs", "opener", 1),
