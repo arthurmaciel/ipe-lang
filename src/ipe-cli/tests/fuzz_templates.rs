@@ -9,6 +9,7 @@
 //! vacuously. `tools/scripts/fuzz-well-typed.sh` and `fuzz-ill-typed.sh` run
 //! `random_well_typed_run` / `random_ill_typed_run` with a chosen seed and count.
 
+#[path = "fuzz_templates/harness.rs"]
 mod harness;
 
 use std::ffi::OsStr;
@@ -31,7 +32,7 @@ fn e2e_on() -> bool {
 }
 
 /// A well-typed program whose prelude import no longer resolves (`IPE-N0022`).
-const ROTTED_WELL_TYPED: &str = r#"-- fuzz-slot n1 : Int 0 9
+const ROTTED_WELL_TYPED: &str = r"-- fuzz-slot n1 : Int 0 9
 module Main exposing (main)
 
 import Ipe.Log exposing (println)
@@ -40,10 +41,10 @@ import Ipe.String as String
 
 main =
     println (String.fromInt @n1@)
-"#;
+";
 
 /// An ill-typed template whose mutant fill is the base fill, so the mutant type-checks.
-const MUTANT_EQUALS_BASE: &str = r#"-- fuzz-hole arg
+const MUTANT_EQUALS_BASE: &str = r"-- fuzz-hole arg
 --   base: 1
 --   mutant: 1
 -- fuzz-expect IPE-T0001
@@ -55,10 +56,10 @@ import Ipe.String as String
 
 main =
     Io.println (String.fromInt @arg@)
-"#;
+";
 
 /// An ill-typed template whose mutant is refused (`IPE-N0001`), but which declares `IPE-T0012`.
-const MUTANT_WRONG_REASON: &str = r#"-- fuzz-hole addend
+const MUTANT_WRONG_REASON: &str = r"-- fuzz-hole addend
 --   base: 0
 --   mutant: undef_x
 -- fuzz-expect IPE-T0012
@@ -70,10 +71,10 @@ import Ipe.String as String
 
 main =
     Io.println (String.fromInt (1 + @addend@))
-"#;
+";
 
 /// An ill-typed template whose body no longer compiles, so its base is refused.
-const ROTTED_BASE: &str = r#"-- fuzz-hole addend
+const ROTTED_BASE: &str = r"-- fuzz-hole addend
 --   base: 0
 --   mutant: undef_x
 -- fuzz-expect IPE-N0001
@@ -85,7 +86,7 @@ import Ipe.String as String
 
 main =
     println (String.fromInt (1 + @addend@))
-"#;
+";
 
 /// A well-typed program that divides by zero at run time.
 const DIVIDES_BY_ZERO: &str = r"module Main exposing (main)
@@ -286,7 +287,6 @@ fn with_body(header: &str) -> String {
 #[test]
 fn template_header_refusals() {
     let slot = "-- fuzz-slot n1 : Int 0 9\n";
-    let hole = "-- fuzz-hole h\n--   base: 1\n--   mutant: 2\n";
     let expect = "-- fuzz-expect IPE-T0001\n";
     let well = |text: &str| well_typed(text).err();
     let ill = |text: &str| ill_typed(text).err();
@@ -374,6 +374,15 @@ fn template_header_refusals() {
             raw: owned("IPE-T9999")
         })
     );
+}
+
+#[test]
+fn template_hole_and_token_refusals() {
+    let slot = "-- fuzz-slot n1 : Int 0 9\n";
+    let hole = "-- fuzz-hole h\n--   base: 1\n--   mutant: 2\n";
+    let expect = "-- fuzz-expect IPE-T0001\n";
+    let well = |text: &str| well_typed(text).err();
+    let ill = |text: &str| ill_typed(text).err();
     let placed = "module Main exposing (main)\n\nmain =\n    @n1@ + @h@\n";
     assert_eq!(
         ill(&format!("{slot}{hole}{placed}")),

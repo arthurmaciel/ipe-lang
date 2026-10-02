@@ -561,7 +561,7 @@ pub struct Template {
 pub struct Mutant {
     template: Template,
     base: Source,
-    mutant: Source,
+    faulty: Source,
     expect: Code,
 }
 
@@ -779,9 +779,7 @@ fn refuse_unused_slots(
     sources: &[&Source],
 ) -> Result<(), TemplateParseError> {
     for (index, (name, _)) in slots.iter().enumerate() {
-        let used = sources
-            .iter()
-            .any(|s| s.0.iter().any(|seg| *seg == Segment::Slot(index)));
+        let used = sources.iter().any(|s| s.0.contains(&Segment::Slot(index)));
         if !used {
             return Err(TemplateParseError::UnusedSlot { name: name.clone() });
         }
@@ -840,7 +838,7 @@ pub fn parse_ill_typed(
     Ok(Mutant {
         template: parsed.template,
         base,
-        mutant,
+        faulty: mutant,
         expect,
     })
 }
@@ -898,7 +896,7 @@ impl Mutant {
     pub fn render(&self, plan: FillPlan) -> Result<(Rendered, Rendered), HarnessError> {
         let values = self.template.values(plan);
         let base = render_source(&self.base, &values, None)?;
-        let mutant = render_source(&self.mutant, &values, None)?;
+        let mutant = render_source(&self.faulty, &values, None)?;
         Ok((
             self.template.render_with(&values, Some(base.as_str()))?,
             self.template.render_with(&values, Some(mutant.as_str()))?,
