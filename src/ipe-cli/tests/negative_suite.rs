@@ -802,6 +802,113 @@ fn canon_server_cookie_definition_reserved() {
     assert_rejected("canon_server_cookie_def", &src, "IPE-N0026");
 }
 
+// ---------------------------------------------------------------------------
+// Open (`exposing (..)`) stdlib imports defer a shared name's clash to a bare
+// use — IPE-N0024 at the use, never at the import.
+// ---------------------------------------------------------------------------
+
+/// Two open imports of stdlib modules declaring a type or constructor of the
+/// same name compile while no bare use names it.
+#[test]
+fn canon_open_imports_sharing_a_name_compile_unused() {
+    for (name, first, second) in [
+        (
+            "canon_open_parser_transition",
+            "Ipe.Parser",
+            "Ipe.Ui.Transition",
+        ),
+        ("canon_open_ui_attributes", "Ipe.Ui", "Ipe.Html.Attributes"),
+        (
+            "canon_open_random_generator",
+            "Ipe.Random",
+            "Ipe.Random.Generator",
+        ),
+    ] {
+        let src = format!(
+            "{HEAD}\nimport Ipe.Io as Io\nimport {first} exposing (..)\nimport {second} exposing (..)\n\n\
+             main = Io.println \"ok\"\n"
+        );
+        assert_compiles(name, &src);
+    }
+}
+
+/// A bare `Step` annotation over the open `Ipe.Parser` and `Ipe.Ui.Transition`
+/// is IPE-N0024.
+#[test]
+fn canon_open_imports_bare_type_use_is_ambiguous() {
+    let src = format!(
+        "{HEAD}\nimport Ipe.Io as Io\nimport Ipe.Parser exposing (..)\nimport Ipe.Ui.Transition exposing (..)\n\n\
+         f : Step -> Int\nf _ =\n    0\n\n\
+         main = Io.println \"ok\"\n"
+    );
+    assert_rejected("canon_open_bare_type_ambiguous", &src, "IPE-N0024");
+}
+
+/// A bare `Alert` (each module's own `Role` constructor) over the open `Ipe.Ui`
+/// and `Ipe.Html.Attributes` is IPE-N0024.
+#[test]
+fn canon_open_imports_bare_ctor_use_is_ambiguous() {
+    let src = format!(
+        "{HEAD}\nimport Ipe.Io as Io\nimport Ipe.Ui exposing (..)\nimport Ipe.Html.Attributes exposing (..)\n\n\
+         r = Alert\n\n\
+         main = Io.println \"ok\"\n"
+    );
+    assert_rejected("canon_open_bare_ctor_ambiguous", &src, "IPE-N0024");
+}
+
+/// The open-import sweep: one program opens every compiled-source stdlib module
+/// a plain `main` may import, and compiles, so no stdlib type or constructor
+/// addition can reject an open importer that does not use the name.
+///
+/// The list is the registry the doc bundle reads. A module joins by rule: the
+/// placement table admits it in a plain-`main` script, and it is not an
+/// `Ipe.Tea.*` shape surface (a plain-`main` program importing one is
+/// IPE-N0033).
+#[test]
+fn canon_open_import_sweep_over_the_stdlib_registry_compiles() {
+    use ipe_canon::shape_runtime::{Admissibility, Placement, Shape, allowed_in, classify};
+    let script = Placement::sole_for(Shape::Script);
+    assert!(script.is_some(), "a plain-`main` script has one placement");
+    #[allow(clippy::expect_used)] // `is_some` is asserted just above
+    let script = script.expect("asserted present above");
+    let mut src = format!("{HEAD}\nimport Ipe.Io as Io\n");
+    let mut joined: Vec<&str> = Vec::new();
+    for module in ipe_stdlib::COMPILED_STD_MODULES {
+        let admitted = matches!(
+            allowed_in(classify(module.dotted), script),
+            Admissibility::Allow
+        );
+        if !admitted || module.dotted.starts_with("Ipe.Tea.") {
+            continue;
+        }
+        let _ = writeln!(
+            src,
+            "import {} as Open{} exposing (..)",
+            module.dotted,
+            joined.len()
+        );
+        joined.push(module.dotted);
+    }
+    src.push_str("\nmain = Io.println \"ok\"\n");
+    // Every module of a known shared-name pair must join, so the rule can never
+    // filter the sweep down past the clashes it exists to pin.
+    for pinned in [
+        "Ipe.Parser",
+        "Ipe.Ui.Transition",
+        "Ipe.Ui",
+        "Ipe.Html.Attributes",
+        "Ipe.Codec",
+        "Ipe.Random",
+        "Ipe.Random.Generator",
+    ] {
+        assert!(
+            joined.contains(&pinned),
+            "the sweep must open `{pinned}`, opened {joined:?}"
+        );
+    }
+    assert_compiles("canon_open_import_sweep", &src);
+}
+
 /// The shape app-leaf names (`WebApp` / `TuiApp` / `CliApp`) are
 /// deliberately NOT reserved — a user program may soundly declare
 /// `type WebApp = …` and use it, and the lowerer's empty-home guard keeps that

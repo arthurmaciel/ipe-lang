@@ -1,0 +1,37 @@
+module Main exposing (main)
+
+import Ipe.Parser as Parser
+import Ipe.Task as Task
+import Ipe.Error exposing (Error)
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- `Ipe.Parser` and `Ipe.Task` both declare a `Step` with a `Done` constructor.
+-- Used qualified, both live in one program as two distinct emitted enums.
+
+
+parsed : Int
+parsed =
+    case Parser.run (Parser.loop 0 (\i -> Parser.succeed (Parser.Done (i + 7)))) "" of
+        Ok n ->
+            n
+
+        Err _ ->
+            0
+
+
+main =
+    do
+        counted <-
+            Task.loop 3
+                0
+                (\i ->
+                    if i >= 1 then
+                        Task.succeed (Task.Done i)
+
+                    else
+                        Task.succeed (Task.Continue (i + 1))
+                )
+        _ <- Io.println (String.fromInt counted)
+        Io.println (String.fromInt parsed)

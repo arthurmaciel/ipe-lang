@@ -652,6 +652,10 @@ pub struct Builtins {
     /// `StoreEqBy` kernel scheme (`Codec t -> …`), so an enum/newtype column's
     /// comparison value is projected to a bound `SqlValue` through its own codec.
     pub codec_con: Symbol,
+    /// `"Step"` — the `Ipe.Task.Step` loop-step ADT (`Continue s | Done a`).
+    /// Consumed by the `Task.loop` kernel scheme; homed via
+    /// [`Self::task_home`] so the scheme's `Step` is the compiled-module enum.
+    pub task_step: Symbol,
     /// `"Store"` — the `Ipe.Db.Store.Store a` ADT, the classified, queryable
     /// table. Reads and writes accept a `Store a`; it is reachable only via
     /// `public` / `secured` applied to a `Draft a` (deny-by-default).
@@ -757,6 +761,11 @@ pub struct Builtins {
     /// through the lowerer's home-keyed variant lookup into the unknown-builtin
     /// internal-compiler-error arm (mirrors [`Self::email_home`]).
     pub duration_home: Vec<Symbol>,
+    /// The interned module segments `["Ipe", "Task"]` — the real home of the
+    /// `Step` ADT. The `Task.loop` kernel scheme carries this home so its `Step`
+    /// is the same nominal type `Ipe.Task` declares, and a point-free reference
+    /// lowers to that emitted enum (mirrors [`Self::duration_home`]).
+    pub task_home: Vec<Symbol>,
 }
 
 impl Builtins {
@@ -1034,6 +1043,7 @@ impl Builtins {
             policy_con: interner.intern("Policy")?,
             order_con: interner.intern("Order")?,
             codec_con: interner.intern("Codec")?,
+            task_step: interner.intern("Step")?,
             // ── ProjectionTerm / ProjectionOperand ──────────────────────────────
             projection_term: interner.intern("ProjectionTerm")?,
             column_term: interner.intern("ColumnTerm")?,
@@ -1061,6 +1071,7 @@ impl Builtins {
             codec_home: vec![interner.intern("Ipe")?, interner.intern("Codec")?],
             email_home: vec![interner.intern("Ipe")?, interner.intern("Email")?],
             duration_home: vec![interner.intern("Ipe")?, interner.intern("Duration")?],
+            task_home: vec![interner.intern("Ipe")?, interner.intern("Task")?],
         })
     }
 

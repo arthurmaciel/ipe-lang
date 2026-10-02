@@ -30,6 +30,8 @@ mod golden_error_details_roundtrip;
 mod golden_error_expect_err_288;
 #[path = "g_fn_pattern/golden_error_nominal_payload.rs"]
 mod golden_error_nominal_payload;
+#[path = "g_fn_pattern/golden_eta_inline_arg_capture.rs"]
+mod golden_eta_inline_arg_capture;
 #[path = "g_fn_pattern/golden_firstclass.rs"]
 mod golden_firstclass;
 #[path = "g_fn_pattern/golden_fn_enum_payload.rs"]

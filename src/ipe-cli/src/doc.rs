@@ -109,7 +109,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{TyDoc, render_ty};
-use ipe_docs::{CommandInfo, Index};
+use ipe_docs::{CommandInfo, Index, html};
 use ipe_intern::Interner;
 use ipe_types::{VarNamer, kernel_type_table, ty_to_doc};
 
@@ -4124,13 +4124,13 @@ fn render_header(active: NavSection, base: &str, search_script: &str) -> String 
         } else {
             ""
         };
-        format!("<a href=\"{base}{href}\"{cls}>{}</a>", html_escape(label))
+        format!("<a href=\"{base}{href}\"{cls}>{}</a>", html::escape(label))
     };
     let mut h = format!(
         "<a class=\"skip-link\" href=\"#content\">{}</a>\n\
          <nav class=\"site-header\" aria-label=\"{}\">\n",
-        html_escape(text::site_skip_link()),
-        html_escape(text::site_nav_label()),
+        html::escape(text::site_skip_link()),
+        html::escape(text::site_nav_label()),
     );
     // The full title on desktop; the mobile CSS swaps in the short form via a
     // second span — never a bare \"Ipê docs\" (issue #1874, item 20).
@@ -4139,8 +4139,8 @@ fn render_header(active: NavSection, base: &str, search_script: &str) -> String 
         "<a class=\"site-title\" href=\"{base}index.html\">\
          <span class=\"title-full\">{}</span>\
          <span class=\"title-short\">{}</span></a>",
-        html_escape(text::site_title_full()),
-        html_escape(text::site_title_short()),
+        html::escape(text::site_title_full()),
+        html::escape(text::site_title_short()),
     );
     let _ = writeln!(
         h,
@@ -4148,7 +4148,7 @@ fn render_header(active: NavSection, base: &str, search_script: &str) -> String 
          aria-label=\"{}\" aria-expanded=\"false\" aria-controls=\"nav-links\">\
          <span class=\"nav-toggle-open\">\u{2630}</span>\
          <span class=\"nav-toggle-close\">\u{2715}</span></button>",
-        html_escape(text::site_menu_label()),
+        html::escape(text::site_menu_label()),
     );
     h.push_str("<div class=\"nav-links\" id=\"nav-links\">\n");
     h.push_str(&link(
@@ -4200,9 +4200,9 @@ fn render_header(active: NavSection, base: &str, search_script: &str) -> String 
          <ul class=\"search-results\" id=\"search-results\" role=\"listbox\" \
          aria-label=\"{}\"></ul>\
          </span>",
-        html_escape(text::site_search_placeholder()),
-        html_escape(text::site_search_label()),
-        html_escape(text::site_search_results_label()),
+        html::escape(text::site_search_placeholder()),
+        html::escape(text::site_search_label()),
+        html::escape(text::site_search_results_label()),
     );
     let _ = writeln!(
         h,
@@ -4210,7 +4210,7 @@ fn render_header(active: NavSection, base: &str, search_script: &str) -> String 
          aria-label=\"{}\" aria-pressed=\"false\">\
          <span class=\"theme-icon-dark\" aria-hidden=\"true\">\u{263e}</span>\
          <span class=\"theme-icon-light\" aria-hidden=\"true\">\u{2600}</span></button>",
-        html_escape(text::site_theme_toggle_label()),
+        html::escape(text::site_theme_toggle_label()),
     );
     h.push_str("</div>\n");
     h.push_str("</nav>\n");
@@ -4277,23 +4277,6 @@ const NAV_UX_SCRIPT: &str = "\
 })();
 </script>
 ";
-
-/// Escape the five characters an HTML text/attribute context requires, so a type
-/// name or a doc-comment can never inject markup.
-fn html_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            c => out.push(c),
-        }
-    }
-    out
-}
 
 /// Parse a leading `[label](url)` link. Returns the label text, the URL, and
 /// the byte length consumed, or `None` when the slice does not open a
@@ -4451,13 +4434,13 @@ fn html_signature(pieces: &[SigPiece]) -> String {
     let mut out = String::new();
     for piece in pieces {
         match piece {
-            SigPiece::Text(t) => out.push_str(&html_escape(t)),
+            SigPiece::Text(t) => out.push_str(&html::escape(t)),
             SigPiece::Link { text, target } => {
                 let _ = write!(
                     out,
                     "<a href=\"{}\">{}</a>",
-                    html_escape(&target.href("html")),
-                    html_escape(text)
+                    html::escape(&target.href("html")),
+                    html::escape(text)
                 );
             }
         }
@@ -4480,8 +4463,8 @@ fn html_page(title: &str, css_href: &str, header: &str, body: &str) -> String {
          <body>\n{header}<main id=\"content\" class=\"page-body\">\n{body}</main>\n\
          <button id=\"scroll-top\" class=\"scroll-top\" type=\"button\" \
          aria-label=\"{}\">\u{2191}</button>\n</body>\n</html>\n",
-        html_escape(title),
-        html_escape(crate::text::site_scroll_top_label()),
+        html::escape(title),
+        html::escape(crate::text::site_scroll_top_label()),
     )
 }
 
@@ -4632,9 +4615,9 @@ fn render_reference_index(docs: &DocsJson, search_script: &str) -> String {
          <input type=\"search\" id=\"filter\" class=\"filter\" \
          placeholder=\"{}\" aria-label=\"{}\" \
          autocomplete=\"off\">\n",
-        html_escape(title),
-        html_escape(crate::text::site_filter_modules()),
-        html_escape(crate::text::site_filter_modules_label()),
+        html::escape(title),
+        html::escape(crate::text::site_filter_modules()),
+        html::escape(crate::text::site_filter_modules_label()),
     );
 
     render_html_module_section_relative(
@@ -4676,7 +4659,7 @@ fn render_html_module_section_relative(
     let _ = writeln!(
         body,
         "<section class=\"group\"><h2>{}</h2>",
-        html_escape(label)
+        html::escape(label)
     );
     let tree = build_namespace_tree(&names);
     render_html_tree_relative(&tree, body);
@@ -4693,21 +4676,22 @@ fn render_html_tree_relative(nodes: &[NamespaceNode], out: &mut String) {
         let _ = write!(
             out,
             " data-name=\"{}\"",
-            html_escape(&node.full_name.to_lowercase())
+            html::escape(&node.full_name.to_lowercase())
         );
         out.push('>');
         if node.is_module {
             let stem = module_stem(&node.full_name);
             let _ = write!(
                 out,
-                "<a href=\"../{stem}.html\">{}</a>",
-                html_escape(&node.full_name)
+                "<a href=\"../{}.html\">{}</a>",
+                html::escape(&stem),
+                html::escape(&node.full_name)
             );
         } else {
             let _ = write!(
                 out,
                 "<span class=\"ns-header\">{}</span>",
-                html_escape(&node.full_name)
+                html::escape(&node.full_name)
             );
         }
         if !node.children.is_empty() {
@@ -4726,7 +4710,7 @@ fn render_html_tree_relative(nodes: &[NamespaceNode], out: &mut String) {
 fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) -> String {
     let header = render_header(NavSection::Diagnostic, "../", search_script);
     let title = crate::text::site_diagnostics();
-    let mut body = format!("<h1>{}</h1>\n", html_escape(title));
+    let mut body = format!("<h1>{}</h1>\n", html::escape(title));
     body.push_str(&render_code_families());
     body.push_str("<ul class=\"index-entries index-table\">\n");
     let mut entries: Vec<&crate::doc_bundle::DocEntry> = bundle
@@ -4741,10 +4725,10 @@ fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script:
             body,
             "<li><a class=\"entry-code\" href=\"{}\">{}</a>\
              <a class=\"entry-title\" href=\"{}\">{}</a></li>",
-            html_escape(&href),
-            html_escape(&entry.key),
-            html_escape(&href),
-            html_escape(&entry.title),
+            html::escape(&href),
+            html::escape(&entry.key),
+            html::escape(&href),
+            html::escape(&entry.title),
         );
     }
     body.push_str("</ul>\n");
@@ -4766,7 +4750,7 @@ fn render_code_families() -> String {
             out,
             "<dt><code>{}</code></dt><dd>{}</dd>",
             row.letter,
-            html_escape(row.summary),
+            html::escape(row.summary),
         );
     }
     out.push_str("</dl>\n");
@@ -4779,7 +4763,7 @@ fn render_code_families() -> String {
 fn render_cli_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) -> String {
     let header = render_header(NavSection::Cli, "../", search_script);
     let title = crate::text::site_cli();
-    let mut body = format!("<h1>{}</h1>\n", html_escape(title));
+    let mut body = format!("<h1>{}</h1>\n", html::escape(title));
     // A two-column aligned table: command in one column, summary in the next, so
     // every summary starts at the same indentation (issue #1874, item 7).
     body.push_str("<ul class=\"index-entries index-table\">\n");
@@ -4797,14 +4781,14 @@ fn render_cli_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) 
         let _ = write!(
             body,
             "<li><a class=\"entry-code\" href=\"{}\">{}</a>",
-            html_escape(&href),
-            html_escape(&entry.key),
+            html::escape(&href),
+            html::escape(&entry.key),
         );
         if !summary.is_empty() {
             let _ = write!(
                 body,
                 "<span class=\"entry-title\">{}</span>",
-                html_escape(&summary),
+                html::escape(&summary),
             );
         }
         body.push_str("</li>\n");
@@ -4846,7 +4830,7 @@ fn render_curated_kind_indexes(
     ];
     for (kind, label, nav) in curated {
         let header = render_header(nav, "../", search_script);
-        let mut body = format!("<h1>{}</h1>\n", html_escape(label));
+        let mut body = format!("<h1>{}</h1>\n", html::escape(label));
         let mut entries: Vec<&crate::doc_bundle::DocEntry> =
             bundle.entries_for_kind(kind).collect();
         sort_curated_entries(&mut entries);
@@ -4856,14 +4840,15 @@ fn render_curated_kind_indexes(
             let summary = first_sentence(&entry.body);
             let _ = write!(
                 body,
-                "<li><a href=\"{href}\" class=\"entry-title\">{}</a>",
-                html_escape(&entry.title)
+                "<li><a href=\"{}\" class=\"entry-title\">{}</a>",
+                html::escape(&href),
+                html::escape(&entry.title)
             );
             if !summary.is_empty() {
                 let _ = write!(
                     body,
                     "<span class=\"entry-summary\">{}</span>",
-                    html_escape(&summary)
+                    html::escape(&summary)
                 );
             }
             body.push_str("</li>\n");
@@ -4903,19 +4888,19 @@ fn render_entry_page(
 ) -> String {
     let header = render_header(nav_section_for(kind), "../", search_script);
     let mut body = String::new();
-    let _ = writeln!(body, "<h1>{}</h1>", html_escape(&entry.title));
+    let _ = writeln!(body, "<h1>{}</h1>", html::escape(&entry.title));
     if entry.key != entry.title {
         let _ = writeln!(
             body,
             "<p class=\"entry-code\"><code>{}</code></p>",
-            html_escape(&entry.key)
+            html::escape(&entry.key)
         );
     }
     if entry.body.is_empty() {
         let _ = writeln!(
             body,
             "<p class=\"comment\">{}</p>",
-            html_escape(crate::text::site_no_documentation())
+            html::escape(crate::text::site_no_documentation())
         );
     } else {
         // Entry bodies are sourced from Markdown files (explain pages, construct
@@ -4969,7 +4954,7 @@ fn render_html_index(
 ) -> String {
     let header = render_header(NavSection::Home, "", search_script);
     let title = crate::text::site_documentation();
-    let heading = format!("<h1>{}</h1>\n", html_escape(title));
+    let heading = format!("<h1>{}</h1>\n", html::escape(title));
     let mut body = heading.clone();
 
     let curated = [
@@ -4999,21 +4984,22 @@ fn render_html_index(
         }
         sort_curated_entries(&mut entries);
         let _ = writeln!(body, "<section class=\"kind-group\">");
-        let _ = writeln!(body, "<h2>{}</h2>", html_escape(label));
+        let _ = writeln!(body, "<h2>{}</h2>", html::escape(label));
         body.push_str("<ul class=\"curated-entries\">\n");
         for entry in entries {
             let href = entry_href(kind, &entry.key, "");
             let summary = first_sentence(&entry.body);
             let _ = write!(
                 body,
-                "<li><a href=\"{href}\" class=\"entry-title\">{}</a>",
-                html_escape(&entry.title)
+                "<li><a href=\"{}\" class=\"entry-title\">{}</a>",
+                html::escape(&href),
+                html::escape(&entry.title)
             );
             if !summary.is_empty() {
                 let _ = write!(
                     body,
                     "<span class=\"entry-summary\">{}</span>",
-                    html_escape(&summary)
+                    html::escape(&summary)
                 );
             }
             body.push_str("</li>\n");
@@ -5034,29 +5020,29 @@ fn render_html_index(
 fn render_html_module(module: &ModuleDoc, index: &AnchorIndex, search_script: &str) -> String {
     let header = render_header(NavSection::Reference, "", search_script);
     let mut body = String::from("<nav class=\"crumb\"><a href=\"module/index.html\">&larr; ");
-    body.push_str(&html_escape(crate::text::site_reference()));
+    body.push_str(&html::escape(crate::text::site_reference()));
     body.push_str("</a></nav>\n");
-    let _ = writeln!(body, "<h1>{}</h1>", html_escape(&module.name));
+    let _ = writeln!(body, "<h1>{}</h1>", html::escape(&module.name));
     if !module.comment.is_empty() {
         body.push_str(&render_comment_html(&module.comment));
     }
 
     if !module.unions.is_empty() {
-        let _ = writeln!(body, "<h2>{}</h2>", html_escape(crate::text::site_types()));
+        let _ = writeln!(body, "<h2>{}</h2>", html::escape(crate::text::site_types()));
         for union in &module.unions {
             let _ = writeln!(
                 body,
                 "<section class=\"entry\" id=\"{}\">\n<h3><code>{}{}</code></h3>",
-                html_escape(&union.name),
-                html_escape(&union.name),
-                html_escape(&union_params(union.params))
+                html::escape(&union.name),
+                html::escape(&union.name),
+                html::escape(&union_params(union.params))
             );
             if !union.comment.is_empty() {
                 body.push_str(&render_comment_html(&union.comment));
             }
             for ctor in &union.ctors {
                 body.push_str("<pre class=\"sig\">");
-                body.push_str(&html_escape(&ctor.name));
+                body.push_str(&html::escape(&ctor.name));
                 for arg in &ctor.arg_types {
                     body.push(' ');
                     body.push_str(&html_signature(&signature_pieces(arg, index)));
@@ -5068,16 +5054,20 @@ fn render_html_module(module: &ModuleDoc, index: &AnchorIndex, search_script: &s
     }
 
     if !module.values.is_empty() {
-        let _ = writeln!(body, "<h2>{}</h2>", html_escape(crate::text::site_values()));
+        let _ = writeln!(
+            body,
+            "<h2>{}</h2>",
+            html::escape(crate::text::site_values())
+        );
         for value in &module.values {
             let sig = html_signature(&signature_pieces(&value.signature_ty, index));
             let _ = writeln!(
                 body,
                 "<section class=\"entry\" id=\"{}\">\n<h3><code>{}</code></h3>\n\
                  <pre class=\"sig\">{} : {sig}</pre>",
-                html_escape(&value.name),
-                html_escape(&value.name),
-                html_escape(&value.name)
+                html::escape(&value.name),
+                html::escape(&value.name),
+                html::escape(&value.name)
             );
             if !value.comment.is_empty() {
                 body.push_str(&render_comment_html(&value.comment));
@@ -5268,7 +5258,7 @@ mod tests {
                 "family {} missing:\n{page}",
                 row.letter
             );
-            assert!(page.contains(&html_escape(row.summary)), "{page}");
+            assert!(page.contains(&html::escape(row.summary)), "{page}");
         }
     }
 
@@ -5835,6 +5825,42 @@ mod tests {
         assert!(idx.contains("App.html"), "App module linked: {idx}");
     }
 
+    /// A module name or a curated key holding a quote cannot close the `href`
+    /// attribute on the reference index, a curated kind index, or the landing.
+    #[test]
+    fn index_hrefs_escape_key_quotes() {
+        let docs = one_module_docs(local_module("A\"B"));
+        let mut bundle = crate::doc_bundle::DocBundle::empty();
+        bundle
+            .insert(
+                crate::doc_bundle::DocKind::Guide,
+                "g\"k".to_owned(),
+                "Guide".to_owned(),
+                String::new(),
+            )
+            .expect("insert");
+        let search = build_site_search_script(&docs, &bundle, "../");
+
+        let reference = render_reference_index(&docs, &search);
+        assert!(
+            reference.contains("href=\"../A&quot;B.html\""),
+            "reference index href: {reference}"
+        );
+
+        let curated = render_curated_kind_indexes(&bundle, &search);
+        let guides = curated.get("guide/index.html").expect("guide index");
+        assert!(
+            guides.contains("href=\"../guide/g&quot;k.html\""),
+            "guide index href: {guides}"
+        );
+
+        let landing = render_html_index(&docs, &bundle, &search);
+        assert!(
+            landing.contains("href=\"guide/g&quot;k.html\""),
+            "landing href: {landing}"
+        );
+    }
+
     #[test]
     fn html_style_is_soft_dark_with_accent_and_multicolumn_module_list() {
         // The accent custom property is defined once in :root.
@@ -5918,7 +5944,7 @@ mod tests {
 
     #[test]
     fn html_escapes_markup_in_names_and_comments() {
-        assert_eq!(html_escape("a<b>&\"'"), "a&lt;b&gt;&amp;&quot;&#39;");
+        assert_eq!(html::escape("a<b>&\"'"), "a&lt;b&gt;&amp;&quot;&#39;");
     }
 
     #[test]
@@ -6082,7 +6108,7 @@ mod tests {
             }
             for opt in &spec.options {
                 assert!(
-                    html.contains(&html_escape(opt.flag)),
+                    html.contains(&html::escape(opt.flag)),
                     "HTML command page omits flag {} from the help SSOT",
                     opt.flag
                 );
