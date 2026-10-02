@@ -357,20 +357,13 @@ saveDecision model uid decision =
 
 
 -- The drain loop: the decision is already saved (DecisionSaved Ok), so the
--- consumed queue entry leaves the index queue and the drain cursor records
--- the hand-off, both under the attested hash the decision was written with.
--- A failure anywhere fails closed with the queue unchanged — the unit stays
--- visible with its badge and the next click retries.
+-- consumed queue entry leaves the index queue under the attested hash the
+-- decision was written with. A failure anywhere fails closed with the queue
+-- unchanged — the unit stays visible with its badge and the next click
+-- retries.
 drainAndReload : Model -> Index.Attested -> Queue.LoadTicket -> Cmd Msg
 drainAndReload model attested load =
-    Cmd.perform
-        (do
-            db <- LibDb.open
-            LibDb.recordDrain db (Index.attestedUid attested) (Index.attestedHash attested)
-            Index.drainUnit attested
-            Queue.loadPage model.queueCursor
-        )
-        (PendingLoaded load)
+    Cmd.perform (Queue.drainThenLoad attested model.queueCursor) (PendingLoaded load)
 
 
 header : Model -> Ui.Element Msg
