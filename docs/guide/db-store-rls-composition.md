@@ -43,8 +43,9 @@ puts each pattern in its own `Rls.*` sub-module of composition helpers, and its
 **Owner** — the simplest pattern: every row is private to the user who created it,
 and no one else can see or change it (think a personal notes or drafts table). A row
 belongs to the caller when its owner column equals the caller's subject; `ownerColumn`
-scopes all four operations to `column = $subject` and forces that column on writes, so
-a caller can never write a row it could not read back. Compose `immutable` to pin a
+scopes all four operations to `column = $subject`, forces that column on insert, and
+never rewrites it on update, so a caller can never write a row it could not read back
+nor hand one to another principal. Compose `immutable` to pin a
 column at insert:
 
 ```ipe

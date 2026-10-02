@@ -525,6 +525,41 @@ fn security_db_unsafe_exec_raw_off_plain_db_is_rejected() {
     assert_rejected("security_db_unsafe_exec_raw_off_plain", src, "IPE-N0005");
 }
 
+/// SECURITY: the policy-checked writes behind `Store.insertAs` / `updateAs` take
+/// the check as a bare `SqlFragment`. They are `Ipe.Db.Store`-private kernel
+/// aliases, so user code reaches them neither as `Db.*` off a plain `Ipe.Db`
+/// import nor as `Store.*` off `Ipe.Db.Store`: a caller cannot pass its own
+/// check and bypass the policy.
+#[test]
+fn security_store_checked_write_kernels_are_unreachable() {
+    for member in ["insertFieldsChecked", "updateWhereChecked"] {
+        let via_db = format!(
+            "module Main exposing (main)\n\
+             import Ipe.Db as Db\n\
+             import Ipe.Task as Task\n\
+             main =\n\
+             \x20   Task.andThen (\\conn -> Db.{member} conn \"t\" []) (Db.open \"sqlite\" \"sqlite::memory:\")\n"
+        );
+        assert_rejected(
+            &format!("security_db_{member}_unreachable"),
+            &via_db,
+            "IPE-N0005",
+        );
+    }
+    for member in ["insertFieldsChecked", "updateWhereChecked", "policyCheck"] {
+        let via_store = format!(
+            "module Main exposing (main)\n\
+             import Ipe.Db.Store as Store\n\
+             main = Store.{member}\n"
+        );
+        assert_rejected(
+            &format!("security_store_{member}_unreachable"),
+            &via_store,
+            "IPE-N0005",
+        );
+    }
+}
+
 /// SECURITY: the untyped row read `unsafeGetField` no longer lives on the plain
 /// `Ipe.Db` surface — it relocated to `Ipe.Db.Unsafe`. Reaching it off a plain
 /// `Ipe.Db` import must be rejected, so the decoder-bypassing read cannot be

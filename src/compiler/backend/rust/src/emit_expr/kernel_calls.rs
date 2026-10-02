@@ -1208,6 +1208,45 @@ pub fn emit_db_call(
                 project_fields(&set_s)
             )))
         }
+        // ── DbInsertFieldsChecked: (conn, table, List (String,SqlField), check: SqlFragment) ─
+        //
+        // The field list is projected exactly like `DbInsertFields`'; the check
+        // is a bare `SqlFragment`, passed through like `DbUpdateWhere`'s WHERE.
+        KernelFn::DbInsertFieldsChecked => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let fields_e = arg!(2, "fields")?;
+            let check_e = arg!(3, "check")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let fields_s = emit_expr_at(ctx, fields_e, indent, child, generics)?;
+            let check_s = emit_expr_at(ctx, check_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {}, {check_s})",
+                project_fields(&fields_s)
+            )))
+        }
+        // ── DbUpdateWhereChecked: (conn, table, List (String,SqlField), frag, check) ─
+        //
+        // `DbUpdateWhere`'s projection plus the trailing check `SqlFragment`.
+        KernelFn::DbUpdateWhereChecked => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let set_e = arg!(2, "set_fields")?;
+            let frag_e = arg!(3, "frag")?;
+            let check_e = arg!(4, "check")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let set_s = emit_expr_at(ctx, set_e, indent, child, generics)?;
+            let frag_s = emit_expr_at(ctx, frag_e, indent, child, generics)?;
+            let check_s = emit_expr_at(ctx, check_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {}, {frag_s}, {check_s})",
+                project_fields(&set_s)
+            )))
+        }
         // ── DbInsertFieldsReturning: (conn, table, List (String, SqlField), projection, decoder) ─
         KernelFn::DbInsertFieldsReturning => {
             let conn_e = arg!(0, "conn")?;

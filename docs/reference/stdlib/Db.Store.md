@@ -2337,8 +2337,9 @@ readOnly : Pred row -> Policy row
 ```
 
 `readOnly p` — a read-only policy: `read = p`, every write scoped to `never`
-(fail-closed). The explicit constructor for read-only intent — a caller who
-wants a write path opens it deliberately with `alsoInsert` / `alsoUpdate` /
+(fail-closed): `insertAs` / `updateAs` / `deleteAs` return `0` and write
+nothing. The explicit constructor for read-only intent — a caller who wants a
+write path opens it deliberately with `alsoInsert` / `alsoUpdate` /
 `alsoDelete`, so no write is ever left open by omission.
 
 ## `alsoInsert`
@@ -2348,7 +2349,8 @@ alsoInsert : Pred row -> Policy row -> Policy row
 ```
 
 `alsoInsert p base` — open the insert path of `base` to `p` (deliberately
-lifting insert off its `never` default).
+lifting insert off its `never` default). `insertAs` keeps a row only when `p`
+holds over it as stored; otherwise it returns `0` and writes nothing.
 
 ## `alsoUpdate`
 
@@ -2401,11 +2403,11 @@ ownerColumn : (row -> t) -> Policy row
 ```
 
 `ownerColumn accessor` — the owner-scoped policy: all four operations are
-scoped to `column = $subject`, and inserts/updates FORCE that column to the
-caller's subject (so a caller can never write a row it could not read back).
-Backward-compatible re-expression of the former single owner-column rule; its
-observable SQL is unchanged (the read/get/update/delete WHERE is still
-`column = $subject`, and writes still force the owner column).
+scoped to `column = $subject`. An insert forces that column to the caller's
+subject, and an update never changes it, so a caller can never write a row it
+could not read back nor hand a row to another principal. The read, get,
+update and delete WHERE is `column = $subject`; a write the policy refuses
+returns `0` and writes nothing.
 
 The column is named by an accessor literal (`.author`), checked against the row
 type at compile time and snake_cased at lowering, then delegated to
@@ -2568,10 +2570,14 @@ bind as parameters. A store with no primary key fails closed.
 insertAs : Auth.Principal -> Db -> Secured a -> a -> Task Error Int
 ```
 
-`insertAs principal db secured row` — insert `row`, forcing every owner
-column the policy scopes to `principal`'s subject so a caller can never write a
-row it would not be allowed to read back. The owner value binds as a parameter.
-The inserted-row count is returned.
+`insertAs principal db secured row` — insert `row` when the policy's insert
+predicate admits it for `principal`. Every owner column the policy scopes is
+first forced to `principal`'s subject, so a caller can never write a row it
+would not be allowed to read back; the owner value binds as a parameter. The
+insert predicate is then checked over the row as stored, in the same
+statement: `1` = inserted, `0` = the policy refused the row and nothing was
+written (for example a `readOnly` policy, or an `alsoInsert (role "editor")`
+caller without the role).
 
 ## `updateAs`
 
@@ -2581,12 +2587,19 @@ updateAs : Auth.Principal -> Db -> Secured a -> a -> Task Error Int
 
 `updateAs principal db secured row` — update the row whose primary key
 matches `row`, but only when the policy's update predicate admits it for
-`principal`; that predicate is AND-ed into the WHERE so a caller cannot update
-another principal's row. Columns marked `Serial` / `DefaultNow` are omitted from
-the SET, and so is every column the policy holds immutable: an immutable
-column's client value is dropped from the SET, so the stored value cannot change
-after insert (the guarantee `immutable` promises). A store with no primary key,
-or a record missing its key column, fails closed.
+`principal`, both before and after the write. The predicate is AND-ed into the
+WHERE, so a caller cannot touch another principal's row, and is checked again
+over the row as stored after the write, in the same statement, so an update
+cannot move a row out of what the policy lets the caller update. `1` = updated,
+`0` = no admitted row matched or the updated row failed the check, and nothing
+was written.
+
+Columns marked `Serial` / `DefaultNow` are omitted from the SET, and so is
+every owner column and every column the policy holds immutable: their client
+values are dropped, so an owner never changes after insert (no update can hand
+a row to another principal) and an immutable column keeps its insert-time
+value. A store with no primary key, or a record missing its key column, fails
+closed.
 
 ## `deleteAs`
 
