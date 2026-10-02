@@ -14,7 +14,7 @@
 //! runtime jail runs under. On Linux (`x86_64`/`aarch64`) it lowers via the SAME
 //! [`crate::run_jail::run_jail_argv`] + [`crate::seccomp`] program the runtime
 //! jail uses; on macOS it lowers the SAME profile to a Seatbelt SBPL profile
-//! ([`sbpl_from_profile`]) enforced by `sandbox-exec`. Either way there is a
+//! ([`checked_sbpl`]) enforced by `sandbox-exec`. Either way there is a
 //! single source of the confining profile: what Tier-2 confines a build to and
 //! what the shipped artifact is confined to at run time cannot drift.
 //!
@@ -398,7 +398,7 @@ pub fn build_in_jail(
 /// wait for it, and return the decoded [`JailOutcome`] (macOS).
 ///
 /// The macOS counterpart to the `Linux` [`build_in_jail`]: it lowers the
-/// SAME [`SandboxProfile`] to a Seatbelt SBPL profile ([`sbpl_from_profile`])
+/// SAME [`SandboxProfile`] to a Seatbelt SBPL profile ([`checked_sbpl`])
 /// and spawns `sandbox-exec -p <profile> <payload>`, so a build observed under
 /// Tier-2 is confined exactly as the shipped artifact will be at run time
 /// (single source of the confining profile). The profile travels in argv, never
@@ -876,11 +876,7 @@ pub fn checked_sbpl(
 
 #[cfg(any(target_os = "macos", test))]
 #[must_use]
-pub fn sbpl_from_profile(
-    profile: &SandboxProfile,
-    scoped_tmp: &Path,
-    working_tree: &Path,
-) -> String {
+fn sbpl_from_profile(profile: &SandboxProfile, scoped_tmp: &Path, working_tree: &Path) -> String {
     use std::fmt::Write as _;
 
     // SBPL string literals are double-quoted; a path with an embedded `"` or `\`
@@ -1210,7 +1206,7 @@ pub(crate) fn freebsd_jail_cache_root(home: Option<PathBuf>) -> Result<PathBuf, 
 /// The FreeBSD jail's network-axis parameters for the given grant.
 ///
 /// PURE — no process spawned — so the exact deny/grant surface is unit-testable on
-/// any host, exactly like the macOS [`sbpl_from_profile`] and the Linux
+/// any host, exactly like the macOS [`checked_sbpl`] and the Linux
 /// [`run_jail_argv`]. Withheld ⇒ a fresh EMPTY vnet (`vnet=new`): a brand-new
 /// network stack with no configured interface and no route, so an outbound socket
 /// has no reachable destination and is denied at the kernel. The disabled address
