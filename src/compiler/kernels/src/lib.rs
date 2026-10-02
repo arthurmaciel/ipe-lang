@@ -15807,6 +15807,20 @@ impl StdlibKernel {
         }
     }
 
+    /// The scheme variable whose solved instance must hold no function type.
+    ///
+    /// `task_loop` carries its state between steps as plain data, so the
+    /// lowerer refuses a call whose state variable is solved to a type
+    /// containing a function, and refuses fail-closed when no solved type is
+    /// recorded for the reference.
+    #[must_use]
+    pub const fn plain_data_scheme_var(self) -> Option<u8> {
+        match self {
+            Self::TaskLoop => Some(0),
+            _ => None,
+        }
+    }
+
     /// `true` when this variant belongs to the `Ipe.Web` subsystem — the
     /// `Ipe.Web` app-entry kernels plus the Task-shaped `PubSub.publish` /
     /// `publishNoEcho`, all of which are `class = Web` and whose symbols live in

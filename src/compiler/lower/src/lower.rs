@@ -21544,23 +21544,21 @@ impl<'a> Lowerer<'a> {
         resolved: &Callee,
         callee: &canon::Expr,
     ) -> DResult<()> {
-        // `Task.loop : Int -> s -> (s -> Task Error (Step s a)) -> Task Error a`,
-        // with `s` the scheme's variable 0.
-        const STATE_VAR: u8 = 0;
-        if !matches!(resolved, Callee::Kernel(KernelFn::TaskLoop)) {
+        let Callee::Kernel(kernel) = resolved else {
             return Ok(());
-        }
-        let (Some(shape), Some(solved)) = (
-            KernelFn::TaskLoop.scheme_shape(),
-            self.region_ty(callee.span),
-        ) else {
+        };
+        let Some(state_var) = kernel.plain_data_scheme_var() else {
+            return Ok(());
+        };
+        let (Some(shape), Some(solved)) = (kernel.scheme_shape(), self.region_ty(callee.span))
+        else {
             return Err(unsupported(callee.span, Feature::TaskLoopFunctionState));
         };
         let heads = SchemeHeads {
             builtins: &self.builtins.kernel_types,
             interner: self.interner,
         };
-        match scheme_var_instance(shape, solved, STATE_VAR, heads) {
+        match scheme_var_instance(shape, solved, state_var, heads) {
             Some(state) if !ty_contains_fun(state) => Ok(()),
             Some(_) | None => Err(unsupported(callee.span, Feature::TaskLoopFunctionState)),
         }
@@ -31865,12 +31863,13 @@ mod tests {
 
             // No region is recorded here, so the gated funnel must refuse every
             // higher-order kernel (no solved type proves its callback results
-            // non-functional) and pass every other kernel through unchanged.
+            // non-functional) and every plain-data-state kernel (no solved type
+            // proves its state function-free), and pass every other kernel
+            // through unchanged.
             let gated = lowerer.lower_callee(&node).ok();
-            let expected = sk
-                .hof_result_vars()
-                .is_empty()
-                .then_some(Callee::Kernel(sk));
+            let expected = (sk.hof_result_vars().is_empty()
+                && sk.plain_data_scheme_var().is_none())
+            .then_some(Callee::Kernel(sk));
             assert_eq!(
                 gated, expected,
                 "lower_callee on KernelFn::{sk:?} with no solved type returned {gated:?}",

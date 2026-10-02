@@ -119,7 +119,7 @@ fn a_qualified_task_done_resolves_to_ipe_task() {
 }
 
 #[test]
-fn two_unqualified_step_imports_are_ambiguous() {
+fn two_explicit_step_imports_are_refused_as_a_duplicate_type() {
     let (result, _) = canonicalise_main(
         &[TASK_STUB, PARSER_STUB],
         "module Main exposing (main)\n\n\
@@ -131,10 +131,10 @@ fn two_unqualified_step_imports_are_ambiguous() {
         matches!(
             &result,
             Err(Diagnostic::Name {
-                msg: NameError::AmbiguousImport { .. },
+                msg: NameError::DuplicateType { .. },
                 ..
             })
         ),
-        "two unqualified `Done` constructors must fail closed with IPE-N0024, got {result:?}"
+        "two explicit `Step(..)` imports must fail closed at the import as a duplicate type, got {result:?}"
     );
 }
