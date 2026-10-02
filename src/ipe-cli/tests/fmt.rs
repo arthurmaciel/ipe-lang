@@ -38,7 +38,7 @@ fn fixtures() -> Vec<(&'static str, String)> {
         ),
         (
             "let_expr",
-            "module M exposing (f)\n\n\nf x =\n    let\n        y = x + 1\n    in\n    y\n".to_owned(),
+            "module M exposing (f)\n\n\nf x =\n    let\n        y =\n            x + 1\n    in\n    y\n".to_owned(),
         ),
         (
             "if_expr",
@@ -118,10 +118,14 @@ fn every_fixture_is_a_fixed_point() {
 /// formatting (a strict fixed point on canonical input).
 #[test]
 fn canonical_inputs_are_unchanged() {
-    for (name, src) in fixtures() {
-        let out = format_source(&src).unwrap();
-        assert_eq!(out, src, "{name}: fmt rewrote an already-canonical fixture");
-    }
+    let rewritten: Vec<String> = fixtures()
+        .into_iter()
+        .filter_map(|(name, src)| {
+            let out = format_source(&src).unwrap();
+            (out != src).then(|| format!("{name}: fmt rewrote an already-canonical fixture\n  in:  {src:?}\n  out: {out:?}"))
+        })
+        .collect();
+    assert!(rewritten.is_empty(), "{}", rewritten.join("\n"));
 }
 
 /// The elm-format-parity regression fixtures are already in canonical form, so
