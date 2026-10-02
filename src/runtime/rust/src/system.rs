@@ -2092,7 +2092,7 @@ mod scrub_log_controls_tests {
     #[test]
     fn is_log_hazard_is_the_terminal_set_for_every_char() {
         for c in (0..=u32::from(char::MAX)).filter_map(char::from_u32) {
-            let terminal = c.is_control() || ipe_diagnostics::terminal::is_denied_format_char(c);
+            let terminal = ipe_diagnostics::terminal::is_display_hazard(c);
             assert_eq!(super::is_log_hazard(c), terminal, "U+{:04X}", u32::from(c));
         }
     }
