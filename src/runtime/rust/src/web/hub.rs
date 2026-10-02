@@ -39,7 +39,9 @@ use std::time::Duration;
 // `reject_cross_tenant_svc` gate, and the task-local that carries a tenant
 // prefix through a request. Both layers judge the same `TenantPrefix` with the
 // same relation (`str::starts_with`), so an explicit `service` argument and an
-// unscoped read cannot disagree on what is in scope.
+// unscoped read cannot disagree on what is in scope. Every reader that returns,
+// names or counts a service's rows applies the predicate: the four `read_*`
+// builders, the service list, the per-service stats and the overview counts.
 //
 // The PRODUCER side — deriving a tenant prefix from a live session's
 // authenticated identity (`id.Claims["tenant"]`) and calling
@@ -683,12 +685,22 @@ impl TelemetryTable {
     }
 }
 
-/// `count(*)` for one telemetry table; 0 on any failure (total).
-async fn count_table(pool: &SqlitePool, table: TelemetryTable) -> i64 {
+/// `count(*)` for one telemetry table within `tenant`'s scope; 0 on any
+/// failure (total).
+async fn count_table(
+    pool: &SqlitePool,
+    table: TelemetryTable,
+    tenant: Option<&TenantPrefix>,
+) -> i64 {
     // `table.name()` is a compile-time constant from a closed enum; the
     // interpolation cannot carry attacker input.
-    let sql = format!("SELECT COUNT(*) AS n FROM {}", table.name());
-    match sqlx::query(&sql).fetch_one(pool).await {
+    let mut sql = format!("SELECT COUNT(*) AS n FROM {} WHERE 1=1", table.name());
+    let tenant_filter = TenantFilter::push(&mut sql, tenant);
+    let mut q = sqlx::query(&sql);
+    if let Some(tf) = tenant_filter {
+        q = tf.bind(q);
+    }
+    match q.fetch_one(pool).await {
         Ok(row) => row.try_get::<i64, _>("n").unwrap_or(0),
         Err(_) => 0,
     }
@@ -702,11 +714,13 @@ where
     A: DeserializeOwned + Send + 'static,
 {
     Box::pin(async move {
+        let tenant = current_tenant_prefix();
+        let tenant = tenant.as_ref();
         let (logs, metrics, spans) = match open_spill(&db_path).await {
             Some(pool) => (
-                count_table(&pool, TelemetryTable::Log).await,
-                count_table(&pool, TelemetryTable::Metric).await,
-                count_table(&pool, TelemetryTable::Span).await,
+                count_table(&pool, TelemetryTable::Log, tenant).await,
+                count_table(&pool, TelemetryTable::Metric, tenant).await,
+                count_table(&pool, TelemetryTable::Span, tenant).await,
             ),
             None => (0, 0, 0),
         };
@@ -910,22 +924,9 @@ where
         let Some(pool) = open_spill(&db_path).await else {
             return decode_rows(Value::Array(vec![]));
         };
-        // Distinct services (reuse the list query). LIMIT 200 mirrors LOG_LIMIT /
-        // METRIC_LIMIT and bounds the per-request aggregation fan-out.
-        let services: Vec<String> = match sqlx::query(
-            "SELECT service_name FROM telemetry_log \
-             UNION SELECT service_name FROM telemetry_metric \
-             UNION SELECT service_name FROM telemetry_span \
-             ORDER BY service_name LIMIT 200",
-        )
-        .fetch_all(&pool)
-        .await
-        {
-            Ok(rows) => rows
-                .iter()
-                .filter_map(|r| r.try_get::<String, _>("service_name").ok())
-                .filter(|s| !s.is_empty())
-                .collect(),
+        let tenant = current_tenant_prefix();
+        let services = match distinct_services(&pool, tenant.as_ref()).await {
+            Ok(services) => services,
             Err(e) => {
                 crate::system::emit_runtime_log("hub", &format!("serviceStats services: {e}"));
                 return decode_rows(Value::Array(vec![]));
@@ -988,6 +989,37 @@ async fn open_spill(db_path: &str) -> Option<SqlitePool> {
     }
 }
 
+/// The distinct non-empty `service_name`s across all three telemetry tables
+/// within `tenant`'s scope, sorted.
+///
+/// `LIMIT 200` bounds result allocation and the per-request aggregation
+/// fan-out of [`hub_read_service_stats`]: `service_name` is writer-controlled,
+/// so an unbounded `UNION` is a memory-amplification vector. The tenant filter
+/// runs before the limit, so another tenant's services cannot crowd this
+/// tenant's out of the page.
+async fn distinct_services(
+    pool: &SqlitePool,
+    tenant: Option<&TenantPrefix>,
+) -> Result<Vec<String>, sqlx::Error> {
+    let mut sql = String::from(
+        "SELECT service_name FROM (SELECT service_name FROM telemetry_log \
+         UNION SELECT service_name FROM telemetry_metric \
+         UNION SELECT service_name FROM telemetry_span) WHERE 1=1",
+    );
+    let tenant_filter = TenantFilter::push(&mut sql, tenant);
+    sql.push_str(" ORDER BY service_name LIMIT 200");
+    let mut q = sqlx::query(&sql);
+    if let Some(tf) = tenant_filter {
+        q = tf.bind(q);
+    }
+    let rows = q.fetch_all(pool).await?;
+    Ok(rows
+        .iter()
+        .filter_map(|r| r.try_get::<String, _>("service_name").ok())
+        .filter(|s| !s.is_empty())
+        .collect())
+}
+
 /// `Hub_listServices : String -> Task Error (List String)` — distinct
 /// service_name across all three telemetry tables, sorted.
 pub fn hub_list_services<E: Send + From<String> + 'static>(
@@ -997,24 +1029,9 @@ pub fn hub_list_services<E: Send + From<String> + 'static>(
         let Some(pool) = open_spill(&db_path).await else {
             return ok_res(Vec::new());
         };
-        // LIMIT 200 mirrors hub_read_service_stats' distinct-services query and
-        // bounds result allocation — service_name is writer-controlled, so an
-        // unbounded UNION is a memory-amplification vector.
-        let sql = "SELECT service_name FROM telemetry_log \
-                   UNION SELECT service_name FROM telemetry_metric \
-                   UNION SELECT service_name FROM telemetry_span \
-                   ORDER BY service_name LIMIT 200";
-        match sqlx::query(sql).fetch_all(&pool).await {
-            Ok(rows) => {
-                let mut out = Vec::with_capacity(rows.len());
-                for r in &rows {
-                    let s: String = r.try_get("service_name").unwrap_or_default();
-                    if !s.is_empty() {
-                        out.push(s);
-                    }
-                }
-                ok_res(out)
-            }
+        let tenant = current_tenant_prefix();
+        match distinct_services(&pool, tenant.as_ref()).await {
+            Ok(services) => ok_res(services),
             Err(e) => {
                 crate::system::emit_runtime_log("hub", &format!("listServices: {e}"));
                 ok_res(Vec::new())
@@ -1801,6 +1818,37 @@ mod tests {
             )
             .await;
             assert_eq!(services_of(&inside, "subapp"), vec!["a_b-d".to_string()]);
+            let _ = std::fs::remove_file(&path);
+        }
+
+        /// The service list, the per-service stats and the overview counts are
+        /// tenant reads too: none may name or count another tenant's service.
+        #[tokio::test]
+        async fn service_list_stats_and_overview_are_scoped() {
+            let path = seed_spill("aggregate").await;
+            let t = TenantPrefix::new("a_b").expect("non-empty test prefix");
+            let listed: IpeResult<String, Vec<String>> =
+                with_tenant_prefix(t.clone(), hub_list_services(path.clone())).await;
+            assert!(
+                matches!(&listed, IpeResult::Ok(v) if v == &["a_b-d".to_string()]),
+                "listServices: {listed:?}"
+            );
+            let stats: IpeResult<String, Vec<Value>> =
+                with_tenant_prefix(t.clone(), hub_read_service_stats(path.clone())).await;
+            assert_eq!(services_of(&stats, "name"), vec!["a_b-d".to_string()]);
+            let overview: IpeResult<String, Value> =
+                with_tenant_prefix(t, hub_read_overview(path.clone())).await;
+            let IpeResult::Ok(ov) = overview else {
+                panic!("overview: {overview:?}");
+            };
+            assert_eq!(ov["bufferLogUsed"], 1, "overview {ov}");
+            assert_eq!(ov["bufferTraceUsed"], 1, "overview {ov}");
+            assert_eq!(ov["requestsTotal"], 3, "overview {ov}");
+            let unscoped: IpeResult<String, Vec<String>> = hub_list_services(path.clone()).await;
+            assert!(
+                matches!(&unscoped, IpeResult::Ok(v) if v.len() == SERVICES.len()),
+                "unscoped listServices: {unscoped:?}"
+            );
             let _ = std::fs::remove_file(&path);
         }
 
