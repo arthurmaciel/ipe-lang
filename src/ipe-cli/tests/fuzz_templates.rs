@@ -112,8 +112,7 @@ fn ill_typed(main: &str) -> Result<harness::Mutant, TemplateParseError> {
 #[test]
 fn every_well_typed_template_type_checks_at_min_max_and_seeded_fills() {
     let templates = harness::load_well_typed();
-    assert!(templates.is_ok(), "{:?}", templates.err());
-    let Ok(templates) = templates else { return };
+    let templates = templates.expect("templates is Ok");
     assert_eq!(templates.len(), WELL_TYPED.len());
     let runtime = runtime();
     let failures: Vec<String> = templates
@@ -132,8 +131,7 @@ fn every_well_typed_template_type_checks_at_min_max_and_seeded_fills() {
 #[test]
 fn every_ill_typed_base_is_accepted_and_its_mutant_rejected_with_the_declared_code() {
     let mutants = harness::load_ill_typed();
-    assert!(mutants.is_ok(), "{:?}", mutants.err());
-    let Ok(mutants) = mutants else { return };
+    let mutants = mutants.expect("mutants is Ok");
     assert_eq!(mutants.len(), ILL_TYPED.len());
     let runtime = runtime();
     let failures: Vec<String> = mutants
@@ -152,8 +150,7 @@ fn every_ill_typed_base_is_accepted_and_its_mutant_rejected_with_the_declared_co
 #[test]
 fn a_well_typed_template_that_fails_to_type_check_fails_the_harness() {
     let template = well_typed(ROTTED_WELL_TYPED);
-    assert!(template.is_ok(), "{template:?}");
-    let Ok(template) = template else { return };
+    let template = template.expect("template is Ok");
     let checked = harness::check_well_typed(&template, FillPlan::Min, &runtime());
     assert!(
         matches!(
@@ -167,8 +164,7 @@ fn a_well_typed_template_that_fails_to_type_check_fails_the_harness() {
 #[test]
 fn an_ill_typed_mutant_that_type_checks_fails_the_harness() {
     let mutant = ill_typed(MUTANT_EQUALS_BASE);
-    assert!(mutant.is_ok(), "{mutant:?}");
-    let Ok(mutant) = mutant else { return };
+    let mutant = mutant.expect("mutant is Ok");
     let checked = harness::check_mutant(&mutant, FillPlan::Min, &runtime());
     assert!(
         matches!(
@@ -182,8 +178,7 @@ fn an_ill_typed_mutant_that_type_checks_fails_the_harness() {
 #[test]
 fn a_mutant_rejected_for_another_reason_fails_the_harness() {
     let mutant = ill_typed(MUTANT_WRONG_REASON);
-    assert!(mutant.is_ok(), "{mutant:?}");
-    let Ok(mutant) = mutant else { return };
+    let mutant = mutant.expect("mutant is Ok");
     assert_eq!(mutant.expect(), IPE_T0012);
     let checked = harness::check_mutant(&mutant, FillPlan::Min, &runtime());
     assert!(
@@ -199,8 +194,7 @@ fn a_mutant_rejected_for_another_reason_fails_the_harness() {
 #[test]
 fn a_mutant_whose_base_is_rejected_fails_the_harness() {
     let mutant = ill_typed(ROTTED_BASE);
-    assert!(mutant.is_ok(), "{mutant:?}");
-    let Ok(mutant) = mutant else { return };
+    let mutant = mutant.expect("mutant is Ok");
     let checked = harness::check_mutant(&mutant, FillPlan::Min, &runtime());
     assert!(
         matches!(
@@ -216,10 +210,8 @@ fn the_catalogue_matches_the_pinned_template_lists() {
     let root = harness::fuzz_root();
     let well = harness::list_templates(&root.join("well-typed"));
     let ill = harness::list_templates(&root.join("ill-typed"));
-    assert!(well.is_ok() && ill.is_ok(), "{well:?} {ill:?}");
-    let (Ok(well), Ok(ill)) = (well, ill) else {
-        return;
-    };
+    let well = well.expect("well-typed templates list");
+    let ill = ill.expect("ill-typed templates list");
     let ill_pinned: Vec<&str> = ILL_TYPED.iter().map(|(name, _)| *name).collect();
     assert_eq!(
         harness::compare_catalogue("well-typed", WELL_TYPED, &well),
@@ -258,8 +250,7 @@ fn catalogue_drift_is_refused() {
         })
     );
     let mutant = ill_typed(MUTANT_EQUALS_BASE);
-    assert!(mutant.is_ok(), "{mutant:?}");
-    let Ok(mutant) = mutant else { return };
+    let mutant = mutant.expect("mutant is Ok");
     assert_eq!(
         harness::check_pinned_expect(&mutant, IPE_N0001),
         Err(HarnessError::ExpectDrift {
@@ -445,8 +436,7 @@ fn template_hole_and_token_refusals() {
 #[test]
 fn a_template_file_that_is_not_main_or_lib_is_refused() {
     let scratch = harness::Scratch::new("unknown-file");
-    assert!(scratch.is_ok(), "{:?}", scratch.err());
-    let Ok(scratch) = scratch else { return };
+    let scratch = scratch.expect("scratch is Ok");
     let dir = scratch.path().join("stray");
     let written = std::fs::create_dir(&dir)
         .and_then(|()| std::fs::write(dir.join("Main.ipe.tmpl"), BODY))
@@ -581,28 +571,17 @@ fn the_classifier_flags_each_fault_and_passes_a_clean_run() {
     ));
 }
 
-/// Read the random-run knobs, failing the test on a refused value.
-fn knobs() -> Option<(u32, FuzzIters)> {
-    let knobs = harness::knobs_from_env();
-    assert!(knobs.is_ok(), "{knobs:?}");
-    knobs.ok()
-}
-
 #[test]
 fn random_well_typed_run() {
-    let Some((seed, iters)) = knobs() else { return };
+    let (seed, iters) = harness::knobs_from_env().expect("fuzz knobs parse");
     let templates = harness::load_well_typed();
-    assert!(templates.is_ok(), "{:?}", templates.err());
-    let Ok(templates) = templates else { return };
+    let templates = templates.expect("templates is Ok");
     let runtime = runtime();
     let run = e2e_on();
     for i in 0..iters.get() {
         let iter_seed = seed.wrapping_add(i);
         let picked = harness::pick(&templates, iter_seed);
-        assert!(picked.is_some(), "an empty catalogue picks nothing");
-        let Some((template, plan)) = picked else {
-            return;
-        };
+        let (template, plan) = picked.expect("an empty catalogue picks nothing");
         let checked = if run {
             harness::run_well_typed(template, plan, &runtime)
         } else {
@@ -618,16 +597,14 @@ fn random_well_typed_run() {
 
 #[test]
 fn random_ill_typed_run() {
-    let Some((seed, iters)) = knobs() else { return };
+    let (seed, iters) = harness::knobs_from_env().expect("fuzz knobs parse");
     let mutants = harness::load_ill_typed();
-    assert!(mutants.is_ok(), "{:?}", mutants.err());
-    let Ok(mutants) = mutants else { return };
+    let mutants = mutants.expect("mutants is Ok");
     let runtime = runtime();
     for i in 0..iters.get() {
         let iter_seed = seed.wrapping_add(i);
         let picked = harness::pick(&mutants, iter_seed);
-        assert!(picked.is_some(), "an empty catalogue picks nothing");
-        let Some((mutant, plan)) = picked else { return };
+        let (mutant, plan) = picked.expect("an empty catalogue picks nothing");
         let checked = harness::check_mutant(mutant, plan, &runtime);
         assert!(
             checked.is_ok(),
@@ -639,12 +616,11 @@ fn random_ill_typed_run() {
 
 #[test]
 fn every_well_typed_template_builds_and_runs() {
-    if !e2e_on() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let templates = harness::load_well_typed();
-    assert!(templates.is_ok(), "{:?}", templates.err());
-    let Ok(templates) = templates else { return };
+    let templates = templates.expect("templates is Ok");
     let runtime = runtime();
     let failures: Vec<String> = templates
         .iter()
@@ -656,15 +632,13 @@ fn every_well_typed_template_builds_and_runs() {
 
 #[test]
 fn the_detector_flags_division_by_zero() {
-    if !e2e_on() {
+    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
     let template = well_typed(DIVIDES_BY_ZERO);
-    assert!(template.is_ok(), "{template:?}");
-    let Ok(template) = template else { return };
+    let template = template.expect("template is Ok");
     let built = harness::accept_well_typed(&template, FillPlan::Min, &runtime());
-    assert!(built.is_ok(), "{:?}", built.err());
-    let Ok(built) = built else { return };
+    let built = built.expect("built is Ok");
     let judged = harness::build_and_run(&built, "fuzz_divides_by_zero");
     assert!(
         matches!(
