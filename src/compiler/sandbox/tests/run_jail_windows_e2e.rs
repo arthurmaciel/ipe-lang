@@ -152,8 +152,8 @@ fn a_child_spawn_is_denied_under_a_subprocess_withholding_job_but_succeeds_under
     let scratch = scratch_dir("sub");
     // Spawn a trivial child and exit 0 iff it started. Under a job capped at one
     // active process, the second process cannot be created.
-    let spawn_child =
-        "$p = Start-Process -FilePath cmd.exe -ArgumentList '/c exit 0' -PassThru -Wait; exit 0";
+    let spawn_child = "try { $p = Start-Process -FilePath cmd.exe -ArgumentList '/c exit 0' \
+                       -PassThru -Wait -ErrorAction Stop; exit 0 } catch { exit 12 }";
     // Control: spawning a child succeeds outside the job.
     let control = run_control(spawn_child);
     if control != Some(0) {
@@ -170,8 +170,10 @@ fn a_child_spawn_is_denied_under_a_subprocess_withholding_job_but_succeeds_under
         granted, 0,
         "subprocess granted must not false-deny a child spawn"
     );
-    assert_ne!(
-        withheld, 0,
+    // The probe's own catch code: any other non-zero exit (the probe failing to
+    // start or erroring for another reason) is not the denial under test.
+    assert_eq!(
+        withheld, 12,
         "a subprocess-withholding job must DENY the child spawn (control succeeded)"
     );
 }
@@ -350,8 +352,8 @@ fn an_out_of_scratch_write_is_denied_under_the_appcontainer_but_succeeds_under_c
     let jailed = run_jailed(&isolated(), &scratch, &write);
     let _ = std::fs::remove_file(&outside);
     let _ = std::fs::remove_dir_all(&scratch);
-    assert_ne!(
-        jailed, 0,
+    assert_eq!(
+        jailed, 13,
         "an AppContainer with only the scratch ACLed must DENY the out-of-scratch write"
     );
 }
@@ -400,8 +402,8 @@ fn an_outbound_connect_is_denied_under_a_network_withholding_appcontainer() {
     let net_withheld = subprocess_granted(); // network stays false
     let jailed = run_jailed(&net_withheld, &scratch, connect);
     let _ = std::fs::remove_dir_all(&scratch);
-    assert_ne!(
-        jailed, 0,
+    assert_eq!(
+        jailed, 7,
         "a network-withholding AppContainer must DENY the outbound connect (control succeeded)"
     );
 }

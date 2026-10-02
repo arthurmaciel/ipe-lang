@@ -184,7 +184,7 @@ pub fn build_windows_jailed(
 ///   host's values the child starts. Only the host's values are proven to start
 ///   it, so each is the host value, re-exported only when the host sets it. The
 ///   values name host profile folders but grant nothing: the `AppContainer` token
-///   reaches only what is ACLed to the container SID.
+///   reaches only what is granted to the container SID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowsBaseEnv {
     /// `SystemRoot`: the host value, else `C:\Windows`.
@@ -606,8 +606,9 @@ mod windows_jail {
         // directory that denies `FILE_TRAVERSE` to the container SID stops the
         // walk, so CreateProcessW cannot start the child there. This grants the
         // minimal traverse right on each ancestor up to (but not including) the
-        // volume root, which already allows traversal to everyone by default. The grant is additive (not a replace-DACL), so
-        // it never removes existing permissions.
+        // volume root, which already allows traversal to everyone by default. The
+        // grant is additive (not a replace-DACL), so it never removes existing
+        // permissions.
         grant_traverse_to_ancestors(scoped_tmp, container.sid())?;
         if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
             probe_volume_persists_acls(working_tree)?;
@@ -628,9 +629,8 @@ mod windows_jail {
         //    always reach. The working tree cannot be the CWD: under a
         //    filesystem-withholding profile it is NOT ACLed to the container SID, so
         //    CreateProcessW could not resolve the current directory for the child.
-        //    The CWD is not a
-        //    capability, so scratch-as-CWD neither grants nor widens any axis (and
-        //    matches the Unix arms, which do not chdir into the working tree either).
+        //    The CWD is not a capability, so scratch-as-CWD neither grants nor
+        //    widens any axis.
         let child = create_suspended_appcontainer_process(
             app,
             app_args,
@@ -946,12 +946,15 @@ mod windows_jail {
     /// ACL a path's DACL to grant read+write to exactly two trustees — the
     /// AppContainer SID (so the sandboxed process can reach its scratch/working
     /// tree) and the launcher's own user SID (so this process and SYSTEM keep the
-    /// access post-run cleanup — `remove_dir_all(scoped_tmp)` — needs). Everyone
-    /// else stays implicitly denied: this is a fresh DACL with only these two
-    /// grants, so deny-by-default holds. The launcher grant does NOT widen the
-    /// sandboxed app's reach: the AppContainer process runs as the container SID,
-    /// never as the launcher user. A failure refuses — never run with an
-    /// unenforced write boundary.
+    /// access post-run cleanup — `remove_dir_all(scoped_tmp)` — needs). These two
+    /// replace every explicit entry of `path`'s DACL. Unless that DACL is
+    /// protected, `SetNamedSecurityInfoW` also keeps the entries `path` inherits
+    /// from its parent; those name host principals, never this per-run container
+    /// SID (the ancestor traverse grant does not inherit), so the container
+    /// reaches only what these two grants give it. The launcher grant does NOT
+    /// widen the sandboxed app's reach: the AppContainer process runs as the
+    /// container SID, never as the launcher user. A failure refuses — never run
+    /// with an unenforced write boundary.
     ///
     /// Both grants inherit to every file and directory below `path`
     /// ([`GRANT_INHERITANCE`]): a granted root is granted as a whole subtree. A
