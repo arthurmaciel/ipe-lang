@@ -114,23 +114,51 @@ pub(crate) fn gutter_line(msg: &str, is_terminal: bool) -> String {
     }
 }
 
-/// A character that must never reach an operator log line raw: every Unicode
-/// `Cc` control (C0 incl. CR/LF/ESC, DEL, C1 incl. NEL/CSI), the Unicode
-/// line/paragraph separators U+2028/U+2029 (record breaks for log viewers and
-/// JS-based aggregators), and the bidirectional formatting controls
-/// (U+061C, U+200E/F, U+202A-E, U+2066-9) that visually reorder a line.
-fn is_log_hazard(c: char) -> bool {
-    c.is_control()
-        || matches!(
-            c,
-            '\u{2028}'
-                | '\u{2029}'
-                | '\u{061c}'
-                | '\u{200e}'
-                | '\u{200f}'
-                | '\u{202a}'..='\u{202e}'
-                | '\u{2066}'..='\u{2069}'
-        )
+/// Format characters that reorder, hide, or break a log line without being control bytes.
+///
+/// Exactly the Unicode `Cf` (format) category plus the `Zl`/`Zp` line and
+/// paragraph separators: the bidirectional controls, the zero-width space,
+/// joiners and word joiner, the invisible operators, the byte-order mark, the
+/// soft hyphen, the prepended-number and annotation marks, and the whole tag
+/// block (so a tag assigned later is already covered). Range for range the
+/// compiler's terminal set (`ipe_diagnostics::terminal::DENIED_FORMAT_CHARS`),
+/// which the runtime cannot import because it ships as source; a test asserts
+/// the two tables equal, and the compiler's table is checked against the UCD.
+pub(crate) const LOG_FORMAT_HAZARDS: &[std::ops::RangeInclusive<char>] = &[
+    '\u{00AD}'..='\u{00AD}',   // SOFT HYPHEN
+    '\u{0600}'..='\u{0605}',   // ARABIC NUMBER SIGN .. NUMBER MARK ABOVE
+    '\u{061C}'..='\u{061C}',   // ARABIC LETTER MARK
+    '\u{06DD}'..='\u{06DD}',   // ARABIC END OF AYAH
+    '\u{070F}'..='\u{070F}',   // SYRIAC ABBREVIATION MARK
+    '\u{0890}'..='\u{0891}',   // ARABIC POUND / PIASTRE MARK ABOVE
+    '\u{08E2}'..='\u{08E2}',   // ARABIC DISPUTED END OF AYAH
+    '\u{180E}'..='\u{180E}',   // MONGOLIAN VOWEL SEPARATOR
+    '\u{200B}'..='\u{200F}',   // ZERO WIDTH SPACE, NON-JOINER, JOINER, LRM, RLM
+    '\u{2028}'..='\u{2029}',   // LINE / PARAGRAPH SEPARATOR
+    '\u{202A}'..='\u{202E}',   // bidi EMBEDDINGs, POP, OVERRIDEs
+    '\u{2060}'..='\u{2064}',   // WORD JOINER, invisible operators
+    '\u{2066}'..='\u{206F}',   // bidi ISOLATEs, deprecated format controls
+    '\u{FEFF}'..='\u{FEFF}',   // ZERO WIDTH NO-BREAK SPACE (BOM)
+    '\u{FFF9}'..='\u{FFFB}',   // INTERLINEAR ANNOTATION controls
+    '\u{110BD}'..='\u{110BD}', // KAITHI NUMBER SIGN
+    '\u{110CD}'..='\u{110CD}', // KAITHI NUMBER SIGN ABOVE
+    '\u{13430}'..='\u{1343F}', // EGYPTIAN HIEROGLYPH format controls
+    '\u{1BCA0}'..='\u{1BCA3}', // SHORTHAND FORMAT controls
+    '\u{1D173}'..='\u{1D17A}', // MUSICAL SYMBOL BEGIN/END controls
+    '\u{E0000}'..='\u{E007F}', // TAG block
+];
+
+/// Whether `c` must never reach an operator log line or terminal raw.
+///
+/// The set is Unicode `Cc`, `Cf`, `Zl` and `Zp`, the compiler's terminal set:
+/// every control (C0 incl. CR/LF/ESC, DEL, C1 incl. NEL/CSI) plus
+/// [`LOG_FORMAT_HAZARDS`]. The one runtime text-hazard predicate: every
+/// runtime sanitiser calls it rather than keeping a local list.
+pub(crate) fn is_log_hazard(c: char) -> bool {
+    if matches!(c, ' '..='~') {
+        return false;
+    }
+    c.is_control() || LOG_FORMAT_HAZARDS.iter().any(|range| range.contains(&c))
 }
 
 /// Neutralise every log-hazard character (see [`is_log_hazard`]) in text
@@ -1905,11 +1933,71 @@ mod scrub_log_controls_tests {
             !out.chars().any(super::is_log_hazard),
             "hazard survived: {out:?}"
         );
-        // One step past each bidi range stays verbatim.
+    }
+
+    #[test]
+    fn printable_neighbours_stay_borrowed() {
+        // One step past a format range, and a variation selector (`Mn`, not
+        // `Cf`), stay verbatim.
         assert!(matches!(
-            scrub_log_controls("\u{202f}\u{206a}\u{2027}"),
+            scrub_log_controls("\u{202f}\u{2070}\u{2027}\u{E0100}"),
             std::borrow::Cow::Borrowed(_)
         ));
+    }
+
+    #[test]
+    fn escapes_zero_width_tag_and_soft_hyphen() {
+        let out = scrub_log_controls("adm\u{200B}in\u{E0041}\u{AD}\u{2060}\u{FEFF}");
+        assert_eq!(out, "adm\\u{200b}in\\u{e0041}\\u{ad}\\u{2060}\\u{feff}");
+    }
+
+    #[test]
+    fn log_format_hazards_equal_the_terminal_set() {
+        assert_eq!(
+            super::LOG_FORMAT_HAZARDS,
+            ipe_diagnostics::terminal::DENIED_FORMAT_CHARS
+        );
+    }
+
+    /// Every scalar value: the runtime predicate is the compiler's terminal set.
+    #[test]
+    fn is_log_hazard_is_the_terminal_set_for_every_char() {
+        for c in (0..=u32::from(char::MAX)).filter_map(char::from_u32) {
+            let terminal = c.is_control() || ipe_diagnostics::terminal::is_denied_format_char(c);
+            assert_eq!(super::is_log_hazard(c), terminal, "U+{:04X}", u32::from(c));
+        }
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // a malformed fixture fails the test
+    fn log_hazard_fixture_matches_the_table() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/log_hazard_ranges.json"))
+                .expect("fixture is JSON");
+        let rows = fixture.as_array().expect("fixture is an array");
+        let parsed: Vec<(u64, u64)> = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.get("lo")
+                        .and_then(serde_json::Value::as_u64)
+                        .expect("lo"),
+                    row.get("hi")
+                        .and_then(serde_json::Value::as_u64)
+                        .expect("hi"),
+                )
+            })
+            .collect();
+        let expected: Vec<(u64, u64)> = [(0, 31), (127, 159)]
+            .into_iter()
+            .chain(super::LOG_FORMAT_HAZARDS.iter().map(|range| {
+                (
+                    u64::from(u32::from(*range.start())),
+                    u64::from(u32::from(*range.end())),
+                )
+            }))
+            .collect();
+        assert_eq!(parsed, expected);
     }
 
     #[test]

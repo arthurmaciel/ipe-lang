@@ -665,6 +665,9 @@ proc-macro2 = "1"
 # `symbol_resolution` reads the emit-symbol SSOT (`StdlibKernel::def().runtime_fn`)
 # to check every kernel's runtime function exists — a native-only source-walk test.
 ipe_kernels = { path = "../../compiler/kernels" }
+# `scrub_log_controls_tests` asserts the runtime log-hazard table equals the
+# compiler's terminal set (`ipe_diagnostics::terminal::DENIED_FORMAT_CHARS`).
+ipe_diagnostics = { path = "../../compiler/diagnostics" }
 # `rerun_this_test_exact`: the shared re-exec that proves the child ran its test.
 e2e-support = { path = "../../../tools/e2e-support" }
 proptest = "1"

@@ -461,28 +461,19 @@ pub async fn ingest(headers: axum::http::HeaderMap, body: String) -> axum::respo
     StatusCode::NO_CONTENT.into_response()
 }
 
-/// Strip control / escape bytes and cap the length of UNTRUSTED ingest text
-/// before it enters the operator console rings (which render to a terminal AND
-/// re-export over OTLP). A malicious or compromised sub-app could otherwise
-/// inject ANSI/CSI/OSC escapes, NUL, or newlines — forged log lines,
-/// clear-screen, cursor moves, terminal-title rewrites — into the operator's
-/// terminal. Mirrors the discipline `observability::track` already applies to
-/// the request path via `sanitise_path`; first-party `Log.*` does NOT route
-/// through ingest, so it is unaffected.
+/// Drop every log-hazard character and cap the length of UNTRUSTED ingest text.
+///
+/// The text enters the operator console rings, which render to a terminal AND
+/// re-export over OTLP. A malicious or compromised sub-app could otherwise
+/// inject ANSI/CSI/OSC escapes, NUL, newlines, line separators, bidi
+/// overrides, zero-width splits or hidden tag-block text — forged log lines,
+/// clear-screen, cursor moves, reordered or invisible content — into the
+/// operator's terminal. The set is the runtime's one predicate,
+/// `system::is_log_hazard`. First-party `Log.*` does NOT route through
+/// ingest, so it is unaffected.
 fn sanitise_ingest(s: &str) -> String {
-    // Reject control bytes AND Unicode bidi-override / zero-width / format chars
-    // (U+200B-200F, U+202A-202E, U+2066-2069, U+FEFF) — a right-to-left override
-    // or zero-width joiner in an untrusted log message can still spoof / reorder
-    // a line in the operator's terminal even though it's not an ASCII control.
     s.chars()
-        .filter(|c| {
-            !c.is_control()
-                && !matches!(c,
-                    '\u{200B}'..='\u{200F}'
-                        | '\u{202A}'..='\u{202E}'
-                        | '\u{2066}'..='\u{2069}'
-                        | '\u{FEFF}')
-        })
+        .filter(|c| !crate::system::is_log_hazard(*c))
         .take(2048)
         .collect()
 }
@@ -1196,5 +1187,10 @@ mod tests {
                 "correct token allowed even cross-origin"
             );
         }
+    }
+
+    #[test]
+    fn ingest_drops_every_log_hazard() {
+        assert_eq!(sanitise_ingest("a\u{2028}b\u{200B}c\u{E0041}d"), "abcd");
     }
 }
