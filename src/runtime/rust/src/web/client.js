@@ -1282,6 +1282,21 @@ window.__ipePortSend = function(raw) {
 var __ipeNavPath   = window.location.pathname;
 var __ipeNavSearch = window.location.search;
 var __ipeNavHref   = window.location.href;
+// The URL to record for a navigation fetch: the canonical URL the server
+// redirected it to, or `fallback`. A followed URL is used only when it is
+// same-origin and its path begins with exactly one `/`; the original hash is
+// kept. Never assigns `location`.
+function __ipeFollowed(r, fallback) {
+  if (!r.redirected) return fallback;
+  try {
+    var u = new URL(r.url);
+    if (u.origin !== window.location.origin) return fallback;
+    if (u.pathname.charAt(0) !== "/" || u.pathname.charAt(1) === "/") return fallback;
+    var hash = "";
+    try { hash = new URL(fallback, window.location.href).hash; } catch (_) {}
+    return u.pathname + u.search + hash;
+  } catch (_) { return fallback; }
+}
 document.addEventListener("click", function(ev) {
   if (ev.defaultPrevented) return;
   if (ev.button !== 0) return;
@@ -1299,10 +1314,13 @@ document.addEventListener("click", function(ev) {
   } catch (e) { return; }
   ev.preventDefault();
   fetch(href, { headers: { "X-Ipe-Nav": "1" }, credentials: "same-origin" })
-    .then(function(r) { return r.text(); })
-    .then(function(t) {
-      __ipePatch(t, "nav");
-      window.history.pushState({}, "", href);
+    .then(function(r) {
+      var url = __ipeFollowed(r, href);
+      return r.text().then(function(t) { return { t: t, url: url }; });
+    })
+    .then(function(res) {
+      __ipePatch(res.t, "nav");
+      window.history.pushState({}, "", res.url);
       __ipeNavPath   = window.location.pathname;
       __ipeNavSearch = window.location.search;
       __ipeNavHref   = window.location.href;
@@ -1324,7 +1342,15 @@ window.addEventListener("popstate", function() {
   __ipeNavSearch = here.search;
   __ipeNavHref = here.href;
   fetch(here.href, { headers: { "X-Ipe-Nav": "1" }, credentials: "same-origin" })
-    .then(function(r) { return r.text(); })
+    .then(function(r) {
+      if (r.redirected) {
+        try { window.history.replaceState({}, "", __ipeFollowed(r, here.href)); } catch (_) {}
+        __ipeNavPath   = window.location.pathname;
+        __ipeNavSearch = window.location.search;
+        __ipeNavHref   = window.location.href;
+      }
+      return r.text();
+    })
     .then(function(t) { __ipePatch(t, "nav"); });
 });
 // ── Status banner (connection state) ─────────────────────────

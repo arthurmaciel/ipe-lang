@@ -22,12 +22,14 @@
 //!   `notFound = Increment` (Msg ctor, wrong ADT) → IPE-T0001.
 //! * Positive control: well-typed routed app (let-bound routes, correct notFound)
 //!   → ipe Ok (reuses the `live_let_bound_routes` fixture).
+//! * R3 (`refused`): well-typed routed app, `routes = []` → IPE-L0159 (no page
+//!   has a route).
 //!
 //! All tests are pure ipe-pipeline checks (parse → canon → types → lower →
 //! emit). No cargo build or runtime binary required — they run without
 //! `IPE_E2E=1`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ipe::CliError;
 
@@ -348,83 +350,29 @@ fn non_routed_live_app_compiles() {
     );
 }
 
-// ── WELL-TYPED empty-routes golden must CARGO-build ──
+// ── A well-typed routed app with an EMPTY table is refused ──
 //
-// R1/R2 above pin the REJECTIONS; this pins the acceptance side of the same
-// empty-routes surface. `routes = []` emits a typed `Vec::<Route<…>>::new()`
-// turbofish, and the runtime `Route<Page>` struct has NO default type
-// parameter — so the pre-round-4 bare `Route` rendering made a WELL-TYPED
-// routed app (`notFound = CounterPage`, matching `page : Page`) ipe-0 and
-// then cargo-fail with E0107 ("missing generics for struct `route::Route`").
-// Post-fix `IrType::WebRoute(page)` renders `Route<MainPage>`.
+// R1/R2 above pin the type refusals; with a well-typed `notFound` an empty
+// table still leaves every page constructor without a route, so no page has
+// a canonical path to render: IPE-L0159.
 
-/// The emitted-project dir for the well-typed empty-routes golden.
-fn empty_routes_ok_out() -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_routed_empty_routes_ok_emit")
-}
-
-/// Compile the well-typed empty-routes golden into `out`.
-fn compile_empty_routes_ok(out: &Path) -> Result<(), ipe::CliError> {
+/// Well-typed routed app with `routes = []` → refused with IPE-L0159 (a page
+/// constructor has no route), never an app whose pages have no address.
+#[test]
+fn routed_empty_routes_is_refused() {
     let entry = repo_root()
         .join("tests")
         .join("golden")
-        .join("live_routed_empty_routes_ok")
+        .join("live_routed_empty_routes_refused")
         .join("Main.ipe");
-    let _ = std::fs::remove_dir_all(out);
-    let runtime = e2e_support::require_runtime().into_path_buf();
-    ipe::build(&entry, out, &runtime)
-}
-
-/// Well-typed routed app with `routes = []` → ipe MUST exit 0, and the
-/// emitted `main.rs` MUST render the page-parametrised `Route<MainPage>`
-/// (never a bare `Route`, which is the E0107 shape). Compile-only — always
-/// runs (no `IPE_E2E` gate).
-#[test]
-fn routed_empty_routes_well_typed_compiles_and_renders_route_page() {
-    let out = empty_routes_ok_out();
-    let result = compile_empty_routes_ok(&out);
-    assert!(
-        result.is_ok(),
-        "#108 hole 1: well-typed empty-routes routed app must be ipe-0, got: {:?}",
-        result.err(),
-    );
-
-    let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
-    assert!(
-        main_rs.contains("route::Route<MainPage>"),
-        "#108 hole 1: emitted code must render the page-parametrised \
-         `Route<MainPage>` (bare `Route` is the E0107 cargo failure)",
-    );
-    assert!(
-        main_rs.contains("web_app_routed"),
-        "#108: a Model with a `page` field must emit `web_app_routed`",
-    );
-}
-
-/// `IPE_E2E` tier: the emitted project must CARGO-build. Builds through the
-/// shared `e2e_support` core, which gives the fixture a unique package name
-/// (fresh app fingerprint) and reuses the warm shared dependency target. The
-/// app crate always compiles fresh from its own source hash — a broken emit
-/// (E0308/E0107) still fails — so the warm deps never mask a SEAL break.
-#[test]
-fn routed_empty_routes_well_typed_cargo_builds() {
-    if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
-        return;
-    }
-    // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling
-    // re-emitting into `empty_routes_ok_out()` in parallel cannot delete rustc's
-    // working directory mid-build.
     let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_routed_empty_routes_ok_e2e_emit");
-    let result = compile_empty_routes_ok(&out);
-    assert!(result.is_ok(), "must compile: {:?}", result.err());
-    let built = e2e_support::build_rust_binary("m7_empty_routes_ok", &out);
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_routed_empty_routes_refused");
+    let _ = std::fs::remove_dir_all(&out);
+    let runtime = e2e_support::require_runtime().into_path_buf();
+    let result = ipe::build(&entry, &out, &runtime);
     assert!(
-        built.is_ok(),
-        "#108 hole 1: emitted empty-routes project must cargo-build \
-         (pre-fix: E0107 missing generics for `route::Route`)\n{}",
-        built.err().unwrap_or_default(),
+        matches!(&result, Err(CliError::Pipeline { diag, .. }) if diag.code().as_str() == "IPE-L0159"),
+        "a routed app with an empty table must be refused with IPE-L0159, got: {result:?}",
     );
 }
 

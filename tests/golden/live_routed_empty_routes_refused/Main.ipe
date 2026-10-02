@@ -1,16 +1,8 @@
 module Main exposing (main)
 
--- #108 round 4 (hole 1) regression — WELL-TYPED routed app with EMPTY routes.
---
--- `routes = []` emits a typed empty vec (`Vec::<Route<…>>::new()`).  The
--- runtime `Route<Page>` struct has NO default type parameter, so the
--- pre-round-4 `IrType::WebRoute` rendering (a bare
--- `ipe_runtime::live::route::Route`) made this ipec-0 program cargo-fail with
--- E0107 ("missing generics for struct `route::Route`") — an
--- exit-0-then-cargo-fail seal violation.  Post-fix `IrType::WebRoute(page)`
--- threads the page type through the lowerer and renders `Route<MainPage>`.
---
--- ipec MUST exit 0 AND the emitted project MUST cargo-build.
+-- A well-typed routed app with an EMPTY route table. Every page constructor
+-- is then without a route, so no page has a canonical path: ipe refuses it
+-- with IPE-L0159.
 
 import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
