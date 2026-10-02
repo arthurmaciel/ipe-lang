@@ -785,6 +785,15 @@ fn write_expr_at(out: &mut String, expr: &Expr, interner: &Interner, level: usiz
                 depth,
             );
         }
+        Expr::OnceLambda {
+            params,
+            ret,
+            body,
+            capture,
+        } => {
+            let label = format!("OnceLambda moves {}", sym_name(interner, capture.name));
+            write_lambda(out, &label, params, ret, body, interner, level, depth);
+        }
         Expr::Apply { func, args } => write_apply(out, func, args, interner, level, depth),
         Expr::FuncValue { callee, ty } => line(
             out,

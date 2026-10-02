@@ -1344,6 +1344,18 @@ pub enum Feature {
     /// partially-applied or point-free `Stream.stream` is a separate fact,
     /// [`LowerError::UnsaturatedHandlerKernel`]. [IPE-L0126]
     StreamHandlerCapture,
+    /// A closure a partial application rebuilds would move a value it cannot copy.
+    ///
+    /// A partial or over-application passed as a function value is rebuilt as a
+    /// closure over its supplied arguments. When one of those arguments reads a
+    /// function, `Task` or `Decoder` value bound through a destructure, the
+    /// closure moves that value on its first call, so it may run only once; it
+    /// is refused wherever the receiving position may call it again (a
+    /// `List.map` mapper, a stored or returned function, a user-function
+    /// argument). The span is the moved value's use. Bind the function with a
+    /// plain `let`, or write an explicit lambda that builds the `Task` or
+    /// `Decoder` inside its body. [IPE-L0126]
+    RebuiltClosureMovesCapture,
 }
 
 /// The app shape whose entry point rejected an inadmissible Model. Drives the
@@ -2443,7 +2455,9 @@ const fn feature_code(f: Feature) -> Code {
         Feature::FloatKeyedCollection => IPE_L0117,
         Feature::RoutedWebApp => IPE_L0118,
         Feature::LetBoundAppCfg => IPE_L0119,
-        Feature::NonCloneCapture | Feature::StreamHandlerCapture => IPE_L0126,
+        Feature::NonCloneCapture
+        | Feature::StreamHandlerCapture
+        | Feature::RebuiltClosureMovesCapture => IPE_L0126,
         Feature::FunctionValueReuse => IPE_L0127,
         Feature::ForeignHandleReuse => IPE_L0130,
         Feature::RowPolyRecordAnnotation => IPE_L0131,

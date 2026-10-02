@@ -25,6 +25,7 @@ use ipe_diagnostics::{
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::free_vars::{pat_bound_symbols, pat_moves_nested_part, pat_moves_scrutinee};
 use ipe_ir::let_inline::{inlined_let_body, let_value_is_inlined};
+use ipe_ir::once_closure::MovedCapture;
 use ipe_ir::{
     AppSurface, Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, EnumPayloadTable, Expr,
     Func, FuncId, IrType, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam,
@@ -43,6 +44,7 @@ mod record_shapes;
 mod ty_templates;
 
 use capture_rewrite::force_shared_capture_clones;
+use clone_class::CaptureWalk;
 use clone_class::{
     CloneClass, CloneEnv, HandlerCapture, classify_capture_clone, classify_handler_capture,
     clone_class, enum_is_opaque_ffi_handle, param_is_multiuse_clonable,
@@ -528,6 +530,17 @@ fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
             params,
             ret,
             body: Box::new(recur(*body)),
+        },
+        Expr::OnceLambda {
+            params,
+            ret,
+            body,
+            capture,
+        } => Expr::OnceLambda {
+            params,
+            ret,
+            body: Box::new(recur(*body)),
+            capture,
         },
         Expr::TailLoop { params, body } => Expr::TailLoop {
             params,
@@ -1265,9 +1278,9 @@ fn escapes(body: &Expr, row_syms: &BTreeSet<Symbol>, tail_sym: Option<Symbol>) -
                     || fields.iter().any(|(_, v)| escapes(v, row_syms, None))
             }
         }
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
-            escapes(body, row_syms, None)
-        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. } => escapes(body, row_syms, None),
         Expr::Apply { func, args } => {
             escapes(func, row_syms, None) || args.iter().any(|a| escapes(a, row_syms, None))
         }
@@ -1559,7 +1572,9 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
         // Nested lambda: descend unless it shadows `sym` via a parameter.
         // A nested `move` closure that captures `sym` causes the outer closure
         // to capture `sym` too.
-        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+        Expr::Lambda { params, body, .. }
+        | Expr::SharedLambda { params, body, .. }
+        | Expr::OnceLambda { params, body, .. } => {
             if params.iter().any(|(s, _)| *s == sym) {
                 false // sym shadowed by inner lambda param
             } else {
@@ -1695,7 +1710,9 @@ fn collect_lambda_capture_depths(sym: Symbol, expr: &Expr, cur_depth: u32, depth
                 depths.push(cur_depth);
             }
         }
-        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+        Expr::Lambda { params, body, .. }
+        | Expr::SharedLambda { params, body, .. }
+        | Expr::OnceLambda { params, body, .. } => {
             if !params.iter().any(|(s, _)| *s == sym) {
                 collect_lambda_capture_depths(sym, body, cur_depth + 1, depths);
             }
@@ -1878,7 +1895,9 @@ fn flows_into_sync_kernel_call(sym: Symbol, expr: &Expr) -> bool {
                 && args.iter().any(|a| expr_mentions_sym(sym, a));
             hit_here || args.iter().any(|a| flows_into_sync_kernel_call(sym, a))
         }
-        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+        Expr::Lambda { params, body, .. }
+        | Expr::SharedLambda { params, body, .. }
+        | Expr::OnceLambda { params, body, .. } => {
             !params.iter().any(|(s, _)| *s == sym) && flows_into_sync_kernel_call(sym, body)
         }
         Expr::Let { name, value, body } => {
@@ -2025,6 +2044,7 @@ fn branch_value_leaf_reads_sym(name: Symbol, branch: &Expr) -> bool {
         // promoted binding).
         Expr::Lambda { .. }
         | Expr::SharedLambda { .. }
+        | Expr::OnceLambda { .. }
         | Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
@@ -2083,6 +2103,11 @@ fn eta_expand_leaf_to_shared(
     ret: &IrType,
     eta_pool: &[Symbol],
 ) -> DResult<Expr> {
+    // A once closure has no `Fn` carrier: it stays at its own position, which
+    // the once check refuses.
+    if matches!(leaf, Expr::OnceLambda { .. }) {
+        return Ok(leaf);
+    }
     // A `Var`/`CloneVar` callee is cloned so the outer `Fn` re-wrap closure's
     // captured binding is not moved out when this eta closure is constructed
     // (E0507); every other shape is a fresh construction, forwarded as-is.
@@ -2162,6 +2187,9 @@ fn unify_group_value_leaves(
             ret: lr,
             body,
         }),
+        // A once closure has no `Fn` carrier to coerce to: it stays at this
+        // branch position, which the once check refuses.
+        once @ Expr::OnceLambda { .. } => Ok(once),
         Expr::Var(s) | Expr::CloneVar(s) if s == name => Ok(Expr::CloneVar(name)),
         Expr::Let {
             name: let_name,
@@ -2326,6 +2354,28 @@ fn promote_unification_sibling_lambdas(
                     params: lp,
                     ret: lr,
                     body: Box::new(recur(*body)?),
+                })
+            }
+        }
+        Expr::OnceLambda {
+            params: lp,
+            ret: lr,
+            body,
+            capture,
+        } => {
+            if lp.iter().any(|(s, _)| *s == name) {
+                Ok(Expr::OnceLambda {
+                    params: lp,
+                    ret: lr,
+                    body,
+                    capture,
+                })
+            } else {
+                Ok(Expr::OnceLambda {
+                    params: lp,
+                    ret: lr,
+                    body: Box::new(recur(*body)?),
+                    capture,
                 })
             }
         }
@@ -2651,9 +2701,9 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
     match expr {
         // A pre-pass `CloneVar` at the outer scope counts like a bare `Var`.
         Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
-            usize::from(lambda_body_refs_sym(sym, body))
-        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. } => usize::from(lambda_body_refs_sym(sym, body)),
         Expr::Let { name, value, body } => {
             let in_value = count_var_uses(sym, value);
             let in_body = if *name == sym {
@@ -2836,7 +2886,9 @@ fn body_calls_kernel_on_param(
             args.iter()
                 .any(|a| body_calls_kernel_on_param(param, a, matcher))
         }
-        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+        Expr::Lambda { params, body, .. }
+        | Expr::SharedLambda { params, body, .. }
+        | Expr::OnceLambda { params, body, .. } => {
             if params.iter().any(|(s, _)| *s == param) {
                 false
             } else {
@@ -2954,7 +3006,9 @@ fn body_reads_field_of_param(param: Symbol, expr: &Expr) -> bool {
                 || body_reads_field_of_param(param, record)
         }
         Expr::Call { args, .. } => args.iter().any(|a| body_reads_field_of_param(param, a)),
-        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+        Expr::Lambda { params, body, .. }
+        | Expr::SharedLambda { params, body, .. }
+        | Expr::OnceLambda { params, body, .. } => {
             if params.iter().any(|(s, _)| *s == param) {
                 false
             } else {
@@ -3160,6 +3214,7 @@ fn collect_row_update_fields(
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. }
         | Expr::TailLoop { body, .. } => {
             collect_row_update_fields(body, sym_to_rp, row_params);
         }
@@ -3627,6 +3682,7 @@ fn body_succeeds_on_bare_var(expr: &Expr) -> bool {
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. }
         | Expr::TailLoop { body, .. }
         | Expr::Access { record: body, .. } => body_succeeds_on_bare_var(body),
         Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
@@ -3704,7 +3760,11 @@ fn body_succeeds_on_bare_var(expr: &Expr) -> bool {
 fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
     match expr {
         Expr::FuncValue { ty, .. } => ir_type_mentions_generic(ty, tv),
-        Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } => {
+        Expr::Lambda { params, ret, body }
+        | Expr::SharedLambda { params, ret, body }
+        | Expr::OnceLambda {
+            params, ret, body, ..
+        } => {
             params.iter().any(|(_, t)| ir_type_mentions_generic(t, tv))
                 || ir_type_mentions_generic(ret, tv)
                 || body_boxes_generic_callback(tv, body)
@@ -3786,7 +3846,11 @@ fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
 fn body_materializes_generic_decoder(tv: Symbol, expr: &Expr) -> bool {
     match expr {
         Expr::FuncValue { ty, .. } => ir_type_generic_in_decoder(ty, tv),
-        Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } => {
+        Expr::Lambda { params, ret, body }
+        | Expr::SharedLambda { params, ret, body }
+        | Expr::OnceLambda {
+            params, ret, body, ..
+        } => {
             params
                 .iter()
                 .any(|(_, t)| ir_type_generic_in_decoder(t, tv))
@@ -3880,7 +3944,9 @@ fn body_materializes_generic_decoder(tv: Symbol, expr: &Expr) -> bool {
 /// `binder` iff [`lambda_body_refs_sym`] finds it live in the closure body.
 fn binder_captured_in_move_closure(binder: Symbol, expr: &Expr) -> bool {
     match expr {
-        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+        Expr::Lambda { params, body, .. }
+        | Expr::SharedLambda { params, body, .. }
+        | Expr::OnceLambda { params, body, .. } => {
             if params.iter().any(|(s, _)| *s == binder) {
                 return false;
             }
@@ -4022,7 +4088,9 @@ fn closure_captures_bare_generic(
                 other => recur(locally_bound, other),
             }
         }
-        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+        Expr::Lambda { params, body, .. }
+        | Expr::SharedLambda { params, body, .. }
+        | Expr::OnceLambda { params, body, .. } => {
             let mut inner = locally_bound.clone();
             inner.extend(params.iter().map(|(s, _)| *s));
             recur(&inner, body)
@@ -4165,7 +4233,11 @@ fn collect_ir_pat_syms(pat: &Pat, out: &mut BTreeSet<Symbol>) {
 /// is also detected.
 fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
     match expr {
-        Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } => {
+        Expr::Lambda { params, ret, body }
+        | Expr::SharedLambda { params, ret, body }
+        | Expr::OnceLambda {
+            params, ret, body, ..
+        } => {
             // A closure can oblige `tv: Sync` only when its body move-captures a
             // value that genuinely carries `tv` BARE into the emitted
             // `Box`/`Arc<dyn Fn + Send + Sync + 'static>`. Two signature regimes
@@ -4551,6 +4623,7 @@ fn collect_user_calls<'e>(expr: &'e Expr, out: &mut Vec<(FuncId, &'e [Expr])>) {
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. }
         | Expr::TailLoop { body, .. } => collect_user_calls(body, out),
         Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
             collect_user_calls(value, out);
@@ -4639,6 +4712,7 @@ fn arg_forwarded_binders(arg: &Expr, out: &mut Vec<Symbol>) {
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. }
         | Expr::TailLoop { body, .. } => arg_forwarded_binders(body, out),
         Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
             arg_forwarded_binders(value, out);
@@ -4845,6 +4919,7 @@ fn collect_local_derived_tvars(
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. }
         | Expr::TailLoop { body, .. } => collect_local_derived_tvars(body, derived),
         Expr::If { cond, then_, else_ } => {
             collect_local_derived_tvars(cond, derived);
@@ -5395,10 +5470,12 @@ fn arg_site_type(
     match arg {
         Expr::Var(s) | Expr::CloneVar(s) => site_types.get(s).cloned().flatten(),
         Expr::FuncValue { ty, .. } => Some(ty.clone()),
-        Expr::Lambda { params, ret, .. } => Some(IrType::Fun(
-            params.iter().map(|(_, t)| t.clone()).collect(),
-            Box::new(ret.clone()),
-        )),
+        Expr::Lambda { params, ret, .. } | Expr::OnceLambda { params, ret, .. } => {
+            Some(IrType::Fun(
+                params.iter().map(|(_, t)| t.clone()).collect(),
+                Box::new(ret.clone()),
+            ))
+        }
         Expr::SharedLambda { params, ret, .. } => Some(IrType::SharedFun(
             params.iter().map(|(_, t)| t.clone()).collect(),
             Box::new(ret.clone()),
@@ -5472,6 +5549,7 @@ fn collect_let_site_types(
         }
         Expr::Lambda { params, body, .. }
         | Expr::SharedLambda { params, body, .. }
+        | Expr::OnceLambda { params, body, .. }
         | Expr::TailLoop { params, body } => {
             for (p, pty) in params {
                 record_site_type(site_types, *p, Some(pty.clone()));
@@ -5619,9 +5697,9 @@ fn align_param_slot(
 fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
-            usize::from(lambda_body_refs_sym(sym, body))
-        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. } => usize::from(lambda_body_refs_sym(sym, body)),
         Expr::Let { name, value, body } => {
             let in_value = count_fn_value_uses(sym, value);
             let in_body = if *name == sym {
@@ -5798,7 +5876,9 @@ fn fn_value_move_walk(
         }
         // A lambda captures `sym` by move at construction; the whole lambda is
         // one consuming read of `sym` at this point.
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. } => {
             if lambda_body_refs_sym(sym, body) {
                 state.read(true);
             }
@@ -6143,9 +6223,9 @@ fn reject_fn_value_reuse(
 fn count_value_consumes(sym: Symbol, copy_fields: &BTreeSet<Symbol>, expr: &Expr) -> usize {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
-            usize::from(lambda_body_refs_sym(sym, body))
-        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. } => usize::from(lambda_body_refs_sym(sym, body)),
         Expr::Let { name, value, body } => {
             let in_value = count_value_consumes(sym, copy_fields, value);
             let in_body = if *name == sym {
@@ -6515,7 +6595,9 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState<'_
                 state.read_whole(true);
             }
         }
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. } => {
             if lambda_body_refs_sym(sym, body) {
                 state.read_whole(true);
             }
@@ -6755,9 +6837,9 @@ fn sym_is_bare_update_base(sym: Symbol, expr: &Expr) -> bool {
             !params.iter().any(|(s, _)| *s == sym) && sym_is_bare_update_base(sym, body)
         }
         Expr::TailRecur { args } => args.iter().any(|a| sym_is_bare_update_base(sym, a)),
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
-            sym_is_bare_update_base(sym, body)
-        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. } => sym_is_bare_update_base(sym, body),
         Expr::Var(_)
         | Expr::CloneVar(_)
         | Expr::Int(_)
@@ -6791,9 +6873,9 @@ fn sym_is_bare_update_base(sym: Symbol, expr: &Expr) -> bool {
 fn count_var_uses_update_aware(sym: Symbol, expr: &Expr) -> usize {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
-            usize::from(lambda_body_refs_sym(sym, body))
-        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. } => usize::from(lambda_body_refs_sym(sym, body)),
         Expr::Let { name, value, body } => {
             let in_value = count_var_uses_update_aware(sym, value);
             let in_body = if *name == sym {
@@ -7090,7 +7172,9 @@ fn collect_mentioned_syms(expr: &Expr, out: &mut BTreeSet<Symbol>) {
         Expr::Var(s) | Expr::CloneVar(s) => {
             out.insert(*s);
         }
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. } => {
             // Recurse into body; params bind new symbols (not tracked here).
             collect_mentioned_syms(body, out);
         }
@@ -7220,7 +7304,9 @@ fn fn_value_read_flags_walk(sym: Symbol, expr: &Expr, depth: u32, flags: &mut Fn
                 flags.any_ge2 |= depth >= 2;
             }
         }
-        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+        Expr::Lambda { params, body, .. }
+        | Expr::SharedLambda { params, body, .. }
+        | Expr::OnceLambda { params, body, .. } => {
             if !params.iter().any(|(s, _)| *s == sym) {
                 fn_value_read_flags_walk(sym, body, depth + 1, flags);
             }
@@ -7422,6 +7508,12 @@ fn eta_shared_rebind(
     ret: &IrType,
     eta_pool: &[Symbol],
 ) -> DResult<Expr> {
+    // A once closure has no `Fn` carrier: wrapping it would build and call it on
+    // every dispatch, moving its capture out of the wrapper. It stays at its own
+    // position, which the once check refuses.
+    if matches!(value, Expr::OnceLambda { .. }) {
+        return Ok(value);
+    }
     let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(param_tys.len());
     let mut args: Vec<Expr> = Vec::with_capacity(param_tys.len());
     for (offset, ty) in param_tys.iter().enumerate() {
@@ -7619,6 +7711,28 @@ fn shim_fn_value_reads_at(site: &ShimSite<'_>, expr: Expr, in_storage: bool) -> 
                     params,
                     ret: lret,
                     body: Box::new(recurse(*body)?),
+                })
+            }
+        }
+        Expr::OnceLambda {
+            params,
+            ret: lret,
+            body,
+            capture,
+        } => {
+            if params.iter().any(|(s, _)| *s == sym) {
+                Ok(Expr::OnceLambda {
+                    params,
+                    ret: lret,
+                    body,
+                    capture,
+                })
+            } else {
+                Ok(Expr::OnceLambda {
+                    params,
+                    ret: lret,
+                    body: Box::new(recurse(*body)?),
+                    capture,
                 })
             }
         }
@@ -7924,7 +8038,9 @@ fn count_self_calls(
             count_self_calls(self_id, arity, body, in_tail, tail, non_tail);
         }
         // Non-tail descents.
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. } => {
             count_self_calls(self_id, arity, body, false, tail, non_tail);
         }
         Expr::BinOp { lhs, rhs, .. } => {
@@ -8455,6 +8571,7 @@ fn collect_func_edges(expr: &Expr, out: &mut BTreeSet<FuncId>) {
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. }
         | Expr::TailLoop { body, .. } => collect_func_edges(body, out),
         Expr::Cons { head, tail } => {
             collect_func_edges(head, out);
@@ -8547,6 +8664,7 @@ fn body_uses_http_with_timeout(expr: &Expr) -> bool {
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. }
         | Expr::TailLoop { body, .. } => body_uses_http_with_timeout(body),
         Expr::Cons { head, tail } => {
             body_uses_http_with_timeout(head) || body_uses_http_with_timeout(tail)
@@ -8839,7 +8957,9 @@ fn collect_node_head_type_refs(
         match expr {
             Expr::List { elem, .. } => slot(elem),
             Expr::Access { field_ty, .. } => slot(field_ty),
-            Expr::Lambda { params, ret, .. } | Expr::SharedLambda { params, ret, .. } => {
+            Expr::Lambda { params, ret, .. }
+            | Expr::SharedLambda { params, ret, .. }
+            | Expr::OnceLambda { params, ret, .. } => {
                 for (_, t) in params {
                     slot(t);
                 }
@@ -8903,6 +9023,7 @@ fn collect_child_ir_type_refs(
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. }
         | Expr::TailLoop { body, .. } => collect_body_ir_type_refs(body, enums, records),
         Expr::Cons { head, tail } => {
             collect_body_ir_type_refs(head, enums, records);
@@ -9140,6 +9261,7 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. }
         | Expr::TailLoop { body, .. } => {
             scan_kernel_usage(body, usage);
         }
@@ -9244,6 +9366,7 @@ fn expr_constructs_sqlvalue(expr: &Expr, enums: &[Symbol]) -> bool {
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. }
         | Expr::TailLoop { body, .. } => expr_constructs_sqlvalue(body, enums),
         Expr::Cons { head, tail } => {
             expr_constructs_sqlvalue(head, enums) || expr_constructs_sqlvalue(tail, enums)
@@ -10165,6 +10288,24 @@ fn rewrite_var_free_occurrences(
                 params,
                 ret,
                 body: new_body,
+            }
+        }
+        Expr::OnceLambda {
+            params,
+            ret,
+            body,
+            capture,
+        } => {
+            let new_body = if params.iter().any(|(s, _)| *s == target) {
+                body
+            } else {
+                Box::new(rewrite_var_free_occurrences(target, *body, on_hit))
+            };
+            Expr::OnceLambda {
+                params,
+                ret,
+                body: new_body,
+                capture,
             }
         }
         Expr::Apply { func, args } => Expr::Apply {
@@ -14849,6 +14990,11 @@ impl<'a> Lowerer<'a> {
             // its needed default pin. Centralised here so no `lower_def` branch
             // can silently miss it.
             func.body = clear_let_bound_task_fail_pins(func.body);
+            // Every `FnOnce`-only eta closure must sit where it is called at
+            // most once; checked on the final body so no later rewrite can move
+            // one into a position that calls it again.
+            crate::once_check::check_once_closures(&func.body)
+                .map_err(|d| (d, def.home().to_vec()))?;
             callee_instances.insert(func.id, self.callee_instances.take());
             if self.interner.resolve(func.name) == Some("main") {
                 entry = Some(func.id);
@@ -18555,42 +18701,87 @@ impl<'a> Lowerer<'a> {
                 None => {}
             }
         }
-        rewrite_captured_clones(&clone_set, &noncl_set, span, body, 0)
+        rewrite_captured_clones(
+            &clone_set,
+            &noncl_set,
+            &CaptureWalk::refusing(span),
+            body,
+            0,
+        )
     }
 
-    /// T3 capture-clone rewrite for the body of a SYNTHETIC eta closure (a
-    /// partial or over-application rebuilt as `\eta… -> f(a0, …, eta…)`).
+    /// Build the closure of a SYNTHETIC eta expansion (a partial or
+    /// over-application rebuilt as `\eta… -> f(a0, …, eta…)`) over `body`.
     ///
-    /// The residual is a `move` closure boxed as `dyn Fn`, so its body runs once
-    /// per call. Every expression it re-evaluates per call — the callee value
-    /// and each supplied argument the eta builder did not hoist out of it (a
-    /// function-typed or `Copy`-typed argument slot) — reads the locals free in
-    /// its CANON source from the closure environment. A `CloneOk` read of such a
-    /// local must clone, exactly as in a source lambda, or the closure moves it
-    /// out of its `Fn` environment (E0507). `sources` are those canon
-    /// expressions; a local free in none of them is not a capture of this
-    /// closure and stays untouched.
+    /// The closure is a `move` closure whose body runs once per call. Every
+    /// expression it re-evaluates per call — the callee value and each supplied
+    /// argument the eta builder did not hoist out of it — reads the locals free
+    /// in its CANON source from the closure environment. `sources` are those
+    /// canon expressions; a local free in none of them is not a capture of this
+    /// closure and stays untouched. Each capture is classified once:
     ///
-    /// Only the `CloneOk` set is rewritten. A `NonClone` capture keeps the eta
-    /// builder's own forwarding discipline (a function value moved into an
-    /// `impl FnOnce` slot), so this pass adds `.clone()` reads and no
-    /// IPE-L0125/L0126 refusal; a capture whose type does not resolve refuses
-    /// exactly as it does for a source lambda.
+    /// * a promotable pure-`Fun` binder is left to its binder site, which reads
+    ///   the lowered scope (this closure included) and moves the binder onto the
+    ///   `Clone` `Arc` carrier when a read here would move it;
+    /// * a `CloneOk` read clones, exactly as in a source lambda, or the closure
+    ///   would move it out of its `Fn` environment (E0507);
+    /// * a `NonClone` read the body moves (anything but a depth-0 callee) is
+    ///   recorded: the closure is then `FnOnce` only and is built as an
+    ///   [`Expr::OnceLambda`], which the once check admits only where its
+    ///   position calls it at most once;
+    /// * a capture whose type does not resolve refuses exactly as it does for a
+    ///   source lambda.
     fn clone_eta_body_captures(
         &self,
         sources: &[&canon::Expr],
         span: Span,
+        params: Vec<(Symbol, IrType)>,
+        ret: IrType,
         body: Expr,
     ) -> DResult<Expr> {
         let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
+        let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
+        let mut use_spans: BTreeMap<Symbol, Span> = BTreeMap::new();
         for source in sources {
-            for (sym, binder_ty) in self.captured_locals(&[], source)? {
-                if classify_capture_clone(self.clone_env(), binder_ty.classified()) == Some(true) {
-                    clone_set.insert(sym);
+            for (sym, capture_span, binder_ty) in self.captured_locals_at(&[], source)? {
+                let ir_ty = binder_ty.classified();
+                if fun_value_arc_promotable(ir_ty)
+                    && self.promotable_fn_binders.borrow().contains(&sym)
+                {
+                    continue;
+                }
+                match classify_capture_clone(self.clone_env(), ir_ty) {
+                    Some(true) => {
+                        clone_set.insert(sym);
+                    }
+                    Some(false) => {
+                        noncl_set.insert(sym);
+                        use_spans.entry(sym).or_insert(capture_span);
+                    }
+                    None => {}
                 }
             }
         }
-        rewrite_captured_clones(&clone_set, &BTreeSet::new(), span, body, 0)
+        let walk = CaptureWalk::recording(span);
+        let body = Box::new(rewrite_captured_clones(
+            &clone_set, &noncl_set, &walk, body, 0,
+        )?);
+        Ok(match walk.first_moved() {
+            None => Expr::Lambda { params, ret, body },
+            Some(name) => {
+                let at = use_spans.get(&name).copied().unwrap_or(span);
+                Expr::OnceLambda {
+                    params,
+                    ret,
+                    body,
+                    capture: MovedCapture {
+                        name,
+                        lo: at.lo,
+                        hi: at.hi,
+                    },
+                }
+            }
+        })
     }
 
     /// Run `f` with `poly` installed as the enclosing def's generic type-variable map.
@@ -22828,8 +23019,9 @@ impl<'a> Lowerer<'a> {
         let mut site = site;
         for (offset, lowered) in lowered_args.iter_mut().enumerate() {
             let arg = first.saturating_add(offset);
-            if let Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } =
-                lowered
+            if let Expr::Lambda { params, body, .. }
+            | Expr::SharedLambda { params, body, .. }
+            | Expr::OnceLambda { params, body, .. } = lowered
             {
                 site =
                     self.flip_mapper_lambda_params(shape, arity, arg, params, body, site, span)?;
@@ -23450,9 +23642,12 @@ impl<'a> Lowerer<'a> {
         // already carry the `Arc` decision; take them first so the eta wrapper is
         // reserved for the non-literal leaves that would otherwise stay `Box`.
         let value = promote_fn_field_value_carrier(value);
+        // A once closure is left at its storage position, which the once check
+        // refuses: no `Arc` wrapper may call it more than once.
         if matches!(
             value,
             Expr::SharedLambda { .. }
+                | Expr::OnceLambda { .. }
                 | Expr::FuncValue {
                     ty: IrType::SharedFun(_, _),
                     ..
@@ -23809,10 +24004,12 @@ impl<'a> Lowerer<'a> {
         ) || matches!(
             value,
             Expr::SharedLambda { ref params, .. } if !params.is_empty()
-        ) || matches!(
-            value,
-            Expr::FuncValue { ty: IrType::Fun(ref params, _), .. } if !params.is_empty()
-        ) {
+        ) || matches!(value, Expr::OnceLambda { .. })
+            || matches!(
+                value,
+                Expr::FuncValue { ty: IrType::Fun(ref params, _), .. } if !params.is_empty()
+            )
+        {
             return Ok(value);
         }
         // Only a DIRECT function arrow needs the fn-payload carrier flip; a
@@ -24138,12 +24335,7 @@ impl<'a> Lowerer<'a> {
             on_form: OnFormKind::NotForm,
         };
         let sources: Vec<&canon::Expr> = canon_args.iter().collect();
-        let body = self.clone_eta_body_captures(&sources, call_span, body)?;
-        let lambda = Expr::Lambda {
-            params,
-            ret,
-            body: Box::new(body),
-        };
+        let lambda = self.clone_eta_body_captures(&sources, call_span, params, ret, body)?;
         // T4: wrap any hoisted let-bindings around the lambda.
         // hoisted = [(cap_sym_0, expr_0), (cap_sym_1, expr_1), ...] in source
         // order.  Folding in reverse yields:
@@ -24302,12 +24494,7 @@ impl<'a> Lowerer<'a> {
             args: call_args,
         };
         let sources: Vec<&canon::Expr> = std::iter::once(callee).chain(canon_args).collect();
-        let body = self.clone_eta_body_captures(&sources, call_span, body)?;
-        let lambda = Expr::Lambda {
-            params,
-            ret,
-            body: Box::new(body),
-        };
+        let lambda = self.clone_eta_body_captures(&sources, call_span, params, ret, body)?;
         // T4: wrap hoisted let-bindings around the lambda, in reverse so the
         // args evaluate left-to-right before the closure is built.
         let result = hoisted
@@ -24432,12 +24619,7 @@ impl<'a> Lowerer<'a> {
             args: call_args,
         };
         let sources: Vec<&canon::Expr> = canon_args.iter().collect();
-        let body = self.clone_eta_body_captures(&sources, call_span, body)?;
-        let lambda = Expr::Lambda {
-            params,
-            ret,
-            body: Box::new(body),
-        };
+        let lambda = self.clone_eta_body_captures(&sources, call_span, params, ret, body)?;
         // T4: wrap any hoisted let-bindings around the lambda.
         // Folding in reverse preserves left-to-right evaluation order.
         let result = hoisted
@@ -24738,12 +24920,7 @@ impl<'a> Lowerer<'a> {
             args: apply_args,
         };
         let sources: Vec<&canon::Expr> = canon_args.iter().collect();
-        let body = self.clone_eta_body_captures(&sources, call_span, body)?;
-        let lambda = Expr::Lambda {
-            params,
-            ret,
-            body: Box::new(body),
-        };
+        let lambda = self.clone_eta_body_captures(&sources, call_span, params, ret, body)?;
         let result = hoisted
             .into_iter()
             .rev()
@@ -29266,7 +29443,13 @@ impl<'a> Lowerer<'a> {
                     None => {}
                 }
             }
-            rewrite_captured_clones(&clone_set, &noncl_set, value_span, value, 0)?
+            rewrite_captured_clones(
+                &clone_set,
+                &noncl_set,
+                &CaptureWalk::refusing(value_span),
+                value,
+                0,
+            )?
         };
         let thunk_name = self.fresh_destructure_thunk_symbol()?;
         let thunk = Expr::Lambda {

@@ -6,6 +6,7 @@ use super::{
 };
 use crate::EmitCtx;
 use core::fmt::Write as _;
+use ipe_ir::once_closure::{ClosureSite, admitted_once_parts};
 
 /// Emit an `Expr` in TAIL/STATEMENT context — the interior of a `TailLoop`'s
 /// `loop { … }`. Every path ends in either a `return <expr>;` (a leaf
@@ -174,13 +175,34 @@ pub fn emit_apply(
     // are evaluated and bound, then the body executes in the same scope.  Free
     // variables from the outer scope are used directly — no capture, no
     // ownership transfer.
-    if let Expr::Lambda {
+    // A once closure (`Expr::OnceLambda`) inlines here exactly as a `Lambda`
+    // does, but only where the shared once verdict admits this application.
+    // Any other application of one falls through to `emit_expr_at`, which
+    // refuses it as a compiler bug.
+    let once_parts = if let Expr::OnceLambda { params, .. } = func {
+        admitted_once_parts(
+            func,
+            &ClosureSite::ImmediateApply {
+                arity: params.len(),
+                args: args.len(),
+            },
+        )
+        .map(|(params, _, body)| (params, body))
+    } else {
+        None
+    };
+    let inlined = if let Expr::Lambda {
         params,
         ret: _,
         body,
     } = func
         && args.len() == params.len()
     {
+        Some((params.as_slice(), body.as_ref()))
+    } else {
+        once_parts
+    };
+    if let Some((params, body)) = inlined {
         // Immediately-applied-lambda inlining, only when the arg count EQUALS the
         // lambda's arity — the ordinary saturated `(\p0,… -> body) a0 …` shape.
         // `args.len() > params.len()` is a CURRIED application of a
@@ -353,6 +375,22 @@ pub fn emit_lambda_unboxed(
         "move |{}| -> {ret_s} {{ {body_s} }}",
         parts.join(", ")
     ))
+}
+
+/// The compiler-bug refusal for an [`Expr::OnceLambda`] at an unadmitted position.
+///
+/// A once closure moves a non-`Clone` capture, so it is emitted only where
+/// `ipe_ir::once_closure::admits_once` admits its position; the lowering once
+/// check refuses every other position first. Reaching this means the two
+/// boundaries disagree.
+#[must_use]
+pub fn once_closure_bug(where_: &'static str) -> Diagnostic {
+    Diagnostic::CompilerBug {
+        where_,
+        detail: "an `Expr::OnceLambda` reached a position `once_closure::admits_once` \
+                 does not admit; boxing it as `dyn Fn` would not build"
+            .to_string(),
+    }
 }
 
 /// Emit a lambda `\p0 p1 ... -> body` as a boxed closure whose static type is

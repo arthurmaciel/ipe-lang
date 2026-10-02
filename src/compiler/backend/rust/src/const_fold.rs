@@ -340,6 +340,17 @@ fn fold_expr(expr: Expr, funcs: &BTreeMap<FuncId, &Func>, interner: &Interner) -
             ret,
             body: go_box(body),
         },
+        Expr::OnceLambda {
+            params,
+            ret,
+            body,
+            capture,
+        } => Expr::OnceLambda {
+            params,
+            ret,
+            body: go_box(body),
+            capture,
+        },
         Expr::Apply { func, args } => Expr::Apply {
             func: go_box(func),
             args: go_vec(args),
@@ -532,9 +543,9 @@ fn body_has_tail_construct(expr: &Expr) -> bool {
                 || fields.iter().any(|(_, v)| body_has_tail_construct(v))
         }
         Expr::Access { record, .. } => body_has_tail_construct(record),
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
-            body_has_tail_construct(body)
-        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::OnceLambda { body, .. } => body_has_tail_construct(body),
         Expr::TaskSeq { effect, rest } => {
             body_has_tail_construct(effect) || body_has_tail_construct(rest)
         }
@@ -683,6 +694,21 @@ fn substitute(expr: Expr, subst: &BTreeMap<Symbol, Expr>) -> Expr {
                 params,
                 ret,
                 body: Box::new(body),
+            }
+        }
+        Expr::OnceLambda {
+            params,
+            ret,
+            body,
+            capture,
+        } => {
+            let bound: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
+            let body = substitute_under_binders(*body, subst, &bound);
+            Expr::OnceLambda {
+                params,
+                ret,
+                body: Box::new(body),
+                capture,
             }
         }
         Expr::Apply { func, args } => Expr::Apply {

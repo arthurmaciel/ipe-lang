@@ -92,6 +92,7 @@ fn sym_referenced_directly(sym: Symbol, expr: &Expr) -> bool {
         // concern, not a DIRECT reference of the lambda we are testing.
         Expr::Lambda { .. }
         | Expr::SharedLambda { .. }
+        | Expr::OnceLambda { .. }
         | Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
@@ -158,6 +159,20 @@ pub(super) fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
         Expr::SharedLambda { params, ret, body } => {
             wrap_shared_lambda_if_needed(sym, Expr::SharedLambda { params, ret, body })
         }
+        Expr::OnceLambda {
+            params,
+            ret,
+            body,
+            capture,
+        } => wrap_shared_lambda_if_needed(
+            sym,
+            Expr::OnceLambda {
+                params,
+                ret,
+                body,
+                capture,
+            },
+        ),
         Expr::Let { name, value, body } => force_shared_capture_clones_let(sym, name, *value, body),
         Expr::Destructure {
             binder,
@@ -428,6 +443,32 @@ fn wrap_shared_lambda_if_needed(sym: Symbol, lambda_expr: Expr) -> Expr {
                 shadowed,
                 needs_wrap,
                 Expr::SharedLambda { params, ret, body },
+            )
+        }
+        Expr::OnceLambda {
+            params,
+            ret,
+            body,
+            capture,
+        } => {
+            let shadowed = params.iter().any(|(s, _)| *s == sym);
+            // Recurse FIRST, then decide on the PROCESSED body — see the
+            // `Lambda` arm above for why the relay must be post-recursion.
+            let body = if shadowed {
+                body
+            } else {
+                Box::new(force_shared_capture_clones(sym, *body))
+            };
+            let needs_wrap = !shadowed && sym_referenced_directly(sym, &body);
+            (
+                shadowed,
+                needs_wrap,
+                Expr::OnceLambda {
+                    params,
+                    ret,
+                    body,
+                    capture,
+                },
             )
         }
         other => (true, false, other),

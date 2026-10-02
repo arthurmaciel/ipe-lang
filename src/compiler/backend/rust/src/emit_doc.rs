@@ -58,9 +58,11 @@ use crate::doc::{ChainOperand, Doc};
 use crate::emit_expr::{
     call_has_kernel_special_case, callee_name, clone_targets_in_expr, combine_guards,
     emit_arm_head, emit_binding_stmts, emit_expr_at, emit_match_scrutinee, free_vars,
-    inlined_let_body, record_struct_name, swapped_container_clone_rewrite, wants_arc_ctor,
+    inlined_let_body, once_closure_bug, record_struct_name, swapped_container_clone_rewrite,
+    wants_arc_ctor,
 };
 use crate::emit_types::{GenericScope, render_type};
+use ipe_ir::once_closure::{ClosureSite, admitted_once_parts};
 
 /// The infix spelling of a chain-eligible operator (never `Append` / `IntDiv`
 /// / `Int{Add,Sub,Mul}` / `Add`/`Sub`/`Mul`, which are all call-shaped).
@@ -274,6 +276,10 @@ pub fn build_doc(
         Expr::SharedLambda { params, ret, body } => {
             build_lambda(ctx, params, ret, body, indent, child, generics, true)
         }
+        // A once closure is built only by the admitted positions below (an
+        // immediate application, `Task.andThen`'s continuation); mirrors
+        // [`crate::emit_expr::emit_expr_at`]'s refusal everywhere else.
+        Expr::OnceLambda { .. } => Err(once_closure_bug("ipe_backend_rust::emit_doc::build_doc")),
 
         // An immediately-applied lambda `({ let p0: T0 = a0; … body })`. The string
         // emitter inlines the lambda's params as `let` bindings then the body — a
@@ -295,6 +301,26 @@ pub fn build_doc(
             };
             build_applied_lambda(ctx, params, args, lam_body, indent, child, generics)
         }
+        // An immediately-applied once closure: the same block as a `Lambda`,
+        // only where the shared once verdict admits the application (mirrors
+        // [`crate::emit_expr::emit_apply`]).
+        Expr::Apply { func, args } if matches!(func.as_ref(), Expr::OnceLambda { .. }) => {
+            let arity = if let Expr::OnceLambda { params, .. } = func.as_ref() {
+                params.len()
+            } else {
+                0
+            };
+            let site = ClosureSite::ImmediateApply {
+                arity,
+                args: args.len(),
+            };
+            let Some((params, _, lam_body)) = admitted_once_parts(func, &site) else {
+                return Err(once_closure_bug(
+                    "ipe_backend_rust::emit_doc::build_doc(Apply)",
+                ));
+            };
+            build_applied_lambda(ctx, params, args, lam_body, indent, child, generics)
+        }
 
         // A general function-value application `({f})(a0, a1, …)`. Structured ONLY
         // for the non-lambda, non-empty-arg tail: the immediately-applied-lambda
@@ -303,7 +329,8 @@ pub fn build_doc(
         // is exactly `({f})(` + a delimited argument list; `f` is built recursively
         // so a structured func operand rides inside its parens.
         Expr::Apply { func, args }
-            if !matches!(func.as_ref(), Expr::Lambda { .. }) && !args.is_empty() =>
+            if !matches!(func.as_ref(), Expr::Lambda { .. } | Expr::OnceLambda { .. })
+                && !args.is_empty() =>
         {
             let func_doc = build_doc(ctx, func, indent, child, generics)?;
             let docs = build_args(ctx, args, indent, child, generics)?;
@@ -1092,9 +1119,9 @@ fn build_call_args_task_and_then(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Vec<Doc>> {
-    if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
+    if let Callee::Kernel(kernel @ KernelFn::TaskAndThen) = callee
         && let [cont, effect] = args
-        && let Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } = cont
+        && let Some((params, ret, body)) = and_then_cont(cont, kernel)
     {
         let closure = build_closure(ctx, params, ret, body, indent, child, generics)?;
         let cont_doc = Doc::concat(vec![Doc::text("Box::new("), closure, Doc::text(")")]);
@@ -1102,6 +1129,19 @@ fn build_call_args_task_and_then(
         return Ok(vec![cont_doc, effect_doc]);
     }
     build_call_args_with_impl_fn(ctx, callee, args, indent, child, generics)
+}
+
+/// The parts of `Task.andThen`'s continuation when it is built unboxed: a
+/// closure literal, or a once closure the shared once verdict admits there.
+fn and_then_cont<'e>(
+    cont: &'e Expr,
+    kernel: &KernelFn,
+) -> Option<(&'e [(Symbol, IrType)], &'e IrType, &'e Expr)> {
+    if let Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } = cont {
+        Some((params.as_slice(), ret, body.as_ref()))
+    } else {
+        admitted_once_parts(cont, &ClosureSite::KernelArg { kernel, index: 0 })
+    }
 }
 
 /// Build a positional argument list, passing a lambda-literal argument UNBOXED

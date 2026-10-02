@@ -22,6 +22,7 @@
 
 mod capabilities;
 mod lower;
+mod once_check;
 
 /// Whole-program capability inference: the exact security-capability set a
 /// lowered program exercises. Consumed by `ipe capabilities` (SP1) and, ahead,

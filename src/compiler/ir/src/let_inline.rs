@@ -232,6 +232,7 @@ pub fn scan_free_target_into(
         }
         Expr::Lambda { params, body, .. }
         | Expr::SharedLambda { params, body, .. }
+        | Expr::OnceLambda { params, body, .. }
         | Expr::TailLoop { params, body } => {
             if !params.iter().any(|(s, _)| *s == target) {
                 scan_free_target_into(body, target, count, has_clonevar);
@@ -415,6 +416,24 @@ pub fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
                 params,
                 ret,
                 body: new_body,
+            }
+        }
+        Expr::OnceLambda {
+            params,
+            ret,
+            body,
+            capture,
+        } => {
+            let new_body = if params.iter().any(|(s, _)| *s == target) {
+                body
+            } else {
+                Box::new(substitute_var(*body, target, replacement))
+            };
+            Expr::OnceLambda {
+                params,
+                ret,
+                body: new_body,
+                capture,
             }
         }
         Expr::Apply { func, args } => Expr::Apply {
