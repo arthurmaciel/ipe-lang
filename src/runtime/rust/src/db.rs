@@ -4516,7 +4516,7 @@ async fn settle_checked_write(
 }
 
 /// Runs a built checked write on `conn`'s routed target and maps the count.
-async fn run_checked_write<E: From<String>>(
+async fn run_checked_write<E: From<String> + Send>(
     conn: &Db,
     sql: String,
     args: Vec<SqlParam>,
