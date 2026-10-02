@@ -445,6 +445,7 @@ fn reissue_set_cookie(
         &CookieName::encode(cookie_name),
         &CookieValue::encode(token),
         CookieAttributes {
+            path: CookiePath::root(),
             http_only: true,
             same_site,
             secure,
@@ -732,7 +733,9 @@ pub fn server_method(req: ServerRequest) -> String {
 
 // ─── cookies ──────────────────────────────────────────────────────────────
 
-pub use cookie_octets::{CookieAttributes, CookieName, CookieValue, SameSite, SetCookie};
+pub use cookie_octets::{
+    CookieAttributes, CookieName, CookiePath, CookieValue, SameSite, SetCookie,
+};
 
 /// RFC 6265 cookie grammar, held in types.
 ///
@@ -766,6 +769,9 @@ mod cookie_octets {
         .add(b'=')
         .add(b'{')
         .add(b'}');
+
+    /// Bytes outside RFC 6265 `av-octet` (a `Path` attribute value): CTLs and `;`.
+    const NOT_AV_OCTET: &AsciiSet = &CONTROLS.add(b';');
 
     /// A cookie name made only of RFC 6265 `token` bytes.
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -825,9 +831,45 @@ mod cookie_octets {
         }
     }
 
-    /// The attributes of a `Set-Cookie` line; `Path=/` is always present.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    /// A `Path` attribute value: starts with `/` and holds only `av-octet` bytes.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct CookiePath(String);
+
+    impl CookiePath {
+        /// The root path `/`.
+        #[must_use]
+        pub fn root() -> Self {
+            Self("/".to_owned())
+        }
+
+        /// Parse `raw`, percent-encoding every byte that is not an `av-octet`.
+        ///
+        /// A value without a leading `/` gets one, so the browser never falls
+        /// back to the request's default path.
+        #[must_use]
+        pub fn encode(raw: &str) -> Self {
+            let encoded = utf8_percent_encode(raw, NOT_AV_OCTET).to_string();
+            if encoded.starts_with('/') {
+                Self(encoded)
+            } else {
+                Self(format!("/{encoded}"))
+            }
+        }
+
+        /// The encoded path.
+        #[must_use]
+        pub fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    /// The attributes of a `Set-Cookie` line.
+    ///
+    /// `SameSite=None` always renders `Secure`: a browser drops a cross-site
+    /// cookie that lacks it, so the pair is never emitted apart.
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct CookieAttributes {
+        pub path: CookiePath,
         pub http_only: bool,
         pub same_site: SameSite,
         pub secure: bool,
@@ -839,7 +881,7 @@ mod cookie_octets {
     pub struct SetCookie(String);
 
     impl SetCookie {
-        /// Render `name=value; Path=/` and then `attributes` in a fixed order.
+        /// Render `name=value; Path=<path>` and then `attributes` in a fixed order.
         #[must_use]
         pub fn new(name: &CookieName, value: &CookieValue, attributes: CookieAttributes) -> Self {
             let http_only = if attributes.http_only {
@@ -848,14 +890,19 @@ mod cookie_octets {
                 ""
             };
             let same_site = attributes.same_site.as_str();
-            let secure = if attributes.secure { "; Secure" } else { "" };
+            let secure = if attributes.secure || attributes.same_site == SameSite::None {
+                "; Secure"
+            } else {
+                ""
+            };
             let max_age = attributes
                 .max_age_secs
                 .map_or_else(String::new, |secs| format!("; Max-Age={secs}"));
             Self(format!(
-                "{}={}; Path=/{http_only}; SameSite={same_site}{secure}{max_age}",
+                "{}={}; Path={}{http_only}; SameSite={same_site}{secure}{max_age}",
                 name.as_str(),
-                value.as_str()
+                value.as_str(),
+                attributes.path.as_str()
             ))
         }
 
@@ -902,6 +949,7 @@ pub fn server_with_cookie(c: ServerCookie, mut r: ServerResponse) -> ServerRespo
         &c.name,
         &c.value,
         CookieAttributes {
+            path: CookiePath::root(),
             http_only: true,
             same_site: SameSite::Lax,
             secure: crate::telemetry::production_from_env(),
@@ -2655,6 +2703,7 @@ fn csrf_set_cookie_value(token: &str, request_is_https: bool) -> SetCookie {
         &CookieName::encode(csrf_cookie_name()),
         &CookieValue::encode(token),
         CookieAttributes {
+            path: CookiePath::root(),
             http_only: false,
             same_site: SameSite::Strict,
             secure: crate::telemetry::production_from_env() || request_is_https,
@@ -3770,6 +3819,7 @@ mod tests {
                 &name,
                 &value,
                 CookieAttributes {
+                    path: CookiePath::root(),
                     http_only: true,
                     same_site: SameSite::Lax,
                     secure: true,
@@ -3811,6 +3861,77 @@ mod tests {
         assert!(
             line.starts_with("sid=%C3%A9%3B%20a%2C%20b%20%22c%22; Path=/; HttpOnly; SameSite=Lax"),
             "{line}"
+        );
+    }
+
+    /// `SameSite=None` without `Secure` has no representation: the line
+    /// carries `Secure` even when the caller's `secure` flag is off.
+    #[test]
+    fn same_site_none_always_renders_secure() {
+        let line = SetCookie::new(
+            &CookieName::encode("sid"),
+            &CookieValue::encode("v"),
+            CookieAttributes {
+                path: CookiePath::root(),
+                http_only: true,
+                same_site: SameSite::None,
+                secure: false,
+                max_age_secs: None,
+            },
+        );
+        assert_eq!(
+            line.as_str(),
+            "sid=v; Path=/; HttpOnly; SameSite=None; Secure"
+        );
+        let lax = SetCookie::new(
+            &CookieName::encode("sid"),
+            &CookieValue::encode("v"),
+            CookieAttributes {
+                path: CookiePath::root(),
+                http_only: false,
+                same_site: SameSite::Lax,
+                secure: false,
+                max_age_secs: Some(5),
+            },
+        );
+        assert_eq!(lax.as_str(), "sid=v; Path=/; SameSite=Lax; Max-Age=5");
+    }
+
+    /// A `Path` value keeps every `av-octet`, encodes CTLs, `;` and non-ASCII,
+    /// and always starts with `/`.
+    #[test]
+    fn cookie_path_encodes_every_byte_outside_av_octet() {
+        for (raw, encoded) in [
+            ("/", "/"),
+            ("", "/"),
+            ("/shop", "/shop"),
+            ("shop", "/shop"),
+            ("/a;b", "/a%3Bb"),
+            ("/a\r\nSet-Cookie: x=y", "/a%0D%0ASet-Cookie: x=y"),
+            ("/caf\u{e9}", "/caf%C3%A9"),
+            ("/a b,c\"d", "/a b,c\"d"),
+        ] {
+            assert_eq!(CookiePath::encode(raw).as_str(), encoded, "path {raw:?}");
+        }
+        let line = SetCookie::new(
+            &CookieName::encode("sid"),
+            &CookieValue::encode("v"),
+            CookieAttributes {
+                path: CookiePath::encode("/a;Domain=evil.example\r\nX: y"),
+                http_only: true,
+                same_site: SameSite::Lax,
+                secure: true,
+                max_age_secs: None,
+            },
+        );
+        assert!(
+            axum::http::HeaderValue::from_str(line.as_str()).is_ok(),
+            "{line}"
+        );
+        assert_eq!(
+            line.matches(';').count(),
+            4,
+            "no smuggled attribute: {line}"
         );
     }
 
