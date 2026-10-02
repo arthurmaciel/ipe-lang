@@ -428,13 +428,10 @@ countLine label conn store =
         (Store.toList conn (Store.query store))
 
 
--- Every row as its `cols` joined by `/`, ordered by the first column.
+-- Every row as its `cols` joined by `/`, ordered by every column in turn, so
+-- the line is deterministic.
 snapshot : String -> Db -> Store Store.Row -> List String -> Task Error String
 snapshot label conn store cols =
-    let
-        orderCol =
-            Maybe.withDefault "" (List.head cols)
-    in
     Task.map
         (\rows ->
             String.concat
@@ -443,10 +440,7 @@ snapshot label conn store cols =
                 , String.join "," (List.map (\row -> String.join "/" (List.map (\c -> cell c row) cols)) rows)
                 ]
         )
-        (Store.query store
-            |> Store.orderAsc orderCol
-            |> Store.toList conn
-        )
+        (Store.toList conn (List.foldl (\c q -> Store.orderAsc c q) (Store.query store) cols))
 
 
 cell : String -> Store.Row -> String
