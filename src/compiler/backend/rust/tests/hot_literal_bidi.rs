@@ -92,7 +92,7 @@ fn tea_program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program
 }
 
 /// `Cmd.none` — the nullary `CmdNone` kernel call.
-fn cmd_none() -> Expr {
+const fn cmd_none() -> Expr {
     Expr::Call {
         callee: Callee::Kernel(KernelFn::CmdNone),
         args: vec![],
@@ -274,7 +274,7 @@ fn end_to_end_hot_init_renders_bidi_string() -> DResult<()> {
         body: Expr::Tuple(vec![
             Expr::Record {
                 fields: vec![(name_sym, Expr::Str(BIDI_VALUE.to_owned()))],
-                ty: Some(rec.clone()),
+                ty: Some(rec),
             },
             cmd_none(),
         ]),
