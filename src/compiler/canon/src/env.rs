@@ -355,6 +355,44 @@ pub struct CtorHome {
     pub arity: usize,
 }
 
+/// The defining identity of a constructor brought in by an open import: its
+/// type's home and name.
+///
+/// Two open imports reaching the same constructor through different modules
+/// (a module imported twice, or a re-export) share one identity and so one
+/// origin; two distinct declarations of the same spelling stay two origins.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct CtorIdentity {
+    pub home: Vec<Symbol>,
+    pub type_name: Symbol,
+}
+
+/// One origin of a constructor brought in by an open (`exposing (..)`) stdlib
+/// import.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct WildcardCtorOrigin {
+    /// The constructor the origin resolves to.
+    pub ctor: CtorHome,
+    /// Every importing module path that brought this origin in, used only to
+    /// name the modules in an ambiguity diagnostic.
+    pub dep_paths: BTreeSet<Vec<Symbol>>,
+}
+
+/// The result of resolving a bare constructor name.
+///
+/// Total by construction: an ambiguous open-import name is its own variant, so
+/// no caller can read it as "not found" or silently pick one origin.
+#[derive(Clone, Copy, Debug)]
+pub enum CtorLookup<'a> {
+    /// Exactly one constructor answers the name.
+    Found(&'a CtorHome),
+    /// Two or more open imports with distinct defining homes expose the name and
+    /// no higher tier shadows it.
+    Ambiguous(&'a BTreeMap<CtorIdentity, WildcardCtorOrigin>),
+    /// No tier binds the name.
+    Missing,
+}
+
 /// The name-resolution environment.
 #[derive(Clone, Debug, Default)]
 pub struct Env {
@@ -371,8 +409,18 @@ pub struct Env {
     /// in-place, no copy). Same maps read with the same `BTreeMap` ordering →
     /// identical resolution + diagnostic order.
     pub vars: BTreeMap<Symbol, VarHome>,
-    /// Unqualified constructor bindings.
+    /// Unqualified constructor bindings of the local and explicit-import tiers:
+    /// this module's unions and `import M exposing (T(..))`.
     pub ctors: Rc<BTreeMap<Symbol, CtorHome>>,
+    /// Constructors of the open-import tier (`import M exposing (..)` of a stdlib
+    /// module): name → defining identity → origin. Consulted only after
+    /// [`Self::ctors`] misses; two identities for one bare use are IPE-N0024 at
+    /// that use.
+    pub wildcard_ctors: Rc<BTreeMap<Symbol, BTreeMap<CtorIdentity, WildcardCtorOrigin>>>,
+    /// The ambient built-in constructors (`Just`, `Ok`, `True`, `ChunkEvent`'s
+    /// `Done`, …), the lowest tier: any import or local declaration of the same
+    /// spelling shadows them.
+    pub ambient_ctors: Rc<BTreeMap<Symbol, CtorHome>>,
     /// Qualified variable bindings: qualifier → (name → home).
     pub qual_vars: Rc<BTreeMap<Symbol, BTreeMap<Symbol, VarHome>>>,
     /// Qualified constructor bindings: qualifier → (`ctor_name` → home).
@@ -1379,7 +1427,7 @@ impl Env {
                     // A home-less built-in (`Just`/`Nothing`/`Ok`/`Err`/`True`/
                     // `False`) has no user module and stays ambient unqualified.
                     None => {
-                        Rc::make_mut(&mut self.ctors).insert(name, ctor_home);
+                        Rc::make_mut(&mut self.ambient_ctors).insert(name, ctor_home);
                     }
                 }
             }
@@ -1398,10 +1446,53 @@ impl Env {
         self.vars.get(&name)
     }
 
-    /// Look up an unqualified constructor.
+    /// Look up an unqualified constructor through its tiers: local and explicit
+    /// imports, then open imports, then the ambient built-ins.
+    ///
+    /// An open-import name with two or more defining identities is
+    /// [`CtorLookup::Ambiguous`] and never falls back to an ambient entry.
     #[must_use]
-    pub fn lookup_ctor(&self, name: Symbol) -> Option<&CtorHome> {
-        self.ctors.get(&name)
+    pub fn lookup_ctor(&self, name: Symbol) -> CtorLookup<'_> {
+        if let Some(ctor) = self.ctors.get(&name) {
+            return CtorLookup::Found(ctor);
+        }
+        match self.lookup_open_ctor(name) {
+            CtorLookup::Missing => self
+                .ambient_ctors
+                .get(&name)
+                .map_or(CtorLookup::Missing, CtorLookup::Found),
+            found_or_ambiguous => found_or_ambiguous,
+        }
+    }
+
+    /// Look up a bare constructor in the open-import tier alone
+    /// ([`Self::wildcard_ctors`]): one defining identity is
+    /// [`CtorLookup::Found`], two or more are [`CtorLookup::Ambiguous`].
+    ///
+    /// Expression resolution ranks this tier below the local and explicit
+    /// VALUE bindings (a record alias's auto-constructor), which
+    /// [`Self::lookup_ctor`] does not see.
+    #[must_use]
+    pub fn lookup_open_ctor(&self, name: Symbol) -> CtorLookup<'_> {
+        let Some(origins) = self.wildcard_ctors.get(&name) else {
+            return CtorLookup::Missing;
+        };
+        let mut each = origins.values();
+        match (each.next(), each.next()) {
+            (Some(only), None) => CtorLookup::Found(&only.ctor),
+            (Some(_), Some(_)) => CtorLookup::Ambiguous(origins),
+            // An empty origin set is never written; it binds nothing.
+            (None, _) => CtorLookup::Missing,
+        }
+    }
+
+    /// Every bare constructor name any tier binds, for a did-you-mean pool.
+    pub fn ctor_names(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.ctors
+            .keys()
+            .chain(self.wildcard_ctors.keys())
+            .chain(self.ambient_ctors.keys())
+            .copied()
     }
 
     /// Look up a qualified variable (`Qualifier.name`).
@@ -1863,7 +1954,7 @@ mod builtin_ctor_registration_tests {
     //! would shadow a user's own same-spelled constructor. The home-less
     //! built-ins (`Just`/`Nothing`/`Ok`/`Err`/`True`/`False`) stay ambient.
 
-    use super::Env;
+    use super::{CtorLookup, Env};
     use ipe_intern::Interner;
 
     /// The `HttpMethod` verbs must NOT be ambient unqualified — a user's own
@@ -1875,7 +1966,7 @@ mod builtin_ctor_registration_tests {
         for verb in ["Get", "Post", "Put", "Delete", "Patch", "Head", "Options"] {
             let sym = interner.intern(verb).expect("intern");
             assert!(
-                env.lookup_ctor(sym).is_none(),
+                matches!(env.lookup_ctor(sym), CtorLookup::Missing),
                 "`{verb}` must not be an ambient unqualified constructor \
                  (it would shadow a user's own `{verb}` ctor)"
             );
@@ -1909,7 +2000,7 @@ mod builtin_ctor_registration_tests {
         for ctor in ["Just", "Nothing", "Ok", "Err", "True", "False"] {
             let sym = interner.intern(ctor).expect("intern");
             assert!(
-                env.lookup_ctor(sym).is_some(),
+                matches!(env.lookup_ctor(sym), CtorLookup::Found(_)),
                 "`{ctor}` must stay an ambient unqualified constructor"
             );
         }
