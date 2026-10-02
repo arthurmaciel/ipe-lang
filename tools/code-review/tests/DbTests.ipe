@@ -67,12 +67,10 @@ import TestSupport exposing
     , renderedForeign
     , describeText
     , refusedFor
-    , openReviewAt
     , migratedReviewAt
     , tableNames
     , attestedFor
     , openReadOnlyAt
-    , countDrainRows
     , vectorsPath
     , ipeIndexTestFile
     , repoFile

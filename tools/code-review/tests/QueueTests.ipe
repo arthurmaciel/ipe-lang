@@ -55,6 +55,8 @@ import TestSupport exposing
     , insertUnitRows
     , setIndexEnv
     , loadFirstPage
+    , indexConn
+    , loadUnitNow
     , checkUnits
     , listSecond
     , isUnitA
@@ -67,11 +69,9 @@ import TestSupport exposing
     , renderedForeign
     , describeText
     , refusedFor
-    , openReviewAt
     , migratedReviewAt
     , tableRowCounts
     , openReadOnlyAt
-    , countDrainRows
     , vectorsPath
     , ipeIndexTestFile
     , repoFile
@@ -353,7 +353,7 @@ dbSizeAndMissingDb =
         setIndexEnv indexDb repo
         System.setenv "IPE_REVIEW_DB" reviewDb
         migratedReviewAt reviewDb
-        bytes <- Index.dbBytes
+        bytes <- indexConn |> Task.andThen Index.dbBytes
         setIndexEnv (base ++ "/missing.db") repo
         result <-
             Queue.loadPage Index.Start
@@ -1152,10 +1152,10 @@ undrainedDecisionHealedOnLoad =
     do
         db <- seedProgressScratch at
         execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
-        pendingBefore <- Index.countPending
+        pendingBefore <- indexConn |> Task.andThen Index.countPending
         insertReviewRow db "u-a" (Index.attest viewA)
         page <- Queue.loadPage Index.Start
-        pendingAfter <- Index.countPending
+        pendingAfter <- indexConn |> Task.andThen Index.countPending
         cleanupProgressScratch at
         Task.succeed
             (page.progress.reviewed == 1
@@ -1210,9 +1210,9 @@ foreignMirrorRowDropped =
         seedProgressScratch at
         execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
         mirrorPair at.indexDb "u-a" (Index.attest viewA)
-        seeded <- Index.loadProgress
+        seeded <- indexConn |> Task.andThen Index.loadProgress
         page <- Queue.loadPage Index.Start
-        row <- Index.loadProgress
+        row <- indexConn |> Task.andThen Index.loadProgress
         cleanupProgressScratch at
         Task.succeed (seeded.reviewed == 1 && page.progress.reviewed == 0 && row.mirrored == 0)
 
@@ -1228,7 +1228,7 @@ secondDecisionOfPairCountsOnce =
     in
     do
         d <- decideAndDrainA at
-        found <- Index.loadUnitByUid "u-a"
+        found <- loadUnitNow "u-a"
         again <-
             case found of
                 Just unit ->
@@ -1239,7 +1239,7 @@ secondDecisionOfPairCountsOnce =
         drainedAgain <- Index.drainUnit again
         redrained <- Index.drainUnit d.attested
         now <- currentProgressOf
-        row <- Index.loadProgress
+        row <- indexConn |> Task.andThen Index.loadProgress
         cleanupProgressScratch at
         Task.succeed
             (drainedAgain == 0
@@ -1265,13 +1265,13 @@ drainIsAtomic =
         execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
         page <- Queue.loadPage Index.Start
         attested <- decideA db page
-        pendingBefore <- Index.countPending
+        pendingBefore <- indexConn |> Task.andThen Index.countPending
         execIndex at.indexDb "DROP TABLE reviewed" []
         refusal <-
             Index.drainUnit attested
                 |> Task.map (\_ -> Nothing)
                 |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
-        pendingAfter <- Index.countPending
+        pendingAfter <- indexConn |> Task.andThen Index.countPending
         cleanupProgressScratch at
         Task.succeed (maybeContains "database error" refusal && pendingAfter == pendingBefore)
 
@@ -1318,11 +1318,11 @@ resyncStopsAtCeiling =
             Queue.resyncReviewedWithin { pageSize = LibDb.pairPageSize, pageCeiling = 1 } db
                 |> Task.map (\_ -> Nothing)
                 |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
-        kept <- Index.loadProgress
+        kept <- indexConn |> Task.andThen Index.loadProgress
         conn <- Db.open "sqlite" ("sqlite://" ++ at.indexDb ++ "?mode=rw")
         preRows <- Db.findWhere conn "reviewed" (Sql.eq (Sql.column "uid") (Sql.string "pre"))
         copied <- Queue.resyncReviewedWithin { pageSize = LibDb.pairPageSize, pageCeiling = 2 } db
-        rebuilt <- Index.loadProgress
+        rebuilt <- indexConn |> Task.andThen Index.loadProgress
         preAfter <- Db.findWhere conn "reviewed" (Sql.eq (Sql.column "uid") (Sql.string "pre"))
         cleanupProgressScratch at
         Task.succeed
@@ -1363,7 +1363,7 @@ resyncAtDeepestCeiling =
             Queue.resyncReviewedWithin bound db
                 |> Task.map (\_ -> Nothing)
                 |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
-        kept <- Index.loadProgress
+        kept <- indexConn |> Task.andThen Index.loadProgress
         cleanupProgressScratch at
         Task.succeed
             (copied == Queue.resyncPageCeiling
@@ -1392,7 +1392,7 @@ resyncRefusesEmptyBound =
         mirrorPair at.indexDb "pre" "hp"
         zeroSize <- attempt { pageSize = 0, pageCeiling = 1 } db
         zeroPages <- attempt { pageSize = 1, pageCeiling = 0 } db
-        kept <- Index.loadProgress
+        kept <- indexConn |> Task.andThen Index.loadProgress
         cleanupProgressScratch at
         Task.succeed (zeroSize && zeroPages && kept.mirrored == 1)
 
@@ -1437,7 +1437,7 @@ resyncSucceedsAtSixThousandPages =
             |> List.map (\i -> insertReviewRow db ("s-" ++ String.fromInt i) "hs")
             |> Task.sequence
         copied <- Queue.resyncReviewedWithin bound db
-        kept <- Index.loadProgress
+        kept <- indexConn |> Task.andThen Index.loadProgress
         cleanupProgressScratch at
         Task.succeed (copied == 6000 && kept.mirrored == 6000)
 
@@ -1464,7 +1464,7 @@ resyncRefusesSixThousandAndOnePages =
             Queue.resyncReviewedWithin bound db
                 |> Task.map (\_ -> Nothing)
                 |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
-        kept <- Index.loadProgress
+        kept <- indexConn |> Task.andThen Index.loadProgress
         cleanupProgressScratch at
         Task.succeed (maybeContains "6000-page ceiling" refusal && kept.mirrored == 0)
 
@@ -1491,7 +1491,7 @@ resyncSucceedsAtExactCeilingTimesPageSize =
             |> List.map (\i -> insertReviewRow db ("x-" ++ String.fromInt i) "hx")
             |> Task.sequence
         copied <- Queue.resyncReviewedWithin bound db
-        kept <- Index.loadProgress
+        kept <- indexConn |> Task.andThen Index.loadProgress
         cleanupProgressScratch at
         Task.succeed (copied == total && kept.mirrored == total)
 
@@ -1516,7 +1516,7 @@ resyncRefusesMaxIntCeiling =
             Queue.resyncReviewedWithin bound db
                 |> Task.map (\_ -> Nothing)
                 |> Task.onError (\e -> Task.succeed (Just (Error.toString e)))
-        kept <- Index.loadProgress
+        kept <- indexConn |> Task.andThen Index.loadProgress
         cleanupProgressScratch at
         Task.succeed
             (maybeContains "Task.loop needs a step ceiling of at least 1" refusal

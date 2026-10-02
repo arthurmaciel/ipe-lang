@@ -55,14 +55,15 @@ type alias Progress =
     }
 
 
--- The progress of the index, with the `reviewed` copy checked fresh first:
--- when its row count differs from the review database's decision count (a
--- decision whose drain failed, a replaced index file, a deleted review row),
--- the copy is rebuilt once and the row read again. It never loops.
-currentProgress : Db.Db -> Task.Task Error Progress
-currentProgress db =
+-- The progress of the index, read on the index connection `conn`, with the
+-- `reviewed` copy checked fresh first: when its row count differs from the
+-- decision count of the review database `db` (a decision whose drain failed,
+-- a replaced index file, a deleted review row), the copy is rebuilt once and
+-- the row read again. It never loops.
+currentProgress : Db.Db -> Db.Db -> Task.Task Error Progress
+currentProgress conn db =
     do
-        first <- Index.loadProgress
+        first <- Index.loadProgress conn
         decisions <- LibDb.countDecisions db
         if first.mirrored == decisions then
             Task.succeed (progressFrom first)
@@ -70,7 +71,7 @@ currentProgress db =
         else
             do
                 resyncReviewed db
-                second <- Index.loadProgress
+                second <- Index.loadProgress conn
                 Task.succeed (progressFrom second)
 
 
@@ -304,7 +305,8 @@ loadHistoryPage cursor =
     do
         db <- LibDb.open
         page <- LibDb.historyPage db LibDb.historyPageSize cursor
-        conn <- Index.openRead
+        settings <- Settings.indexSettings
+        conn <- Index.readConnection settings
         rows <- Task.sequence (List.map (historyRow conn) page.rows)
         Task.succeed { rows = rows, at = cursor, next = page.next }
 
@@ -412,16 +414,19 @@ sourceStatusText view =
 
 -- The unit page loads the unit by uid (decided units have no change_queue
 -- row, so the page queries units directly) and resolves every identifier
--- token of its verified source against the index's qualified names. Nothing
--- when no unit has this uid.
+-- token of its verified source against the index's qualified names, both
+-- read on one connection from one settings resolution. Nothing when no unit
+-- has this uid.
 loadUnitView : String -> Task.Task Error (Maybe ( Index.Unit, List Links.Link ))
 loadUnitView uid =
     do
-        mb <- Index.loadUnitByUid uid
+        settings <- Settings.indexSettings
+        conn <- Index.readConnection settings
+        mb <- Index.loadUnitByUid settings.roots conn uid
         case mb of
             Just unit ->
                 do
-                    qs <- Index.qualifiedUids
+                    qs <- Index.qualifiedUids conn
                     Task.succeed (Just ( unit, linksFor unit qs ))
 
             Nothing ->
@@ -516,16 +521,18 @@ pageHeaderText page =
 -- The page also carries the whole-queue count, the database size and the
 -- review progress. Progress is read first, so a rebuild of the `reviewed`
 -- copy that drains an undrained decided pair is already reflected in the
--- page's rows and count.
+-- page's rows and count. The index settings are resolved once and every
+-- index read runs on the one read connection opened from them.
 loadPage : Index.Cursor -> Task.Task Error QueuePage
 loadPage cursor =
     do
         settings <- Settings.indexSettings
+        conn <- Index.readConnection settings
         db <- LibDb.open
-        progress <- currentProgress db
-        rows <- Index.loadPendingPage cursor
-        total <- Index.countPending
-        bytes <- Index.dbBytes
+        progress <- currentProgress conn db
+        rows <- Index.loadPendingPage settings.roots conn cursor
+        total <- Index.countPending conn
+        bytes <- Index.dbBytes conn
         units <- classify db (List.map (\r -> r.unit) rows)
         Task.succeed
             { units = units

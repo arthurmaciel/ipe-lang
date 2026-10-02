@@ -22,6 +22,8 @@ module TestSupport exposing
     , insertUnitRows
     , setIndexEnv
     , loadFirstPage
+    , indexConn
+    , loadUnitNow
     , checkUnits
     , listSecond
     , isUnitA
@@ -386,13 +388,33 @@ setIndexEnv indexDb repo =
 
 
 
--- The first queue page's units with the whole queue's count.
+-- The first queue page's units with the whole queue's count, both read on
+-- one index connection.
 loadFirstPage : Task.Task Error { units : List Index.Unit, total : Int }
 loadFirstPage =
     do
-        rows <- Index.loadPendingPage Index.Start
-        total <- Index.countPending
+        settings <- Settings.indexSettings
+        conn <- Index.readConnection settings
+        rows <- Index.loadPendingPage settings.roots conn Index.Start
+        total <- Index.countPending conn
         Task.succeed { units = List.map (\r -> r.unit) rows, total = total }
+
+
+
+-- The index read connection from the current `IPE_INDEX_*` environment.
+indexConn : Task.Task Error Db
+indexConn =
+    Settings.indexSettings |> Task.andThen Index.readConnection
+
+
+
+-- The unit `uid` loaded from the index the current environment names.
+loadUnitNow : String -> Task.Task Error (Maybe Index.Unit)
+loadUnitNow uid =
+    do
+        settings <- Settings.indexSettings
+        conn <- Index.readConnection settings
+        Index.loadUnitByUid settings.roots conn uid
 
 
 
@@ -610,7 +632,7 @@ attestedIn : Scratch -> String -> Task.Task Error Index.Attested
 attestedIn at uid =
     do
         seedIndex at.indexDb at.repo
-        found <- Index.loadUnitByUid uid
+        found <- loadUnitNow uid
         attested <- reverifyShown uid found
         cleanupIndex at.indexDb at.repo
         Task.succeed attested

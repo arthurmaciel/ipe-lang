@@ -55,6 +55,8 @@ import TestSupport exposing
     , insertUnitRows
     , setIndexEnv
     , loadFirstPage
+    , indexConn
+    , loadUnitNow
     , checkUnits
     , listSecond
     , isUnitA
@@ -67,9 +69,7 @@ import TestSupport exposing
     , renderedForeign
     , describeText
     , refusedFor
-    , openReviewAt
     , openReadOnlyAt
-    , countDrainRows
     , vectorsPath
     , ipeIndexTestFile
     , repoFile
@@ -242,12 +242,13 @@ unitPageLoad =
         |> Task.andThen (\_ -> setIndexEnv indexDb repo)
         |> Task.andThen
             (\_ ->
-                Index.loadUnitByUid "u-a"
+                loadUnitNow "u-a"
                     |> Task.andThen
                         (\mb ->
                             case mb of
                                 Just unit ->
-                                    Index.qualifiedUids
+                                    indexConn
+                                        |> Task.andThen Index.qualifiedUids
                                         |> Task.map
                                             (\qs ->
                                                 SafeText.toString unit.qualified
@@ -269,7 +270,7 @@ unitPageLoad =
                     Task.succeed False
 
                 else
-                    Index.loadUnitByUid "u-zz"
+                    loadUnitNow "u-zz"
                         |> Task.map
                             (\mb ->
                                 case mb of
