@@ -305,6 +305,9 @@ pub enum BuiltinTag {
     /// `BackoffStrategy` — the four-constructor retry-strategy ADT
     /// (`Linear | LinearWithJitter | Exponential | ExponentialWithJitter`).
     BackoffStrategy,
+    /// `Step` — `Ipe.Task`'s two-constructor loop step `Continue s | Done a`,
+    /// applied to its state and result types.
+    TaskStep,
     /// `Decimal` — the nullary fixed-point decimal value type.
     Decimal,
     /// `Task` — the effect constructor `Task a` (its error channel is the
@@ -2051,6 +2054,11 @@ pub enum StdlibKernel {
     TaskPerform,
     /// `Task.lazy : (() -> Task e a) -> Task e a` — deferred task creation.
     TaskLazy,
+    /// `Task.loop : Int -> s -> (s -> Task Error (Step s a)) -> Task Error a`.
+    ///
+    /// Runs a step from an initial state until it returns `Done`, at most the
+    /// ceiling's number of times, at constant stack depth (runtime `task_loop`).
+    TaskLoop,
     // ── Task retry surface (retryWith) ──────────────────────────────────────
     /// `Task.retryWith : RetryPolicy Error -> Task Error a -> Task Error a`
     /// Runs the task retrying per policy on failure.
@@ -4857,6 +4865,7 @@ impl StdlibKernel {
             Self::TaskRun => d("Task", "run", 1, Pure, "task_run", IpeOrder),
             Self::TaskPerform => d("Task", "perform", 1, Pure, "task_run", IpeOrder),
             Self::TaskLazy => d("Task", "lazy", 1, Pure, "task_lazy", IpeOrder),
+            Self::TaskLoop => d("Task", "loop", 3, Pure, "task_loop", IpeOrder),
             // ── Task retry surface (special-case emitter in emit_expr.rs) ───
             Self::TaskRetryWith => d("Task", "retryWith", 2, Pure, "task_retry_with", IpeOrder),
             Self::TaskLinearBackoff => d(
@@ -7901,6 +7910,7 @@ impl StdlibKernel {
         Self::TaskSequence,
         Self::TaskParallel,
         Self::TaskLazy,
+        Self::TaskLoop,
         Self::TaskRetryWith,
         Self::TaskLinearBackoff,
         Self::TaskExponentialBackoff,
@@ -9780,6 +9790,14 @@ impl StdlibKernel {
         // `lazy : (() -> Task a) -> Task a`.
         const UNIT_TO_TASK_A: TyShape = TyShape::Fun(&UNIT, &TASK_A);
         const TASK_LAZY: TyShape = TyShape::Fun(&UNIT_TO_TASK_A, &TASK_A);
+        // `loop : Int -> s -> (s -> Task (Step s a)) -> Task a`, with `s` = `A`
+        // and `a` = `B`.
+        const STEP_A_B: TyShape = TyShape::Con(BuiltinTag::TaskStep, &[A, B]);
+        const TASK_STEP_A_B: TyShape = TyShape::Con(BuiltinTag::Task, &[STEP_A_B]);
+        const A_TO_TASK_STEP: TyShape = TyShape::Fun(&A, &TASK_STEP_A_B);
+        const STEP_FN_TO_TASK_B: TyShape = TyShape::Fun(&A_TO_TASK_STEP, &TASK_B);
+        const A_TO_STEP_FN_TO_TASK_B: TyShape = TyShape::Fun(&A, &STEP_FN_TO_TASK_B);
+        const TASK_LOOP: TyShape = TyShape::Fun(&INT, &A_TO_STEP_FN_TO_TASK_B);
 
         // ── Cmd / Sub shapes. ──
         // `Cmd.batch : List (Cmd a) -> Cmd a`.
@@ -12041,6 +12059,7 @@ impl StdlibKernel {
             Self::TaskSequence | Self::TaskParallel => Some(&TASK_SEQUENCE),
             Self::TaskRun | Self::TaskPerform => Some(&TASK_A_TO_RESULT_ERR_A),
             Self::TaskLazy => Some(&TASK_LAZY),
+            Self::TaskLoop => Some(&TASK_LOOP),
 
             // ── Cmd / Sub / PubSub. ──
             Self::CmdNone => Some(&CMD_A),
@@ -13890,6 +13909,7 @@ impl StdlibKernel {
             | Self::TaskRun
             | Self::TaskPerform
             | Self::TaskLazy
+            | Self::TaskLoop
             | Self::TaskRetryWith
             | Self::TaskLinearBackoff
             | Self::TaskExponentialBackoff
@@ -15838,13 +15858,14 @@ impl StdlibKernel {
     /// Whether this kernel is emittable only as a saturated call.
     ///
     /// Such a kernel's emit arm carries a bridge or a guard (the input
-    /// subscriptions' `KeyEvent` bridge and surface check) that a point-free
+    /// subscriptions' `KeyEvent` bridge and surface check, `Task.loop`'s bridge
+    /// from the emitted `Step` enum to the runtime `LoopStep`) that a point-free
     /// first-class reference would bypass, so the lowerer eta-expands every
     /// point-free reference to it into `\x -> kernel x` and the backend refuses
     /// to box it as a bare function value.
     #[must_use]
     pub const fn requires_saturated_emit(self) -> bool {
-        self.input_surface().is_some()
+        self.input_surface().is_some() || matches!(self, Self::TaskLoop)
     }
 
     /// `true` when this variant belongs to the `Ipe.CssSafety` leaf
@@ -16145,6 +16166,7 @@ impl StdlibKernel {
                         | Self::TaskFromResult
                         | Self::TaskAndThenResult
                         | Self::TaskSequence
+                        | Self::TaskLoop
                 ) ||
                 // `Env.public` — build-time-embedded `[wasm] publicEnv`
                 // allowlist (`option_env!` on wasm32; the SAME allowlist via
@@ -16279,6 +16301,7 @@ impl StdlibKernel {
                         | Self::TaskFromResult
                         | Self::TaskAndThenResult
                         | Self::TaskSequence
+                        | Self::TaskLoop
                 )
                 // `Env.public` — build-time-embedded allowlist (`option_env!` on
                 // wasm32, the same as the browser arm).
@@ -17451,6 +17474,7 @@ mod tests {
             StdlibKernel::TaskMap,
             StdlibKernel::TaskAndThen,
             StdlibKernel::TaskSequence,
+            StdlibKernel::TaskLoop,
             // Entropy pair (`random_get`) + `Env.public`.
             StdlibKernel::CryptoRandomBytes,
             StdlibKernel::CryptoRandomToken,
@@ -17505,6 +17529,21 @@ mod tests {
                 "{denied:?} must have NO WASI denotation (breaks THE SEAL otherwise)"
             );
         }
+    }
+
+    /// `Task.loop`'s runtime driver is a pure `async` loop beside
+    /// `task_sequence`, so it builds on both wasm targets; it keeps the
+    /// fail-closed reactor-requiring default like every non-`Backoff*` `Task`
+    /// member.
+    #[test]
+    fn task_loop_is_wasm_representable_and_keeps_the_reactor_default() {
+        use super::Target;
+        assert!(StdlibKernel::TaskLoop.available_on(Target::WasmWasi));
+        assert!(StdlibKernel::TaskLoop.available_on(Target::WasmClient));
+        assert!(StdlibKernel::TaskLoop.requires_async_runtime());
+        // Its emit arm carries the `Step` bridge, so a point-free reference is
+        // eta-expanded rather than boxed as a bare runtime function.
+        assert!(StdlibKernel::TaskLoop.requires_saturated_emit());
     }
 
     /// Verifies that no two non-internal variants in [`StdlibKernel::ALL`] share

@@ -1,0 +1,50 @@
+module Main exposing (main)
+
+import Ipe.Task as Task exposing (Step(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+-- A counter that runs one `Task` step per count. `Task.loop` drives the step at
+-- constant stack depth, so 150,000 steps run where a function calling itself
+-- inside `andThen` would trip the recursion limit. The ceiling is the most
+-- times the step may run.
+
+
+-- Decide whether the counter has reached its target.
+classify : Int -> Int -> Step Int Int
+classify target n =
+    if n >= target then
+        Done n
+
+    else
+        Continue n
+
+
+-- One step: a `do` block with two binds, then the `Continue` / `Done` decision.
+countStep : Int -> Int -> Task Error (Step Int Int)
+countStep target n =
+    do
+        next <- Task.succeed (n + 1)
+        checked <- Task.succeed next
+        Task.succeed (classify target checked)
+
+
+countTo : Int -> Int -> Task Error Int
+countTo limit target =
+    Task.loop limit 0 (countStep target)
+
+
+report : Int -> Task Error ()
+report n =
+    Io.println (String.fromInt n)
+
+
+main =
+    do
+        reached <- countTo 150000 150000
+        _ <- report reached
+        countTo 5 150000
+            |> Task.andThen report
+            |> Task.onError (\err -> Io.println (Error.toString err))

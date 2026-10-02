@@ -1,0 +1,14 @@
+module Main exposing (main)
+
+import Ipe.Task as Task
+import Ipe.Error as Error exposing (Error)
+import Ipe.Io as Io
+
+
+-- A step that always fails: no `Step` value is ever built and the loop's result
+-- type is never fixed by a use. The loop still emits (the `Step` enum is kept
+-- for the kernel's bridge) and ends with the step's error unchanged.
+main =
+    Task.loop 3 0 (\_ -> Task.fail (Error.conflict "x"))
+        |> Task.map (\_ -> ())
+        |> Task.onError (\err -> Io.println (Error.toString err))

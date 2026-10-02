@@ -1,0 +1,260 @@
+//! SEAL tests for `Task.loop`, the bounded constant-stack step loop.
+//!
+//! | Fixture / source | Shape | Outcome |
+//! |---|---|---|
+//! | `task_loop` | 150,000-step counter, `do`-block step; then a ceiling hit | prints `150000`, then the typed limit error |
+//! | `task_loop_recursive_control` | the same counter as a self-recursive `andThen` | exits nonzero with `RecursionLimit` |
+//! | `task_loop_no_step_value` | a step that always fails, no `Step` ever built | prints `Conflict: x` |
+//! | `task_loop_nonclone_capture` | a step capturing a `Task` parameter | refused by `ipe` with a typed lowering code |
+//! | `task_loop_shapes` | top-level fn, capturing lambda, partial `Task.loop 5`, `case` on `Step` | builds and runs |
+//! | `task_loop_parser_clash` | qualified `Parser.Done` beside `Task.Done` | builds and runs |
+//! | inline sources | a `String` ceiling; a step that is not a `Step`; two unqualified `Step(..)` imports | typed type / name errors |
+//!
+//! Every fixture is checked at `ipe` time here; under `IPE_E2E=1` the accepted
+//! ones are also built with `cargo` and run (THE SEAL).
+//!
+//! ```text
+//! cargo test -p ipe --test g_issues golden_i3320
+//! IPE_E2E=1 cargo test -p ipe --test g_issues golden_i3320
+//! ```
+
+use std::path::{Path, PathBuf};
+
+use ipe::CliError;
+use ipe_diagnostics::{Code, Family};
+
+use crate::support::repo_root;
+
+/// A runtime `false` the optimiser cannot fold, so `assert!(false_marker(), …)`
+/// reads as a deliberate unconditional failure.
+const fn false_marker() -> bool {
+    std::hint::black_box(false)
+}
+
+fn fixture_entry(root: &Path, name: &str) -> PathBuf {
+    root.join("tests")
+        .join("golden")
+        .join(name)
+        .join("Main.ipe")
+}
+
+fn out_dir(name: &str) -> PathBuf {
+    let out = crate::support::scratch_root().join(format!("ipec_i3320_{name}"));
+    let _ = std::fs::remove_dir_all(&out);
+    out
+}
+
+/// Build the fixture `name` with `ipe`, returning its emitted directory, or
+/// failing the test when `ipe` rejects it.
+#[track_caller]
+fn accept_fixture(name: &str) -> Option<PathBuf> {
+    let entry = fixture_entry(&repo_root(), name);
+    let out = out_dir(name);
+    let runtime = e2e_support::require_runtime().into_path_buf();
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "{name}: ipe must accept the fixture; got {built:?}"
+    );
+    built.ok().map(|()| out)
+}
+
+/// Build the fixture `name`, then (under `IPE_E2E=1`) `cargo build` and run it,
+/// asserting exit 0 and `expected_stdout`.
+#[track_caller]
+fn accept_and_run(name: &str, expected_stdout: &str) {
+    let Some(out) = accept_fixture(name) else {
+        return;
+    };
+    if e2e_support::e2e_tier() != e2e_support::Tier::E2e {
+        return;
+    }
+    let outcome = crate::support::build_and_run_emitted(name, &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "{name}: emitted crate must build and exit 0; stdout:\n{}",
+        outcome.stdout
+    );
+    assert_eq!(
+        outcome.stdout.trim_end(),
+        expected_stdout,
+        "{name}: emitted crate built (SEAL held) but ran to the wrong output"
+    );
+}
+
+/// The pipeline diagnostic `ipe` refuses `entry` with, failing the test when it
+/// is accepted or fails outside the pipeline.
+#[track_caller]
+fn refusal_code(name: &str, entry: &Path) -> Option<Code> {
+    let out = out_dir(name);
+    let runtime = e2e_support::require_runtime().into_path_buf();
+    match ipe::build(entry, &out, &runtime) {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        Ok(()) => {
+            assert!(
+                false_marker(),
+                "{name}: ipe ACCEPTED a program it must refuse (exit 0)"
+            );
+            None
+        }
+        Err(other) => {
+            assert!(
+                false_marker(),
+                "{name}: non-pipeline build error: {other:?}"
+            );
+            None
+        }
+    }
+}
+
+/// Write `source` as a single-file `Main.ipe` under a fresh scratch dir.
+fn write_single(name: &str, source: &str) -> Option<PathBuf> {
+    let dir = crate::support::scratch_root().join("i3320-src").join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).ok()?;
+    let entry = dir.join("Main.ipe");
+    std::fs::write(&entry, source).ok()?;
+    Some(entry)
+}
+
+#[test]
+fn task_loop_runs_far_past_the_recursion_guard_and_reports_its_ceiling() {
+    accept_and_run(
+        "task_loop",
+        "150000\nInvalidInput: Task.loop ran its step 5 times, its ceiling, without reaching Done",
+    );
+}
+
+/// The control: the self-recursive `andThen` counter at the same size trips the
+/// recursion guard, which proves `task_loop`'s size is past the guard.
+#[test]
+fn self_recursive_and_then_at_the_same_size_trips_the_recursion_guard() {
+    let Some(out) = accept_fixture("task_loop_recursive_control") else {
+        return;
+    };
+    if e2e_support::e2e_tier() != e2e_support::Tier::E2e {
+        return;
+    }
+    let run =
+        crate::support::build_and_run_emitted_capturing_stderr("task_loop_recursive_control", &out);
+    assert!(
+        run.exit_code.is_some_and(|code| code != 0),
+        "the self-recursive counter must exit with a nonzero CODE (a guarded trip); \
+         got {:?}\n--- stderr ---\n{}",
+        run.exit_code,
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("RecursionLimit"),
+        "stderr must carry the classified RecursionLimit kind\n--- stderr ---\n{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn a_step_that_never_builds_a_step_value_ends_with_its_error() {
+    accept_and_run("task_loop_no_step_value", "Conflict: x");
+}
+
+#[test]
+fn a_step_capturing_a_task_is_refused_at_ipe_time() {
+    let name = "task_loop_nonclone_capture";
+    let entry = fixture_entry(&repo_root(), name);
+    let Some(code) = refusal_code(name, &entry) else {
+        return;
+    };
+    assert!(
+        code == ipe_diagnostics::IPE_L0135 || code == ipe_diagnostics::IPE_L0125,
+        "{name}: expected IPE-L0135 or IPE-L0125, got {}",
+        code.as_str()
+    );
+}
+
+#[test]
+fn every_step_shape_builds_and_runs() {
+    accept_and_run("task_loop_shapes", "1\nloop2\n1\ncontinue 1\ndone 2");
+}
+
+#[test]
+fn qualified_parser_and_task_steps_share_one_program() {
+    accept_and_run("task_loop_parser_clash", "1\n7");
+}
+
+/// Refuse `source` and assert the diagnostic's family.
+#[track_caller]
+fn assert_refused_in_family(name: &str, source: &str, family: Family) {
+    let entry = crate::support::expect_scratch_entry(name, write_single(name, source));
+    let Some(code) = refusal_code(name, &entry) else {
+        return;
+    };
+    assert_eq!(
+        code.family(),
+        family,
+        "{name}: expected a {family:?} diagnostic, got {}",
+        code.as_str()
+    );
+}
+
+const STRING_CEILING: &str = r#"module Main exposing (main)
+
+import Ipe.Task as Task exposing (Step(..))
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+main =
+    Task.loop "3" 0 (\n -> Task.succeed (Done n))
+        |> Task.andThen (\n -> Io.println (String.fromInt n))
+"#;
+
+const NON_STEP_RESULT: &str = r"module Main exposing (main)
+
+import Ipe.Task as Task
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+main =
+    Task.loop 3 0 (\n -> Task.succeed n)
+        |> Task.andThen (\n -> Io.println (String.fromInt n))
+";
+
+const TWO_UNQUALIFIED_STEPS: &str = r"module Main exposing (main)
+
+import Ipe.Parser exposing (Step(..))
+import Ipe.Task as Task exposing (Step(..))
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+main =
+    Task.loop 3 0 (\n -> Task.succeed (Done n))
+        |> Task.andThen (\n -> Io.println (String.fromInt n))
+";
+
+#[test]
+fn a_string_ceiling_is_a_type_error() {
+    assert_refused_in_family("task_loop_string_ceiling", STRING_CEILING, Family::Type);
+}
+
+#[test]
+fn a_step_that_returns_no_step_is_a_type_error() {
+    assert_refused_in_family("task_loop_non_step_result", NON_STEP_RESULT, Family::Type);
+}
+
+#[test]
+fn two_unqualified_step_imports_are_ambiguous() {
+    let name = "task_loop_two_unqualified_steps";
+    let entry =
+        crate::support::expect_scratch_entry(name, write_single(name, TWO_UNQUALIFIED_STEPS));
+    let Some(code) = refusal_code(name, &entry) else {
+        return;
+    };
+    assert_eq!(
+        code,
+        ipe_diagnostics::IPE_N0024,
+        "{name}: expected IPE-N0024, got {}",
+        code.as_str()
+    );
+}

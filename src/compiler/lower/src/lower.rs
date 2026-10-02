@@ -8510,68 +8510,47 @@ fn collect_func_edges(expr: &Expr, out: &mut BTreeSet<FuncId>) {
     }
 }
 
-/// Whether `expr` contains a `Http.withTimeout` kernel call anywhere in its
-/// tree. The kernel unwraps its typed `Duration` argument through the compiled
-/// `Ipe.Duration.toMillis` accessor at emit time, a synthesised call that
-/// leaves no `Callee::Func` edge; this predicate lets the dead-function prune
-/// root that accessor so the emitted crate does not reference an absent
-/// function. The traversal mirrors [`collect_func_edges`] arm-for-arm so a new
-/// `Expr` variant that could nest a call is a compile error here too, not a
-/// silent miss.
-fn body_uses_http_with_timeout(expr: &Expr) -> bool {
+/// Whether `expr` calls or references the kernel `kernel` anywhere in its tree.
+///
+/// A kernel whose emit arm synthesises a reference the IR does not carry reads
+/// this: `Http.withTimeout` unwraps its typed `Duration` through the compiled
+/// `Ipe.Duration.toMillis` accessor (a call with no `Callee::Func` edge, so the
+/// dead-function prune roots that accessor), and `Task.loop` bridges the
+/// emitted `Ipe.Task.Step` enum (so the dead-type prune keeps that enum). The
+/// traversal mirrors [`collect_func_edges`] arm-for-arm so a new `Expr` variant
+/// that could nest a call is a compile error here too, not a silent miss.
+fn body_uses_kernel(expr: &Expr, kernel: KernelFn) -> bool {
+    let recur = |e: &Expr| body_uses_kernel(e, kernel);
     match expr {
         Expr::Call { callee, args, .. } => {
-            matches!(callee, Callee::Kernel(KernelFn::HttpWithTimeout))
-                || args.iter().any(body_uses_http_with_timeout)
+            matches!(callee, Callee::Kernel(k) if *k == kernel) || args.iter().any(recur)
         }
         Expr::FuncValue { callee, .. } => {
-            matches!(callee, Callee::Kernel(KernelFn::HttpWithTimeout))
+            matches!(callee, Callee::Kernel(k) if *k == kernel)
         }
-        Expr::Apply { func, args } => {
-            body_uses_http_with_timeout(func) || args.iter().any(body_uses_http_with_timeout)
-        }
+        Expr::Apply { func, args } => recur(func) || args.iter().any(recur),
         Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
-            body_uses_http_with_timeout(value) || body_uses_http_with_timeout(body)
+            recur(value) || recur(body)
         }
-        Expr::If { cond, then_, else_ } => {
-            body_uses_http_with_timeout(cond)
-                || body_uses_http_with_timeout(then_)
-                || body_uses_http_with_timeout(else_)
-        }
+        Expr::If { cond, then_, else_ } => recur(cond) || recur(then_) || recur(else_),
         Expr::Match(m) => {
-            body_uses_http_with_timeout(m.scrutinee())
-                || m.arms().iter().any(|arm| {
-                    arm.guard.as_ref().is_some_and(body_uses_http_with_timeout)
-                        || body_uses_http_with_timeout(&arm.body)
-                })
+            recur(m.scrutinee())
+                || m.arms()
+                    .iter()
+                    .any(|arm| arm.guard.as_ref().is_some_and(recur) || recur(&arm.body))
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
-        | Expr::TailLoop { body, .. } => body_uses_http_with_timeout(body),
-        Expr::Cons { head, tail } => {
-            body_uses_http_with_timeout(head) || body_uses_http_with_timeout(tail)
-        }
-        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            body_uses_http_with_timeout(list)
-        }
-        Expr::Tuple(elems) | Expr::List { items: elems, .. } => {
-            elems.iter().any(body_uses_http_with_timeout)
-        }
-        Expr::Record { fields, .. } => fields.iter().any(|(_, v)| body_uses_http_with_timeout(v)),
-        Expr::Access { record, .. } => body_uses_http_with_timeout(record),
-        Expr::Update { record, fields } => {
-            body_uses_http_with_timeout(record)
-                || fields.iter().any(|(_, v)| body_uses_http_with_timeout(v))
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            body_uses_http_with_timeout(lhs) || body_uses_http_with_timeout(rhs)
-        }
-        Expr::TaskSeq { effect, rest } => {
-            body_uses_http_with_timeout(effect) || body_uses_http_with_timeout(rest)
-        }
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
-            args.iter().any(body_uses_http_with_timeout)
-        }
+        | Expr::TailLoop { body, .. } => recur(body),
+        Expr::Cons { head, tail } => recur(head) || recur(tail),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => recur(list),
+        Expr::Tuple(elems) | Expr::List { items: elems, .. } => elems.iter().any(recur),
+        Expr::Record { fields, .. } => fields.iter().any(|(_, v)| recur(v)),
+        Expr::Access { record, .. } => recur(record),
+        Expr::Update { record, fields } => recur(record) || fields.iter().any(|(_, v)| recur(v)),
+        Expr::BinOp { lhs, rhs, .. } => recur(lhs) || recur(rhs),
+        Expr::TaskSeq { effect, rest } => recur(effect) || recur(rest),
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(recur),
         Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
@@ -8635,6 +8614,37 @@ fn reachable_from_seeds<'a>(
     reachable
 }
 
+/// The enums a kernel emit arm names without any IR type mention.
+///
+/// `Task.loop`'s emit arm bridges the compiled `Ipe.Task.Step` enum to the
+/// runtime's `LoopStep`, so that enum is kept whenever a surviving function
+/// uses the kernel, even when no `Step` value is built or matched (a step that
+/// always fails). Fail-closed toward over-keeping, like the prune it seeds.
+fn backend_named_enum_roots(
+    funcs: &[Func],
+    types_ir: &[TypeDef],
+    interner: &Interner,
+) -> Vec<(ModPath, Symbol)> {
+    if !funcs
+        .iter()
+        .any(|f| body_uses_kernel(&f.body, KernelFn::TaskLoop))
+    {
+        return Vec::new();
+    }
+    types_ir
+        .iter()
+        .filter_map(|TypeDef::Enum(e)| {
+            let is_task_step = interner.resolve(e.name) == Some("Step")
+                && matches!(
+                    e.home.0.as_slice(),
+                    [seg0, seg1] if interner.resolve(*seg0) == Some("Ipe")
+                        && interner.resolve(*seg1) == Some("Task")
+                );
+            is_task_step.then(|| (e.home.clone(), e.name))
+        })
+        .collect()
+}
+
 /// The functions the backend invokes without any IR call edge naming them.
 ///
 /// Two kinds, in function order: every wasm-hydration island projection
@@ -8665,7 +8675,9 @@ where
             )
     });
     if let Some(to_millis) = duration_to_millis
-        && funcs.clone().any(|f| body_uses_http_with_timeout(&f.body))
+        && funcs
+            .clone()
+            .any(|f| body_uses_kernel(&f.body, KernelFn::HttpWithTimeout))
     {
         roots.push(to_millis.id);
     }
@@ -8730,11 +8742,18 @@ fn collect_ir_type_refs(
 /// mention, and the synthetic (usage-injected) enums are appended AFTER this
 /// prune, so a kept declaration can never reference a dropped one — no
 /// exit-0-then-cargo-fail (E0412) can arise from an under-kept type.
-fn prune_dead_type_decls(funcs: &[Func], types_ir: &mut Vec<TypeDef>, records: &mut Vec<IrType>) {
+fn prune_dead_type_decls(
+    funcs: &[Func],
+    extra_enum_roots: &[(ModPath, Symbol)],
+    types_ir: &mut Vec<TypeDef>,
+    records: &mut Vec<IrType>,
+) {
     // Seed the reachable sets from every surviving function's type positions:
     // ret / params / row-generic fields / body — the same surface
-    // `func_type_mentions` scans, walked here to accumulate rather than test.
-    let mut reachable_enums: BTreeSet<(ModPath, Symbol)> = BTreeSet::new();
+    // `func_type_mentions` scans, walked here to accumulate rather than test —
+    // plus the enums a kernel emit arm names without an IR mention.
+    let mut reachable_enums: BTreeSet<(ModPath, Symbol)> =
+        extra_enum_roots.iter().cloned().collect();
     let mut reachable_records: std::collections::HashSet<IrType> = std::collections::HashSet::new();
     for f in funcs {
         collect_ir_type_refs(&f.ret, &mut reachable_enums, &mut reachable_records);
@@ -15017,7 +15036,8 @@ impl<'a> Lowerer<'a> {
         // a dropped type stops forcing its runtime feature and the injected
         // enums (appended below) can never reference a pruned declaration.
         if prune_dead {
-            prune_dead_type_decls(&funcs, &mut types_ir, &mut records);
+            let extra_enum_roots = backend_named_enum_roots(&funcs, &types_ir, self.interner);
+            prune_dead_type_decls(&funcs, &extra_enum_roots, &mut types_ir, &mut records);
         }
 
         // Every synthesized Prelude enum lives in (or aliases into) the Db
@@ -25521,6 +25541,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListMap2
                 // `Task.map2 : (a -> b -> r) -> Task e a -> Task e b -> Task e r`
                 | KernelFn::TaskMap2
+                // `Task.loop : Int -> s -> (s -> Task Error (Step s a)) -> Task Error a`
+                | KernelFn::TaskLoop
                 // `Config.map2` — arity 3
                 | KernelFn::ConfigMap2
                 // `Store.eqBy` / `Store.neqBy` / `Store.gtBy` / `Store.gteBy` /
@@ -27558,6 +27580,7 @@ impl<'a> Lowerer<'a> {
                     ("Task", "run") => Ok(Callee::Kernel(KernelFn::TaskRun)),
                     ("Task", "perform") => Ok(Callee::Kernel(KernelFn::TaskPerform)),
                     ("Task", "lazy") => Ok(Callee::Kernel(KernelFn::TaskLazy)),
+                    ("Task", "loop") => Ok(Callee::Kernel(KernelFn::TaskLoop)),
                     // ── Task retry surface ──────────────────────────────
                     ("Task", "retryWith") => Ok(Callee::Kernel(KernelFn::TaskRetryWith)),
                     ("Task", "linearBackoff") => Ok(Callee::Kernel(KernelFn::TaskLinearBackoff)),

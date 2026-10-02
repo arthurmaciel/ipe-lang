@@ -102,6 +102,52 @@ bad deploy:
   => rolled back
 ```
 
+## Repeating a step
+
+Some work repeats one step until it is finished: draining a queue, paging
+through an API, counting up to a target. `Task.loop` runs such a step:
+
+- **The step returns a `Step`.** `Continue state` runs the step again from the
+  new state; `Done result` ends the loop with that result. A failing step ends
+  the loop with its error unchanged.
+- **The ceiling is required.** `Task.loop limit init step` runs the step at most
+  `limit` times. A loop that needs one more step fails with an `InvalidInput`
+  error naming the ceiling, so a runaway loop stops with a typed error rather
+  than spinning forever.
+
+```ipe
+classify : Int -> Int -> Step Int Int
+classify target n =
+    if n >= target then
+        Done n
+
+    else
+        Continue n
+
+
+countStep : Int -> Int -> Task Error (Step Int Int)
+countStep target n =
+    do
+        next <- Task.succeed (n + 1)
+        checked <- Task.succeed next
+        Task.succeed (classify target checked)
+
+
+countTo : Int -> Int -> Task Error Int
+countTo limit target =
+    Task.loop limit 0 (countStep target)
+```
+
+`countTo 150000 150000` succeeds with `150000`; `countTo 5 150000` fails with
+`InvalidInput: Task.loop ran its step 5 times, its ceiling, without reaching
+Done`. `Step` comes from `import Ipe.Task as Task exposing (Step(..))`.
+
+Why a loop rather than a function that calls itself inside `andThen`: each such
+call nests one more pending task, so the stack grows with the count, and a few
+thousand steps trip the runtime's recursion limit. `Task.loop` runs every step at
+the same stack depth, so the ceiling you write is the real bound on the work, not
+a guess at how deep the stack can go.
+
 ## The why
 
 Task-as-a-value is [soundness][principles] for effects: because building a task
@@ -122,7 +168,8 @@ rather than a pyramid of nested error checks.
 
 - **Per-symbol reference:** `ipe doc Ipe.Task` — every combinator with a verified
   example. `ipe doc Ipe.Task.andThen`, `ipe doc Ipe.Task.onError`, and
-  `ipe doc Ipe.Task.parallel` cover sequencing, recovery, and concurrency.
+  `ipe doc Ipe.Task.parallel` cover sequencing, recovery, and concurrency;
+  `ipe doc Ipe.Task.loop` covers repeating a step under a ceiling.
 - **Sibling guides:** [Results](result.md) — `Result` is a task that has already
   settled; `Task.fromResult` bridges them. [Lists](list.md) — `Task.sequence`
   turns a `List (Task Error a)` into one task. The typed failure type lives in

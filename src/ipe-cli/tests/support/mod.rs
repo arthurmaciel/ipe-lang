@@ -688,7 +688,7 @@ pub struct RunOutcomeWithStderr {
 /// Fails the calling test if `cargo build` fails (surfacing cargo's stderr), the
 /// binary cannot be located, or it cannot be spawned.
 #[must_use]
-#[allow(dead_code)] // only the recursion-guard DoS golden exercises this helper
+#[allow(dead_code)] // only the recursion-guard goldens (DoS proof, `Task.loop` control) use it
 pub fn build_and_run_emitted_capturing_stderr(
     golden_name: &str,
     emitted_dir: &Path,
