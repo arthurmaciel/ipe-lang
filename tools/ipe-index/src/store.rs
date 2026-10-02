@@ -459,6 +459,20 @@ mod tests {
         assert_eq!(s.count("units").unwrap(), 2);
     }
 
+    // `tools/code-review`'s tests seed a fake index DB from this exact file
+    // (never a hand copy), so a drift here is caught by the Rust build
+    // before the Ipê tests can certify a schema the real index never
+    // creates.
+    #[test]
+    fn schema_fixture_matches_the_real_schema() {
+        const FIXTURE: &str = include_str!("../tests/schema.sql");
+        assert_eq!(
+            SCHEMA, FIXTURE,
+            "tools/ipe-index/tests/schema.sql has drifted from `SCHEMA` in store.rs \
+             — update the fixture to match (tools/code-review reads it verbatim)"
+        );
+    }
+
     #[test]
     fn schema_version_is_gated() {
         let s = Store::open(":memory:").unwrap();
