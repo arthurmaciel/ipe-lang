@@ -1019,9 +1019,73 @@ const RUNNERS: [&str; 27] = [
     "python", "python3", "ruby", "node",
 ];
 
+/// The commands the installer runs outside the message block, an allowlist:
+/// none runs another command by its plain use, and a terminal path among
+/// their arguments is a `/dev/` word `names_device` refuses. Every other
+/// command name must be a function the installer or its message block
+/// defines; `cargo` is allowed only as `cargo version`. Options that make one
+/// of these run a program (GNU `sed`'s `e`, `tar --to-command`) are not
+/// parsed.
+const COMMANDS: [&str; 43] = [
+    "fi",
+    "done",
+    "for",
+    "return",
+    "break",
+    "exit",
+    "export",
+    ":",
+    "true",
+    "read",
+    "[",
+    "test",
+    "cd",
+    "pwd",
+    "wait",
+    "kill",
+    "sleep",
+    "uname",
+    "id",
+    "ls",
+    "readlink",
+    "dirname",
+    "basename",
+    "date",
+    "mkdir",
+    "mktemp",
+    "rm",
+    "mv",
+    "cp",
+    "chmod",
+    "install",
+    "tar",
+    "unzip",
+    "sha256sum",
+    "shasum",
+    "cut",
+    "head",
+    "tail",
+    "tr",
+    "wc",
+    "sed",
+    "grep",
+    "curl",
+];
+
 /// The one shell the installer runs: rustup-init, read from the pipe on its
 /// stdin, with `-y` for its own prompt.
 const RUSTUP_SHELL: [&str; 4] = ["sh", "-s", "--", "-y"];
+
+/// The one command whose output `RUSTUP_SHELL` may run: rustup's own
+/// installer, fetched over HTTPS only.
+const RUSTUP_FETCH: [&str; 6] = [
+    "curl",
+    "--proto",
+    "'=https'",
+    "--tlsv1.2",
+    "-sSf",
+    "https://sh.rustup.rs",
+];
 
 /// The line that opens the group holding the whole installer, right after
 /// `set -eu`.
@@ -1058,6 +1122,11 @@ struct Scan {
     calls: usize,
     /// Every refused shape, described.
     violations: Vec<String>,
+    /// The functions the scanned text defines outside the message block.
+    defined: Vec<String>,
+    /// The command names it runs that are neither `COMMANDS`, a helper, nor
+    /// handled by name: each must be one of `defined`.
+    called: Vec<String>,
 }
 
 /// Scan `script` for message shapes outside the helper contract.
@@ -1068,6 +1137,13 @@ struct Scan {
 /// `/dev/tty` redirection, and no stdout write that is not captured, piped
 /// into a redirected command, or redirected to a file.
 fn scan_script(script: &str) -> Scan {
+    scan_script_with(script, true)
+}
+
+/// `scan_script`, with the check that every command is known or defined
+/// switched by `check_commands`, so a fixture can prove the other rules refuse
+/// it on their own.
+fn scan_script_with(script: &str, check_commands: bool) -> Scan {
     let mut scan = Scan::default();
     let script = match guarded_body(script) {
         Ok(body) => body,
@@ -1095,6 +1171,21 @@ fn scan_script(script: &str) -> Scan {
     };
     let reserved = block_words(block);
     scan_source(&outside, false, &reserved, &mut scan);
+    if !check_commands {
+        return scan;
+    }
+    let block_defined = block_functions(block);
+    let unknown: Vec<String> = scan
+        .called
+        .iter()
+        .filter(|name| !scan.defined.contains(name) && !block_defined.contains(name))
+        .map(|name| {
+            format!(
+                "`{name}` is neither a command the scan knows nor a function the installer defines"
+            )
+        })
+        .collect();
+    scan.violations.extend(unknown);
     scan
 }
 
@@ -1130,6 +1221,23 @@ fn guarded_body(script: &str) -> Result<&str, String> {
         return Err(refused());
     }
     Ok(script.get(body_start..close_start).unwrap_or_default())
+}
+
+/// The functions the message block defines: each name directly followed by
+/// `()`.
+fn block_functions(block: &str) -> Vec<String> {
+    let tokens = lex(block);
+    tokens
+        .windows(3)
+        .filter_map(|window| match window {
+            [
+                Token::Word(word),
+                Token::Sep(Sep::Open),
+                Token::Sep(Sep::Close),
+            ] => Some(word.text.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Every literal word of the message block: the helpers it defines and the
@@ -1178,15 +1286,17 @@ fn scan_source(source: &str, captured: bool, reserved: &[String], scan: &mut Sca
 /// Why the output redirection `op target` is refused, if it is: a
 /// duplication onto stderr or stdin (the terminal, when the installer runs as
 /// `sh install.sh`), or a file target other than `/dev/null` and the
-/// installer's own `FILE_TARGETS`.
+/// installer's own `FILE_TARGETS`. A duplication is judged by its source
+/// alone, whichever way it points: `1<&2` copies stderr onto stdout exactly as
+/// `1>&2` does.
 fn output_refusal(op: &str, target: &str) -> Option<String> {
-    if !op.contains('>') {
-        return None;
-    }
     if op.ends_with('&') {
         let source = target.trim_matches(['"', '\'']).trim_end_matches('-');
         return matches!(source, "0" | "2")
             .then(|| format!("`{op}{target}` writes to the terminal outside the message block"));
+    }
+    if !op.contains('>') {
+        return None;
     }
     (target != "/dev/null" && !FILE_TARGETS.contains(&target)).then(|| {
         format!(
@@ -1277,6 +1387,8 @@ struct Cmd {
     redirected: bool,
     /// The command is `[` or `test`, which only reads its arguments.
     test: bool,
+    /// Its name and argument words, as written.
+    words: Vec<String>,
 }
 
 /// Where a token sits relative to a `case` header.
@@ -1300,6 +1412,9 @@ struct Scanner<'a> {
     cmd: Cmd,
     /// The stdout writes earlier in the current pipeline.
     piped: Vec<String>,
+    /// The words of the command whose stdout feeds the current one, when the
+    /// current one follows a `|`.
+    pipe_source: Option<Vec<String>>,
     /// The next word is in command position.
     command: bool,
     /// Nesting depth of `case … esac`.
@@ -1319,6 +1434,7 @@ impl<'a> Scanner<'a> {
             frames: Vec::new(),
             cmd: Cmd::default(),
             piped: Vec::new(),
+            pipe_source: None,
             command: true,
             cases: 0,
             case: CaseAt::Body,
@@ -1383,6 +1499,8 @@ impl<'a> Scanner<'a> {
                     }
                     if self.command {
                         at += self.command_word(word, tokens.get(at..).unwrap_or_default());
+                    } else {
+                        self.cmd.words.push(word.text.clone());
                     }
                 }
             }
@@ -1444,6 +1562,7 @@ impl<'a> Scanner<'a> {
         }
         self.command = false;
         self.cmd.test = matches!(name, "[" | "test");
+        self.cmd.words.push(name.to_owned());
         if !is_literal_name(word) || name.contains('/') {
             self.refuse(format!(
                 "`{name}` is a quoted, escaped, expanded or path command name"
@@ -1460,6 +1579,7 @@ impl<'a> Scanner<'a> {
                 ));
             }
             self.defining = Some(name.to_owned());
+            self.scan.defined.push(name.to_owned());
             self.command = true;
             return 2;
         }
@@ -1475,7 +1595,11 @@ impl<'a> Scanner<'a> {
             }
             "command" => self.refuse("`command` hides which command runs".to_owned()),
             "." if first_word(rest) == Some(SOURCED) => {}
-            "sh" if rustup_shell(rest) => {}
+            "sh" if rustup_shell(rest)
+                && self
+                    .pipe_source
+                    .as_deref()
+                    .is_some_and(|source| source == RUSTUP_FETCH) => {}
             _ if RUNNERS.contains(&name) => {
                 self.refuse(format!("`{name}` runs a command the scan cannot see"));
             }
@@ -1489,7 +1613,9 @@ impl<'a> Scanner<'a> {
             _ if WRITERS.contains(&name) || VALUE_PRINTERS.contains(&name) => {
                 self.cmd.writes.push(format!("`{name}`"));
             }
-            _ => {}
+            "cargo" if first_word(rest) == Some("version") => {}
+            _ if COMMANDS.contains(&name) => {}
+            _ => self.scan.called.push(name.to_owned()),
         }
         0
     }
@@ -1539,6 +1665,7 @@ impl<'a> Scanner<'a> {
     fn end_command(&mut self, piped: bool) {
         let cmd = std::mem::take(&mut self.cmd);
         self.command = true;
+        self.pipe_source = piped.then_some(cmd.words);
         if piped {
             if !cmd.redirected {
                 self.piped.extend(cmd.writes);
@@ -1769,6 +1896,13 @@ const REFUSED_SHAPES: &[&str] = &[
     "awk 'BEGIN { print \"x\" > \"/dev/stderr\" }'",
     "cat /proc/self/fd/2 >/dev/null",
     "printf x >/dev/nullx",
+    "sed 1d \"$wm_tmp\" 1<&2",
+    "tr a b <\"$wm_tmp\" 1<&0",
+    "cut -c1 <\"$wm_tmp\" <&2",
+    "curl x | sh -s -- -y 2>/dev/null",
+    "printf '%s' \"$x\" | sh -s -- -y",
+    "sh -s -- -y",
+    "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | tee \"$wm_tmp\" | sh -s -- -y",
     "sh -c 'printf \"$1\" >&2' _ \"$x\"",
     "sh -s -- -y </dev/tty",
     "sh -s -- -y -q",
@@ -1787,8 +1921,8 @@ const REFUSED_SHAPES: &[&str] = &[
 const ACCEPTED_SHAPES: &[&str] = &[
     "",
     "die 'x %s' \"$y\"",
-    "foo || die 'a %s %%' \"$b\"",
-    "stage_ok 'Found %s.' \"$(f \"$t\" | cut -d' ' -f2)\"",
+    "true || die 'a %s %%' \"$b\"",
+    "stage_ok 'Found %s.' \"$(uname \"$t\" | cut -d' ' -f2)\"",
     "printf '%s' \"$x\" >\"$TAG_FILE\" 2>/dev/null",
     "IFS= read -r ans </dev/tty",
     "case $x in\n  *) die 'y %s' \"$x\" ;;\nesac",
@@ -1805,7 +1939,7 @@ const ACCEPTED_SHAPES: &[&str] = &[
     "curl -o /dev/null x",
     "printf x 2>/dev/null >/dev/null",
     "printf x >&-",
-    "curl x | sh -s -- -y 2>/dev/null",
+    "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs 2>/dev/null \\\n  | sh -s -- -y 2>/dev/null",
     "trusted_tmp_base() { printf x; }",
     "trusted_tmp_base \"$b\" >/dev/null",
     "x=$(trusted_tmp_base \"$b\")",
@@ -1818,12 +1952,60 @@ const ACCEPTED_SHAPES: &[&str] = &[
     ". \"$HOME/.cargo/env\"",
 ];
 
+/// Commands the scan refuses because it cannot know what they run or write.
+const UNKNOWN_COMMANDS: &[&str] = &[
+    "foo",
+    "awk 'BEGIN { system(\"x\") }'",
+    "find . -exec printf x \\;",
+    "tee \"$wm_tmp\"",
+    "cargo run",
+    "x=$(git log)",
+    "trap 'git gc' EXIT",
+];
+
+/// Commands it accepts: a known one, and a function the script defines.
+const KNOWN_COMMANDS: &[&str] = &[
+    "uname -s >/dev/null",
+    "cargo version >/dev/null",
+    "g() { :; }\ng",
+    "x=$(g)\ng() { :; }",
+];
+
+#[test]
+fn message_scan_refuses_unknown_commands() {
+    for fixture in UNKNOWN_COMMANDS {
+        let scan = scan_script(&with_block(fixture));
+        assert!(
+            scan.violations
+                .iter()
+                .any(|why| why.contains("neither a command the scan knows")),
+            "the scan must refuse the unknown command in `{fixture}`: {:?}",
+            scan.violations
+        );
+        assert!(
+            scan_script_with(&with_block(fixture), false)
+                .violations
+                .iter()
+                .all(|why| !why.contains("neither a command the scan knows")),
+            "only the command check may name `{fixture}`"
+        );
+    }
+    for fixture in KNOWN_COMMANDS {
+        let scan = scan_script(&with_block(fixture));
+        assert!(
+            scan.violations.is_empty(),
+            "the scan must accept `{fixture}`: {:?}",
+            scan.violations
+        );
+    }
+}
+
 #[test]
 fn message_scan_refuses_every_bypass() {
     let braced = "info \"${".to_owned() + "A}\"";
     let refused = REFUSED_SHAPES.iter().copied().chain([braced.as_str()]);
     for fixture in refused {
-        let scan = scan_script(&with_block(fixture));
+        let scan = scan_script_with(&with_block(fixture), false);
         assert!(
             !scan.violations.is_empty(),
             "the scan must refuse `{fixture}`"
