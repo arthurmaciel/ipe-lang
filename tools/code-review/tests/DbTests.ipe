@@ -68,6 +68,9 @@ import TestSupport exposing
     , describeText
     , refusedFor
     , openReviewAt
+    , migratedReviewAt
+    , tableNames
+    , attestedFor
     , openReadOnlyAt
     , countDrainRows
     , vectorsPath
@@ -81,35 +84,108 @@ import TestSupport exposing
 
 
 
-bothTablesExist : Db -> Task.Task Error Bool
-bothTablesExist db =
-    Task.map2
-        (\a b -> a && b)
-        (tableExists db "review")
-        (tableExists db "drain_cursor")
+-- A scratch review database at `name`, migrated through `LibDb.probe`, given
+-- to `run`, then removed with its WAL files.
+withScratchReview : String -> (Db -> Task.Task Error Bool) -> Task.Task Error Bool
+withScratchReview name run =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/" ++ name
+
+        dbPath =
+            base ++ "/review.db"
+    in
+    do
+        dir <- Task.fromResult (Path.fromString base)
+        File.mkdirAll dir
+        removeReviewFiles dbPath
+        db <- migratedReviewAt dbPath
+        ok <- run db
+        removeReviewFiles dbPath
+        Task.succeed ok
 
 
 
-idempotent : Db -> Task.Task Error Bool
-idempotent db =
-    LibDb.migrate db
-        |> Task.andThen (\_ -> tableExists db "review")
+removeReviewFiles : String -> Task.Task Error ()
+removeReviewFiles dbPath =
+    do
+        removeFileIfAny dbPath
+        removeFileIfAny (dbPath ++ "-wal")
+        removeFileIfAny (dbPath ++ "-shm")
 
 
 
-duplicateInsertIsNoop : Db -> Task.Task Error Bool
-duplicateInsertIsNoop db =
-    LibDb.insertDecision db "dup-uid" "h1" Approved
-        |> Task.andThen
-            (\_ ->
-                refuse "changed" |> Task.andThen (LibDb.insertDecision db "dup-uid" "h1")
-            )
-        |> Task.andThen (\_ -> countReviewRows db "dup-uid" "h1")
-        |> Task.andThen
-            (\n ->
-                LibDb.findDecision db "dup-uid" "h1"
-                    |> Task.map (\m -> n == 1 && isApproved m)
-            )
+-- After `probe` the review database holds the review table and the
+-- migrations table, nothing else: no write-only table outlives its last
+-- reader. A second `probe` on the same file is a no-op. Red while the
+-- `drain_cursor` migration stands without the one dropping it.
+drainCursorGoneAfterMigrate : Task.Task Error Bool
+drainCursorGoneAfterMigrate =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-table-set"
+
+        dbPath =
+            base ++ "/review.db"
+    in
+    do
+        dir <- Task.fromResult (Path.fromString base)
+        File.mkdirAll dir
+        removeReviewFiles dbPath
+        loc <- Settings.parseDbLocation "IPE_REVIEW_DB" dbPath
+        LibDb.probe loc
+        LibDb.probe loc
+        db <- LibDb.openAt loc
+        tables <- tableNames db
+        removeReviewFiles dbPath
+        Task.succeed (tables == [ "_ipe_migrations", "review" ])
+
+
+
+-- `LibDb.open` never migrates: on a review file that `probe` never ran on,
+-- the next read is a typed error and no table is created. A review file
+-- deleted under a running server is therefore never silently re-created
+-- empty. Red while `open` migrates.
+openDoesNotMigrate : Task.Task Error Bool
+openDoesNotMigrate =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-open-no-migrate"
+
+        dbPath =
+            base ++ "/review.db"
+    in
+    do
+        dir <- Task.fromResult (Path.fromString base)
+        File.mkdirAll dir
+        removeReviewFiles dbPath
+        System.setenv "IPE_REVIEW_DB" dbPath
+        db <- LibDb.open
+        readFailed <-
+            LibDb.findDecision db "u-a" "h"
+                |> Task.map (\_ -> False)
+                |> Task.onError (\_ -> Task.succeed True)
+        created <- tableExists db "review"
+        removeReviewFiles dbPath
+        Task.succeed (readFailed && not created)
+
+
+
+-- A second decision on the same attested pair is a no-op: one row, the
+-- first decision kept.
+duplicateInsertIsNoop : Task.Task Error Bool
+duplicateInsertIsNoop =
+    withScratchReview "ipe-review-duplicate"
+        (\db ->
+            do
+                attested <- attestedFor "ipe-review-duplicate-index" "u-a"
+                LibDb.insertDecision db attested Approved
+                changed <- refuse "changed"
+                second <- LibDb.insertDecision db attested changed
+                n <- countReviewRows db "u-a" (Index.attest viewA)
+                found <- LibDb.findDecision db "u-a" (Index.attest viewA)
+                Task.succeed (second == 0 && n == 1 && isApproved found)
+        )
 
 
 
@@ -204,16 +280,16 @@ storedReasonShown expected found =
 
 
 
-decisionRoundtrip : Db -> Task.Task Error Bool
-decisionRoundtrip db =
-    LibDb.insertDecision db "rt-uid" "h3" Approved
-        |> Task.andThen (\_ -> refuse "too big" |> Task.andThen (LibDb.insertDecision db "rt-uid" "h4"))
-        |> Task.andThen
-            (\_ ->
+decisionRoundtrip : Task.Task Error Bool
+decisionRoundtrip =
+    withScratchReview "ipe-review-roundtrip"
+        (\db ->
+            do
+                insertBoth "ipe-review-roundtrip-index" db
                 Task.map2 checkPair
-                    (LibDb.findDecision db "rt-uid" "h3")
-                    (LibDb.findDecision db "rt-uid" "h4")
-            )
+                    (LibDb.findDecision db "u-a" (Index.attest viewA))
+                    (LibDb.findDecision db "u-b" (Index.attest viewB))
+        )
 
 
 
@@ -427,88 +503,17 @@ failedWritesKeepTheirError =
     do
         dir <- Task.fromResult (Path.fromString base)
         File.mkdirAll dir
-        removeFileIfAny dbPath
-        rw <- openReviewAt dbPath
-        LibDb.migrate rw
-        LibDb.insertDecision rw "seen" "h" Approved
+        removeReviewFiles dbPath
+        seen <- attestedFor "ipe-review-failed-writes-index" "u-a"
+        fresh <- attestedFor "ipe-review-failed-writes-index" "u-b"
+        rw <- migratedReviewAt dbPath
+        LibDb.insertDecision rw seen Approved
         ro <- openReadOnlyAt dbPath
-        duplicate <- LibDb.insertDecision ro "seen" "h" Approved
-        freshReview <- failedReadOnly (LibDb.insertDecision ro "fresh" "h" Approved)
-        freshDrain <- failedReadOnly (LibDb.recordDrain ro "fresh" "h")
-        freshDrainInsert <- failedReadOnly (LibDb.insertDrainCursor ro "fresh" "h")
-        kept <- LibDb.findDecision rw "fresh" "h"
-        removeFileIfAny dbPath
-        removeFileIfAny (dbPath ++ "-wal")
-        removeFileIfAny (dbPath ++ "-shm")
-        Task.succeed (duplicate == 0 && freshReview && freshDrain && freshDrainInsert && not (hasDecision kept))
-
-
-
--- A cursor insert that loses the race to a concurrent drain of the same pair
--- hits the primary key, then refreshes the row that won: the pair already has
--- its cursor row when the insert runs, and the insert reports that one row
--- written instead of failing, leaving the pair with exactly one row.
-lostCursorInsertRefreshes : Task.Task Error Bool
-lostCursorInsertRefreshes =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-lost-insert"
-
-        dbPath =
-            base ++ "/review.db"
-    in
-    do
-        dir <- Task.fromResult (Path.fromString base)
-        File.mkdirAll dir
-        removeFileIfAny dbPath
-        db <- openReviewAt dbPath
-        LibDb.migrate db
-        first <- LibDb.recordDrain db "raced" "h"
-        lost <- LibDb.insertDrainCursor db "raced" "h"
-        rows <- countDrainRows db "raced" "h"
-        removeFileIfAny dbPath
-        removeFileIfAny (dbPath ++ "-wal")
-        removeFileIfAny (dbPath ++ "-shm")
-        Task.succeed (first == 1 && lost == 1 && rows == 1)
-
-
-
--- A cursor insert that fails for a reason other than the key, on a writable
--- database whose pair has no row, keeps the insert's own error: the retried
--- refresh matches no row, so the failure is not read as a lost race. A trigger
--- aborting every insert is that reason (`SQLITE_CONSTRAINT_TRIGGER`, 1811,
--- not the primary key's 1555).
-blockedCursorInsertKeepsItsError : Task.Task Error Bool
-blockedCursorInsertKeepsItsError =
-    let
-        base =
-            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-blocked-insert"
-
-        dbPath =
-            base ++ "/review.db"
-    in
-    do
-        dir <- Task.fromResult (Path.fromString base)
-        File.mkdirAll dir
-        removeFileIfAny dbPath
-        db <- openReviewAt dbPath
-        LibDb.migrate db
-        Db.exec db "CREATE TRIGGER block_cursor BEFORE INSERT ON drain_cursor BEGIN SELECT RAISE(ABORT, 'blocked'); END" []
-        refusal <-
-            LibDb.insertDrainCursor db "fresh" "h"
-                |> Task.map (\_ -> Nothing)
-                |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
-        rows <- countDrainRows db "fresh" "h"
-        removeFileIfAny dbPath
-        removeFileIfAny (dbPath ++ "-wal")
-        removeFileIfAny (dbPath ++ "-shm")
-        Task.succeed (refusal == Just triggerAbortError && rows == 0)
-
-
-
-triggerAbortError : String
-triggerAbortError =
-    "db: database error [1811]"
+        duplicate <- LibDb.insertDecision ro seen Approved
+        freshReview <- failedReadOnly (LibDb.insertDecision ro fresh Approved)
+        kept <- LibDb.findDecision rw "u-b" (Index.attest viewB)
+        removeReviewFiles dbPath
+        Task.succeed (duplicate == 0 && freshReview && not (hasDecision kept))
 
 
 
@@ -545,11 +550,10 @@ historyRoundtrip =
     removeFileIfAny reviewDb
         |> Task.andThen (\_ -> Task.fromResult (Path.fromString base))
         |> Task.andThen File.mkdirAll
-        |> Task.andThen (\_ -> openReviewAt reviewDb)
+        |> Task.andThen (\_ -> migratedReviewAt reviewDb)
         |> Task.andThen
             (\db ->
-                LibDb.migrate db
-                    |> Task.andThen (\_ -> insertBoth db)
+                insertBoth "ipe-index-b6-history-index" db
                     |> Task.map (\_ -> db)
             )
         |> Task.andThen
@@ -579,18 +583,24 @@ historyRoundtrip =
 
 
 
-insertBoth : Db -> Task.Task Error Int
-insertBoth db =
-    LibDb.insertDecision db "u-a" "hashA" Approved
-        |> Task.andThen (\_ -> refuse "too big" |> Task.andThen (LibDb.insertDecision db "u-b" "hashB"))
+-- Fixture unit u-a approved and u-b refused "too big", each against the
+-- `Attested` pair its seeded source re-verifies to.
+insertBoth : String -> Db -> Task.Task Error Int
+insertBoth scratch db =
+    do
+        a <- attestedFor scratch "u-a"
+        b <- attestedFor scratch "u-b"
+        LibDb.insertDecision db a Approved
+        tooBig <- refuse "too big"
+        LibDb.insertDecision db b tooBig
 
 
 checks : Db -> Task.Task Error (List ( String, Bool ))
 checks db =
     Task.sequence
-        [ Task.map (\ok -> ( "0001+0002 create tables", ok )) (bothTablesExist db)
-        , Task.map (\ok -> ( "re-migrate idempotent", ok )) (idempotent db)
-        , Task.map (\ok -> ( "duplicate (uid,body_hash) no-op", ok )) (duplicateInsertIsNoop db)
+        [ Task.map (\ok -> ( "drain_cursor is gone after migrate", ok )) drainCursorGoneAfterMigrate
+        , Task.map (\ok -> ( "open does not migrate", ok )) openDoesNotMigrate
+        , Task.map (\ok -> ( "a duplicate attested decision is a no-op", ok )) duplicateInsertIsNoop
         , Task.map (\ok -> ( "refusal reason is non-blank and bounded", ok )) (reasonBounded db)
         , Task.map (\ok -> ( "a stored over-long reason decodes and shows its length", ok )) (storedOverlongReasonDecodes db)
         , Task.map (\ok -> ( "a stored blank reason decodes as blank", ok )) (storedBlankReasonDecodes db)
@@ -599,7 +609,7 @@ checks db =
         , Task.map (\ok -> ( "history pages read in index order", ok )) (historyPagesUseIndex db)
         , Task.succeed ( "only the latest load settles a page slot", loadTicketsSettleLatest )
         , Task.succeed ( "history state texts distinguish loading/empty/failed/loaded", historyStateTextsDistinct )
-        , Task.map (\ok -> ( "decision roundtrip", ok )) (decisionRoundtrip db)
+        , Task.map (\ok -> ( "decision roundtrip", ok )) decisionRoundtrip
         , Task.succeed
             ( "history shows the digest, not the scheme"
             , shortHashShown "sha256:0123456789abcdef"
@@ -620,6 +630,4 @@ checks db =
             )
         , Task.map (\ok -> ( "review history roundtrip", ok )) historyRoundtrip
         , Task.map (\ok -> ( "failed writes keep their error", ok )) failedWritesKeepTheirError
-        , Task.map (\ok -> ( "cursor insert that lost the race refreshes the winner", ok )) lostCursorInsertRefreshes
-        , Task.map (\ok -> ( "cursor insert failing off the key keeps its error", ok )) blockedCursorInsertKeepsItsError
         ]

@@ -35,6 +35,10 @@ module TestSupport exposing
     , describeText
     , refusedFor
     , openReviewAt
+    , migratedReviewAt
+    , tableNames
+    , tableRowCounts
+    , attestedFor
     , openReadOnlyAt
     , countDrainRows
     , vectorsPath
@@ -550,6 +554,85 @@ openReviewAt : String -> Task.Task Error Db
 openReviewAt path =
     Settings.parseDbLocation "IPE_REVIEW_DB" path
         |> Task.andThen LibDb.openAt
+
+
+
+-- The review database at a test file path, migrated through `LibDb.probe`,
+-- the app's one migrate, then opened.
+migratedReviewAt : String -> Task.Task Error Db
+migratedReviewAt path =
+    do
+        loc <- Settings.parseDbLocation "IPE_REVIEW_DB" path
+        LibDb.probe loc
+        LibDb.openAt loc
+
+
+
+-- A database's table names, SQLite's own excluded, in name order.
+tableNames : Db -> Task.Task Error (List String)
+tableNames db =
+    Db.queryDecode db
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        []
+        (Db.Decode.succeed identity |> Db.Decode.required "name" (Db.Decode.string "name"))
+
+
+
+-- Every table of a database with its row count, in name order.
+tableRowCounts : Db -> Task.Task Error (List ( String, Int ))
+tableRowCounts db =
+    tableNames db
+        |> Task.andThen (\names -> Task.sequence (List.map (tableRowCount db) names))
+
+
+
+tableRowCount : Db -> String -> Task.Task Error ( String, Int )
+tableRowCount db name =
+    Db.queryDecode db
+        ("SELECT COUNT(*) AS total FROM \"" ++ name ++ "\"")
+        []
+        (Db.Decode.succeed identity |> Db.Decode.required "total" (Db.Decode.int "total"))
+        |> Task.map (\rows -> ( name, List.sum rows ))
+
+
+
+-- The `Attested` proof for fixture unit `uid`, built the one way the app
+-- builds it: the unit is loaded from a seeded scratch index, its shown
+-- source re-verified by `Index.reverify`, and the scratch index removed. A
+-- unit that is not shown fails the run.
+attestedFor : String -> String -> Task.Task Error Index.Attested
+attestedFor name uid =
+    attestedIn (scratchAt name) uid
+
+
+
+attestedIn : Scratch -> String -> Task.Task Error Index.Attested
+attestedIn at uid =
+    do
+        seedIndex at.indexDb at.repo
+        found <- Index.loadUnitByUid uid
+        attested <- reverifyShown uid found
+        cleanupIndex at.indexDb at.repo
+        Task.succeed attested
+
+
+
+reverifyShown : String -> Maybe Index.Unit -> Task.Task Error Index.Attested
+reverifyShown uid found =
+    case found of
+        Just unit ->
+            case unit.view of
+                Shown shown ->
+                    Index.reverify shown
+
+                Stale _ ->
+                    Task.fail (Error.conflict ("fixture unit " ++ uid ++ " is stale"))
+
+                Unreadable _ ->
+                    Task.fail (Error.conflict ("fixture unit " ++ uid ++ " is unreadable"))
+
+        Nothing ->
+            Task.fail (Error.conflict ("fixture unit " ++ uid ++ " is not in the index"))
 
 
 

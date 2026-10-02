@@ -1,4 +1,4 @@
-module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), PendingRow, ProgressRow, ShownSource, SourceView(..), StaleReason(..), Unit, attest, attestedHash, attestedUid, countPending, dbBytes, drainPair, drainUnit, loadPendingPage, loadProgress, loadUnitByUid, nameFor, openRead, pageSize, probe, qualifiedUids, rebuildReviewed, reverify, shortHash, shownHash, shownText, storedHash, viewText)
+module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), DecidedPair, PendingRow, ProgressRow, ShownSource, SourceView(..), StaleReason(..), Unit, attest, attestedHash, attestedUid, countPending, dbBytes, decidedPairDecoder, decidedPairKey, drainDecided, drainUnit, loadPendingPage, loadProgress, loadUnitByUid, nameFor, openRead, pageSize, probe, qualifiedUids, rebuildReviewed, reverify, shortHash, shownHash, shownText, storedHash, viewText)
 
 import Ipe.ByteSize as ByteSize exposing (ByteSize)
 import Ipe.Crypto as Crypto
@@ -445,6 +445,38 @@ drainUnit attested =
         Db.withTransaction conn (\tx -> drainPair tx (attestedUid attested) (attestedHash attested))
 
 
+-- A decided (uid, body_hash) pair as the review table holds it. Opaque:
+-- built only by `decidedPairDecoder`, which `Lib.Db.decidedPairsAfter` runs
+-- over the review table, so a refill drains only pairs read back from it.
+type DecidedPair
+    = DecidedPair { uid : String, hash : String }
+
+
+-- The one constructor of a `DecidedPair`: a row's `uid` and `body_hash`.
+decidedPairDecoder : Db.Decode.Decoder DecidedPair
+decidedPairDecoder =
+    Db.Decode.succeed (\uid hash -> DecidedPair { uid = uid, hash = hash })
+        |> Db.Decode.required "uid" (Db.Decode.string "uid")
+        |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
+
+
+-- A decided pair's key, read-only: the (uid, body_hash) it was decoded from.
+decidedPairKey : DecidedPair -> ( String, String )
+decidedPairKey pair =
+    case pair of
+        DecidedPair p ->
+            ( p.uid, p.hash )
+
+
+-- One decided pair drained on `conn`, the refill step of `rebuildReviewed`.
+-- Atomic only inside the transaction `rebuildReviewed` opens.
+drainDecided : Db.Db -> DecidedPair -> Task.Task Error Int
+drainDecided conn pair =
+    case pair of
+        DecidedPair p ->
+            drainPair conn p.uid p.hash
+
+
 -- One decided pair drained on `conn`, the one step both a drain and a
 -- rebuild run: the pair is added to `reviewed` (a pair already there is
 -- kept, so the first review wins and a re-drain is a no-op), then the
@@ -465,7 +497,7 @@ drainPair conn uid hash =
 
 
 -- The `reviewed` copy rebuilt in one index transaction: every row is
--- deleted, then `refill` re-adds the decided pairs through `drainPair` on the
+-- deleted, then `refill` re-adds the decided pairs through `drainDecided` on the
 -- transaction's connection it is given. A failed refill rolls the whole
 -- rebuild back, leaving the copy as it was.
 rebuildReviewed : (Db.Db -> Task.Task Error a) -> Task.Task Error a

@@ -68,6 +68,8 @@ import TestSupport exposing
     , describeText
     , refusedFor
     , openReviewAt
+    , migratedReviewAt
+    , tableRowCounts
     , openReadOnlyAt
     , countDrainRows
     , vectorsPath
@@ -101,8 +103,7 @@ decideAfter name prepare mutate decision =
         prepare at
         r <- loadFirstPage
         mutate at
-        db <- openReviewAt at.reviewDb
-        migrated <- LibDb.migrate db
+        db <- migratedReviewAt at.reviewDb
         conflict <- decideOutcome db (List.find (\u -> u.uid == "u-a") r.units) decision
         rows <- countUidRows db "u-a"
         cleanupIndex at.indexDb at.repo
@@ -157,8 +158,7 @@ decideRecordsShownHash =
         removeFileIfAny at.reviewDb
         seedIndex at.indexDb at.repo
         r <- loadFirstPage
-        db <- openReviewAt at.reviewDb
-        migrated <- LibDb.migrate db
+        db <- migratedReviewAt at.reviewDb
         recorded <-
             case List.find (\u -> u.uid == "u-a") r.units of
                 Just unit ->
@@ -254,6 +254,7 @@ pagesCoverQueueOnce =
         seedManyUnits indexDb seeded
         setIndexEnv indexDb repo
         System.setenv "IPE_REVIEW_DB" reviewDb
+        migratedReviewAt reviewDb
         first <- Queue.loadPage Index.Start
         second <-
             case first.next of
@@ -351,6 +352,7 @@ dbSizeAndMissingDb =
         seedManyUnits indexDb 1
         setIndexEnv indexDb repo
         System.setenv "IPE_REVIEW_DB" reviewDb
+        migratedReviewAt reviewDb
         bytes <- Index.dbBytes
         setIndexEnv (base ++ "/missing.db") repo
         result <-
@@ -462,13 +464,48 @@ seedOneUnit conn i =
 -- ── decision drain loop ─────────────────────────────────────────────────
 --
 -- A decided unit leaves the index queue: the decision returns the attested
--- pair, recordDrain writes the drain cursor under it (idempotent on the same
--- pair), drainUnit deletes the consumed change_queue row, and a subsequent
+-- pair, drainUnit deletes the consumed change_queue row, and a subsequent
 -- page load no longer lists the unit.
 drainFlow : Task.Task Error Bool
 drainFlow =
     drainAfter "ipe-index-drain" noChange
-        |> Task.map (\o -> o.drained == 1 && o.cursorRows == 1 && not o.stillQueued && o.totalAfter == o.totalBefore - 1)
+        |> Task.map (\o -> o.drained == 1 && not o.stillQueued && o.totalAfter == o.totalBefore - 1)
+
+
+
+-- The drain of a decided unit, with the queue page reloaded after it, writes
+-- the index alone: every review-database table keeps its row count, and the
+-- table set is unchanged. The review table already holds the decision, so
+-- nothing on the drain path has a reason to write there. Red if the drain
+-- task records anything in the review database (a drain cursor row).
+drainWritesNothingToReview : Task.Task Error Bool
+drainWritesNothingToReview =
+    let
+        at =
+            scratchAt "ipe-index-drain-isolated"
+    in
+    do
+        removeFileIfAny at.indexDb
+        removeFileIfAny at.reviewDb
+        seedIndex at.indexDb at.repo
+        r <- loadFirstPage
+        System.setenv "IPE_REVIEW_DB" at.reviewDb
+        db <- migratedReviewAt at.reviewDb
+        decided <- decideUnit db (List.find (\u -> u.uid == "u-b") r.units)
+        before <- tableRowCounts db
+        page <-
+            case decided of
+                ( attested, _ ) ->
+                    Queue.drainThenLoad attested Index.Start
+        after <- tableRowCounts db
+        cleanupIndex at.indexDb at.repo
+        removeFileIfAny at.reviewDb
+        Task.succeed
+            (before
+                == after
+                && List.member ( "review", 1 ) after
+                && not (List.any (\q -> q.unit.uid == "u-b") page.units)
+            )
 
 
 
@@ -550,8 +587,8 @@ requeueB at =
 
 
 
--- Seeds the bridge fixture, decides `u-b`, runs `mutate`, then records the
--- drain twice and drains under the decision's attested pair. `totalBefore`
+-- Seeds the bridge fixture, decides `u-b`, runs `mutate`, then drains under
+-- the decision's attested pair. `totalBefore`
 -- and `totalAfter` are the queue counts around the drain.
 drainAfter : String -> (Scratch -> Task.Task Error ()) -> Task.Task Error DrainOutcome
 drainAfter name mutate =
@@ -564,11 +601,10 @@ drainAfter name mutate =
         removeFileIfAny at.reviewDb
         seedIndex at.indexDb at.repo
         r <- loadFirstPage
-        db <- openReviewAt at.reviewDb
-        migrated <- LibDb.migrate db
+        db <- migratedReviewAt at.reviewDb
         decided <- decideUnit db (List.find (\u -> u.uid == "u-b") r.units)
         mutate at
-        outcome <- drainDecided db r.total decided
+        outcome <- drainAndCount r.total decided
         cleanupIndex at.indexDb at.repo
         removeFileIfAny at.reviewDb
         Task.succeed outcome
@@ -587,23 +623,19 @@ decideUnit db found =
 
 
 type alias DrainOutcome =
-    { drained : Int, cursorRows : Int, stillQueued : Bool, totalBefore : Int, totalAfter : Int }
+    { drained : Int, stillQueued : Bool, totalBefore : Int, totalAfter : Int }
 
 
 
-drainDecided : Db -> Int -> ( Index.Attested, Int ) -> Task.Task Error DrainOutcome
-drainDecided db totalBefore decided =
+drainAndCount : Int -> ( Index.Attested, Int ) -> Task.Task Error DrainOutcome
+drainAndCount totalBefore decided =
     case decided of
         ( attested, _ ) ->
             do
-                first <- LibDb.recordDrain db (Index.attestedUid attested) (Index.attestedHash attested)
-                second <- LibDb.recordDrain db (Index.attestedUid attested) (Index.attestedHash attested)
-                cursorRows <- countDrainRows db (Index.attestedUid attested) (Index.attestedHash attested)
                 drained <- Index.drainUnit attested
                 after <- loadFirstPage
                 Task.succeed
                     { drained = drained
-                    , cursorRows = cursorRows
                     , stillQueued = List.any (\u -> u.uid == "u-b") after.units
                     , totalBefore = totalBefore
                     , totalAfter = after.total
@@ -616,7 +648,8 @@ drainDecided db totalBefore decided =
 -- A unit already decided on its current hash stays hidden; a unit decided on an
 -- OLDER hash resurfaced at the queue head, flagged with the previous decision;
 -- never-seen units follow in their natural order. The two decisions are
--- written without a drain, so the load's progress check rebuilds the
+-- stored rows written straight into the review table (the fixture's hashes
+-- name no source, so no `Attested` pair exists for them), without a drain, so the load's progress check rebuilds the
 -- `reviewed` copy, which drains u-b's queue row: the queue counts the two
 -- shown units.
 changeReenqueue : Task.Task Error Bool
@@ -647,12 +680,11 @@ changeReenqueue =
         |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" repo)
         |> Task.andThen
             (\_ ->
-                openReviewAt reviewDb
-                    |> Task.andThen (\db -> LibDb.migrate db |> Task.map (\_ -> db))
+                migratedReviewAt reviewDb
                     |> Task.andThen
                         (\db ->
-                            LibDb.insertDecision db "u-a" "hashA" Approved
-                                |> Task.andThen (\_ -> refuse "too big" |> Task.andThen (LibDb.insertDecision db "u-b" "hashB"))
+                            insertReviewRow db "u-a" "hashA"
+                                |> Task.andThen (\_ -> Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString "u-b", SqlString "hashB", SqlString "refuse", SqlString "too big", SqlInt 0 ])
                                 |> Task.map (\_ -> db)
                         )
                     |> Task.andThen (\_ -> System.setenv "IPE_REVIEW_DB" reviewDb)
@@ -932,7 +964,7 @@ seedProgressScratch at =
         removeFileIfAny at.reviewDb
         seedIndex at.indexDb at.repo
         System.setenv "IPE_REVIEW_DB" at.reviewDb
-        LibDb.open
+        migratedReviewAt at.reviewDb
 
 
 
@@ -990,8 +1022,8 @@ progressStableAcrossDrain =
         seedIndex at.indexDb at.repo
         execIndex at.indexDb "UPDATE change_queue SET new_hash = ? WHERE uid = ?" [ SqlString (Index.attest viewA), SqlString "u-a" ]
         System.setenv "IPE_REVIEW_DB" at.reviewDb
+        db <- migratedReviewAt at.reviewDb
         before <- Queue.loadPage Index.Start
-        db <- LibDb.open
         decided <-
             case List.find (\q -> q.unit.uid == "u-a") before.units of
                 Just q ->
@@ -1130,6 +1162,39 @@ undrainedDecisionHealedOnLoad =
                 && pendingAfter == pendingBefore - 1
                 && page.total == pendingAfter
             )
+
+
+
+-- A refill copies into the index's `reviewed` table exactly the pairs the
+-- review table holds, each a `DecidedPair` decoded from a review row: a pair
+-- already in the copy that no review row names is gone after the rebuild,
+-- and every review pair is present once. Red if the refill drains a pair it
+-- did not read from the review table, or skips one it did.
+refillDrainsOnlyReviewPairs : Task.Task Error Bool
+refillDrainsOnlyReviewPairs =
+    let
+        at =
+            scratchAt "ipe-index-refill-pairs"
+
+        pairs =
+            [ ( "r-a", "ha" ), ( "r-b", "hb" ), ( "r-c", "hc" ) ]
+
+        pairDecoder =
+            Db.Decode.succeed (\uid hash -> ( uid, hash ))
+                |> Db.Decode.required "uid" (Db.Decode.string "uid")
+                |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
+    in
+    do
+        db <- seedProgressScratch at
+        pairs
+            |> List.map (\( uid, hash ) -> insertReviewRow db uid hash)
+            |> Task.sequence
+        mirrorPair at.indexDb "foreign" "hf"
+        copied <- Queue.resyncReviewed db
+        conn <- Db.open "sqlite" ("sqlite://" ++ at.indexDb ++ "?mode=rw")
+        mirrored <- Db.queryDecode conn "SELECT uid, body_hash FROM reviewed ORDER BY uid, body_hash" [] pairDecoder
+        cleanupProgressScratch at
+        Task.succeed (copied == List.length pairs && mirrored == pairs)
 
 
 
@@ -1463,6 +1528,8 @@ checks : Db -> Task.Task Error (List ( String, Bool ))
 checks _ =
     Task.sequence
         [ Task.map (\ok -> ( "decided unit drained from queue", ok )) drainFlow
+        , Task.map (\ok -> ( "a drain writes nothing to the review database", ok )) drainWritesNothingToReview
+        , Task.map (\ok -> ( "a refill drains only pairs read from the review table", ok )) refillDrainsOnlyReviewPairs
         , Task.map (\ok -> ( "re-queued change survives the drain", ok )) drainKeepsRequeuedChange
         , Task.map (\ok -> ( "unit page states are distinct", ok )) unitPageStatesDistinct
         , Task.map (\ok -> ( "queue pages bound to pageSize and cover the queue once", ok )) pagesCoverQueueOnce

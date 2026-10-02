@@ -31,7 +31,7 @@ import Lib.RepoPath as RepoPath exposing (PathError(..), Root, RootMap)
 import Lib.SafeText as SafeText
 import Lib.Settings as Settings
 
-import TestSupport exposing (openReviewAt)
+import TestSupport exposing (migratedReviewAt)
 import DbTests
 import ViewTests
 import IndexTests
@@ -108,8 +108,8 @@ main =
     Task.fromResult (Path.fromString dbPath)
         |> Task.andThen File.remove
         |> Task.onError (\_ -> Task.succeed ())
-        |> Task.andThen (\_ -> openReviewAt dbPath)
-        |> Task.andThen (\db -> LibDb.migrate db |> Task.andThen (\_ -> gatherChecks db))
+        |> Task.andThen (\_ -> migratedReviewAt dbPath)
+        |> Task.andThen gatherChecks
         |> Task.andThen
             (\results ->
                 removeDbFile dbPath

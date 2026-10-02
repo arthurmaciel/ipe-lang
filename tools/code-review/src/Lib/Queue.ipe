@@ -1,4 +1,4 @@
-module Lib.Queue exposing (HistoryPage, HistoryRow, HistoryState(..), LoadTicket, Progress, QueuePage, QueueState(..), QueuedUnit, ResyncBound, UnitPageState(..), decide, firstTicket, historyStateFromResult, historyStatusText, isCurrentLoad, loadHistoryPage, loadPage, nextTicket, loadUnitView, pageHeaderText, queueStatusText, resyncBound, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
+module Lib.Queue exposing (HistoryPage, HistoryRow, HistoryState(..), LoadTicket, Progress, QueuePage, QueueState(..), QueuedUnit, ResyncBound, UnitPageState(..), decide, drainThenLoad, firstTicket, historyStateFromResult, historyStatusText, isCurrentLoad, loadHistoryPage, loadPage, nextTicket, loadUnitView, pageHeaderText, queueStatusText, resyncBound, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText)
 
 import Ipe.Db as Db
 import Ipe.Error as Error
@@ -128,7 +128,7 @@ resyncReviewedWithin bound db =
 type alias RefillState =
     { pagesRead : Int
     , copied : Int
-    , cursor : Maybe ( String, String )
+    , cursor : Maybe Index.DecidedPair
     }
 
 
@@ -159,7 +159,7 @@ refillStep bound db conn state =
         else
             do
                 pairs
-                    |> List.map (\( uid, hash ) -> Index.drainPair conn uid hash)
+                    |> List.map (Index.drainDecided conn)
                     |> Task.sequence
                 let
                     copied =
@@ -334,7 +334,7 @@ decide db unit decision =
         Shown shown ->
             do
                 attested <- Index.reverify shown
-                n <- LibDb.insertDecision db (Index.attestedUid attested) (Index.attestedHash attested) decision
+                n <- LibDb.insertDecision db attested decision
                 Task.succeed ( attested, n )
 
         Stale _ ->
@@ -535,6 +535,14 @@ loadPage cursor =
             , next = nextCursor rows
             , progress = progress
             }
+
+
+-- A decided unit drained from the index queue, then the queue page at
+-- `cursor` reloaded. The drain writes the index alone: the review database
+-- already holds the decision, so nothing is written to it here.
+drainThenLoad : Index.Attested -> Index.Cursor -> Task.Task Error QueuePage
+drainThenLoad attested cursor =
+    Index.drainUnit attested |> Task.andThen (\_ -> loadPage cursor)
 
 
 -- A full page may have rows after it; a short page is the last one.
