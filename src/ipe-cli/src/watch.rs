@@ -2783,8 +2783,9 @@ fn child_command(exe_path: &Path, env: &[(String, String)]) -> Command {
 /// would otherwise orphan it holding the dev port. `spawn_hardened` forks it
 /// from the runtime's process-lifetime spawner thread, so on Linux the kernel
 /// SIGTERMs it when `ipe watch` dies by ANY means, and never earlier (the
-/// signal is bound to the forking thread, which lives as long as the process).
-/// A refused hardened spawn surfaces as a spawn error; it never degrades to an
+/// signal is bound to the forking thread, which lives as long as the process),
+/// and on every Unix the child inherits stdio and no other descriptor of
+/// `ipe watch`. A refused hardened spawn surfaces as a spawn error; it never degrades to an
 /// unhardened spawn.
 fn spawn_command(exe_path: &Path, env: &[(String, String)]) -> std::io::Result<Child> {
     ipe_runtime_rust::system::spawn_hardened(child_command(exe_path, env))

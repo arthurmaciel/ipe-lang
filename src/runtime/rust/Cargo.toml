@@ -191,7 +191,9 @@ tao = { version = "0.35", optional = true }
 # FFI. `pty` + `termios`: `Ipe.Process.runInPty` allocates a pseudo-terminal
 # (openpt / grantpt / unlockpt / ptsname) and sizes it (tcsetwinsize), and
 # `Io.readSecret` toggles terminal echo (isatty / tcgetattr / tcsetattr).
-# `process`: the child parent-death floor (`prctl(PR_SET_PDEATHSIG)`, Linux).
+# `process`: the child parent-death floor (`prctl(PR_SET_PDEATHSIG)`, Linux)
+# and the descriptor floor's `getrlimit` bound; `fs` also lists the open
+# descriptors (`/proc/self/fd` walk, `/dev/fd` probe) the floor marks close-on-exec.
 # `fs` backs `open`ing the pty replica and `scratch_core`'s `O_NOFOLLOW` open
 # and entry-owner facts (checked against `process`'s effective uid/gid); `std`
 # re-exports `OwnedFd`.
