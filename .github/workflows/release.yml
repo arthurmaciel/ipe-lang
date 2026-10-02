@@ -27,9 +27,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The release tag, parsed once: the release event's tag, or the dispatched
+  # tag input on a manual rebuild. Every job builds, checks out, and uploads
+  # against this one output, and only a tag of the release grammar reaches it
+  # (release-please's `ipe-vX.Y.Z`, or a bare `vX.Y.Z`).
+  resolve-tag:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      tag: ${{ steps.parse.outputs.tag }}
+    steps:
+      - id: parse
+        env:
+          RAW_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+        run: |
+          grammar='^(ipe-)?v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+          if [[ ! "$RAW_TAG" =~ $grammar ]]; then
+            echo "::error::release tag is not an ipe-vX.Y.Z or vX.Y.Z tag"
+            exit 1
+          fi
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
+
   # Native/cross build per target. Linux is fully-static musl (copy-anywhere,
   # no runtime deps); the others are the platform-native binary.
   build:
+    needs: resolve-tag
     strategy:
       fail-fast: false
       matrix:
@@ -58,9 +80,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # Build the tagged commit for both triggers: the release event's tag,
-          # or the manually-dispatched tag input.
-          ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+          # Build the tagged commit `resolve-tag` parsed.
+          ref: ${{ needs.resolve-tag.outputs.tag }}
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: ${{ matrix.target }}
@@ -72,24 +93,33 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Build ipe + ipe-ffi-inspector
         shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          EXT: ${{ matrix.ext }}
         run: |
-          cargo build --release --target ${{ matrix.target }} -p ipe -p ipe-ffi-inspector
+          cargo build --release --target "$TARGET" -p ipe -p ipe-ffi-inspector
           mkdir -p dist
-          BIN=target/${{ matrix.target }}/release
-          cp "$BIN/ipe${{ matrix.ext }}"               "dist/ipe${{ matrix.ext }}"
-          cp "$BIN/ipe-ffi-inspector${{ matrix.ext }}" "dist/ipe-ffi-inspector${{ matrix.ext }}"
+          BIN="target/$TARGET/release"
+          cp "$BIN/ipe$EXT"               "dist/ipe$EXT"
+          cp "$BIN/ipe-ffi-inspector$EXT" "dist/ipe-ffi-inspector$EXT"
           chmod +x dist/* || true
       - name: Smoke-test
         shell: bash
-        run: ./dist/ipe${{ matrix.ext }} version
+        env:
+          EXT: ${{ matrix.ext }}
+        run: '"./dist/ipe$EXT" version'
       - name: Package
         shell: bash
+        env:
+          BUILD_OS: ${{ matrix.os }}
+          ARTIFACT: ${{ matrix.artifact }}
+          EXT: ${{ matrix.ext }}
         run: |
           cd dist
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            7z a "${{ matrix.artifact }}.zip" "ipe${{ matrix.ext }}" "ipe-ffi-inspector${{ matrix.ext }}"
+          if [ "$BUILD_OS" = "windows-latest" ]; then
+            7z a "$ARTIFACT.zip" "ipe$EXT" "ipe-ffi-inspector$EXT"
           else
-            tar czf "${{ matrix.artifact }}.tar.gz" "ipe${{ matrix.ext }}" "ipe-ffi-inspector${{ matrix.ext }}"
+            tar czf "$ARTIFACT.tar.gz" "ipe$EXT" "ipe-ffi-inspector$EXT"
           fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -101,11 +131,12 @@ jobs:
 
   # FreeBSD has no native GitHub runner — build + test natively in a VM.
   build-freebsd:
+    needs: resolve-tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+          ref: ${{ needs.resolve-tag.outputs.tag }}
       - name: Build in FreeBSD VM
         uses: vmactions/freebsd-vm@4469451fe39bee80be4066836c5170362e9349f3 # v1.5.7
         with:
@@ -132,13 +163,13 @@ jobs:
   # LOUDLY for each missing platform — the good binaries ship first, the failure
   # stays visible (red run + `::error::` annotations), never swallowed.
   release:
-    needs: [build, build-freebsd]
-    if: ${{ always() && !cancelled() }}
+    needs: [resolve-tag, build, build-freebsd]
+    if: ${{ always() && !cancelled() && needs.resolve-tag.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+          ref: ${{ needs.resolve-tag.outputs.tag }}
       # A failed build leg uploaded nothing, so some names may be absent.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -159,15 +190,14 @@ jobs:
       - name: Upload assets to release
         env:
           GH_TOKEN: ${{ github.token }}
+          # The tag the build jobs checked out, never GITHUB_REF_NAME (the
+          # branch, main, on workflow_dispatch).
+          TAG: ${{ needs.resolve-tag.outputs.tag }}
+          REPO: ${{ github.repository }}
         run: |
-          # Resolve the tag the same way the build jobs resolve `ref`: the release
-          # event's tag on a published release, or the dispatched tag on a manual
-          # rebuild. GITHUB_REF_NAME is the branch (main) on workflow_dispatch, so
-          # it must not be used here.
-          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
           gh release upload "$TAG" release/* \
             --clobber \
-            --repo "${{ github.repository }}"
+            --repo "$REPO"
       # Completeness gate, AFTER the upload so present binaries are already
       # attached. Every expected platform must have staged an artifact; each
       # absent one is a red `::error::` annotation plus a summary line, and the

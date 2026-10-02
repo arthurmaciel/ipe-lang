@@ -105,10 +105,12 @@ jobs:
         run: cargo test -p ipe --test static_emit
 
       - name: ipe build --static (example, ${{ matrix.allocator }})
+        env:
+          ALLOCATOR: ${{ matrix.allocator }}
         run: |
           cd examples/shapes/non-tea/hello-world
           "$CARGO_TARGET_DIR/release/ipe" build package.ipe --out out \
-            --static --allocator ${{ matrix.allocator }}
+            --static --allocator "$ALLOCATOR"
           cd out/rust
           cargo build --release --target "$STATIC_TRIPLE"
           # Cargo names the binary after the emitted crate's `[package] name`,
