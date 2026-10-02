@@ -439,6 +439,142 @@ fn a_failing_tools_error_text_never_reaches_the_terminal() -> io::Result<()> {
 }
 
 #[test]
+fn an_inherited_tmp_never_names_what_the_exit_trap_removes() -> io::Result<()> {
+    let r = root("install-msg-inherited-tmp")?;
+    let victim = leaf(&r, "victim")?;
+    std::fs::create_dir(&victim)?;
+    let keep = victim.join("keep");
+    std::fs::write(&keep, "")?;
+    let run = run_installer(
+        &r,
+        &[
+            ("tmp", victim.as_os_str()),
+            ("IPE_VERSION", OsStr::new("bad tag")),
+        ],
+    )?;
+    assert_eq!(
+        run.status.and_then(|status| status.code()),
+        Some(1),
+        "a malformed IPE_VERSION must stop the installer; stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        keep.exists(),
+        "the exit trap must remove only the scratch directory the installer created, never a `tmp` from the environment"
+    );
+    Ok(())
+}
+
+/// A `curl` stub that logs its arguments and appends its standard input to
+/// `$CURL_LOG.stdin`, then fails.
+const STDIN_CURL: &str = "#!/bin/sh
+printf '%s\\n' \"$*\" >>\"$CURL_LOG\"
+cat >>\"$CURL_LOG.stdin\"
+exit 7
+";
+
+#[test]
+fn a_github_token_reaches_curl_on_stdin_never_in_its_arguments() -> io::Result<()> {
+    let r = root("install-msg-token-stdin")?;
+    let token = "ghp_installerProbeToken123";
+    let run = run_installer_with(
+        &r,
+        &[("GITHUB_TOKEN", OsStr::new(token))],
+        &[("curl", STDIN_CURL)],
+    )?;
+    let args = String::from_utf8_lossy(&run.curl_log);
+    let stdin = std::fs::read_to_string(leaf(&r, "curl.log.stdin")?)?;
+    assert!(
+        args.contains("api.github.com") && !args.contains(token),
+        "the token must never be a curl argument: {args}"
+    );
+    assert!(
+        stdin.contains(&format!("Authorization: Bearer {token}")),
+        "the token must reach curl as a config line on its standard input: {stdin}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&run.stderr).contains(token),
+        "the token must never reach the terminal"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_github_token_that_could_end_its_config_line_is_refused() -> io::Result<()> {
+    for token in [
+        "ghp_a\"\nurl = \"https://example.invalid/",
+        "ghp_a\\b",
+        "ghp_a b",
+    ] {
+        for name in ["GITHUB_TOKEN", "GH_TOKEN"] {
+            let r = root("install-msg-token-refused")?;
+            let run = run_installer(&r, &[(name, OsStr::new(token))])?;
+            let stderr = String::from_utf8_lossy(&run.stderr);
+            assert_eq!(
+                run.status.and_then(|status| status.code()),
+                Some(1),
+                "{name} {token:?} must stop the installer; stderr: {stderr}"
+            );
+            assert!(
+                stderr.contains("is not a GitHub token") && !stderr.contains("ghp_a"),
+                "{name} {token:?} must be refused without echoing it: {stderr}"
+            );
+            assert!(
+                run.curl_log.is_empty(),
+                "{name} {token:?} must be refused before any network call"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A `curl` stub that serves a release: the probe succeeds, every metadata
+/// fetch fails quietly, and a download writes an archive holding `ipe`.
+const RELEASE_CURL: &str = "#!/bin/sh
+printf '%s\\n' \"$*\" >>\"$CURL_LOG\"
+case \"$*\" in
+  *' -I '*) exit 0 ;;
+  *SHA256SUMS*|*' -r '*) exit 22 ;;
+esac
+dest=''
+prev=''
+for arg in \"$@\"; do
+  [ \"$prev\" = -o ] && dest=\"$arg\"
+  prev=\"$arg\"
+done
+[ -n \"$dest\" ] && [ \"$dest\" != /dev/null ] || exit 7
+pkg=\"$dest.d\"
+mkdir \"$pkg\" && printf '#!/bin/sh\\n' >\"$pkg/ipe\" && tar czf \"$dest\" -C \"$pkg\" ipe
+";
+
+#[test]
+fn an_install_directory_that_cannot_be_created_is_named() -> io::Result<()> {
+    let r = root("install-msg-install-dir")?;
+    let file = leaf(&r, "file")?;
+    std::fs::write(&file, "")?;
+    let dir = file.join("bin");
+    let run = run_installer_with(
+        &r,
+        &[
+            ("IPE_VERSION", OsStr::new("v9.9.9")),
+            ("IPE_INSTALL_DIR", dir.as_os_str()),
+        ],
+        &[("curl", RELEASE_CURL)],
+    )?;
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert_eq!(
+        run.status.and_then(|status| status.code()),
+        Some(1),
+        "an install directory under a regular file must stop the installer; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Could not create the install directory") && !stderr.contains(UNREPORTED),
+        "the failure must name the install directory, not end in the exit trap's line: {stderr}"
+    );
+    Ok(())
+}
+
+#[test]
 fn release_tag_ok_table() -> io::Result<()> {
     let longest = format!("v1.{}", "0".repeat(125));
     let too_long = format!("v1.{}", "0".repeat(126));
@@ -1060,7 +1196,11 @@ const WRITERS: [&str; 3] = ["printf", "echo", "cat"];
 /// The functions outside the message block whose stdout is their return
 /// value: each prints only inside its own body, and every call is captured or
 /// redirected.
-const VALUE_PRINTERS: [&str; 2] = ["scratch_base_reason", "trusted_tmp_base"];
+const VALUE_PRINTERS: [&str; 3] = [
+    "scratch_base_reason",
+    "trusted_tmp_base",
+    "gh_latest_release",
+];
 
 /// The commands that run text the scan cannot see.
 const OPAQUE: [&str; 6] = ["eval", "alias", "builtin", ".", "source", "function"];

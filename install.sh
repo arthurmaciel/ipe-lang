@@ -433,11 +433,16 @@ fmt_eta() {
 }
 # <<< message helpers
 
+# tmp is the private scratch directory once `mktemp -d` creates it. It starts
+# empty here, before the exit trap that removes it is set, so a `tmp` inherited
+# from the environment never names what the trap removes.
+tmp=''
+
 # on_exit — the exit trap: remove the private scratch directory once it exists,
 # then report a failure no message has (see msg_unreported_exit).
 on_exit() {
   _oe_status=$?
-  if [ -n "${tmp:-}" ]; then
+  if [ -n "$tmp" ]; then
     rm -rf "$tmp" || :
   fi
   msg_unreported_exit "$_oe_status"
@@ -678,6 +683,15 @@ esac
 if [ -n "${IPE_VERSION:-}" ]; then
   require_release_tag "$IPE_VERSION"
 fi
+# A GitHub token (GITHUB_TOKEN, else GH_TOKEN) authenticates the latest-release
+# lookup. It reaches curl as a config line on curl's standard input, never as an
+# argument another local user can read, so it may hold only a token's own
+# characters: a quote, a backslash, or a newline would end that config line.
+GH_AUTH_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+case "$GH_AUTH_TOKEN" in
+  *[!A-Za-z0-9_]*)
+    die 'GITHUB_TOKEN (or GH_TOKEN) is not a GitHub token: only letters, digits and _ are allowed.' ;;
+esac
 # The scratch base: TMPDIR and every ancestor must be trusted (see the
 # private-scratch helpers); the scratch directory itself is re-checked after
 # `mktemp -d` creates it.
@@ -708,14 +722,16 @@ artifact="ipe-$plat-$cpu"
 [ "$plat" = windows ] && ext=zip || ext=tar.gz
 
 # Fetch the GitHub "latest release" JSON. When a token is present in the
-# environment (GITHUB_TOKEN / GH_TOKEN) the request is authenticated, so shared
-# CI runners are not rate-limited — the anonymous API allows only 60 req/hr/IP
-# and a busy runner IP hits 403. A real user without a token uses the generous
-# per-IP anonymous limit unchanged.
+# environment (GH_AUTH_TOKEN, gated above) the request is authenticated, so
+# shared CI runners are not rate-limited — the anonymous API allows only 60
+# req/hr/IP and a busy runner IP hits 403. A real user without a token uses the
+# generous per-IP anonymous limit unchanged. The header goes to curl on its
+# standard input (`-K -`) from the `printf` builtin, so the token is never in a
+# process's arguments.
 gh_latest_release() {
-  _tok="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-  if [ -n "$_tok" ]; then
-    curl -fsSL -H "Authorization: Bearer $_tok" "https://api.github.com/repos/$REPO/releases/latest"
+  if [ -n "$GH_AUTH_TOKEN" ]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$GH_AUTH_TOKEN" \
+      | curl -K - -fsSL "https://api.github.com/repos/$REPO/releases/latest"
   else
     curl -fsSL "https://api.github.com/repos/$REPO/releases/latest"
   fi
@@ -1010,13 +1026,14 @@ if [ "$ext" = zip ]; then
 else
   tar xzf "$pkg" -C "$tmp" || die 'Could not extract the download.'
 fi
-mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR" || die 'Could not create the install directory %s.' "$INSTALL_DIR"
 installed=0
 for b in ipe ipe-ffi-inspector; do
   [ "$plat" = windows ] && b="$b.exe"
   if [ -f "$tmp/$b" ]; then
     install -m 0755 "$tmp/$b" "$INSTALL_DIR/$b" 2>/dev/null \
-      || { cp "$tmp/$b" "$INSTALL_DIR/$b"; chmod +x "$INSTALL_DIR/$b"; }
+      || { cp "$tmp/$b" "$INSTALL_DIR/$b" && chmod +x "$INSTALL_DIR/$b"; } \
+      || die 'Could not install %s into %s.' "$b" "$INSTALL_DIR"
     installed=$(( installed + 1 ))
   fi
 done
