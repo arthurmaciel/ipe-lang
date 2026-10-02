@@ -330,7 +330,9 @@ fn http_stream_chunks_no_open_builds() {
 ///
 /// Its HTML responses get the dev-console banner, which `telemetry` builds
 /// through `crate::escape`; `html` is not vendored for it, so `escape` must be
-/// in the floor module set (or the build fails E0433).
+/// in the floor module set (or the build fails E0433). Built under the vendored
+/// model in every job: the dependency model compiles the runtime crate's own
+/// `mod.rs`, which never reads the floor template.
 const HEADLESS_HTML_SERVER: &str = "module Main exposing (main)\n\
     import Ipe.Http.Server as Server\n\
     import Ipe.Task\n\
@@ -343,7 +345,7 @@ fn headless_html_server_builds_with_the_escape_module() {
     if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         return;
     }
-    emit_and_build("headless_html_server", HEADLESS_HTML_SERVER).expect(
+    emit_and_build_vendored("headless_html_server", HEADLESS_HTML_SERVER).expect(
         "a server without Ipe.Html must build: the dev banner escapes through \
          crate::escape, which every module set declares",
     );
