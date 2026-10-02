@@ -4,7 +4,7 @@ name: release-please
 # Commits. On every push to `main`, release-please opens (or refreshes) a single
 # standing "release PR" targeting `main` that bumps the workspace version in
 # Cargo.toml and prepends the new CHANGELOG.md section. That PR is inert until
-# merged; merging it tags `vX.Y.Z` and creates the GitHub release. The binary
+# merged; merging it tags `ipe-vX.Y.Z` and creates the GitHub release. The binary
 # build+upload lives in release.yml, triggered by the tag release-please pushes.
 #
 # The release PR targets `main` — where the release commit and tag live. main is
