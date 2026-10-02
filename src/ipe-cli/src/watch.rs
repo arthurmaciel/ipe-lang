@@ -3240,18 +3240,24 @@ fn spawn_cargo_build(
         });
         let out_buf = drained.stdout.text;
         let err_buf = drained.stderr.text;
-        let outcome = match drained.waited {
-            None => CargoOutcome::Red("cargo build: could not observe exit status".to_owned()),
-            Some((status, _)) if status.success() => find_executable_path(&out_buf).map_or_else(
-                || {
-                    CargoOutcome::Red(
-                        "cargo build succeeded but produced no executable artifact".to_owned(),
-                    )
-                },
-                CargoOutcome::Green,
-            ),
-            Some((_, true)) => CargoOutcome::Killed,
-            Some((_, false)) => CargoOutcome::Red(err_buf),
+        let outcome = match (drained.waited, drained.stdout.error) {
+            (None, _) => CargoOutcome::Red("cargo build: could not observe exit status".to_owned()),
+            // A refused artifact stream (past its ceiling, not UTF-8, or a read
+            // error) is never searched for an executable.
+            (Some((status, _)), Some(e)) if status.success() => {
+                CargoOutcome::Red(format!("cargo build: {e}"))
+            }
+            (Some((status, _)), None) if status.success() => find_executable_path(&out_buf)
+                .map_or_else(
+                    || {
+                        CargoOutcome::Red(
+                            "cargo build succeeded but produced no executable artifact".to_owned(),
+                        )
+                    },
+                    CargoOutcome::Green,
+                ),
+            (Some((_, true)), _) => CargoOutcome::Killed,
+            (Some((_, false)), _) => CargoOutcome::Red(err_buf),
         };
         let _ = evt_tx.send(OrchestratorEvent::CargoDone {
             generation,

@@ -1,27 +1,44 @@
-//! The one owner of every `cargo build` child the CLI spawns.
+//! The one owner of every `cargo` child the CLI spawns to build a crate or
+//! read its target directory.
 //!
 //! A cargo build is described as a typed value — the crate it builds, its
 //! profile, its target and its output mode — and this module alone turns that
 //! value into a `Command`: the `build` subcommand, the flags, the environment,
-//! the hermetic lockfile, the pipe drains and the reap. No other module builds
+//! the lockfile policy, the pipe drains and the reap. No other module builds
 //! a cargo `build` command (`tests/cargo_step_scan.rs` holds the inventory), so
 //! every command path gets the same environment, the same drains and the same
 //! lifetime for its cargo child.
 //!
 //! Both pipes of a child are drained on threads scoped to the call that spawned
 //! it, so no drain outlives the build and the child is always reaped before the
-//! call returns, on success and on every error.
+//! call returns, on success and on every error. Every captured pipe has a
+//! declared byte ceiling: a drain keeps reading to the end of the stream (so
+//! cargo never stalls on a full pipe) but stops storing at the ceiling.
 
-use std::io::{BufReader, Read as _};
-use std::path::Path;
-use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::io::{BufReader, ErrorKind, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 
 use ipe_backend_rust::static_build::StaticTriple;
 
 use crate::output_dir::OwnedDir;
 use crate::style::TerminalSafe;
+use crate::toolchain::CargoBin;
 use crate::watch::{BuildAccel, apply_build_accel_env};
-use crate::{CliError, RuntimeContext};
+use crate::{CliError, RuntimeContext, text};
+
+/// Bytes of a build's `--message-format=json` stdout kept; a longer stream
+/// fails the build, since the stream is the record of the artifacts cargo wrote.
+pub const ARTIFACT_STREAM_CAP: usize = 64 * 1024 * 1024;
+
+/// Bytes of cargo's stderr kept for a failure diagnostic. The live relay of a
+/// build forwards every byte; only the kept copy stops here, at a chunk
+/// boundary, so the diagnostic shows the first errors cargo reported.
+pub const STDERR_KEEP_CAP: usize = 1024 * 1024;
+
+/// Bytes of `cargo metadata --no-deps` stdout kept; a longer document is
+/// refused, never parsed truncated.
+pub const METADATA_STDOUT_CAP: usize = 16 * 1024 * 1024;
 
 /// The cargo build profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,8 +101,9 @@ impl Verbosity {
 pub enum CargoOutput {
     /// stdout inherited; a `cargo build` writes only status, to stderr.
     Human(Verbosity),
-    /// `--message-format=json`: stdout is captured and handed back, the one
-    /// authoritative record of the artifacts cargo wrote.
+    /// `--message-format=json`: stdout is captured (up to
+    /// [`ARTIFACT_STREAM_CAP`]) and handed back, the one authoritative record
+    /// of the artifacts cargo wrote.
     JsonStream(Verbosity),
 }
 
@@ -124,12 +142,33 @@ pub enum CargoCrate<'a> {
     },
 }
 
+/// Which `Cargo.lock` a blocking build replays with `--locked`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LockPolicy {
+    /// Resolve the graph once into the crate's own fresh lock, then replay it:
+    /// an emitted crate has no lock of its own.
+    Regenerate,
+    /// Replay the lock the tree already commits; never rewrite it, since ipe
+    /// does not own that tree.
+    Committed,
+}
+
+impl CargoCrate<'_> {
+    /// The lock this crate's build replays.
+    const fn lock_policy(&self) -> LockPolicy {
+        match self {
+            Self::Emitted(_) => LockPolicy::Regenerate,
+            Self::ReleaseWrapper { .. } => LockPolicy::Committed,
+        }
+    }
+}
+
 /// One blocking `cargo build`: [`CargoBuild::run`] spawns it and returns once
 /// cargo has exited and both pipes are drained.
 #[derive(Debug, Clone)]
 pub struct CargoBuild<'a> {
-    /// The resolved `cargo` ([`crate::toolchain::CargoBin::path`]).
-    pub cargo: &'a Path,
+    /// The resolved `cargo`.
+    pub cargo: &'a CargoBin,
     /// The crate to build; cargo runs with it as its working directory.
     pub krate: CargoCrate<'a>,
     /// The build profile.
@@ -156,7 +195,7 @@ impl CargoBuild<'_> {
     /// The `cargo build` command, before the lockfile flag and the pipes.
     fn command(&self) -> Command {
         let mut cmd = build_command(
-            self.cargo,
+            self.cargo.path(),
             self.dir(),
             self.profile,
             self.target,
@@ -174,17 +213,20 @@ impl CargoBuild<'_> {
         cmd
     }
 
-    /// Pin the dependency graph, build against exactly that lock, and return
-    /// the captured stdout (empty for [`CargoOutput::Human`]).
+    /// Build against a pinned dependency graph and return the captured stdout
+    /// (empty for [`CargoOutput::Human`]).
     ///
-    /// The resolve runs once into the crate's own `Cargo.lock` and the build
-    /// passes `--locked`, so a transitive point release cannot change a build
-    /// with no source change, and any lock-to-manifest drift fails at `ipe`
-    /// time. stderr is relayed live, indented one shared column, and kept
-    /// unindented for the failure diagnostic.
+    /// Every build passes `--locked`, so a transitive point release cannot
+    /// change a build with no source change, and any lock-to-manifest drift
+    /// fails at `ipe` time. An emitted crate first resolves once into its own
+    /// `Cargo.lock`; the release wrapper replays the workspace's committed
+    /// lock and never rewrites it. stderr is relayed live, indented one shared
+    /// column, and kept unindented (up to [`STDERR_KEEP_CAP`]) for the failure
+    /// diagnostic.
     ///
     /// # Errors
-    /// - [`CliError::Io`] if cargo cannot be spawned, waited on, or read.
+    /// - [`CliError::Io`] if cargo cannot be spawned, waited on, or read, or
+    ///   its artifact stream passes [`ARTIFACT_STREAM_CAP`].
     /// - [`CliError::EmittedBuildFailed`] if the resolve or the build exits
     ///   non-zero.
     /// - [`CliError::OutputRefused`] if an [`CargoCrate::Emitted`] directory
@@ -199,18 +241,13 @@ impl CargoBuild<'_> {
             source,
         };
         let mut cmd = self.command();
-        lock_dependencies(&cmd, dir, self.output.verbosity())?;
+        if self.krate.lock_policy() == LockPolicy::Regenerate {
+            lock_dependencies(&cmd, dir, self.output.verbosity())?;
+        }
         cmd.arg("--locked");
-        let mut child = cmd.spawn().map_err(io_err)?;
-        let pipes = CargoPipes::take(&mut child);
-        let drained = pipes.drain_while(|| child.wait());
-        let status = drained.waited.map_err(io_err)?;
-        if let Some(e) = drained.stderr.error {
-            return Err(io_err(e));
-        }
-        if let Some(e) = drained.stdout.error {
-            return Err(io_err(e));
-        }
+        let drained =
+            run_to_exit(&mut cmd, StderrMode::Relay, ARTIFACT_STREAM_CAP).map_err(io_err)?;
+        let status = drained.waited;
         if !status.success() {
             return Err(CliError::EmittedBuildFailed {
                 what: self.what,
@@ -219,6 +256,12 @@ impl CargoBuild<'_> {
                 runtime: self.runtime.clone(),
             });
         }
+        if let Some(e) = drained.stderr.error {
+            return Err(io_err(e));
+        }
+        if let Some(e) = drained.stdout.error {
+            return Err(io_err(e));
+        }
         if let CargoCrate::Emitted(dir) = self.krate {
             dir.verify()?;
         }
@@ -226,13 +269,52 @@ impl CargoBuild<'_> {
     }
 }
 
+/// The directory cargo writes `crate_dir`'s build output to, read from
+/// `cargo metadata --no-deps` (it honours `CARGO_TARGET_DIR` and any config
+/// relocation).
+///
+/// # Errors
+/// [`CliError::Io`] if cargo cannot be spawned, waited on or read, or its
+/// document passes [`METADATA_STDOUT_CAP`]; [`CliError::Usage`] if it exits
+/// non-zero or its document carries no target directory.
+pub fn target_directory(cargo: &CargoBin, crate_dir: &Path) -> Result<PathBuf, CliError> {
+    let mut cmd = Command::new(cargo.path());
+    cmd.args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(crate_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let io_err = |source: std::io::Error| CliError::Io {
+        path: crate_dir.to_path_buf(),
+        source,
+    };
+    let drained = run_to_exit(&mut cmd, StderrMode::Keep, METADATA_STDOUT_CAP).map_err(io_err)?;
+    if !drained.waited.success() {
+        return Err(CliError::Usage(text::msg::cargo_metadata_failed(
+            &crate_dir.display(),
+            &drained.stderr.text,
+        )));
+    }
+    if let Some(e) = drained.stdout.error {
+        return Err(io_err(e));
+    }
+    let meta: serde_json::Value = serde_json::from_str(&drained.stdout.text)
+        .map_err(|e| CliError::Usage(text::msg::cargo_metadata_unparsable(&e)))?;
+    meta.get("target_directory")
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .ok_or_else(|| CliError::Usage(text::msg::cargo_metadata_no_target_dir()))
+}
+
 /// One `ipe watch` rebuild: [`WatchBuild::spawn`] starts it and returns at
 /// once, so the watch loop can kill a superseded build.
 ///
-/// A watch rebuild resolves dependencies live (no `--locked` replay), so an
-/// edit loop does not hit the registry index on every rebuild.
+/// A watch rebuild passes no `--locked`: the emitted crate's dependencies
+/// change with the program's imports between rebuilds, so cargo keeps the
+/// session's `Cargo.lock` and extends it only when the manifest asks for a
+/// crate it does not pin, rather than re-resolving on every rebuild.
 pub struct WatchBuild<'a> {
-    /// The resolved `cargo` ([`crate::toolchain::CargoBin::path`]).
+    /// The `cargo` to run ([`crate::watch::WatchOptions::cargo_path`]).
     pub cargo: &'a Path,
     /// The emitted crate; cargo runs with it as its working directory.
     pub crate_dir: &'a Path,
@@ -267,7 +349,7 @@ impl WatchBuild<'_> {
     /// The spawn error when cargo cannot be started.
     pub fn spawn(&self) -> std::io::Result<(Child, CargoPipes)> {
         let mut child = self.command().spawn()?;
-        let pipes = CargoPipes::take(&mut child);
+        let pipes = CargoPipes::take(&mut child, StderrMode::Relay, ARTIFACT_STREAM_CAP);
         Ok((child, pipes))
     }
 }
@@ -311,17 +393,40 @@ fn build_command(
     cmd
 }
 
+/// Spawn `cmd`, drain its pipes while waiting on it, and return its exit
+/// status with both drains; the child is reaped before this returns.
+fn run_to_exit(
+    cmd: &mut Command,
+    stderr: StderrMode,
+    stdout_cap: usize,
+) -> std::io::Result<Drained<ExitStatus>> {
+    let mut child = cmd.spawn()?;
+    let pipes = CargoPipes::take(&mut child, stderr, stdout_cap);
+    let Drained {
+        waited,
+        stdout,
+        stderr,
+    } = pipes.drain_while(|| child.wait());
+    Ok(Drained {
+        waited: waited?,
+        stdout,
+        stderr,
+    })
+}
+
 /// Resolve the crate's dependency graph once into its own `Cargo.lock`, with
 /// the build command's program, directory and environment, so the lock comes
 /// from the toolchain that consumes it.
 ///
 /// The resolve is the one silent gap before cargo's own progress starts, so a
 /// [`Verbosity::Progress`] build covers it with a stage, settled before the
-/// relay starts.
+/// relay starts. Its stderr is kept (up to [`STDERR_KEEP_CAP`]) for the
+/// failure diagnostic, never relayed.
 ///
 /// # Errors
-/// [`CliError::Io`] if the resolve cannot be spawned; [`CliError::EmittedBuildFailed`]
-/// if it exits non-zero (the registry unreachable, for one).
+/// [`CliError::Io`] if the resolve cannot be spawned, waited on or read;
+/// [`CliError::EmittedBuildFailed`] if it exits non-zero (the registry
+/// unreachable, for one).
 fn lock_dependencies(build: &Command, dir: &Path, verbosity: Verbosity) -> Result<(), CliError> {
     let stage = (verbosity == Verbosity::Progress).then(|| {
         crate::progress::Stage::start(
@@ -330,25 +435,30 @@ fn lock_dependencies(build: &Command, dir: &Path, verbosity: Verbosity) -> Resul
         )
     });
     let mut lock = Command::new(build.get_program());
-    lock.arg("generate-lockfile").current_dir(dir);
+    lock.arg("generate-lockfile")
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
     for (key, val) in build.get_envs() {
         match val {
             Some(v) => lock.env(key, v),
             None => lock.env_remove(key),
         };
     }
-    let resolved = match lock.output() {
-        Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => Err(CliError::EmittedBuildFailed {
+    let io_err = |source: std::io::Error| CliError::Io {
+        path: dir.to_path_buf(),
+        source,
+    };
+    let resolved = match run_to_exit(&mut lock, StderrMode::Keep, 0) {
+        Ok(drained) if drained.waited.success() => Ok(()),
+        Ok(drained) => Err(CliError::EmittedBuildFailed {
             what: "the emitted crate's dependency lockfile",
-            code: output.status.code().unwrap_or(1),
-            stderr: TerminalSafe::sanitize(&String::from_utf8_lossy(&output.stderr)),
+            code: drained.waited.code().unwrap_or(1),
+            stderr: TerminalSafe::sanitize(&drained.stderr.text),
             runtime: None,
         }),
-        Err(source) => Err(CliError::Io {
-            path: dir.to_path_buf(),
-            source,
-        }),
+        Err(source) => Err(io_err(source)),
     };
     if let Some(stage) = stage {
         if resolved.is_ok() {
@@ -360,21 +470,35 @@ fn lock_dependencies(build: &Command, dir: &Path, verbosity: Verbosity) -> Resul
     resolved
 }
 
-/// The stdout and stderr pipes of a spawned cargo child.
-#[derive(Debug)]
-pub struct CargoPipes {
-    /// stdout, piped only for [`CargoOutput::JsonStream`].
-    stdout: Option<ChildStdout>,
-    /// stderr, always piped.
-    stderr: Option<ChildStderr>,
+/// What a drain does with a child's stderr.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StderrMode {
+    /// Relay it live to our stderr and keep a copy.
+    Relay,
+    /// Keep it for a diagnostic only.
+    Keep,
 }
 
-/// The text a pipe drain read, and the read error that ended it early.
+/// The stdout and stderr pipes of a spawned cargo child, with how each is drained.
+#[derive(Debug)]
+pub struct CargoPipes {
+    /// stdout, when piped.
+    stdout: Option<ChildStdout>,
+    /// The bytes of stdout kept before the stream is refused.
+    stdout_cap: usize,
+    /// stderr, when piped.
+    stderr: Option<ChildStderr>,
+    /// Whether stderr is relayed live.
+    stderr_mode: StderrMode,
+}
+
+/// The text a pipe drain kept, and the error that ended or refused it.
 #[derive(Debug, Default)]
 pub struct Drain {
-    /// Everything read before the end of the stream or the error.
+    /// Everything kept before the end of the stream, the error, or the ceiling.
     pub text: String,
-    /// The read error that stopped the drain, if one did.
+    /// The read error that stopped the drain, or the refusal of a stdout that
+    /// passed its ceiling or was not UTF-8.
     pub error: Option<std::io::Error>,
 }
 
@@ -383,18 +507,41 @@ pub struct Drain {
 pub struct Drained<T> {
     /// What the waiter returned.
     pub waited: T,
-    /// The captured stdout (empty when stdout was inherited).
+    /// The captured stdout (empty when stdout was not piped).
     pub stdout: Drain,
-    /// The captured stderr, unindented.
+    /// The captured stderr, unindented, cut at [`STDERR_KEEP_CAP`].
     pub stderr: Drain,
 }
 
+/// A pipe that passed its byte ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipeOverflow {
+    /// The pipe's name.
+    pub pipe: &'static str,
+    /// The ceiling it passed, in bytes.
+    pub cap: usize,
+}
+
+impl std::fmt::Display for PipeOverflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cargo {} passed its {}-byte ceiling",
+            self.pipe, self.cap
+        )
+    }
+}
+
+impl std::error::Error for PipeOverflow {}
+
 impl CargoPipes {
     /// Take both pipes off `child`.
-    const fn take(child: &mut Child) -> Self {
+    const fn take(child: &mut Child, stderr_mode: StderrMode, stdout_cap: usize) -> Self {
         Self {
             stdout: child.stdout.take(),
+            stdout_cap,
             stderr: child.stderr.take(),
+            stderr_mode,
         }
     }
 
@@ -405,10 +552,32 @@ impl CargoPipes {
     /// stalling cargo. The drains end at end-of-stream, which cargo's exit
     /// (or its kill) brings, so none outlives the build.
     pub fn drain_while<T>(self, wait: impl FnOnce() -> T) -> Drained<T> {
-        let Self { stdout, stderr } = self;
+        let Self {
+            stdout,
+            stdout_cap,
+            stderr,
+            stderr_mode,
+        } = self;
         std::thread::scope(|scope| {
-            let stdout = scope.spawn(move || stdout.map(read_to_end).unwrap_or_default());
-            let stderr = scope.spawn(move || stderr.map(relay_stderr).unwrap_or_default());
+            let stdout = scope.spawn(move || {
+                stdout
+                    .map(|pipe| stdout_drain(read_capped(pipe, stdout_cap), stdout_cap))
+                    .unwrap_or_default()
+            });
+            let stderr = scope.spawn(move || {
+                stderr
+                    .map(|pipe| match stderr_mode {
+                        StderrMode::Relay => relay_stderr(pipe, STDERR_KEEP_CAP),
+                        StderrMode::Keep => {
+                            let kept = read_capped(pipe, STDERR_KEEP_CAP);
+                            Drain {
+                                text: String::from_utf8_lossy(&kept.bytes).into_owned(),
+                                error: kept.error,
+                            }
+                        }
+                    })
+                    .unwrap_or_default()
+            });
             let waited = wait();
             Drained {
                 waited,
@@ -429,24 +598,81 @@ fn joined(result: std::thread::Result<Drain>, pipe: &str) -> Drain {
     })
 }
 
-/// Read `pipe` to its end.
-fn read_to_end(mut pipe: ChildStdout) -> Drain {
-    let mut drain = Drain::default();
-    if let Err(e) = pipe.read_to_string(&mut drain.text) {
-        drain.error = Some(e);
+/// The bytes a capped read kept.
+#[derive(Debug, Default)]
+struct Kept {
+    /// At most the cap's worth of the stream's first bytes.
+    bytes: Vec<u8>,
+    /// Whether the stream held more than the cap.
+    overflowed: bool,
+    /// The read error that ended the stream early.
+    error: Option<std::io::Error>,
+}
+
+/// Read `pipe` to its end, keeping at most `cap` bytes; the rest is read and
+/// dropped so the writer never blocks.
+fn read_capped(mut pipe: impl Read, cap: usize) -> Kept {
+    let mut kept = Kept::default();
+    let mut buf = [0u8; 8 * 1024];
+    loop {
+        match pipe.read(&mut buf) {
+            Ok(0) => return kept,
+            Ok(n) => {
+                let got = buf.get(..n).unwrap_or_default();
+                let room = cap.saturating_sub(kept.bytes.len());
+                let take = got.get(..room.min(got.len())).unwrap_or_default();
+                kept.bytes.extend_from_slice(take);
+                if take.len() < got.len() {
+                    kept.overflowed = true;
+                }
+            }
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => {
+                kept.error = Some(e);
+                return kept;
+            }
+        }
     }
-    drain
+}
+
+/// A stdout drain: the kept text, refused when the stream passed `cap` or is
+/// not UTF-8.
+fn stdout_drain(kept: Kept, cap: usize) -> Drain {
+    if kept.overflowed {
+        return Drain {
+            text: String::new(),
+            error: Some(std::io::Error::new(
+                ErrorKind::FileTooLarge,
+                PipeOverflow {
+                    pipe: "stdout",
+                    cap,
+                },
+            )),
+        };
+    }
+    match String::from_utf8(kept.bytes) {
+        Ok(text) => Drain {
+            text,
+            error: kept.error,
+        },
+        Err(e) => Drain {
+            text: String::new(),
+            error: Some(std::io::Error::new(ErrorKind::InvalidData, e)),
+        },
+    }
 }
 
 /// Relay `pipe` live to our stderr, one shared column off the edge, and keep
-/// the unindented text.
+/// the unindented text up to `keep` bytes.
 ///
 /// Chunks end at a newline or a carriage return
 /// ([`crate::read_progress_chunk`]), so cargo's in-place progress bar flows
-/// without waiting for the next newline.
-fn relay_stderr(pipe: ChildStderr) -> Drain {
+/// without waiting for the next newline. The kept copy stops at the first
+/// chunk that would pass `keep`; the relay goes on to the end of the stream.
+fn relay_stderr(pipe: impl Read, keep: usize) -> Drain {
     let mut reader = BufReader::new(pipe);
     let mut drain = Drain::default();
+    let mut keeping = true;
     let mut chunk = String::new();
     loop {
         chunk.clear();
@@ -457,7 +683,10 @@ fn relay_stderr(pipe: ChildStderr) -> Drain {
                     crate::screen::Stream::Stderr,
                     &crate::screen::indent_relay_chunk(&chunk),
                 );
-                drain.text.push_str(&chunk);
+                keeping = keeping && drain.text.len().saturating_add(chunk.len()) <= keep;
+                if keeping {
+                    drain.text.push_str(&chunk);
+                }
             }
             Err(e) => {
                 drain.error = Some(e);
@@ -474,11 +703,16 @@ mod tests {
         CargoBuild, CargoCrate, CargoOutput, CargoProfile, CargoTarget, EmbeddedApp, Verbosity,
         WatchBuild,
     };
+    use crate::toolchain::CargoBin;
     use crate::watch::BuildAccel;
     use ipe_backend_rust::static_build::StaticTriple;
     use std::ffi::OsStr;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::LazyLock;
+
+    /// A `cargo` the command-shape tests never spawn.
+    static CARGO: LazyLock<CargoBin> = LazyLock::new(|| CargoBin::stub(PathBuf::from("cargo")));
 
     /// The arguments of `cmd`, as text.
     fn args(cmd: &Command) -> Vec<String> {
@@ -508,7 +742,7 @@ mod tests {
     /// A release wrapper build over `root`.
     fn wrapper<'a>(root: &'a Path, embed: Option<EmbeddedApp<'a>>) -> CargoBuild<'a> {
         CargoBuild {
-            cargo: Path::new("cargo"),
+            cargo: &CARGO,
             krate: CargoCrate::ReleaseWrapper {
                 workspace_root: root,
                 embed,
@@ -626,5 +860,237 @@ mod tests {
         assert_eq!(env(&cmd, "CARGO_TARGET_DIR"), Env::Set(OsStr::new("/t")));
         assert_eq!(env(&cmd, "CARGO_INCREMENTAL"), Env::Set(OsStr::new("1")));
         assert_eq!(args(&cmd), ["build", "--message-format=json", "-q"]);
+    }
+
+    #[test]
+    fn a_capped_read_keeps_exactly_its_ceiling() {
+        let at = super::read_capped(&[b'a'; 10][..], 10);
+        assert_eq!((at.bytes.len(), at.overflowed), (10, false));
+        let past = super::read_capped(&[b'a'; 11][..], 10);
+        assert_eq!((past.bytes.len(), past.overflowed), (10, true));
+    }
+
+    #[test]
+    fn a_stdout_past_its_ceiling_is_refused_whole() {
+        let drain = super::stdout_drain(super::read_capped(&[b'a'; 11][..], 10), 10);
+        assert!(
+            drain.text.is_empty(),
+            "no prefix of a refused stream is kept"
+        );
+        let refusal = drain.error.expect("an overflowing stdout is refused");
+        assert_eq!(refusal.kind(), std::io::ErrorKind::FileTooLarge);
+        assert!(
+            refusal
+                .get_ref()
+                .and_then(|e| e.downcast_ref::<super::PipeOverflow>())
+                .is_some_and(|o| o.cap == 10),
+            "the refusal names its ceiling, got {refusal:?}"
+        );
+    }
+
+    #[test]
+    fn a_stdout_that_is_not_utf8_is_refused() {
+        let drain = super::stdout_drain(super::read_capped(&[0xff, 0xfe][..], 10), 10);
+        assert_eq!(
+            drain.error.map(|e| e.kind()),
+            Some(std::io::ErrorKind::InvalidData)
+        );
+    }
+
+    #[test]
+    fn a_relayed_stderr_keeps_whole_chunks_up_to_its_ceiling() {
+        let drain = super::relay_stderr(&b"aaaa\nbbbb\ncccc\n"[..], 10);
+        assert_eq!(drain.text, "aaaa\nbbbb\n");
+        assert!(drain.error.is_none());
+    }
+
+    #[test]
+    fn a_progress_chunk_with_no_terminator_ends_at_its_ceiling() {
+        let line = vec![b'a'; crate::driver::RELAY_CHUNK_CAP * 3];
+        let mut reader = &line[..];
+        let mut chunk = String::new();
+        let n = crate::read_progress_chunk(&mut reader, &mut chunk).expect("read");
+        assert_eq!(n, crate::driver::RELAY_CHUNK_CAP);
+        assert_eq!(chunk.len(), crate::driver::RELAY_CHUNK_CAP);
+    }
+
+    #[test]
+    fn a_progress_chunk_never_splits_a_character_at_its_ceiling() {
+        let mut line = vec![b'a'; crate::driver::RELAY_CHUNK_CAP - 1];
+        line.extend_from_slice("éé".as_bytes());
+        let mut reader = &line[..];
+        let mut chunk = String::new();
+        crate::read_progress_chunk(&mut reader, &mut chunk).expect("read");
+        assert!(
+            !chunk.contains('\u{fffd}'),
+            "a chunk ends on a character boundary"
+        );
+    }
+
+    #[cfg(unix)]
+    mod stubbed {
+        //! Builds driven through a stub `cargo` that logs every invocation.
+
+        use super::super::{
+            CargoBuild, CargoCrate, CargoOutput, CargoProfile, CargoTarget, Verbosity,
+            target_directory,
+        };
+        use crate::CliError;
+        use crate::output_dir::OwnedDir;
+        use crate::toolchain::CargoBin;
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::path::{Path, PathBuf};
+
+        /// A fresh scratch base for `tag`.
+        fn scratch(tag: &str) -> PathBuf {
+            let base = ipe_test_temp::temp_root()
+                .join(format!("ipe-cargo-step-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(&base).expect("scratch base");
+            base
+        }
+
+        /// A stub `cargo` under `base` that logs its arguments to `base/log`, then runs `body`.
+        fn stub(base: &Path, body: &str) -> CargoBin {
+            let path = base.join("cargo");
+            let log = base.join("log");
+            std::fs::write(
+                &path,
+                format!("#!/bin/sh\necho \"$@\" >> '{}'\n{body}\n", log.display()),
+            )
+            .expect("write stub");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("stub executable");
+            CargoBin::stub(path)
+        }
+
+        /// Every logged invocation, one per line.
+        fn invocations(base: &Path) -> Vec<String> {
+            std::fs::read_to_string(base.join("log"))
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        }
+
+        /// A quiet build of `krate` through `cargo`.
+        fn build(cargo: &CargoBin, krate: CargoCrate<'_>) -> Result<String, CliError> {
+            CargoBuild {
+                cargo,
+                krate,
+                profile: CargoProfile::Dev,
+                target: CargoTarget::Host,
+                output: CargoOutput::JsonStream(Verbosity::Quiet),
+                what: "the stub build",
+                runtime: None,
+            }
+            .run()
+        }
+
+        #[test]
+        fn the_wrapper_build_replays_the_committed_lock_and_never_rewrites_it() {
+            let base = scratch("wrapper");
+            let cargo = stub(&base, "true");
+            let built = build(
+                &cargo,
+                CargoCrate::ReleaseWrapper {
+                    workspace_root: &base,
+                    embed: None,
+                },
+            );
+            assert!(built.is_ok(), "{built:?}");
+            let calls = invocations(&base);
+            assert!(
+                calls.iter().all(|c| !c.contains("generate-lockfile")),
+                "the wrapper's committed lock is never regenerated, got {calls:?}"
+            );
+            assert!(
+                calls
+                    .iter()
+                    .any(|c| c.starts_with("build ") && c.contains("--locked")),
+                "the wrapper build replays the lock, got {calls:?}"
+            );
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn an_emitted_build_resolves_its_own_lock_then_replays_it() {
+            let base = scratch("emitted");
+            let cargo = stub(&base, "true");
+            let crate_dir = OwnedDir::claim(&base.join("crate")).expect("claim crate");
+            let built = build(&cargo, CargoCrate::Emitted(&crate_dir));
+            assert!(built.is_ok(), "{built:?}");
+            let calls = invocations(&base);
+            assert_eq!(calls.first().map(String::as_str), Some("generate-lockfile"));
+            assert!(
+                calls
+                    .get(1)
+                    .is_some_and(|c| c.starts_with("build ") && c.contains("--locked")),
+                "the build replays the fresh lock, got {calls:?}"
+            );
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn an_artifact_stream_past_its_ceiling_fails_the_build() {
+            let base = scratch("artifact-cap");
+            let cargo = stub(
+                &base,
+                &format!(
+                    "[ \"$1\" = build ] && head -c {} /dev/zero; exit 0",
+                    super::super::ARTIFACT_STREAM_CAP + 1
+                ),
+            );
+            let crate_dir = OwnedDir::claim(&base.join("crate")).expect("claim crate");
+            let built = build(&cargo, CargoCrate::Emitted(&crate_dir));
+            assert!(
+                matches!(&built, Err(CliError::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::FileTooLarge),
+                "an oversized artifact stream is refused, got {built:?}"
+            );
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn the_target_directory_is_read_from_cargo_metadata() {
+            let base = scratch("metadata");
+            let cargo = stub(&base, "echo '{\"target_directory\":\"/t\"}'");
+            let dir = target_directory(&cargo, &base);
+            assert_eq!(dir.ok(), Some(PathBuf::from("/t")));
+            let calls = invocations(&base);
+            assert_eq!(
+                calls.first().map(String::as_str),
+                Some("metadata --format-version 1 --no-deps")
+            );
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn a_failing_cargo_metadata_is_refused() {
+            let base = scratch("metadata-fail");
+            let cargo = stub(&base, "echo boom >&2; exit 3");
+            let dir = target_directory(&cargo, &base);
+            assert!(matches!(dir, Err(CliError::Usage(_))), "{dir:?}");
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        #[test]
+        fn a_metadata_document_past_its_ceiling_is_refused() {
+            let base = scratch("metadata-cap");
+            let cargo = stub(
+                &base,
+                &format!(
+                    "head -c {} /dev/zero",
+                    super::super::METADATA_STDOUT_CAP + 1
+                ),
+            );
+            let dir = target_directory(&cargo, &base);
+            assert!(
+                matches!(&dir, Err(CliError::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::FileTooLarge),
+                "an oversized metadata document is refused, got {dir:?}"
+            );
+            let _ = std::fs::remove_dir_all(&base);
+        }
     }
 }

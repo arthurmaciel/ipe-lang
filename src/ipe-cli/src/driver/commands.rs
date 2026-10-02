@@ -947,7 +947,7 @@ pub fn compile_and_finalize_native_build(
         None
     };
     CargoBuild {
-        cargo: cargo_bin.path(),
+        cargo: &cargo_bin,
         krate: CargoCrate::Emitted(crate_dir),
         profile: CargoProfile::Dev,
         target: static_plan
@@ -972,6 +972,7 @@ pub fn compile_and_finalize_native_build(
     // `cargo metadata`; a binary missing at that path fails closed (no stale
     // copy). Copy (never hardlink): the shared target is often a different mount.
     let artifact = copy_native_artifact(
+        &cargo_bin,
         out_dir,
         &output.claim_area(&[OutputArea::Bin])?,
         static_plan.as_ref(),
@@ -999,12 +1000,13 @@ pub fn compile_and_finalize_native_build(
 /// the caller can report it. Copy (not hardlink): the shared target is often on
 /// a different mount.
 fn copy_native_artifact(
+    cargo_bin: &toolchain::CargoBin,
     out_dir: &Path,
     bin_dir: &OwnedDir,
     static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
     manifest: Option<&project::ProjectManifest>,
 ) -> Result<PathBuf, CliError> {
-    let target_dir = cargo_target_directory(out_dir)?;
+    let target_dir = crate::cargo_step::target_directory(cargo_bin, out_dir)?;
     // LOCATE the built binary by its emitted crate identity (the hashed
     // `<friendly>_<hash>` cargo actually produces); DELIVER it under the plain
     // friendly project name, so the user-facing artifact stays `out/bin/<name>`
@@ -1434,7 +1436,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         )?;
 
         CargoBuild {
-            cargo: cargo_bin.path(),
+            cargo: &cargo_bin,
             krate: CargoCrate::Emitted(&crate_dir),
             profile: CargoProfile::Release,
             target: CargoTarget::Static(triple),
@@ -1444,7 +1446,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         }
         .run()?;
 
-        let app_target_dir = cargo_target_directory(&out_dir)?;
+        let app_target_dir = crate::cargo_step::target_directory(&cargo_bin, &out_dir)?;
         // Cargo names the built binary after the emitted crate IDENTITY (the
         // path-uniquified `<friendly>_<hash>`), so the artifact is LOCATED by that
         // identity; it is delivered under the plain FRIENDLY name so the hash the
@@ -1525,7 +1527,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     )?;
 
     CargoBuild {
-        cargo: cargo_bin.path(),
+        cargo: &cargo_bin,
         krate: CargoCrate::Emitted(&app_dir),
         profile: CargoProfile::Release,
         target: CargoTarget::Static(triple),
@@ -1542,7 +1544,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     // Locate the compiled app binary. The target dir may be a global
     // `CARGO_TARGET_DIR` (set by the user or the agent lane), so we resolve
     // it via cargo metadata rather than assuming `app_out/target/`.
-    let app_target_dir = cargo_target_directory(&app_out)?;
+    let app_target_dir = crate::cargo_step::target_directory(&cargo_bin, &app_out)?;
     let release_bin_name = emitted_bin_filename(&app_out);
     let app_binary = app_target_dir
         .join(triple.as_str())
@@ -1571,7 +1573,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         profile: &profile_src,
     });
     CargoBuild {
-        cargo: cargo_bin.path(),
+        cargo: &cargo_bin,
         krate: CargoCrate::ReleaseWrapper {
             workspace_root: &workspace_root,
             embed,
@@ -1589,7 +1591,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
 
     // Locate the wrapper binary. As with the app binary, the target dir may be
     // a global CARGO_TARGET_DIR; resolve via cargo metadata.
-    let wrapper_target_dir = cargo_target_directory(&workspace_root)?;
+    let wrapper_target_dir = crate::cargo_step::target_directory(&cargo_bin, &workspace_root)?;
     let wrapper_src = wrapper_target_dir
         .join(wrapper_static_plan.triple.as_str())
         .join("release")
@@ -1751,6 +1753,10 @@ pub fn set_executable(path: &Path) -> Result<(), CliError> {
     })
 }
 
+/// Bytes one [`read_progress_chunk`] call reads before it ends the chunk
+/// without a terminator.
+pub const RELAY_CHUNK_CAP: usize = 64 * 1024;
+
 /// Read the next chunk of `cargo`'s stderr into `out`, stopping at either a
 /// newline (a completed message line) or a carriage return (the boundary of
 /// cargo's in-place progress bar, which carries no newline). Returns the number
@@ -1760,6 +1766,10 @@ pub fn set_executable(path: &Path) -> Result<(), CliError> {
 /// Bytes are decoded lossily so a non-UTF-8 byte from a compiler message never
 /// aborts the build's progress relay.
 ///
+/// A chunk is at most [`RELAY_CHUNK_CAP`] bytes: a longer run with neither
+/// terminator ends at the first ASCII byte past it (a character boundary), and
+/// at twice the cap whatever the byte.
+///
 /// # Errors
 /// Propagates the underlying read error from the `cargo` stderr pipe.
 pub fn read_progress_chunk<R: std::io::Read>(
@@ -1767,19 +1777,21 @@ pub fn read_progress_chunk<R: std::io::Read>(
     out: &mut String,
 ) -> std::io::Result<usize> {
     let mut bytes: Vec<u8> = Vec::new();
-    let mut total = 0usize;
     loop {
         let mut byte = [0u8; 1];
         let n = reader.read(&mut byte)?;
         if n == 0 {
             break;
         }
-        total += n;
-        bytes.push(byte[0]);
-        if byte[0] == b'\n' || byte[0] == b'\r' {
+        let [byte] = byte;
+        bytes.push(byte);
+        let full = bytes.len() >= RELAY_CHUNK_CAP
+            && (byte.is_ascii() || bytes.len() >= RELAY_CHUNK_CAP.saturating_mul(2));
+        if byte == b'\n' || byte == b'\r' || full {
             break;
         }
     }
+    let total = bytes.len();
     out.push_str(&String::from_utf8_lossy(&bytes));
     Ok(total)
 }
@@ -1893,7 +1905,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
     // enrichment only, never a gate — the missing-path-dependency error cargo
     // itself raises is already fail-closed).
     CargoBuild {
-        cargo: cargo_bin.path(),
+        cargo: &cargo_bin,
         krate: CargoCrate::Emitted(crate_dir),
         profile: CargoProfile::Release,
         target: CargoTarget::WasmBrowser,
@@ -2059,7 +2071,7 @@ pub fn bundle_wasi(crate_dir: &OwnedDir) -> Result<PathBuf, CliError> {
     // target-dir guess that a toggled `CARGO_TARGET_DIR` or a relocated
     // `cargo metadata` can invalidate.
     let messages = CargoBuild {
-        cargo: cargo_bin.path(),
+        cargo: &cargo_bin,
         krate: CargoCrate::Emitted(crate_dir),
         profile: CargoProfile::Release,
         target: CargoTarget::Wasip1,
@@ -2710,7 +2722,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         None
     };
     CargoBuild {
-        cargo: cargo_bin.path(),
+        cargo: &cargo_bin,
         krate: CargoCrate::Emitted(&crate_dir),
         profile: CargoProfile::Dev,
         target: static_plan
@@ -2732,7 +2744,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     // relocates the artifact, so a hardcoded `<out>/target` would exec a
     // missing or stale binary.
     let bin_name = emitted_bin_filename(&out_dir);
-    let mut bin = cargo_target_directory(&out_dir)?;
+    let mut bin = crate::cargo_step::target_directory(&cargo_bin, &out_dir)?;
     if let Some(plan) = &static_plan {
         bin.push(plan.triple.as_str());
     }
@@ -2870,7 +2882,8 @@ pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
     // the artifact dir's `Cargo.toml`. Falls back to `"ipe-app"` when the
     // manifest is absent or the name cannot be parsed.
     let exec_bin_name = emitted_bin_filename(&dir);
-    let mut bin = cargo_target_directory(&dir)?;
+    let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Run)?;
+    let mut bin = crate::cargo_step::target_directory(&cargo_bin, &dir)?;
     bin.push("debug");
     bin.push(&exec_bin_name);
     if !bin.is_file() {
@@ -3013,33 +3026,6 @@ fn friendly_artifact_filename(manifest: Option<&project::ProjectManifest>) -> St
         friendly_artifact_name(manifest),
         std::env::consts::EXE_SUFFIX
     )
-}
-
-/// The target directory cargo will use for a build with CWD = `crate_dir`,
-/// resolved by cargo itself (`cargo metadata`) so every relocation source —
-/// `CARGO_TARGET_DIR`, a user-level `[build] target-dir` pin, a config in an
-/// ancestor dir — is honoured instead of guessed at.
-pub fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliError> {
-    let output = std::process::Command::new("cargo")
-        .args(["metadata", "--format-version", "1", "--no-deps"])
-        .current_dir(crate_dir)
-        .output()
-        .map_err(|e| CliError::Io {
-            path: crate_dir.to_path_buf(),
-            source: e,
-        })?;
-    if !output.status.success() {
-        return Err(CliError::Usage(text::msg::cargo_metadata_failed(
-            &crate_dir.display(),
-            &String::from_utf8_lossy(&output.stderr),
-        )));
-    }
-    let meta: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| CliError::Usage(text::msg::cargo_metadata_unparsable(&e)))?;
-    meta.get("target_directory")
-        .and_then(serde_json::Value::as_str)
-        .map(PathBuf::from)
-        .ok_or_else(|| CliError::Usage(text::msg::cargo_metadata_no_target_dir()))
 }
 
 /// `ipe explain` has been folded into `ipe doc`.
@@ -3928,6 +3914,7 @@ mod held_crate_tests {
         CargoBuild, CargoCrate, CargoOutput, CargoProfile, CargoTarget, Verbosity,
     };
     use crate::output_dir::{OutputRefusal, OwnedDir};
+    use crate::toolchain::CargoBin;
 
     /// A fresh scratch base for `tag`, holding a claimed `crate/`.
     fn scratch(tag: &str) -> (PathBuf, OwnedDir) {
@@ -3977,7 +3964,7 @@ mod held_crate_tests {
     /// A quiet host build of `crate_dir` through `cargo`, its artifact stream returned.
     fn build_with(cargo: &Path, crate_dir: &OwnedDir) -> Result<String, CliError> {
         CargoBuild {
-            cargo,
+            cargo: &CargoBin::stub(cargo.to_path_buf()),
             krate: CargoCrate::Emitted(crate_dir),
             profile: CargoProfile::Dev,
             target: CargoTarget::Host,
