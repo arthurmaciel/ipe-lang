@@ -20,7 +20,7 @@ pub struct ModuleHome(Vec<Symbol>);
 impl ModuleHome {
     /// The home named by `path`, or `None` when `path` is empty.
     #[must_use]
-    pub const fn new(path: Vec<Symbol>) -> Option<Self> {
+    pub fn new(path: Vec<Symbol>) -> Option<Self> {
         if path.is_empty() {
             None
         } else {

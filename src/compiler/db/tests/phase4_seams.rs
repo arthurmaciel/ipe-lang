@@ -233,14 +233,13 @@ fn lower_program_short_circuits_on_typecheck_error() {
 
     let typecheck_err = ipe_db::typecheck(&db, root, entry)
         .clone()
-        .expect_err("annotated Int binding with a String body must be rejected")
-        .0;
+        .expect_err("annotated Int binding with a String body must be rejected");
     let lower_err = ipe_db::lower_program(&db, root, entry)
         .clone()
-        .expect_err("lower_program must refuse to lower an ill-typed program")
-        .0;
+        .expect_err("lower_program must refuse to lower an ill-typed program");
     assert_eq!(
-        typecheck_err, lower_err,
+        ipe_db::PipelineError::Infer(typecheck_err),
+        lower_err,
         "lower_program's short-circuit must surface typecheck's own diagnostic verbatim"
     );
 }

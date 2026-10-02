@@ -541,10 +541,10 @@ fn extract_from_db(
                             module: path.clone(),
                         });
                     }
-                    Err((diag, _home)) => {
+                    Err(err) => {
                         return Err(DiffError::Typecheck {
                             module: path.clone(),
-                            diag: Box::new(diag.clone()),
+                            diag: Box::new(err.diagnostic().clone()),
                         });
                     }
                 }
