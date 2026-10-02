@@ -488,6 +488,17 @@ GITHUB_RUNNER_FILE_PROPS = frozenset({"env", "path", "state", "output", "step_su
 # The action whose `with.script` is JavaScript source the runner assembles
 # from `${{ }}` expansion before it runs, a shell-text position like `run:`.
 GITHUB_SCRIPT_REPO = "actions/github-script"
+# Action inputs, by case-folded name and for every action, that hold a script
+# the action hands to an interpreter (`vmactions/*-vm`'s `run`/`prepare` run
+# under `sh` in the guest; `script`, `command`, `entrypoint`, `args` are the
+# names other actions give the same role). A `${{ }}` in one is a shell-text
+# splice, as in a `run:`.
+ACTION_SHELL_INPUTS = frozenset(
+    {"run", "prepare", "script", "command", "commands", "cmd", "shell", "entrypoint", "args"}
+)
+# The words that re-parse their arguments as shell syntax: bash `eval`, pwsh
+# `Invoke-Expression` and its alias `iex` (case-folded).
+EVAL_WORDS = frozenset({"eval", "invoke-expression", "iex"})
 # `GITHUB_WORKSPACE` roots the helper and requirements paths, so it may only be
 # read (`$GITHUB_WORKSPACE`, `${GITHUB_WORKSPACE}`, exact case), never assigned,
 # defaulted (`${GITHUB_WORKSPACE:=x}`), exported, or set as an env key.
@@ -3379,11 +3390,14 @@ def _runner_file_refusal(text: str, parsed: gha_expr.Template | gha_expr.Refusal
 
 class ShellTextPosition(enum.Enum):
     """A step position whose text the runner expands `${{ }}` into before an
-    interpreter parses it: a `run:` (shell) or a `with.script` of
-    `actions/github-script` (JavaScript)."""
+    interpreter parses it: a `run:` (shell), the `with.script` of
+    `actions/github-script` (JavaScript), or an action input named in
+    `ACTION_SHELL_INPUTS` (a script the action hands to a shell, e.g. the
+    `with.run`/`with.prepare` a VM action runs inside the guest)."""
 
     RUN = "run"
     GITHUB_SCRIPT = "github-script"
+    ACTION_INPUT = "action-input"
 
 
 def _refuse_shell_expression(
@@ -3393,11 +3407,16 @@ def _refuse_shell_expression(
     """Rule (j): no `${{ }}` in a shell-text position (`position`), whatever
     context it reads. The value enters as an `env:` entry the script reads by
     name, so no value, whoever controls it, becomes syntax."""
-    read = (
-        'and read it as "$NAME" (bash) or $env:NAME (pwsh)'
-        if position is ShellTextPosition.RUN
-        else "and read it as process.env.NAME"
-    )
+    match position:
+        case ShellTextPosition.RUN:
+            read = 'and read it as "$NAME" (bash) or $env:NAME (pwsh)'
+        case ShellTextPosition.GITHUB_SCRIPT:
+            read = "and read it as process.env.NAME"
+        case ShellTextPosition.ACTION_INPUT:
+            read = (
+                "forward it with the action's own env input (e.g. `with.envs`), and read it "
+                'as "$NAME"'
+            )
     for lo, hi in parsed.spans:
         errors.append(
             f"{loc} {what} splices {text[lo:hi]!r} into shell text — the runner expands "
@@ -3408,13 +3427,14 @@ def _refuse_shell_expression(
 
 def _refuse_eval(text: str, loc: str, what: str, errors: list[str]) -> None:
     """Rule (j): no quote-removed word of `text` (here-document bodies
-    included) is `eval`, which re-parses an `env:` value as shell syntax."""
+    included) is in `EVAL_WORDS` (case-folded): each re-parses an `env:`
+    value as shell syntax."""
     for part in _shell_texts(text):
         for cmd in shell_lex.split_commands(part):
-            if "eval" in cmd.words:
+            if any(w.casefold() in EVAL_WORDS for w in cmd.words):
                 errors.append(
-                    f"{loc} {what} runs {' '.join(cmd.words)!r}, which names the `eval` builtin — "
-                    "it re-parses a value as shell syntax; refused"
+                    f"{loc} {what} runs {' '.join(cmd.words)!r}, which names the `eval` builtin "
+                    "(or pwsh `Invoke-Expression`) — it re-parses a value as shell syntax; refused"
                 )
 
 
@@ -4028,16 +4048,37 @@ def _audit_step(st: Step, loc: str, policy: StepPolicy, errors: list[str]) -> No
         _refuse_shape(loc, "with:", "a mapping", st.raw["with"], errors)
     _audit_scalars(st.raw, loc, policy, errors, step=True)
     with_ = st.raw.get("with")
-    if _uses_repo(st, GITHUB_SCRIPT_REPO) and isinstance(with_, dict):
-        script = with_.get("script")
-        if isinstance(script, str):
-            parsed = _parsed_expressions(script, bare_expression=False)
-            if isinstance(parsed, gha_expr.Template):
-                _refuse_shell_expression(
-                    script, parsed, ShellTextPosition.GITHUB_SCRIPT, loc, "with.script", errors
-                )
-        elif script is not None:
-            _refuse_shape(loc, "with.script:", "a string", script, errors)
+    if st.uses is None or not isinstance(with_, dict):
+        return
+    for key, value in with_.items():
+        position = _action_input_position(st, key)
+        if position is None:
+            continue
+        what = f"with.{key}"
+        if not isinstance(value, str):
+            _refuse_shape(loc, f"{what}:", "a string", value, errors)
+            continue
+        if position is ShellTextPosition.ACTION_INPUT:
+            _refuse_eval(value, loc, what, errors)
+        parsed = _parsed_expressions(value, bare_expression=False)
+        if isinstance(parsed, gha_expr.Template):
+            _refuse_shell_expression(value, parsed, position, loc, what, errors)
+
+
+def _action_input_position(st: Step, key: object) -> ShellTextPosition | None:
+    """The shell-text position `with.<key>` of `st` is, or None: the
+    `script` of `actions/github-script`, or any input whose case-folded name
+    is in `ACTION_SHELL_INPUTS`, for every action (remote or local). The name
+    set is judged without the action's identity, so a new action whose
+    script input carries one of these names is covered before anyone reads
+    its `action.yml`."""
+    if not isinstance(key, str):
+        return None
+    if key.casefold() == "script" and _uses_repo(st, GITHUB_SCRIPT_REPO):
+        return ShellTextPosition.GITHUB_SCRIPT
+    if key.casefold() in ACTION_SHELL_INPUTS:
+        return ShellTextPosition.ACTION_INPUT
+    return None
 
 
 # The steps a job may run up to and including its last step naming
@@ -5058,14 +5099,18 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
           exists; there only the job half of (i) is asked, the job read as
           a verdict job (`ToolJob.parse`), and the write scan is not run;
       (j) any `${{ }}` in a shell-text position (`ShellTextPosition`): a
-          step's `run:` (workflow or local composite) and the `with.script`
-          of an `actions/github-script` step (case-folded, any ref). The
+          step's `run:` (workflow or local composite), the `with.script`
+          of an `actions/github-script` step (case-folded, any ref), and
+          every action input named in `ACTION_SHELL_INPUTS` (a VM action's
+          `with.run`/`with.prepare`, any action's `with.command`). The
           runner expands an expression before the interpreter parses the
           text, so its value, whatever context it reads, would become
           syntax; every value enters through `env:` and is read as
           `"$NAME"` (bash), `$env:NAME` (pwsh), or `process.env.NAME`.
-          A quote-removed word `eval` in a `run:` (here-document bodies
-          included) is refused too: it re-parses an `env:` value as shell.
+          A quote-removed word in `EVAL_WORDS` (`eval`, pwsh
+          `Invoke-Expression`/`iex`) in a `run:` or an action shell input
+          (here-document bodies included) is refused too: it re-parses an
+          `env:` value as shell.
     Every local `uses: ./...` is resolved on disk from the repo root
     (`action.yml`, then `action.yaml`); an unresolvable, ambiguous, non-
     composite (node/docker), cyclic, or over-deep (> LOCAL_ACTION_DEPTH_LIMIT)

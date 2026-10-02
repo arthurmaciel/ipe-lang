@@ -1555,6 +1555,39 @@ class TestTypedExpressionAndShellReads(unittest.TestCase):
         for run in ('eval "$X"', 'e""val "$X"', 'true && eval "$X"'):
             self.run_refused(run, "`eval`")
 
+    def test_invoke_expression_in_run_is_refused(self) -> None:
+        for run in ('Invoke-Expression $env:X', 'iex $env:X', 'IEX $env:X'):
+            self.run_refused(run, "`eval`", "Invoke-Expression")
+
+    def _vm_step(self, with_: str) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            _ci(
+                f"steps:\n  - name: V\n    uses: vmactions/freebsd-vm@{_PINNED_SHA}\n"
+                "    env:\n      TAG: ${{ github.head_ref }}\n"
+                f"    with:\n      usesh: true\n      envs: 'TAG'\n{with_}"
+            ),
+        )
+
+    def test_expression_in_an_action_shell_input_is_refused(self) -> None:
+        for key in ("run", "prepare", "Run", "command"):
+            for ctx in ("github.event.issue.title", "matrix.x"):
+                with self.subTest(key=key, ctx=ctx):
+                    self._vm_step(f"      {key}: echo \"${{{{ {ctx} }}}}\"\n")
+                    self.assertRefused(f"with.{key}", "splices", "shell text", "with.envs")
+
+    def test_eval_in_an_action_shell_input_is_refused(self) -> None:
+        self._vm_step('      run: eval "$TAG"\n')
+        self.assertRefused("with.run", "`eval`")
+
+    def test_non_string_action_shell_input_is_refused(self) -> None:
+        self._vm_step("      run: [a, b]\n")
+        self.assertRefused("with.run:", "a string")
+
+    def test_action_shell_input_reading_a_forwarded_env_passes(self) -> None:
+        self._vm_step('      prepare: pkg install -y curl\n      run: echo "$TAG"\n')
+        self.assertEqual(self.fx.errors(), [])
+
     def test_value_through_env_passes(self) -> None:
         self.fx.workflow(
             "ci.yml",
