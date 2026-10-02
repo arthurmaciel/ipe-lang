@@ -54,13 +54,52 @@ def _listing(*runs: dict) -> dict:
     return {"total_count": len(runs), "workflow_runs": list(runs)}
 
 
-class FakeApi:
-    """Route `gh api` paths: the three dispatch listings per scope, a PR, a compare.
+def _producer(workflow: str) -> ng.Producer:
+    (found,) = [p for p in ng.PRODUCERS if p.workflow == workflow]
+    return found
 
+
+CI = _producer("ci.yml")
+SANDBOX = _producer("admission-sandbox.yml")
+STATIC = _producer("static.yml")
+RULESET = _producer("ruleset-admin-read.yml")
+
+
+def _prun(producer: ng.Producer, **over: object) -> dict:
+    """A green main nightly of `producer`, id 900 + its position in `PRODUCERS`."""
+    run = _run(
+        id=900 + ng.PRODUCERS.index(producer),
+        event=producer.events[0],
+        path=producer.path,
+    )
+    run.update(over)
+    return run
+
+
+def _jobs_page(rid: int, *jobs: tuple[str, str], total: int | None = None) -> dict:
+    listed = [{"name": n, "status": "completed", "conclusion": c, "run_id": rid} for n, c in jobs]
+    return {"total_count": len(listed) if total is None else total, "jobs": listed}
+
+
+def _scope(path: str) -> str | None:
+    """The commit or branch filter of a run listing path, or None for an event-only listing."""
+    query = path.split("?", 1)[-1].split("&")
+    scoped = [q for q in query if q.startswith(("head_sha=", "branch="))]
+    return scoped[0] if scoped else None
+
+
+class FakeApi:
+    """Route `gh api` paths: the run listings per producer, event, and scope, a run, its jobs, a PR, a compare.
+
+    For the producer under test (`workflow`, ci.yml by default):
     `main`/`own` answer the workflow listing filtered by event and branch/commit;
     `event_only` answers the workflow listing filtered by event alone;
-    `repo_main`/`repo_own` answer the repository listing filtered by event and branch/commit;
-    `by_id` answers a run's own document, by default its copy in the scope's last listings.
+    `repo_main`/`repo_own` answer the repository listing filtered by event and branch/commit.
+    Every other producer's main listing is `others[workflow]`, by default one green run;
+    `others_own[workflow]` is its commit listing, empty by default.
+    `by_id` answers a run's own document, by default its most recently served listed copy.
+    `jobs[rid]` answers run rid's job listing pages; by default one page holding every
+    nightly-gate job of its producer, concluded as the run's freshest copy concluded.
     """
 
     def __init__(
@@ -73,14 +112,27 @@ class FakeApi:
         repo_main: object = None,
         repo_own: object = None,
         by_id: dict | None = None,
+        *,
+        workflow: str = "ci.yml",
+        others: dict | None = None,
+        others_own: dict | None = None,
+        jobs: dict | None = None,
     ) -> None:
+        self.workflow = workflow
         self.by_id = by_id or {}
+        self.jobs = jobs or {}
         self.served: list[object] = []
+        self.batch: list[object] = []
+        self.scope: tuple[str, str] | None = None
+        self.judged: dict[int, dict] = {}
         self.main, self.own, self.pr = main, own if own is not None else _listing(), pr
         self.event_only = event_only if event_only is not None else _listing()
         self.repo_main = repo_main if repo_main is not None else _listing()
         self.repo_own = repo_own if repo_own is not None else _listing()
         self.compare = compare if compare is not None else {"status": "ahead"}
+        self.others = {p.workflow: _listing(_prun(p)) for p in ng.PRODUCERS if p.workflow != workflow}
+        self.others.update(others or {})
+        self.others_own = others_own or {}
         self.calls: list[str] = []
 
     def __call__(self, path: str) -> object:
@@ -88,7 +140,46 @@ class FakeApi:
         served = self._route(path)
         if "/runs?" in path:
             self.served.append(served)
+            scope = _scope(path)
+            if "/workflows/" in path and scope is not None:
+                key = (path.split("/workflows/", 1)[1].split("/", 1)[0], scope)
+                if key != self.scope:
+                    self.scope, self.batch = key, []
+            self.batch.append(served)
         return served
+
+    def _copies(self, rid: int) -> list[dict]:
+        """Copies of run `rid` in the listings served since the last run was re-read."""
+        return [
+            run
+            for listing in self.batch
+            for run in (listing.get("workflow_runs", []) if isinstance(listing, dict) else [])
+            if isinstance(run, dict) and run.get("id") == rid
+        ]
+
+    def _reread(self, rid: int) -> object:
+        copies = self._copies(rid)
+        if rid in self.by_id:
+            doc = self.by_id[rid]
+        elif copies:
+            doc = copies[-1]
+        else:
+            raise AssertionError(f"run {rid} was never listed")
+        if isinstance(doc, dict) and copies:
+            judged = copies[0]
+            for copy_ in [*copies[1:], doc]:
+                judged = ng._fresher(judged, copy_)
+            self.judged[rid] = judged
+        self.batch = []
+        return doc
+
+    def _job_pages(self, rid: int, page: int) -> object:
+        if rid in self.jobs:
+            pages = self.jobs[rid]
+            return pages[page - 1] if page <= len(pages) else {"total_count": pages[0].get("total_count"), "jobs": []}
+        run = self.judged[rid]
+        (producer,) = [p for p in ng.PRODUCERS if p.path == run.get("path")]
+        return _jobs_page(rid, *((g, str(run.get("conclusion"))) for g in sorted(producer.gates)))
 
     def _route(self, path: str) -> object:
         if "/pulls/" in path:
@@ -97,21 +188,23 @@ class FakeApi:
             return self.pr
         if "/compare/" in path:
             return self.compare
+        if path.startswith(f"repos/{REPO}/actions/runs/") and "/jobs?" in path:
+            rid = int(path.split("/actions/runs/", 1)[1].split("/", 1)[0])
+            return self._job_pages(rid, int(path.rsplit("page=", 1)[-1]))
         if path.startswith(f"repos/{REPO}/actions/runs/"):
-            rid = int(path.rsplit("/", 1)[-1])
-            if rid in self.by_id:
-                return self.by_id[rid]
-            for listing in self.served[-len(ng._listing_paths(REPO, "")):]:
-                for run in listing.get("workflow_runs", []) if isinstance(listing, dict) else []:
-                    if isinstance(run, dict) and run.get("id") == rid:
-                        return run
-            raise AssertionError(f"run {rid} was never listed")
+            return self._reread(int(path.rsplit("/", 1)[-1]))
         if f"repos/{REPO}/actions/runs?" in path:
             if "head_sha=" in path:
                 return self.repo_own
             if "branch=main" in path:
                 return self.repo_main
-        elif f"repos/{REPO}/actions/workflows/ci.yml/runs?" in path:
+        for producer in ng.PRODUCERS:
+            if f"repos/{REPO}/actions/workflows/{producer.workflow}/runs?" not in path:
+                continue
+            if producer.workflow != self.workflow:
+                if "head_sha=" in path:
+                    return self.others_own.get(producer.workflow, _listing())
+                return self.others[producer.workflow] if "branch=main" in path else _listing()
             if "head_sha=" in path:
                 return self.own
             if "branch=main" in path:
@@ -123,7 +216,7 @@ class FakeApi:
 
 
 def _pick(*listings: object, branch: str | None = "main", sha: str | None = None) -> dict | None:
-    return ng.newest_dispatch(list(listings), branch=branch, sha=sha)
+    return ng.newest_run(list(listings), CI, CI.events, branch=branch, sha=sha)
 
 
 def _verdict(api: FakeApi, **env: str) -> list[str]:
@@ -138,8 +231,8 @@ def _verdict(api: FakeApi, **env: str) -> list[str]:
 
 
 class RunErrorsTest(unittest.TestCase):
-    def check(self, run: dict | None) -> list[str]:
-        return ng.run_errors(run, branch="main", sha=None, now=NOW)
+    def check(self, run: dict | None, producer: ng.Producer = CI) -> list[str]:
+        return ng.run_errors(run, producer, producer.events, branch="main", sha=None, now=NOW)
 
     def test_green_fresh_nightly_passes(self) -> None:
         self.assertEqual(self.check(_run()), [])
@@ -148,8 +241,16 @@ class RunErrorsTest(unittest.TestCase):
         self.assertTrue(self.check(None))
 
     def test_red_nightly_refused(self) -> None:
-        for bad in ("failure", "cancelled", "timed_out", "skipped", "neutral", "action_required", None):
+        for bad in ("cancelled", "timed_out", "skipped", "neutral", "action_required", "startup_failure", None):
             self.assertTrue(self.check(_run(conclusion=bad)), bad)
+            self.assertTrue(self.check(_prun(SANDBOX, conclusion=bad), SANDBOX), bad)
+
+    def test_failed_run_left_to_its_jobs_only_with_a_non_blocking_job(self) -> None:
+        # A failed run is judged by its jobs only when a non-blocking job could
+        # have failed it; a producer with none is red on the run alone.
+        self.assertEqual(self.check(_run(conclusion="failure")), [])
+        self.assertTrue(self.check(_prun(SANDBOX, conclusion="failure"), SANDBOX))
+        self.assertTrue(self.check(_prun(RULESET, conclusion="failure"), RULESET))
 
     def test_running_nightly_refused(self) -> None:
         self.assertTrue(self.check(_run(status="in_progress", conclusion=None)))
@@ -176,7 +277,7 @@ class RunErrorsTest(unittest.TestCase):
         self.assertTrue(self.check(_run(head_branch="feature")))
 
     def test_wrong_commit_refused(self) -> None:
-        self.assertTrue(ng.run_errors(_run(head_sha=OTHER), branch=None, sha=SHA, now=None))
+        self.assertTrue(ng.run_errors(_run(head_sha=OTHER), CI, CI.events, branch=None, sha=SHA, now=None))
 
 
 class ListingTest(unittest.TestCase):
@@ -266,13 +367,13 @@ class UnionTest(unittest.TestCase):
 
     def test_all_listings_empty_is_red(self) -> None:
         reasons = _verdict(FakeApi(_listing()))
-        self.assertTrue(any("no completed dispatched full gate exists" in r for r in reasons))
+        self.assertTrue(any("no completed workflow_dispatch run of ci.yml exists" in r for r in reasons), reasons)
 
     def test_every_listing_is_read(self) -> None:
         api = FakeApi(_listing(_run(conclusion="failure")))
         _verdict(api)
         for scope in (f"head_sha={SHA}", "branch=main"):
-            for path in ng._listing_paths(REPO, scope):
+            for path in ng._listing_paths(REPO, CI, "workflow_dispatch", scope):
                 self.assertIn(path, api.calls)
 
     def test_stale_own_listing_loses_to_repo_listing(self) -> None:
@@ -481,13 +582,18 @@ WORKFLOW = {
 MANIFEST = {"checks": [{"context": "nightly-green", "disposition": "gate", "producer": "nightly-green.yml"}]}
 
 
+def _wiring(workflow: object, manifest: object) -> list[str]:
+    """The wiring verdict over a manifest that names no nightly-gate producer."""
+    return ng.wiring_errors(workflow, manifest, {}, ())
+
+
 def _job(wf: dict) -> dict:
     return wf["jobs"]["nightly-green"]
 
 
 class WiringTest(unittest.TestCase):
     def test_ssot_wiring_passes(self) -> None:
-        self.assertEqual(ng.wiring_errors(WORKFLOW, MANIFEST), [])
+        self.assertEqual(_wiring(WORKFLOW, MANIFEST), [])
 
     def test_repo_wiring_passes(self) -> None:
         self.assertEqual(ng.lint(), 0)
@@ -496,43 +602,43 @@ class WiringTest(unittest.TestCase):
         for key, val in (("if", "false"), ("continue-on-error", True), ("needs", ["x"]), ("strategy", {})):
             wf = copy.deepcopy(WORKFLOW)
             _job(wf)[key] = val
-            self.assertTrue(ng.wiring_errors(wf, MANIFEST), key)
+            self.assertTrue(_wiring(wf, MANIFEST), key)
 
     def test_step_escape_refused(self) -> None:
         for key, val in (("if", "false"), ("continue-on-error", True)):
             wf = copy.deepcopy(WORKFLOW)
             _job(wf)["steps"][1][key] = val
-            self.assertTrue(ng.wiring_errors(wf, MANIFEST), key)
+            self.assertTrue(_wiring(wf, MANIFEST), key)
 
     def test_masked_invocation_refused(self) -> None:
         for run in (f"{ng.VERDICT_INVOCATION} || true", f"{ng.VERDICT_INVOCATION}; exit 0", "true"):
             wf = copy.deepcopy(WORKFLOW)
             _job(wf)["steps"][1]["run"] = run
-            self.assertTrue(ng.wiring_errors(wf, MANIFEST), run)
+            self.assertTrue(_wiring(wf, MANIFEST), run)
 
     def test_duplicate_invocation_refused(self) -> None:
         wf = copy.deepcopy(WORKFLOW)
         _job(wf)["steps"].append(dict(STEP))
-        self.assertTrue(ng.wiring_errors(wf, MANIFEST))
+        self.assertTrue(_wiring(wf, MANIFEST))
 
     def test_env_tampering_refused(self) -> None:
         for key, val in (("EVENT_NAME", "pull_request"), ("HEAD_REF", "${{ github.event.merge_group.head_ref }}"), ("GITHUB_REF", "refs/heads/main"), ("HEAD_SHA", "${{ github.sha }}"), ("GH_TOKEN", "${{ secrets.X }}")):
             wf = copy.deepcopy(WORKFLOW)
             _job(wf)["steps"][1]["env"][key] = val
-            self.assertTrue(ng.wiring_errors(wf, MANIFEST), key)
+            self.assertTrue(_wiring(wf, MANIFEST), key)
         wf = copy.deepcopy(WORKFLOW)
         del _job(wf)["steps"][1]["env"]["REPO"]
-        self.assertTrue(ng.wiring_errors(wf, MANIFEST))
+        self.assertTrue(_wiring(wf, MANIFEST))
 
     def test_renamed_context_refused(self) -> None:
         wf = copy.deepcopy(WORKFLOW)
         _job(wf)["name"] = "nightly"
-        self.assertTrue(ng.wiring_errors(wf, MANIFEST))
+        self.assertTrue(_wiring(wf, MANIFEST))
 
     def test_extra_job_refused(self) -> None:
         wf = copy.deepcopy(WORKFLOW)
         wf["jobs"]["other"] = {"steps": []}
-        self.assertTrue(ng.wiring_errors(wf, MANIFEST))
+        self.assertTrue(_wiring(wf, MANIFEST))
 
     def test_manifest_downgrade_refused(self) -> None:
         for manifest in (
@@ -542,7 +648,242 @@ class WiringTest(unittest.TestCase):
             {"checks": MANIFEST["checks"] * 2},
             None,
         ):
-            self.assertTrue(ng.wiring_errors(WORKFLOW, manifest), manifest)
+            self.assertTrue(_wiring(WORKFLOW, manifest), manifest)
+
+
+def _gates_page(rid: int, producer: ng.Producer, *extra: tuple[str, str], **over: str) -> list[dict]:
+    """One job page: every nightly-gate job of `producer` green unless `over` names it, plus `extra` jobs."""
+    jobs = [(g, over.get(g, "success")) for g in sorted(producer.gates)]
+    return [_jobs_page(rid, *jobs, *extra)]
+
+
+SANDBOX_ID = 900 + ng.PRODUCERS.index(SANDBOX)
+STATIC_ID = 900 + ng.PRODUCERS.index(STATIC)
+RULESET_ID = 900 + ng.PRODUCERS.index(RULESET)
+WINDOWS = "windows-x64 (Docker Windows container, process isolation)"
+
+
+class ProducerVerdictTest(unittest.TestCase):
+    """Every nightly-gate producer is judged; a red or stale one blocks even when ci.yml is green."""
+
+    def test_every_producer_green_passes(self) -> None:
+        api = FakeApi(_listing(_run()))
+        self.assertEqual(_verdict(api), [])
+        for producer in ng.PRODUCERS:
+            for event in producer.events:
+                for path in ng._listing_paths(REPO, producer, event, "branch=main"):
+                    self.assertIn(path, api.calls)
+
+    def test_red_admission_sandbox_nightly_context_fails(self) -> None:
+        red_run = _listing(_prun(SANDBOX, conclusion="failure"))
+        reasons = _verdict(FakeApi(_listing(_run()), others={SANDBOX.workflow: red_run}))
+        self.assertTrue(any(r.startswith("admission-sandbox.yml main nightly:") for r in reasons), reasons)
+        # A run reported green whose nightly-gate job is red is still red.
+        for conclusion in ("failure", "cancelled", "skipped", "timed_out"):
+            with self.subTest(conclusion):
+                jobs = {SANDBOX_ID: _gates_page(SANDBOX_ID, SANDBOX, **{WINDOWS: conclusion})}
+                reasons = _verdict(FakeApi(_listing(_run()), jobs=jobs))
+                self.assertTrue(any(WINDOWS in r and "admission-sandbox.yml" in r for r in reasons), reasons)
+
+    def test_stale_producer_fails(self) -> None:
+        for producer in (SANDBOX, STATIC, RULESET):
+            with self.subTest(producer.workflow):
+                stale = _listing(_prun(producer, created_at=_stamp(timedelta(hours=ng.MAX_AGE_H, seconds=1))))
+                reasons = _verdict(FakeApi(_listing(_run()), others={producer.workflow: stale}))
+                self.assertTrue(any(producer.workflow in r and "older than" in r for r in reasons), reasons)
+
+    def test_absent_producer_run_fails(self) -> None:
+        for producer in (SANDBOX, STATIC, RULESET):
+            with self.subTest(producer.workflow):
+                reasons = _verdict(FakeApi(_listing(_run()), others={producer.workflow: _listing()}))
+                self.assertTrue(any(f"run of {producer.workflow} exists" in r for r in reasons), reasons)
+
+    def test_producer_run_of_a_non_nightly_event_never_selected(self) -> None:
+        # static.yml also runs on push; only its scheduled/dispatched runs are its nightly.
+        push = _listing(_prun(STATIC, event="push", created_at=_stamp(timedelta(hours=1))))
+        reasons = _verdict(FakeApi(_listing(_run()), others={STATIC.workflow: push}))
+        self.assertTrue(any("run of static.yml exists" in r for r in reasons), reasons)
+
+    def test_missing_gate_job_fails(self) -> None:
+        jobs = {SANDBOX_ID: [_jobs_page(SANDBOX_ID, ("freebsd-x64 (jail(8) inside vmactions VM)", "success"))]}
+        reasons = _verdict(FakeApi(_listing(_run()), jobs=jobs))
+        self.assertTrue(any(f"nightly-gate job {WINDOWS!r} did not run" in r for r in reasons), reasons)
+
+    def test_unknown_job_blocks_unless_green_or_skipped(self) -> None:
+        for conclusion, red in (("failure", True), ("cancelled", True), ("skipped", False), ("success", False)):
+            with self.subTest(conclusion):
+                jobs = {SANDBOX_ID: _gates_page(SANDBOX_ID, SANDBOX, ("admission-changes", conclusion))}
+                self.assertEqual(bool(_verdict(FakeApi(_listing(_run()), jobs=jobs))), red)
+
+    def test_non_blocking_job_never_decides(self) -> None:
+        # A red informational job fails static.yml's run but not the nightly.
+        failed = _listing(_prun(STATIC, conclusion="failure"))
+        jobs = {STATIC_ID: _gates_page(STATIC_ID, STATIC, ("windows-static (dlmalloc, MSVC +crt-static)", "failure"))}
+        self.assertEqual(_verdict(FakeApi(_listing(_run()), others={STATIC.workflow: failed}, jobs=jobs)), [])
+
+    def test_unfinished_job_fails(self) -> None:
+        jobs = {STATIC_ID: [{"total_count": 1, "jobs": [{"name": "linux-cfree-gate (refusal is fail-closed)", "status": "in_progress", "conclusion": None, "run_id": STATIC_ID}]}]}
+        self.assertTrue(_verdict(FakeApi(_listing(_run()), jobs=jobs)))
+
+    def test_own_dispatch_recovers_only_its_producer(self) -> None:
+        red = {SANDBOX.workflow: _listing(_prun(SANDBOX, conclusion="failure"))}
+        own = {SANDBOX.workflow: _listing(_prun(SANDBOX, id=77, event="workflow_dispatch", head_branch="fix", head_sha=SHA))}
+        self.assertEqual(_verdict(FakeApi(_listing(_run()), others=red, others_own=own)), [])
+        # A green ci.yml dispatch of the change does not stand in for a red admission-sandbox.yml.
+        ci_own = _listing(_run(id=78, head_branch="fix", head_sha=SHA))
+        reasons = _verdict(FakeApi(_listing(_run()), own=ci_own, others=red))
+        self.assertTrue(any(r.startswith("admission-sandbox.yml") for r in reasons), reasons)
+        # A scheduled run never proves a change commit, even at its sha.
+        scheduled = {SANDBOX.workflow: _listing(_prun(SANDBOX, id=79, head_branch="fix", head_sha=SHA))}
+        self.assertTrue(_verdict(FakeApi(_listing(_run()), others=red, others_own=scheduled)))
+
+    def test_producer_without_dispatch_has_no_branch_recovery(self) -> None:
+        red = {RULESET.workflow: _listing(_prun(RULESET, conclusion="failure"))}
+        own = {RULESET.workflow: _listing(_prun(RULESET, id=80, event="workflow_dispatch", head_branch="fix", head_sha=SHA))}
+        api = FakeApi(_listing(_run()), others=red, others_own=own)
+        reasons = _verdict(api)
+        self.assertTrue(any(r.startswith("ruleset-admin-read.yml main nightly:") for r in reasons), reasons)
+        self.assertFalse(any("ruleset-admin-read.yml/runs?" in c and "head_sha=" in c for c in api.calls))
+
+    def test_producer_hint_names_the_recovery(self) -> None:
+        red = {STATIC.workflow: _listing(_prun(STATIC, conclusion="failure"))}
+        reasons = _verdict(FakeApi(_listing(_run()), others=red))
+        self.assertTrue(any("gh workflow run static.yml --ref <branch>" in r for r in reasons), reasons)
+
+
+class JobListingTest(unittest.TestCase):
+    def test_pages_cover_the_total(self) -> None:
+        jobs = [_jobs_page(5, ("a", "success"), total=2), _jobs_page(5, ("b", "success"), total=2)]
+        self.assertEqual([j["name"] for j in ng.jobs_of(jobs, 5)], ["a", "b"])
+
+    def test_short_or_malformed_listing_refused(self) -> None:
+        for pages in (
+            [],
+            [_jobs_page(5, ("a", "success"), total=2)],
+            [_jobs_page(5, ("a", "success"), total=1), _jobs_page(5, ("b", "success"), total=2)],
+            [{"total_count": 1}],
+            [{"total_count": True, "jobs": []}],
+            [{"total_count": -1, "jobs": []}],
+            [None],
+            [{"total_count": 1, "jobs": [{"name": 3, "run_id": 5}]}],
+            [{"total_count": 1, "jobs": ["a"]}],
+            [_jobs_page(6, ("a", "success"))],
+        ):
+            with self.subTest(pages), self.assertRaises(ng.NightlyError):
+                ng.jobs_of(pages, 5)
+
+    def test_listing_past_the_page_bound_refused(self) -> None:
+        total = ng.JOBS_PAGE * ng.MAX_JOB_PAGES + 1
+        pages = [
+            _jobs_page(SANDBOX_ID, *((f"j{p}-{i}", "success") for i in range(ng.JOBS_PAGE)), total=total)
+            for p in range(ng.MAX_JOB_PAGES + 1)
+        ]
+        api = FakeApi(_listing(_run()), jobs={SANDBOX_ID: pages})
+        with self.assertRaises(ng.NightlyError):
+            _verdict(api)
+        self.assertEqual(sum(f"actions/runs/{SANDBOX_ID}/jobs?" in c for c in api.calls), ng.MAX_JOB_PAGES)
+
+    def test_every_page_read(self) -> None:
+        names = sorted(SANDBOX.gates)
+        pages = [_jobs_page(SANDBOX_ID, (names[0], "success"), total=2), _jobs_page(SANDBOX_ID, (names[1], "success"), total=2)]
+        api = FakeApi(_listing(_run()), jobs={SANDBOX_ID: pages})
+        self.assertEqual(_verdict(api), [])
+        self.assertIn(ng._jobs_path(REPO, SANDBOX_ID, 2), api.calls)
+
+    def test_jobs_read_latest_attempt_unfiltered_by_status(self) -> None:
+        path = ng._jobs_path(REPO, 5, 1)
+        self.assertIn("filter=latest", path)
+        self.assertNotIn("status=", path)
+
+
+def _manifest(*entries: tuple[str, str, str]) -> dict:
+    return {"checks": [{"context": c, "disposition": d, "producer": p} for c, d, p in entries]}
+
+
+def _triggers(**on: tuple[str, ...]) -> dict:
+    return {f"{name.replace('_', '-')}.yml": set(events) for name, events in on.items()}
+
+
+SYNTH = ng.Producer(
+    workflow="nightly-a.yml",
+    events=("schedule", "workflow_dispatch"),
+    recovery="workflow_dispatch",
+    gates=frozenset({"heavy"}),
+    non_blocking=frozenset({"note"}),
+)
+SYNTH_MANIFEST = _manifest(("heavy", "nightly-gate", "nightly-a.yml"), ("note", "informational", "nightly-a.yml"), ("fast", "gate", "nightly-a.yml"))
+SYNTH_TRIGGERS = _triggers(nightly_a=("push", "schedule", "workflow_dispatch"))
+
+
+class ProducersTest(unittest.TestCase):
+    """`PRODUCERS` must equal what the manifest and each producer's triggers derive."""
+
+    def check(self, manifest: object = SYNTH_MANIFEST, triggers: dict | None = None, declared: tuple = (SYNTH,)) -> list[str]:
+        return ng.producers_errors(manifest, SYNTH_TRIGGERS if triggers is None else triggers, declared)
+
+    def test_derived_producers_pass(self) -> None:
+        self.assertEqual(self.check(), [])
+
+    def test_repo_producers_match_the_manifest(self) -> None:
+        self.assertEqual(ng.lint(), 0)
+
+    def test_producer_absent_from_manifest_is_refused(self) -> None:
+        extra = ng.Producer("gone.yml", ("schedule",), None, frozenset({"x"}), frozenset())
+        errors = self.check(declared=(SYNTH, extra))
+        self.assertTrue(any("gone.yml" in e and "produces no nightly-gate context" in e for e in errors), errors)
+
+    def test_manifest_producer_absent_from_producers_is_refused(self) -> None:
+        errors = self.check(declared=())
+        self.assertTrue(any("nightly-a.yml" in e and "absent from PRODUCERS" in e for e in errors), errors)
+
+    def test_duplicate_producer_refused(self) -> None:
+        self.assertTrue(self.check(declared=(SYNTH, SYNTH)))
+
+    def test_drifted_entry_refused(self) -> None:
+        for drift in (
+            {"gates": frozenset()},
+            {"gates": frozenset({"heavy", "fast"})},
+            {"non_blocking": frozenset()},
+            {"events": ("workflow_dispatch",)},
+            {"events": ("workflow_dispatch", "schedule")},
+            {"recovery": None},
+        ):
+            with self.subTest(drift):
+                declared = (ng.Producer(**{**SYNTH.__dict__, **drift}),)
+                self.assertTrue(self.check(declared=declared))
+
+    def test_trigger_drift_refused(self) -> None:
+        for on in (("schedule",), ("push", "workflow_dispatch")):
+            with self.subTest(on):
+                self.assertTrue(self.check(triggers=_triggers(nightly_a=on)))
+
+    def test_producer_without_nightly_trigger_refused(self) -> None:
+        for triggers in (_triggers(nightly_a=("push", "pull_request")), {"nightly-a.yml": None}, {}):
+            with self.subTest(triggers):
+                errors = self.check(triggers=triggers)
+                self.assertTrue(any("nightly-a.yml" in e for e in errors), errors)
+
+    def test_unreadable_manifest_refused(self) -> None:
+        for manifest in (None, {}, {"checks": {}}):
+            with self.subTest(manifest):
+                self.assertTrue(self.check(manifest=manifest))
+
+    def test_non_blocking_dispositions_derived(self) -> None:
+        manifest = _manifest(("heavy", "nightly-gate", "nightly-a.yml"), ("note", "candidate", "nightly-a.yml"), ("old", "delete", "nightly-a.yml"))
+        declared = (ng.Producer(**{**SYNTH.__dict__, "non_blocking": frozenset({"note", "old"})}),)
+        self.assertEqual(self.check(manifest=manifest, declared=declared), [])
+
+    def test_triggers_of_reads_every_on_shape(self) -> None:
+        self.assertEqual(ng.triggers_of({True: {"schedule": None}}), {"schedule"})
+        self.assertEqual(ng.triggers_of({"on": ["push", "schedule"]}), {"push", "schedule"})
+        self.assertEqual(ng.triggers_of({"on": "schedule"}), {"schedule"})
+        for bad in (None, {}, {"on": 3}, {"on": [1]}, []):
+            self.assertIsNone(ng.triggers_of(bad), bad)
+
+    def test_wiring_includes_producer_check(self) -> None:
+        manifest = {"checks": [*MANIFEST["checks"], *SYNTH_MANIFEST["checks"]]}
+        self.assertEqual(ng.wiring_errors(WORKFLOW, manifest, SYNTH_TRIGGERS, (SYNTH,)), [])
+        self.assertTrue(ng.wiring_errors(WORKFLOW, manifest, SYNTH_TRIGGERS, ()))
 
 
 if __name__ == "__main__":
