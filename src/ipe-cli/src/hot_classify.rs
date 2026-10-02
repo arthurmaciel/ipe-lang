@@ -1857,4 +1857,30 @@ mod tests {
         let next = project(&[("src/update.rs", &wiring_arm(WEFF0, 2))], "cargo");
         assert_eq!(classify(&prev, &next), Classification::Logic);
     }
+
+    /// The hot-literal reader decodes exactly what the one literal renderer
+    /// emits, over every escape form `Debug` produces.
+    #[test]
+    fn parse_string_literal_inverts_rust_str_lit() {
+        let corpus = [
+            "",
+            "plain ascii",
+            "quote \" backslash \\ apostrophe '",
+            "tab\t nl\n cr\r crlf\r\n nul\0 del\u{7f} esc\u{1b}",
+            "bidi \u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}",
+            "format \u{200E}\u{FEFF}\u{2028}\u{2029}",
+            "\u{301}leading combining mark",
+            "accented é, astral 𝄞, unassigned \u{10FFFF}",
+            "braces {} {{x}}",
+        ];
+        for text in corpus {
+            let lit = ipe_intern::rust_str_lit(text);
+            let source = format!("{lit}, trailing");
+            assert_eq!(
+                parse_string_literal(source.as_bytes(), 0),
+                Some((text.to_owned(), lit.len())),
+                "{lit} did not round-trip"
+            );
+        }
+    }
 }

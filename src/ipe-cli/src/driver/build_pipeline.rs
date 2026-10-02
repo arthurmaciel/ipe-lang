@@ -2228,7 +2228,40 @@ pub fn build_emit_manifest(
     for (rel, contents) in &emitted.files {
         manifest.insert(PathBuf::from(rel.as_str()), contents.clone());
     }
+    refuse_unlexable_rust(&manifest)?;
     Ok(manifest)
+}
+
+/// The `where_` a lexability refusal of emitted Rust names.
+const EMIT_LEXABLE: &str = "emit.lexable";
+
+/// Refuse a manifest whose `.rs` text holds a character the Rust lexer refuses raw.
+///
+/// The scan covers the FINAL manifest — vendored runtime, backend emit, post-emit
+/// injections and a cache-deserialized project alike — so no text reaches
+/// `cargo` that would make it fail a program `ipe` accepted. The detail names the
+/// file, byte offset and code point through the hazard's own rendering, never the
+/// raw character.
+///
+/// # Errors
+/// [`CliError::Pipeline`] carrying [`Diagnostic::CompilerBug`] on the first hit.
+fn refuse_unlexable_rust(manifest: &BTreeMap<PathBuf, String>) -> Result<(), CliError> {
+    let hit = manifest
+        .iter()
+        .filter(|(path, _)| path.extension().is_some_and(|ext| ext == "rs"))
+        .find_map(|(path, text)| ipe_intern::find_lexer_hazard(text).map(|hazard| (path, hazard)));
+    hit.map_or(Ok(()), |(path, hazard)| {
+        Err(CliError::Pipeline {
+            file: path.clone(),
+            src: String::new(),
+            diag: Box::new(Diagnostic::CompilerBug {
+                where_: EMIT_LEXABLE,
+                detail: format!(
+                    "emitted {path:?} holds {hazard}, which the Rust lexer refuses raw"
+                ),
+            }),
+        })
+    })
 }
 
 /// Vendor only the runtime source files the emitted `mod.rs` reaches.
@@ -2697,6 +2730,68 @@ mod tests {
             ),
             "the widget pair is not the Debug-escaped literal pair: {main}"
         );
+    }
+
+    /// An emitted project for the manifest: a vendored `mod.rs` that declares
+    /// no runtime module, so the scan sees only `files` and reads no disk.
+    fn vendored_project(files: &[(&str, &str)]) -> ipe_backend::EmittedProject {
+        let mut map = BTreeMap::new();
+        for (path, body) in files.iter().chain(&[("src/ipe_runtime/mod.rs", "")]) {
+            let rel = ipe_backend::RelPath::new(*path).expect("valid rel path");
+            map.insert(rel, (*body).to_owned());
+        }
+        ipe_backend::EmittedProject {
+            files: map,
+            cargo_toml: String::new(),
+            uses_webview: false,
+        }
+    }
+
+    /// The manifest refuses `.rs` text holding a raw bidi control or a bare CR,
+    /// past every renderer, and names the hazard without echoing it.
+    #[test]
+    fn manifest_refuses_a_raw_lexer_hazard() {
+        let missing = Path::new("/nonexistent-runtime-dir");
+        for (path, body) in [
+            ("src/main.rs", "fn main() { let _ = \"a\u{202E}b\"; }\n"),
+            ("src/ipe_runtime/x.rs", "// a\rb\n"),
+        ] {
+            let refused = build_emit_manifest(&vendored_project(&[(path, body)]), missing, true);
+            assert!(
+                matches!(&refused, Err(CliError::Pipeline { .. })),
+                "a raw hazard in {path} passed the manifest"
+            );
+            let Err(CliError::Pipeline { file, diag, .. }) = refused else {
+                return;
+            };
+            assert_eq!(file, PathBuf::from(path));
+            assert!(
+                matches!(
+                    &*diag,
+                    Diagnostic::CompilerBug {
+                        where_: EMIT_LEXABLE,
+                        ..
+                    }
+                ),
+                "not the lexability refusal: {diag:?}"
+            );
+            let Diagnostic::CompilerBug { detail, .. } = *diag else {
+                return;
+            };
+            assert!(
+                !detail.contains(['\u{202E}', '\r']),
+                "the refusal echoed the raw hazard: {detail:?}"
+            );
+        }
+        for (path, body) in [
+            ("src/main.rs", "fn main() {}\r\n// \u{200E}\u{FEFF} é 𝄞\r\n"),
+            ("www/index.html", "<p>\u{202E}\r</p>"),
+        ] {
+            assert!(
+                build_emit_manifest(&vendored_project(&[(path, body)]), missing, true).is_ok(),
+                "lexable or non-Rust text in {path} was refused"
+            );
+        }
     }
 
     /// A build whose caller states no intent is a release build.
