@@ -18558,6 +18558,41 @@ impl<'a> Lowerer<'a> {
         rewrite_captured_clones(&clone_set, &noncl_set, span, body, 0)
     }
 
+    /// T3 capture-clone rewrite for the body of a SYNTHETIC eta closure (a
+    /// partial or over-application rebuilt as `\eta… -> f(a0, …, eta…)`).
+    ///
+    /// The residual is a `move` closure boxed as `dyn Fn`, so its body runs once
+    /// per call. Every expression it re-evaluates per call — the callee value
+    /// and each supplied argument the eta builder did not hoist out of it (a
+    /// function-typed or `Copy`-typed argument slot) — reads the locals free in
+    /// its CANON source from the closure environment. A `CloneOk` read of such a
+    /// local must clone, exactly as in a source lambda, or the closure moves it
+    /// out of its `Fn` environment (E0507). `sources` are those canon
+    /// expressions; a local free in none of them is not a capture of this
+    /// closure and stays untouched.
+    ///
+    /// Only the `CloneOk` set is rewritten. A `NonClone` capture keeps the eta
+    /// builder's own forwarding discipline (a function value moved into an
+    /// `impl FnOnce` slot), so this pass adds `.clone()` reads and no
+    /// IPE-L0125/L0126 refusal; a capture whose type does not resolve refuses
+    /// exactly as it does for a source lambda.
+    fn clone_eta_body_captures(
+        &self,
+        sources: &[&canon::Expr],
+        span: Span,
+        body: Expr,
+    ) -> DResult<Expr> {
+        let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
+        for source in sources {
+            for (sym, binder_ty) in self.captured_locals(&[], source)? {
+                if classify_capture_clone(self.clone_env(), binder_ty.classified()) == Some(true) {
+                    clone_set.insert(sym);
+                }
+            }
+        }
+        rewrite_captured_clones(&clone_set, &BTreeSet::new(), span, body, 0)
+    }
+
     /// Run `f` with `poly` installed as the enclosing def's generic type-variable map.
     ///
     /// The previous map is restored once `f` returns, whatever path `f` exits
@@ -21275,6 +21310,7 @@ impl<'a> Lowerer<'a> {
                     let arity = self.callee_arity(&callee)?;
                     return self.eta_expand_partial(
                         e,
+                        &[],
                         callee,
                         Vec::new(),
                         arity,
@@ -23146,6 +23182,7 @@ impl<'a> Lowerer<'a> {
                     // `eta_expand_partial` for named-function partial application.
                     self.eta_expand_partial_ctor(
                         callee,
+                        args,
                         ctor_home,
                         *type_name,
                         *name,
@@ -23265,6 +23302,7 @@ impl<'a> Lowerer<'a> {
                     }
                     std::cmp::Ordering::Less => self.eta_expand_partial(
                         callee,
+                        args,
                         resolved,
                         lowered_args,
                         arity,
@@ -23272,7 +23310,7 @@ impl<'a> Lowerer<'a> {
                         call_span,
                     ),
                     std::cmp::Ordering::Greater => {
-                        self.saturate_over(callee, resolved, lowered_args, arity, call_span)
+                        self.saturate_over(callee, args, resolved, lowered_args, arity, call_span)
                     }
                 }
             }
@@ -23306,7 +23344,13 @@ impl<'a> Lowerer<'a> {
                     && arity != 0
                     && args.len() < arity
                 {
-                    return self.eta_expand_value_partial(callee, lowered_args, arity, call_span);
+                    return self.eta_expand_value_partial(
+                        callee,
+                        args,
+                        lowered_args,
+                        arity,
+                        call_span,
+                    );
                 }
                 Ok(Expr::Apply {
                     func: Box::new(self.lower_expr(callee)?),
@@ -23913,9 +23957,11 @@ impl<'a> Lowerer<'a> {
     /// missing region type, or an arrow shorter than `arity`, is unreachable for
     /// well-typed input and surfaces as a [`Diagnostic::CompilerBug`], not a
     /// silent default.
+    #[allow(clippy::too_many_arguments)] // the canon call (callee + args) plus its lowered form and site
     fn eta_expand_partial(
         &self,
         callee: &canon::Expr,
+        canon_args: &[canon::Expr],
         resolved: Callee,
         lowered_args: Vec<Expr>,
         arity: usize,
@@ -24091,6 +24137,8 @@ impl<'a> Lowerer<'a> {
             // saturated) — this residual call carries no form-handler verdict.
             on_form: OnFormKind::NotForm,
         };
+        let sources: Vec<&canon::Expr> = canon_args.iter().collect();
+        let body = self.clone_eta_body_captures(&sources, call_span, body)?;
         let lambda = Expr::Lambda {
             params,
             ret,
@@ -24150,6 +24198,7 @@ impl<'a> Lowerer<'a> {
     fn eta_expand_value_partial(
         &self,
         callee: &canon::Expr,
+        canon_args: &[canon::Expr],
         lowered_args: Vec<Expr>,
         arity: usize,
         call_span: Span,
@@ -24252,6 +24301,8 @@ impl<'a> Lowerer<'a> {
             func: Box::new(self.lower_expr(callee)?),
             args: call_args,
         };
+        let sources: Vec<&canon::Expr> = std::iter::once(callee).chain(canon_args).collect();
+        let body = self.clone_eta_body_captures(&sources, call_span, body)?;
         let lambda = Expr::Lambda {
             params,
             ret,
@@ -24296,6 +24347,7 @@ impl<'a> Lowerer<'a> {
     fn eta_expand_partial_ctor(
         &self,
         callee: &canon::Expr,
+        canon_args: &[canon::Expr],
         ctor_home: ModPath,
         type_name: Symbol,
         name: Symbol,
@@ -24379,6 +24431,8 @@ impl<'a> Lowerer<'a> {
             variant: name,
             args: call_args,
         };
+        let sources: Vec<&canon::Expr> = canon_args.iter().collect();
+        let body = self.clone_eta_body_captures(&sources, call_span, body)?;
         let lambda = Expr::Lambda {
             params,
             ret,
@@ -24510,6 +24564,7 @@ impl<'a> Lowerer<'a> {
     fn saturate_over(
         &self,
         callee: &canon::Expr,
+        canon_args: &[canon::Expr],
         resolved: Callee,
         lowered_args: Vec<Expr>,
         arity: usize,
@@ -24529,6 +24584,7 @@ impl<'a> Lowerer<'a> {
                 // params. `eta_expand_over_partial` builds exactly that.
                 return self.eta_expand_over_partial(
                     callee,
+                    canon_args,
                     resolved,
                     lowered_args,
                     arity,
@@ -24574,12 +24630,15 @@ impl<'a> Lowerer<'a> {
     ///
     /// The residual params/ret come from the callee's solved region type, peeled
     /// past the `arity + surplus` positions already supplied. The T4 clone
-    /// discipline for the surplus args mirrors the other eta paths; the captured
-    /// `Call(f, head)` value is a `Box<dyn Fn>` moved in and called via `&self`,
-    /// so the residual is `Fn`.
+    /// discipline for the surplus args mirrors the other eta paths. The direct
+    /// `Call(f, head)` sits in the residual's body and is re-evaluated on every
+    /// call, so its `head` captures go through the same body-wide capture-clone
+    /// rewrite as the surplus args.
+    #[allow(clippy::too_many_arguments)] // the canon call (callee + args) plus its lowered form and arities
     fn eta_expand_over_partial(
         &self,
         callee: &canon::Expr,
+        canon_args: &[canon::Expr],
         resolved: Callee,
         lowered_args: Vec<Expr>,
         arity: usize,
@@ -24678,6 +24737,8 @@ impl<'a> Lowerer<'a> {
             }),
             args: apply_args,
         };
+        let sources: Vec<&canon::Expr> = canon_args.iter().collect();
+        let body = self.clone_eta_body_captures(&sources, call_span, body)?;
         let lambda = Expr::Lambda {
             params,
             ret,
