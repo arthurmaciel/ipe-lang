@@ -4,6 +4,7 @@ import Ipe.ByteSize as ByteSize
 import Ipe.Char as Char
 import Ipe.Crypto as Crypto
 import Ipe.Db as Db
+import Ipe.Db.Decode
 import Ipe.Db.Sql as Sql
 import Ipe.Dict as Dict
 import Ipe.Error as Error
@@ -19,13 +20,13 @@ import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.Time.Timestamp as Timestamp
-import Lib.Db as LibDb exposing (Decision(..))
+import Lib.Db as LibDb exposing (Decision(..), HistoryCursor(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
 import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
-import Lib.Queue as Queue exposing (QueueState(..), UnitPageState(..))
+import Lib.Queue as Queue exposing (HistoryState(..), QueueState(..), UnitPageState(..))
 import Lib.RepoPath as RepoPath exposing (PathError(..), Root, RootMap)
 import Lib.SafeText as SafeText
 import Lib.Settings as Settings
@@ -91,18 +92,18 @@ duplicateInsertIsNoop db =
 
 -- Re-reviewing the same pair must succeed (any Err here fails
 -- the check loudly) and must keep the first decision.
-isApproved : Maybe Decision -> Bool
+isApproved : Maybe LibDb.ReviewRow -> Bool
 isApproved m =
     case m of
         Nothing ->
             False
 
-        Just d ->
-            case d of
-                Approved ->
-                    True
+        Just row ->
+            case row.reason of
+                Nothing ->
+                    row.decision == "approve"
 
-                Refused _ ->
+                Just _ ->
                     False
 
 
@@ -125,7 +126,7 @@ reasonShown reason =
 
 -- `parseReason` is the only way to a refusal: blank and over-long reasons
 -- have no `Reason`, the bound itself is accepted, and a stored row whose
--- reason breaks the bound fails to decode rather than reaching a page.
+-- reason breaks the bound still decodes, its reason shown by length only.
 reasonBounded : Db -> Task.Task Error Bool
 reasonBounded db =
     let
@@ -142,7 +143,7 @@ reasonBounded db =
     in
     do
         Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString "long-uid", SqlString "hL", SqlString "refuse", SqlString (atBound ++ "x"), SqlInt 0 ]
-        storedRefused <- LibDb.findDecision db "long-uid" "hL" |> Task.map (\_ -> False) |> Task.onError (\e -> Task.succeed (String.contains "at most" (Error.toString e) && String.contains "unit \"long-uid\" at hash \"hL\"" (Error.toString e)))
+        storedRefused <- LibDb.findDecision db "long-uid" "hL" |> Task.map (storedReasonShown "reason not shown: 501 characters, over the 500-character limit")
         Db.exec db "DELETE FROM review WHERE uid = ?" [ SqlString "long-uid" ]
         Task.succeed
             (rejected ""
@@ -160,32 +161,25 @@ reasonBounded db =
             )
 
 
-checkPair : Maybe Decision -> Maybe Decision -> Bool
+checkPair : Maybe LibDb.ReviewRow -> Maybe LibDb.ReviewRow -> Bool
 checkPair approved refused =
-    case approved of
+    isApproved approved && storedReasonShown "too big" refused
+
+
+-- True when the row is a refusal whose reason shows exactly as `expected`.
+storedReasonShown : String -> Maybe LibDb.ReviewRow -> Bool
+storedReasonShown expected found =
+    case found of
         Nothing ->
             False
 
-        Just Approved ->
-            case refused of
+        Just row ->
+            case row.reason of
                 Nothing ->
                     False
 
-                Just d ->
-                    matchRefused d
-
-        Just (Refused _) ->
-            False
-
-
-matchRefused : Decision -> Bool
-matchRefused d =
-    case d of
-        Approved ->
-            False
-
-        Refused reason ->
-            reasonShown reason == "too big"
+                Just r ->
+                    row.decision == "refuse" && SafeText.toString (LibDb.storedReasonText r) == expected
 
 
 decisionRoundtrip : Db -> Task.Task Error Bool
@@ -200,6 +194,188 @@ decisionRoundtrip db =
             )
 
 
+-- ── stored rows ─────────────────────────────────────────────────────────
+--
+-- A stored refusal whose reason breaks the bound — written before the bound,
+-- or edited outside this tool — still decodes through every read of the
+-- review table, and shows its length, never its text. Red if a stored reason
+-- is parsed by `parseReason` at the decode point.
+storedOverlongReasonDecodes : Db -> Task.Task Error Bool
+storedOverlongReasonDecodes db =
+    let
+        expected =
+            "reason not shown: 5000 characters, over the 500-character limit"
+    in
+    do
+        Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString "huge-uid", SqlString "hH", SqlString "refuse", SqlString (String.repeat 5000 "y"), SqlInt 0 ]
+        byPair <- LibDb.findDecision db "huge-uid" "hH"
+        byUid <- LibDb.findLatestForUid db "huge-uid"
+        Db.exec db "DELETE FROM review WHERE uid = ?" [ SqlString "huge-uid" ]
+        Task.succeed (storedReasonShown expected byPair && storedReasonShown expected byUid)
+
+
+-- A stored reason the table's check accepts but that is blank to the tool
+-- (SQLite's `trim` strips only spaces) decodes as blank, not as a `Reason`.
+storedBlankReasonDecodes : Db -> Task.Task Error Bool
+storedBlankReasonDecodes db =
+    do
+        Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString "blank-uid", SqlString "hB", SqlString "refuse", SqlString "\n\t", SqlInt 0 ]
+        found <- LibDb.findDecision db "blank-uid" "hB"
+        Db.exec db "DELETE FROM review WHERE uid = ?" [ SqlString "blank-uid" ]
+        Task.succeed (storedReasonShown "reason not shown: it is blank" found)
+
+
+-- History pages walked two rows at a time from the start return every row
+-- of the table exactly once, in the order one unpaged query gives — ties in
+-- `reviewed_at`, and one uid at two hashes, included. Red if a page skips or
+-- repeats a row at its edge, or if the walk never pages.
+historyWalkMatchesOrder : Db -> Task.Task Error Bool
+historyWalkMatchesOrder db =
+    let
+        seeded =
+            [ ( "walk-b", "h1", 7 ), ( "walk-a", "h2", 7 ), ( "walk-a", "h1", 7 ), ( "walk-c", "h1", 3 ), ( "walk-c", "h2", 3 ), ( "walk-d", "h1", 9 ), ( "walk-e", "h1", 1 ) ]
+
+        seed ( uid, bodyHash, at ) =
+            Db.exec db "INSERT INTO review (uid, body_hash, decision, reason, reviewed_at) VALUES (?,?,?,?,?)" [ SqlString uid, SqlString bodyHash, SqlString "refuse", SqlString "r", SqlInt at ]
+
+        keyDecoder =
+            Db.Decode.succeed (\uid bodyHash -> ( uid, bodyHash ))
+                |> Db.Decode.required "uid" (Db.Decode.string "uid")
+                |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
+    in
+    do
+        Task.sequence (List.map seed seeded)
+        walked <- Task.loop 1000 { cursor = HistoryStart, seen = [], pages = 0 } (historyWalkStep db)
+        expected <- Db.queryDecode db "SELECT uid, body_hash FROM review ORDER BY reviewed_at DESC, uid, body_hash" [] keyDecoder
+        Db.exec db "DELETE FROM review WHERE uid LIKE ?" [ SqlString "walk-%" ]
+        Task.succeed
+            (walked.seen
+                == expected
+                && walked.pages
+                > 3
+                && List.filter (\( uid, _ ) -> String.startsWith "walk-" uid) walked.seen
+                == [ ( "walk-d", "h1" ), ( "walk-a", "h1" ), ( "walk-a", "h2" ), ( "walk-b", "h1" ), ( "walk-c", "h1" ), ( "walk-c", "h2" ), ( "walk-e", "h1" ) ]
+            )
+
+
+-- The state one History walk step carries: where the next page starts, the
+-- keys read so far, and how many pages were read.
+type alias HistoryWalk =
+    { cursor : LibDb.HistoryCursor
+    , seen : List ( String, String )
+    , pages : Int
+    }
+
+
+historyWalkStep : Db -> HistoryWalk -> Task.Task Error (Task.Step HistoryWalk HistoryWalk)
+historyWalkStep db state =
+    do
+        page <- LibDb.historyPage db 2 state.cursor
+        let
+            next =
+                { cursor = state.cursor
+                , seen = state.seen ++ List.map (\row -> ( row.uid, row.bodyHash )) page.rows
+                , pages = state.pages + 1
+                }
+        in
+        case page.next of
+            Nothing ->
+                Task.succeed (Task.Done next)
+
+            Just cursor ->
+                Task.succeed (Task.Continue { next | cursor = cursor })
+
+
+isLastHistoryPage : Maybe LibDb.HistoryCursor -> Bool
+isLastHistoryPage next =
+    case next of
+        Nothing ->
+            True
+
+        Just _ ->
+            False
+
+
+-- A History page of no rows, or fewer, is refused as invalid input before
+-- any read.
+historyPageSizeRefused : Db -> Task.Task Error Bool
+historyPageSizeRefused db =
+    let
+        refused size =
+            LibDb.historyPage db size HistoryStart
+                |> Task.map (\_ -> False)
+                |> Task.onError (\e -> Task.succeed (Error.kind e == Error.kind (Error.invalidInput "")))
+    in
+    do
+        zero <- refused 0
+        negative <- refused (-1)
+        one <- LibDb.historyPage db 1 HistoryStart |> Task.map (\page -> List.length page.rows <= 1)
+        Task.succeed (zero && negative && one)
+
+
+-- Each History state has its own text: a load in flight or a failed load
+-- never reads as an empty history, and an empty later page never reads as
+-- "no reviews yet".
+historyStateTextsDistinct : Bool
+historyStateTextsDistinct =
+    let
+        boom =
+            Error.unexpected "boom"
+
+        row =
+            { uid = "u-h", bodyHash = "h", decision = "approve", reason = Nothing, reviewedAt = Timestamp.fromUnixMillis 0, name = Nothing }
+
+        later =
+            HistoryAfter (Timestamp.fromUnixMillis 0) "u-h" "h"
+    in
+    List.all identity
+        [ Queue.historyStatusText HistoryLoading == Just "Loading history…"
+        , Queue.historyStatusText (HistoryFailed boom) == Just ("History load failed: " ++ Error.toString boom)
+        , Queue.historyStatusText (HistoryLoaded { rows = [], at = HistoryStart, next = Nothing }) == Just "No reviews yet."
+        , Queue.historyStatusText (HistoryLoaded { rows = [], at = later, next = Nothing }) == Just "No more reviews."
+        , Queue.historyStatusText (HistoryLoaded { rows = [ row ], at = HistoryStart, next = Nothing }) == Nothing
+        , Queue.historyStatusText (HistoryLoaded { rows = [ row ], at = later, next = Just later }) == Nothing
+        ]
+
+
+-- Both History page shapes read in the order of the `review_history_order`
+-- index: the first page scans it from the top, a later page seeks into it at
+-- its cursor, and neither sorts the table. Red without the index migration,
+-- or if the cursor predicate loses its seekable `reviewed_at <=` bound.
+historyPagesUseIndex : Db -> Task.Task Error Bool
+historyPagesUseIndex db =
+    let
+        indexed plan =
+            List.any (String.contains "USING INDEX review_history_order") plan
+                && not (List.any (String.contains "TEMP B-TREE") plan)
+    in
+    do
+        first <- LibDb.historyPlan db HistoryStart
+        later <- LibDb.historyPlan db (HistoryAfter (Timestamp.fromUnixMillis 5) "u" "h")
+        Task.succeed (indexed first && indexed later && List.any (String.startsWith "SEARCH") later)
+
+
+-- A slot's load tickets: each load takes a ticket no earlier load holds, and
+-- only the latest ticket settles the slot. Red if a later load could share
+-- an earlier load's ticket, so a slower earlier result would replace it.
+loadTicketsSettleLatest : Bool
+loadTicketsSettleLatest =
+    let
+        first =
+            Queue.nextTicket Queue.firstTicket
+
+        second =
+            Queue.nextTicket first
+    in
+    Queue.isCurrentLoad second second
+        && not (Queue.isCurrentLoad first second)
+        && not (Queue.isCurrentLoad Queue.firstTicket first)
+        && not (Queue.isCurrentLoad second first)
+
+
+-- ── end stored rows ─────────────────────────────────────────────────────
+
+
 allChecks : Db -> Task.Task Error (List ( String, Bool ))
 allChecks db =
     Task.sequence
@@ -207,6 +383,13 @@ allChecks db =
         , Task.map (\ok -> ( "re-migrate idempotent", ok )) (idempotent db)
         , Task.map (\ok -> ( "duplicate (uid,body_hash) no-op", ok )) (duplicateInsertIsNoop db)
         , Task.map (\ok -> ( "refusal reason is non-blank and bounded", ok )) (reasonBounded db)
+        , Task.map (\ok -> ( "a stored over-long reason decodes and shows its length", ok )) (storedOverlongReasonDecodes db)
+        , Task.map (\ok -> ( "a stored blank reason decodes as blank", ok )) (storedBlankReasonDecodes db)
+        , Task.map (\ok -> ( "history pages walk every row once in order", ok )) (historyWalkMatchesOrder db)
+        , Task.map (\ok -> ( "a history page below one row is refused", ok )) (historyPageSizeRefused db)
+        , Task.map (\ok -> ( "history pages read in index order", ok )) (historyPagesUseIndex db)
+        , Task.succeed ( "only the latest load settles a page slot", loadTicketsSettleLatest )
+        , Task.succeed ( "history state texts distinguish loading/empty/failed/loaded", historyStateTextsDistinct )
         , Task.map (\ok -> ( "decision roundtrip", ok )) (decisionRoundtrip db)
         , Task.succeed
             ( "formatReviewedAt renders UTC"
@@ -2252,7 +2435,7 @@ openReadOnlyAt path =
         |> Task.andThen (\loc -> Db.open "sqlite" (Settings.indexReadUrl loc))
 
 
-hasDecision : Maybe Decision -> Bool
+hasDecision : Maybe LibDb.ReviewRow -> Bool
 hasDecision m =
     case m of
         Just _ ->
@@ -2519,8 +2702,8 @@ countDrainRows db uid bodyHash =
 
 -- ── review history ──────────────────────────────────────────────────────
 --
--- Two decisions on a scratch review db must come back through findDecisions
--- with their columns in order (descending reviewed_at, then uid).
+-- Two decisions on a scratch review db must come back on the first History
+-- page with their columns, and that short page is the last one.
 historyRoundtrip : Task.Task Error Bool
 historyRoundtrip =
     let
@@ -2542,14 +2725,19 @@ historyRoundtrip =
             )
         |> Task.andThen
             (\db ->
-                LibDb.findDecisions db
+                LibDb.historyPage db LibDb.historyPageSize HistoryStart
                     |> Task.map
-                        (\rows ->
-                            List.length rows
+                        (\page ->
+                            let
+                                rows =
+                                    page.rows
+                            in
+                            isLastHistoryPage page.next
+                                && List.length rows
                                 == 2
                                 && List.member ( "u-a", "approve" ) (List.map (\r -> ( r.uid, r.decision )) rows)
                                 && List.member ( "u-b", "refuse" ) (List.map (\r -> ( r.uid, r.decision )) rows)
-                                && List.member (Just "too big") (List.map (\r -> Maybe.map reasonShown r.reason) rows)
+                                && List.member (Just "too big") (List.map (\r -> Maybe.map (\s -> SafeText.toString (LibDb.storedReasonText s)) r.reason) rows)
                         )
             )
         |> Task.andThen

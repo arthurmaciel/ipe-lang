@@ -77,7 +77,12 @@ overrides therefore shows each one as `\u{202e}`-style text instead of
 rendering reordered (Trojan Source). `\` and `"` are shown as written.
 
 A refusal needs a reason of at most 500 characters; a blank or longer one is
-refused before anything is saved.
+refused before anything is saved. A stored refusal whose reason breaks that
+bound (saved before it, or edited in the database) still loads, shown by its
+length, never its text.
+
+History shows 100 reviews per page, newest first; each page reads only its own
+rows, through an index in that order.
 
 The progress counter in the header counts the units whose current body hash
 has a decision, out of the units decided or still queued. Each queue load
