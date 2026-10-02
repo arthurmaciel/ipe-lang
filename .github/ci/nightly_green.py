@@ -1,28 +1,38 @@
 #!/usr/bin/env python3
 """SSOT for the `nightly-green` gate: a red nightly blocks the next merge.
 
-The nightly is the "Build & test" workflow (ci.yml) dispatched on main by
-nightly-full-gate.yml; a dispatch runs every `nightly-gate` job. `nightly-green`
-is a required context that passes only on proof the full gate is green:
+The nightly is every run of a workflow that produces a `nightly-gate` context
+in `check-manifest.yml` — its *producers*, `PRODUCERS` below: "Build & test"
+(ci.yml) dispatched on main by nightly-full-gate.yml, and the scheduled runs of
+the others. `nightly-green` is a required context that passes only when EVERY
+producer is proven green, each in one of two ways:
 
-  1. the change's own commit passed a dispatched full gate (the recovery path:
-     a PR that fixes a red nightly is dispatched on its branch, proves itself,
-     and can merge), or
-  2. the latest concluded nightly on main (a re-run in flight counts, its
-     verdict not yet known) concluded `success`, is at most
-     MAX_AGE_H hours old (a stopped nightly is not a green one), and ran on a
-     commit of main's own history in this repository (a tag or branch merely
-     named `main` proves nothing).
+  1. the change's own commit passed a dispatched run of that producer (the
+     recovery path: a PR that fixes a red nightly dispatches the producer on
+     its branch, proves itself, and can merge), or
+  2. the producer's latest concluded nightly run on main (a re-run in flight
+     counts, its verdict not yet known) is at most MAX_AGE_H hours old (a
+     stopped nightly is not a green one), ran on a commit of main's own history
+     in this repository (a tag or branch merely named `main` proves nothing),
+     and its jobs are green.
 
-Absence is not a pass: no run, an unreadable listing, an unexpected shape, a
-cancelled or stale nightly — each is a red.
+A run's jobs are green when every `nightly-gate` context of the producer is a
+job that concluded `success`, and every other job concluded `success` or
+`skipped` — except a job whose context the manifest declares non-blocking
+(`NON_BLOCKING_DISPOSITIONS`). A job the manifest does not name blocks: an
+unknown job is never assumed harmless.
+
+Absence is not a pass: no run, a missing gate job, an unreadable listing, an
+unexpected shape, a cancelled or stale nightly — each is a red.
 
 Modes:
   --verdict  exit 0 iff the proof above holds for $EVENT_NAME / $HEAD_SHA in
              $REPO (a merge-group change is read from the runner's own
              $GITHUB_REF, the queue ref); exit 1 otherwise, naming why.
-  --lint     fail unless nightly-green.yml runs `--verdict` unconditionally and
-             the manifest declares `nightly-green` a gate. manifest-guard runs it.
+  --lint     fail unless nightly-green.yml runs `--verdict` unconditionally,
+             the manifest declares `nightly-green` a gate, and `PRODUCERS`
+             equals what the manifest and each producer's triggers derive.
+             manifest-guard runs it.
 """
 
 from __future__ import annotations
@@ -32,18 +42,22 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 CONTEXT = "nightly-green"
 WORKFLOW_FILE = "nightly-green.yml"
-NIGHTLY_WORKFLOW_PATH = ".github/workflows/ci.yml"
-NIGHTLY_EVENT = "workflow_dispatch"
+WORKFLOWS_DIR = ".github/workflows"
 MAIN = "main"
 MAX_AGE_H = 48
 # Runs fetched per listing; the newest matching run across all listings is judged.
 LISTING_PAGE = 20
+# Jobs fetched per page of a run's job listing, and the most pages read; a run
+# with more jobs than the bound covers is refused, never judged on a prefix.
+JOBS_PAGE = 100
+MAX_JOB_PAGES = 10
 # Fields a run is judged on; two equally fresh copies of one run must agree on them.
 _JUDGED_FIELDS = ("event", "path", "status", "conclusion", "head_branch", "head_sha", "created_at")
 GH_TIMEOUT_S = 60
@@ -54,6 +68,14 @@ EXPECTED_ENV = {
     "REPO": "${{ github.repository }}",
     "GH_TOKEN": "${{ github.token }}",
 }
+NIGHTLY_DISPOSITION = "nightly-gate"
+# Dispositions whose job never decides the nightly verdict (`candidate` is
+# surfaced with a promotion criterion instead, never judged here).
+NON_BLOCKING_DISPOSITIONS = frozenset({"informational", "delete", "candidate"})
+# Triggers whose runs on main are a producer's nightly; only a dispatch can
+# target a branch, so it alone is the change-commit recovery event.
+NIGHTLY_TRIGGERS = ("schedule", "workflow_dispatch")
+RECOVERY_TRIGGER = "workflow_dispatch"
 
 _SHA = re.compile(r"[0-9a-f]{40}")
 _REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -64,23 +86,98 @@ class NightlyError(Exception):
     """A listing, run, or event shape that proves nothing."""
 
 
+@dataclass(frozen=True)
+class Producer:
+    """One workflow producing `nightly-gate` contexts, as the manifest and its triggers derive it."""
+
+    workflow: str
+    events: tuple[str, ...]
+    recovery: str | None
+    gates: frozenset[str]
+    non_blocking: frozenset[str]
+
+    @property
+    def path(self) -> str:
+        return f"{WORKFLOWS_DIR}/{self.workflow}"
+
+
+# Asserted equal to the manifest + trigger derivation by `--lint` (manifest-guard);
+# held here because the verdict runs from a sparse checkout of this file alone.
+PRODUCERS: tuple[Producer, ...] = (
+    Producer(
+        workflow="admission-sandbox.yml",
+        events=("schedule", "workflow_dispatch"),
+        recovery="workflow_dispatch",
+        gates=frozenset(
+            {
+                "windows-x64 (Docker Windows container, process isolation)",
+                "freebsd-x64 (jail(8) inside vmactions VM)",
+            }
+        ),
+        non_blocking=frozenset(),
+    ),
+    Producer(
+        workflow="ci.yml",
+        events=("workflow_dispatch",),
+        recovery="workflow_dispatch",
+        gates=frozenset(
+            {
+                "asan-all",
+                "tsan",
+                "ruleset-drift",
+                "linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)",
+            }
+        ),
+        non_blocking=frozenset({"cancel-on-cheap-red"}),
+    ),
+    Producer(
+        workflow="ruleset-admin-read.yml",
+        events=("schedule",),
+        recovery=None,
+        gates=frozenset({"ruleset-admin-read"}),
+        non_blocking=frozenset(),
+    ),
+    Producer(
+        workflow="static.yml",
+        events=("schedule", "workflow_dispatch"),
+        recovery="workflow_dispatch",
+        gates=frozenset({"linux-cfree-gate (refusal is fail-closed)"}),
+        non_blocking=frozenset(
+            {
+                "linux-static-x64 (dlmalloc)",
+                "linux-static-x64 (mimalloc)",
+                "linux-static-arm64 (dlmalloc)",
+                "windows-static (dlmalloc, MSVC +crt-static)",
+                "freebsd-cross (x86_64-unknown-freebsd, build-only)",
+            }
+        ),
+    ),
+)
+
+
 def _parse_time(text: object) -> datetime:
     if not isinstance(text, str) or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", text):
         raise NightlyError(f"run timestamp {text!r} is not an ISO-8601 UTC instant")
     return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
 def _run_id(run: dict) -> int:
-    rid = run.get("id")
-    if not isinstance(rid, int) or isinstance(rid, bool) or rid <= 0:
-        raise NightlyError(f"run listing entry id {rid!r} is not a positive integer")
+    rid = _positive_int(run.get("id"))
+    if rid is None:
+        raise NightlyError(f"run listing entry id {run.get('id')!r} is not a positive integer")
     return rid
 
 
 def _attempt(run: dict) -> int:
-    attempt = run.get("run_attempt", 1)
-    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt <= 0:
-        raise NightlyError(f"run {run.get('id')} attempt {attempt!r} is not a positive integer")
+    attempt = _positive_int(run.get("run_attempt", 1))
+    if attempt is None:
+        raise NightlyError(f"run {run.get('id')} attempt {run.get('run_attempt')!r} is not a positive integer")
     return attempt
 
 
@@ -103,8 +200,10 @@ def _fresher(a: dict, b: dict) -> dict:
     return a
 
 
-def newest_dispatch(listings: list[object], *, branch: str | None, sha: str | None) -> dict | None:
-    """Return the newest completed nightly-workflow dispatch on `branch` / at `sha` across `listings`, or None.
+def newest_run(
+    listings: list[object], producer: Producer, events: tuple[str, ...], *, branch: str | None, sha: str | None
+) -> dict | None:
+    """Return the newest completed `producer` run of `events` on `branch` / at `sha` across `listings`, or None.
 
     No single listing is trusted to be complete, ordered, or filtered as asked:
     a server-side filter can serve a stale index or drop recent runs. Every
@@ -134,8 +233,8 @@ def newest_dispatch(listings: list[object], *, branch: str | None, sha: str | No
     for run in union.values():
         if (
             (run.get("status") != "completed" and _attempt(run) == 1)
-            or run.get("event") != NIGHTLY_EVENT
-            or run.get("path") != NIGHTLY_WORKFLOW_PATH
+            or run.get("event") not in events
+            or run.get("path") != producer.path
             or (branch is not None and run.get("head_branch") != branch)
             or (sha is not None and run.get("head_sha") != sha)
         ):
@@ -146,21 +245,32 @@ def newest_dispatch(listings: list[object], *, branch: str | None, sha: str | No
     return None if newest is None else newest[1]
 
 
-def run_errors(run: dict | None, *, branch: str | None, sha: str | None, now: datetime | None) -> list[str]:
-    """Return why `run` is not a green dispatched full gate, or [] when it is.
+def run_errors(
+    run: dict | None,
+    producer: Producer,
+    events: tuple[str, ...],
+    *,
+    branch: str | None,
+    sha: str | None,
+    now: datetime | None,
+) -> list[str]:
+    """Return why `run` is not a concluded `producer` run fit to be judged by its jobs, or [] when it is.
 
-    `branch`/`sha` pin where it must have run; `now` (when given) bounds its age.
+    `branch`/`sha` pin where it must have run; `now` (when given) bounds its
+    age. A run may conclude `failure` only when the producer has a
+    non-blocking job that could have failed it; its jobs then decide.
     """
     if run is None:
-        return ["no completed dispatched full gate exists"]
+        return [f"no completed {'/'.join(events)} run of {producer.workflow} exists"]
     errors: list[str] = []
-    if run.get("event") != NIGHTLY_EVENT:
-        errors.append(f"run event is {run.get('event')!r}, not {NIGHTLY_EVENT!r}")
-    if run.get("path") != NIGHTLY_WORKFLOW_PATH:
-        errors.append(f"run workflow is {run.get('path')!r}, not {NIGHTLY_WORKFLOW_PATH!r}")
+    if run.get("event") not in events:
+        errors.append(f"run event is {run.get('event')!r}, not one of {list(events)}")
+    if run.get("path") != producer.path:
+        errors.append(f"run workflow is {run.get('path')!r}, not {producer.path!r}")
     if run.get("status") != "completed":
         errors.append(f"run status is {run.get('status')!r}, not 'completed'")
-    if run.get("conclusion") != "success":
+    concluded = ("success", "failure") if producer.non_blocking else ("success",)
+    if run.get("conclusion") not in concluded:
         errors.append(f"run {run.get('html_url', run.get('id'))} concluded {run.get('conclusion')!r}")
     if branch is not None and run.get("head_branch") != branch:
         errors.append(f"run branch is {run.get('head_branch')!r}, not {branch!r}")
@@ -178,6 +288,60 @@ def run_errors(run: dict | None, *, branch: str | None, sha: str | None, now: da
                 errors.append(
                     f"latest nightly is older than {MAX_AGE_H}h (run {run.get('id')}, created {created.isoformat()})"
                 )
+    return errors
+
+
+def jobs_of(pages: list[object], rid: int) -> list[dict]:
+    """Return the jobs `pages` (a run's job listing, page by page) hold for run `rid`.
+
+    The pages must cover the listing's `total_count` exactly with distinct
+    jobs (a page that shifts under the read repeats one job in place of
+    another), and every job must name `rid` and carry a positive id and a
+    string name; anything else refuses.
+    """
+    jobs: list[dict] = []
+    ids: set[int] = set()
+    total: int | None = None
+    for page in pages:
+        if not isinstance(page, dict) or not isinstance(page.get("jobs"), list):
+            raise NightlyError(f"run {rid} job listing page has no `jobs` list")
+        count = page.get("total_count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise NightlyError(f"run {rid} job listing total_count {count!r} is not a count")
+        if total is not None and count != total:
+            raise NightlyError(f"run {rid} job listing pages disagree on total_count")
+        total = count
+        for job in page["jobs"]:
+            if not isinstance(job, dict) or not isinstance(job.get("name"), str):
+                raise NightlyError(f"run {rid} job listing entry is not a named job")
+            if job.get("run_id") != rid:
+                raise NightlyError(f"run {rid} job listing holds a job of run {job.get('run_id')!r}")
+            jid = _positive_int(job.get("id"))
+            if jid is None:
+                raise NightlyError(f"run {rid} job {job['name']!r} id {job.get('id')!r} is not a positive integer")
+            if jid in ids:
+                raise NightlyError(f"run {rid} job listing holds job {jid} twice")
+            ids.add(jid)
+            jobs.append(job)
+    if total is None or len(jobs) != total:
+        raise NightlyError(f"run {rid} job listing holds {len(jobs)} jobs, not its total_count {total!r}")
+    return jobs
+
+
+def job_errors(jobs: list[dict], producer: Producer) -> list[str]:
+    """Return why `jobs` (one run's latest job results) do not prove `producer` green, or []."""
+    errors: list[str] = []
+    seen: set[str] = set()
+    for job in jobs:
+        name = job["name"]
+        seen.add(name)
+        if name in producer.non_blocking and name not in producer.gates:
+            continue
+        status, conclusion = job.get("status"), job.get("conclusion")
+        allowed = ("success",) if name in producer.gates else ("success", "skipped")
+        if status != "completed" or conclusion not in allowed:
+            errors.append(f"job {name!r} is {status!r}/{conclusion!r}, not {'/'.join(allowed)}")
+    errors += [f"nightly-gate job {name!r} did not run" for name in sorted(producer.gates - seen)]
     return errors
 
 
@@ -234,20 +398,23 @@ def _gh_json(path: str) -> object:
         raise NightlyError(f"`gh api {path}` returned non-JSON: {exc}") from exc
 
 
-def _listing_paths(repo: str, scope: str) -> tuple[str, ...]:
-    """Independent `.../runs` listings that each may hold the dispatches in `scope`.
+def _listing_paths(repo: str, producer: Producer, event: str, scope: str) -> tuple[str, ...]:
+    """Independent `.../runs` listings that each may hold `producer`'s `event` runs in `scope`.
 
     The workflow listing filtered by event and scope, the workflow listing
     filtered by event only, and the repository listing filtered by event and
     scope are separate server-side indexes; none is trusted alone.
     """
-    workflow = NIGHTLY_WORKFLOW_PATH.rsplit("/", 1)[-1]
-    page = f"event={NIGHTLY_EVENT}&per_page={LISTING_PAGE}"
+    page = f"event={event}&per_page={LISTING_PAGE}"
     return (
-        f"repos/{repo}/actions/workflows/{workflow}/runs?{page}&{scope}",
-        f"repos/{repo}/actions/workflows/{workflow}/runs?{page}",
+        f"repos/{repo}/actions/workflows/{producer.workflow}/runs?{page}&{scope}",
+        f"repos/{repo}/actions/workflows/{producer.workflow}/runs?{page}",
         f"repos/{repo}/actions/runs?{page}&{scope}",
     )
+
+
+def _jobs_path(repo: str, rid: int, page: int) -> str:
+    return f"repos/{repo}/actions/runs/{rid}/jobs?filter=latest&per_page={JOBS_PAGE}&page={page}"
 
 
 def _reread(repo: str, run: dict) -> dict:
@@ -264,10 +431,73 @@ def _reread(repo: str, run: dict) -> dict:
     return _fresher(run, fresh)
 
 
-def _newest(repo: str, scope: str, *, branch: str | None, sha: str | None) -> dict | None:
-    listings = [_gh_json(path) for path in _listing_paths(repo, scope)]
-    chosen = newest_dispatch(listings, branch=branch, sha=sha)
+def _jobs(repo: str, rid: int) -> list[dict]:
+    """Read run `rid`'s latest job results, page by page, at most `MAX_JOB_PAGES` pages."""
+    pages: list[object] = []
+    collected = 0
+    for number in range(1, MAX_JOB_PAGES + 1):
+        page = _gh_json(_jobs_path(repo, rid, number))
+        pages.append(page)
+        jobs = page.get("jobs") if isinstance(page, dict) else None
+        count = page.get("total_count") if isinstance(page, dict) else None
+        if not isinstance(jobs, list) or not jobs or not isinstance(count, int):
+            break
+        collected += len(jobs)
+        if collected >= count:
+            break
+    return jobs_of(pages, rid)
+
+
+def _newest(
+    repo: str, producer: Producer, events: tuple[str, ...], scope: str, *, branch: str | None, sha: str | None
+) -> dict | None:
+    listings = [_gh_json(path) for event in events for path in _listing_paths(repo, producer, event, scope)]
+    chosen = newest_run(listings, producer, events, branch=branch, sha=sha)
     return None if chosen is None else _reread(repo, chosen)
+
+
+def _proof_errors(
+    repo: str,
+    producer: Producer,
+    events: tuple[str, ...],
+    scope: str,
+    *,
+    branch: str | None,
+    sha: str | None,
+    now: datetime | None,
+) -> list[str]:
+    run = _newest(repo, producer, events, scope, branch=branch, sha=sha)
+    errors = run_errors(run, producer, events, branch=branch, sha=sha, now=now)
+    if errors or run is None:
+        return errors
+    if branch == MAIN:
+        # `head_branch` is only a name: a tag or a fork branch called `main`
+        # carries it too. The run proves main only if its commit is on main.
+        errors = on_main_errors(repo, run)
+        if errors:
+            return errors
+    return job_errors(_jobs(repo, _run_id(run)), producer)
+
+
+def producer_errors(repo: str, producer: Producer, change_sha: str | None, now: datetime) -> list[str]:
+    """Return why `producer` is not proven green for a change at `change_sha` (None: main only), or []."""
+    reasons: list[str] = []
+    if change_sha is not None and producer.recovery is not None:
+        own = _proof_errors(
+            repo, producer, (producer.recovery,), f"head_sha={change_sha}", branch=None, sha=change_sha, now=None
+        )
+        if not own:
+            return []
+        reasons += [f"{producer.workflow} at change commit {change_sha[:12]}: {e}" for e in own]
+    main = _proof_errors(repo, producer, producer.events, f"branch={MAIN}", branch=MAIN, sha=None, now=now)
+    if not main:
+        return []
+    hint = (
+        f" (prove a fix with `gh workflow run {producer.workflow} --ref <branch>`)"
+        if producer.recovery is not None
+        else " (it runs on main only: `gh run rerun` its run, or follow the break-glass in .github/ci/RECONCILIATION.md)"
+    )
+    return reasons + [f"{producer.workflow} main nightly: {e}{hint}" for e in main]
 
 
 def verdict(env: dict[str, str], now: datetime) -> list[str]:
@@ -276,38 +506,131 @@ def verdict(env: dict[str, str], now: datetime) -> list[str]:
     if not _REPO.fullmatch(repo):
         raise NightlyError(f"REPO {repo!r} is not owner/name")
     source = change_sha_source(env.get("EVENT_NAME", ""), env.get("HEAD_SHA", ""), env.get("GITHUB_REF", ""))
-    reasons: list[str] = []
+    sha: str | None = None
     if source is not None:
-        kind, value = source
-        sha = value
+        kind, sha = source
         if kind == "pr":
-            pr = _gh_json(f"repos/{repo}/pulls/{value}")
+            pr = _gh_json(f"repos/{repo}/pulls/{sha}")
             head = pr.get("head") if isinstance(pr, dict) else None
-            sha = head.get("sha") if isinstance(head, dict) else None
-            if not isinstance(sha, str) or not _SHA.fullmatch(sha):
-                raise NightlyError(f"PR #{value} has no 40-hex head sha")
-        own = _newest(repo, f"head_sha={sha}", branch=None, sha=sha)
-        own_errors = run_errors(own, branch=None, sha=sha, now=None)
-        if not own_errors:
-            return []
-        reasons += [f"change commit {sha[:12]}: {e}" for e in own_errors]
-    main_run = _newest(repo, f"branch={MAIN}", branch=MAIN, sha=None)
-    main_errors = run_errors(main_run, branch=MAIN, sha=None, now=now)
-    if not main_errors and main_run is not None:
-        # `head_branch` is only a name: a tag or a fork branch called `main`
-        # carries it too. The run proves main only if its commit is on main.
-        main_errors = on_main_errors(repo, main_run)
-    if not main_errors:
-        return []
-    return reasons + [f"main nightly: {e}" for e in main_errors]
+            head_sha = head.get("sha") if isinstance(head, dict) else None
+            if not isinstance(head_sha, str) or not _SHA.fullmatch(head_sha):
+                raise NightlyError(f"PR #{sha} has no 40-hex head sha")
+            sha = head_sha
+    reasons: list[str] = []
+    for producer in PRODUCERS:
+        reasons += producer_errors(repo, producer, sha, now)
+    return reasons
 
 
 def _strip_expr(text: str) -> str:
     return " ".join(text.split())
 
 
-def wiring_errors(workflow: object, manifest: object) -> list[str]:
-    """Return why nightly-green could pass without `--verdict` passing, or []."""
+def triggers_of(workflow: object) -> set[str] | None:
+    """Return the workflow's event names, or None when `on:` has no recognised shape.
+
+    PyYAML 1.1 reads the bare key `on` as boolean True.
+    """
+    if not isinstance(workflow, dict):
+        return None
+    on = workflow.get(True, workflow.get("on"))
+    if isinstance(on, str):
+        return {on}
+    if isinstance(on, list) and all(isinstance(e, str) for e in on):
+        return set(on)
+    if isinstance(on, dict):
+        return {str(k) for k in on}
+    return None
+
+
+def nightly_workflows(manifest: object) -> list[str]:
+    """Return every workflow a `nightly-gate` entry of `manifest` names as its producer."""
+    entries = manifest.get("checks") if isinstance(manifest, dict) else None
+    listed = entries if isinstance(entries, list) else []
+    return sorted(
+        {str(e.get("producer")) for e in listed if isinstance(e, dict) and e.get("disposition") == NIGHTLY_DISPOSITION}
+    )
+
+
+def derive_producers(manifest: object, triggers: dict[str, set[str] | None]) -> tuple[list[Producer], list[str]]:
+    """Derive every producer from `manifest` and each producer workflow's `triggers`; return them and any refusal.
+
+    A producer is every workflow a `nightly-gate` entry names. Its nightly
+    events are its triggers among `NIGHTLY_TRIGGERS`, and its recovery event is
+    `RECOVERY_TRIGGER` when it has that trigger. A producer without a nightly
+    trigger, or whose triggers are unreadable, is refused: nothing would ever
+    prove it.
+    """
+    entries = manifest.get("checks") if isinstance(manifest, dict) else None
+    if not isinstance(entries, list):
+        return [], ["check-manifest.yml has no `checks` list"]
+    checks = [e for e in entries if isinstance(e, dict)]
+    producers: list[Producer] = []
+    errors: list[str] = []
+    for workflow in nightly_workflows(manifest):
+        on = triggers.get(workflow)
+        if on is None:
+            errors.append(f"nightly-gate producer {workflow} has no readable `on:` triggers")
+            continue
+        events = tuple(t for t in NIGHTLY_TRIGGERS if t in on)
+        if not events:
+            errors.append(f"nightly-gate producer {workflow} has no {'/'.join(NIGHTLY_TRIGGERS)} trigger")
+            continue
+        mine = [e for e in checks if e.get("producer") == workflow]
+        contexts = [str(e.get("context")) for e in mine]
+        errors += [
+            f"nightly-gate producer {workflow} declares context {c!r} more than once"
+            for c in sorted({c for c in contexts if contexts.count(c) > 1})
+        ]
+        producers.append(
+            Producer(
+                workflow=workflow,
+                events=events,
+                recovery=RECOVERY_TRIGGER if RECOVERY_TRIGGER in on else None,
+                gates=frozenset(str(e.get("context")) for e in mine if e.get("disposition") == NIGHTLY_DISPOSITION),
+                non_blocking=frozenset(
+                    str(e.get("context")) for e in mine if e.get("disposition") in NON_BLOCKING_DISPOSITIONS
+                ),
+            )
+        )
+    return producers, errors
+
+
+def producers_errors(
+    manifest: object, triggers: dict[str, set[str] | None], declared: tuple[Producer, ...] = PRODUCERS
+) -> list[str]:
+    """Return why `declared` (the verdict's `PRODUCERS`) differs from the manifest + trigger derivation, or []."""
+    derived, errors = derive_producers(manifest, triggers)
+    want = {p.workflow: p for p in derived}
+    have: dict[str, Producer] = {}
+    for producer in declared:
+        if producer.workflow in have:
+            errors.append(f"PRODUCERS lists {producer.workflow} twice")
+        have[producer.workflow] = producer
+    named = set(nightly_workflows(manifest))
+    errors += [
+        f"PRODUCERS lists {workflow}, which produces no nightly-gate context in check-manifest.yml"
+        for workflow in sorted(set(have) - named)
+    ]
+    errors += [
+        f"check-manifest.yml has nightly-gate contexts produced by {workflow}, absent from PRODUCERS"
+        for workflow in sorted(named - set(have))
+    ]
+    errors += [
+        f"PRODUCERS entry for {workflow} is {have[workflow]}, but the manifest derives {want[workflow]}"
+        for workflow in sorted(set(want) & set(have))
+        if have[workflow] != want[workflow]
+    ]
+    return errors
+
+
+def wiring_errors(
+    workflow: object,
+    manifest: object,
+    triggers: dict[str, set[str] | None],
+    declared: tuple[Producer, ...] = PRODUCERS,
+) -> list[str]:
+    """Return why nightly-green could pass without `--verdict` passing or judge other producers than the manifest's, or []."""
     errors: list[str] = []
     jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
     if not isinstance(jobs, dict) or len(jobs) != 1:
@@ -340,27 +663,34 @@ def wiring_errors(workflow: object, manifest: object) -> list[str]:
     mine = [e for e in entries or [] if isinstance(e, dict) and e.get("context") == CONTEXT]
     if len(mine) != 1 or mine[0].get("disposition") != "gate" or mine[0].get("producer") != WORKFLOW_FILE:
         errors.append(f"check-manifest.yml must declare {CONTEXT!r} once as a `gate` produced by {WORKFLOW_FILE}")
-    return errors
+    return errors + producers_errors(manifest, triggers, declared)
 
 
 def lint(root: str = REPO_ROOT) -> int:
     sys.path.insert(0, HERE)
     import strict_yaml  # noqa: PLC0415  # PyYAML-backed; only `lint` needs it
 
+    def load(*parts: str) -> object:
+        with open(os.path.join(root, *parts), encoding="utf-8") as fh:
+            return strict_yaml.safe_load(fh)
+
+    workflows = WORKFLOWS_DIR.split("/")
     try:
-        with open(os.path.join(root, ".github", "workflows", WORKFLOW_FILE), encoding="utf-8") as fh:
-            workflow = strict_yaml.safe_load(fh)
-        with open(os.path.join(root, ".github", "ci", "check-manifest.yml"), encoding="utf-8") as fh:
-            manifest = strict_yaml.safe_load(fh)
+        workflow = load(*workflows, WORKFLOW_FILE)
+        manifest = load(".github", "ci", "check-manifest.yml")
+        triggers = {name: triggers_of(load(*workflows, name)) for name in nightly_workflows(manifest)}
     except Exception as exc:  # noqa: BLE001  # any read or parse failure is a refusal
         print(f"nightly-green lint: unreadable input: {exc}", file=sys.stderr)
         return 1
-    errors = wiring_errors(workflow, manifest)
+    errors = wiring_errors(workflow, manifest, triggers)
     for err in errors:
         print(f"nightly-green lint: {err}", file=sys.stderr)
     if errors:
         return 1
-    print(f"nightly-green lint: {WORKFLOW_FILE} runs the verdict unconditionally; the manifest gates it.")
+    print(
+        f"nightly-green lint: {WORKFLOW_FILE} runs the verdict unconditionally; the manifest gates it; "
+        f"it judges every nightly-gate producer ({', '.join(p.workflow for p in PRODUCERS)})."
+    )
     return 0
 
 
@@ -374,12 +704,12 @@ def main(argv: list[str]) -> int:
             print(f"nightly-green: {reason}", file=sys.stderr)
         if reasons:
             print(
-                "nightly-green: RED — fix main's nightly, or prove this commit with "
-                "`gh workflow run 'Build & test' --ref <branch>` and re-run this check.",
+                "nightly-green: RED — fix the red nightly on main, or prove this commit by dispatching "
+                "each red producer on its branch (`gh workflow run <workflow> --ref <branch>`) and re-run this check.",
                 file=sys.stderr,
             )
             return 1
-        print("nightly-green: the full gate is green.")
+        print("nightly-green: every nightly-gate producer is green.")
         return 0
     if argv == ["--lint"]:
         return lint()
