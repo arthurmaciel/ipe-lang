@@ -22,6 +22,7 @@
 //! Entry point: [`Index::build`].
 
 pub mod env_vars;
+pub mod html;
 pub mod markdown;
 pub mod render;
 pub mod stdlib_docs;
@@ -846,7 +847,8 @@ mod tests {
     /// produces byte-identical output for every page.
     #[test]
     fn site_generator_is_deterministic() {
-        use crate::render::{html_escape, page};
+        use crate::html;
+        use crate::render::page;
 
         let idx = build_index();
 
@@ -866,7 +868,7 @@ mod tests {
             };
             let body = format!(
                 "<h1>{} <span class=\"kind-badge\">{kind_label}</span></h1>\n",
-                html_escape("Maybe.withDefault")
+                html::escape("Maybe.withDefault")
             );
             page("Maybe.withDefault", &body)
         };
@@ -907,11 +909,12 @@ mod tests {
     /// A symbol entry page renders its `source_key` as the heading.
     #[test]
     fn symbol_page_heading_is_key() {
-        use crate::render::{html_escape, page};
+        use crate::html;
+        use crate::render::page;
 
         let heading_html = format!(
             "<h1>{} <span class=\"kind-badge\">symbol</span></h1>",
-            html_escape("List.map")
+            html::escape("List.map")
         );
         let html = page("List.map", &heading_html);
         assert!(
