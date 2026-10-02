@@ -3959,10 +3959,10 @@ fn witness_record_fields(
                 Some((
                     alias_key,
                     ResolvedAlias::Local {
-                        params,
+                        params: [],
                         body: src::TypeAnnotation::TRecord(fields),
                     },
-                )) if params.is_empty() => (fields, vec![alias_key]),
+                )) => (fields, vec![alias_key]),
                 // An imported record alias is already canonical in its
                 // defining module's scope; its fields are the witness as-is.
                 Some((_, ResolvedAlias::Imported(exported)))

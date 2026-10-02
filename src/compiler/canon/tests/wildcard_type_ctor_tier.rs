@@ -131,7 +131,7 @@ fn ambiguous_modules(result: &DResult<Module>) -> Option<(Span, Vec<String>)> {
     };
     Some((
         *span,
-        modules.as_slice().iter().map(|m| m.to_string()).collect(),
+        modules.as_slice().iter().map(ToString::to_string).collect(),
     ))
 }
 
