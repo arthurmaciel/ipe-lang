@@ -726,6 +726,57 @@ Example:
     addItem conn store name =
         Store.insertReturning conn store { id = 0, name = name }
 
+## `upsert`
+
+```ipe
+upsert : Db -> Store a -> a -> Task Error Int
+```
+
+`upsert conn store row` — insert `row`, or, when a row with the same key
+already exists, update that row in place, and return the affected-row count.
+One atomic statement (`INSERT … ON CONFLICT (…) DO UPDATE`), so the database
+decides insert-or-update and no read-then-write race exists.
+
+The conflict target is the store's declared key, never an argument: the
+primary key (every column of a composite key, in declared order) or, for a
+store with no primary key, its one `unique` column. Each target column is
+resolved to its current name (after any `renameColumn`). These fail with a
+typed `Err` before any SQL is sent:
+
+* a store with no primary key and no `unique` column;
+* a store with no primary key and several `unique` columns (the target
+  would be a guess) — declare the identifying column as the primary key;
+* an illegal key declaration (its recorded `Err`);
+* a target column that is not a valid identifier or not a column of the store;
+* a target column the database fills (`serial` / `defaultNow` /
+  `touchOnUpdate`): a row never carries a value to match, so use `insert`;
+* a row whose key value is absent or `NULL` (a `NULL` key never conflicts, so
+  the row would be duplicated).
+
+On conflict, every non-key column the row supplies is overwritten; `serial` /
+`defaultNow` / `touchOnUpdate` columns are omitted from the write and keep
+their stored value (a `touchOnUpdate` column is not re-stamped). The count is
+`1` for an insert or an in-place update, and `0` only when every non-key
+column is DB-filled, leaving nothing to update (an existing row is then kept
+as is). A row that conflicts on a unique column other than the target is the
+database's typed `Err`, never a silent overwrite. Routes through the audited
+`Db.upsertFields`, which re-validates every identifier and binds every value.
+
+Example:
+
+    import Ipe.Db as Db exposing (Db)
+    import Ipe.Db.Store as Store exposing (Store)
+    import Ipe.Task as Task exposing (Task)
+    import Ipe.Error exposing (Error)
+
+    type alias Setting =
+        { name : String, value : String }
+
+    -- `name` is the primary key: the first call inserts, the next updates.
+    saveSetting : Db -> Store Setting -> String -> String -> Task Error Int
+    saveSetting conn store name value =
+        Store.upsert conn store { name = name, value = value }
+
 ## `all`
 
 ```ipe

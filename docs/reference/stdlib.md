@@ -1515,6 +1515,7 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `readFloat` | Read a column as a `Float`. A missing or non-numeric column is a typed |
 | `insert` | `insert conn store row` — insert one row and return its generated id. The |
 | `insertReturning` | `insertReturning conn store row` — insert one row and return the stored row |
+| `upsert` | `upsert conn store row` — insert `row`, or, when a row with the same key |
 | `all` | `all conn store` — read every row and decode each through the store's |
 | `get` | `get conn store keyValue` — read the single row whose primary key equals |
 | `delete` | `delete conn store keyValue` — delete the row whose primary key equals |
