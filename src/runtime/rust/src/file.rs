@@ -72,79 +72,13 @@ pub const READ_FILE_DEFAULT_CEILING: u64 = 512 * 1024 * 1024;
 /// eight-byte `i64`.
 const READ_FILE_BYTES_CEILING: u64 = 10 * 1024 * 1024;
 
-/// Longest prefix of a malformed `IPE_FILE_READ_MAX` value echoed in its refusal.
-const READ_CEILING_SHOWN_CHARS: usize = 32;
-
-/// The operator's `IPE_FILE_READ_MAX` setting, parsed once.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReadCeiling {
-    /// The variable is absent; `READ_FILE_DEFAULT_CEILING` applies.
-    Unset,
-    /// An explicit byte ceiling; `0` refuses every non-empty file.
-    Bytes(u64),
-}
-
-impl ReadCeiling {
-    const fn bytes(self) -> u64 {
-        match self {
-            Self::Unset => READ_FILE_DEFAULT_CEILING,
-            Self::Bytes(n) => n,
-        }
-    }
-}
-
-/// Parses the raw `IPE_FILE_READ_MAX` lookup into a ceiling.
-///
-/// Only an absent variable yields the default. A present value must be a plain
-/// decimal byte count (`0` included); anything else — empty, signed, padded,
-/// suffixed, overflowing, non-Unicode — is a refusal, so a typo never widens
-/// the ceiling.
-fn parse_read_ceiling(raw: Result<String, std::env::VarError>) -> Result<ReadCeiling, String> {
-    let shown = match raw {
-        Err(std::env::VarError::NotPresent) => return Ok(ReadCeiling::Unset),
-        Err(std::env::VarError::NotUnicode(os)) => shown_env_value(os.as_encoded_bytes()),
-        Ok(v) => {
-            if !v.is_empty()
-                && v.bytes().all(|b| b.is_ascii_digit())
-                && let Ok(n) = v.parse::<u64>()
-            {
-                return Ok(ReadCeiling::Bytes(n));
-            }
-            shown_env_value(v.as_bytes())
-        }
-    };
-    Err(format!(
-        "IPE_FILE_READ_MAX must be a decimal byte count (got \"{shown}\")"
-    ))
-}
-
-/// Renders a refused environment value for its error text without losing or
-/// smuggling a byte: valid UTF-8 keeps its printable characters and escapes
-/// every other one (`char::escape_debug` — controls, ESC, CR/LF, bidi
-/// overrides, `"` and `\`), and each byte that is not UTF-8 shows as `\xNN`.
-/// At most `READ_CEILING_SHOWN_CHARS` source characters or bytes are shown.
-fn shown_env_value(raw: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    let mut budget = READ_CEILING_SHOWN_CHARS;
-    for chunk in raw.utf8_chunks() {
-        for c in chunk.valid().chars() {
-            let Some(left) = budget.checked_sub(1) else {
-                return out;
-            };
-            budget = left;
-            out.extend(c.escape_debug());
-        }
-        for b in chunk.invalid() {
-            let Some(left) = budget.checked_sub(1) else {
-                return out;
-            };
-            budget = left;
-            let _ = write!(out, "\\x{b:02X}");
-        }
-    }
-    out
-}
+/// The operator's `IPE_FILE_READ_MAX` setting; `0` refuses every non-empty file.
+const FILE_READ_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_FILE_READ_MAX",
+    READ_FILE_DEFAULT_CEILING,
+    crate::system::ZeroCeiling::Accepted,
+    "decimal byte count",
+);
 
 /// Resolves the `File.readFile` ceiling from `IPE_FILE_READ_MAX`.
 ///
@@ -152,7 +86,7 @@ fn shown_env_value(raw: &[u8]) -> String {
 /// source (`/dev/zero`, a named pipe, a multi-GiB file) so it cannot exhaust
 /// memory. A malformed setting fails the read closed rather than falling back.
 fn file_read_ceiling() -> Result<u64, String> {
-    parse_read_ceiling(crate::system::read_env_var("IPE_FILE_READ_MAX")).map(ReadCeiling::bytes)
+    FILE_READ_CEILING.read().map_err(String::from)
 }
 
 fn file_read_file_sync(path: &str, cap: u64) -> Result<String, String> {
@@ -712,6 +646,11 @@ fn tp(p: &std::path::Path) -> Path {
 mod read_ceiling_tests {
     use super::*;
 
+    #[test]
+    fn env_ceilings_honour_the_shared_contract() {
+        crate::system::assert_env_ceiling_contract(FILE_READ_CEILING);
+    }
+
     fn block<T>(fut: impl std::future::Future<Output = T>) -> T {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -753,28 +692,26 @@ mod read_ceiling_tests {
         );
     }
 
+    /// The `IPE_FILE_READ_MAX` parse as `File.readFile` surfaces it.
+    fn parse_read_ceiling(raw: Result<String, std::env::VarError>) -> Result<u64, String> {
+        FILE_READ_CEILING.parse(raw).map_err(String::from)
+    }
+
     #[test]
     fn ceiling_unset_is_the_default() {
         assert_eq!(
             parse_read_ceiling(Err(std::env::VarError::NotPresent)),
-            Ok(ReadCeiling::Unset)
+            Ok(READ_FILE_DEFAULT_CEILING)
         );
-        assert_eq!(ReadCeiling::Unset.bytes(), READ_FILE_DEFAULT_CEILING);
     }
 
     #[test]
     fn ceiling_decimal_values_are_bytes() {
-        assert_eq!(
-            parse_read_ceiling(Ok("0".into())),
-            Ok(ReadCeiling::Bytes(0))
-        );
-        assert_eq!(
-            parse_read_ceiling(Ok("1024".into())),
-            Ok(ReadCeiling::Bytes(1024))
-        );
+        assert_eq!(parse_read_ceiling(Ok("0".into())), Ok(0));
+        assert_eq!(parse_read_ceiling(Ok("1024".into())), Ok(1024));
         assert_eq!(
             parse_read_ceiling(Ok("18446744073709551615".into())),
-            Ok(ReadCeiling::Bytes(u64::MAX))
+            Ok(u64::MAX)
         );
     }
 
@@ -841,8 +778,8 @@ mod read_ceiling_tests {
         let long = "x".repeat(200);
         let res = parse_read_ceiling(Ok(long));
         assert!(
-            matches!(&res, Err(e) if !e.contains(&"x".repeat(READ_CEILING_SHOWN_CHARS + 1))
-                && e.contains(&"x".repeat(READ_CEILING_SHOWN_CHARS))),
+            matches!(&res, Err(e) if !e.contains(&"x".repeat(crate::system::ENV_VALUE_SHOWN_CHARS + 1))
+                && e.contains(&"x".repeat(crate::system::ENV_VALUE_SHOWN_CHARS))),
             "{res:?}"
         );
     }
