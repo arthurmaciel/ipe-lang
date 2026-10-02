@@ -13,6 +13,7 @@ use ipe_diagnostics::{
 use ipe_intern::{Interner, Symbol};
 use ipe_kernels::{AppSurface, StdlibKernel, WebCapability};
 use ipe_syntax as src;
+use ipe_syntax::fixity::{Assoc, Fixity, fixity};
 
 use crate::ast as canon;
 use crate::env::{
@@ -6472,54 +6473,13 @@ fn resolve_qual_var(
     }
 }
 
-/// Operator associativity. Mirrors `Ipe.Parse.Symbol.Assoc`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Assoc {
-    Left,
-    Right,
-    None,
-}
-
-/// The precedence (higher binds tighter) and associativity of `op`.
-///
-/// Mirror of the reference compiler `Ipe.Parse.Symbol.precedence` for the
-/// core operator set; any operator outside the set defaults to `9 L` exactly
-/// as the reference compiler catch-all does.
-const fn op_precedence(op: &str) -> (i32, Assoc) {
-    match op.as_bytes() {
-        b"*" | b"/" | b"//" | b"%" => (7, Assoc::Left),
-        // `|.` (parser-pipeline discard, yields left's result) shares prec 6
-        // left-assoc with arithmetic `+`/`-` — merged because prec+assoc are identical.
-        b"+" | b"-" | b"|." => (6, Assoc::Left),
-        b"++" | b"::" => (5, Assoc::Right),
-        // `|=` (parser-pipeline keep, yields right's result) — prec 5 left-assoc.
-        // Distinct from `++`/`::` (same prec, but right-assoc), so its own arm.
-        // `a |= b |. c` groups as `a |= (b |. c)` because `|.` at 6 is tighter.
-        b"|=" => (5, Assoc::Left),
-        b"==" | b"/=" | b"<" | b">" | b"<=" | b">=" => (4, Assoc::None),
-        b"&&" => (3, Assoc::Right),
-        b"||" => (2, Assoc::Right),
-        // Elm-exact pipe precedence: loosest operators (prec 0).
-        // `|>` is left-associative:  `x |> f |> g` = `(x |> f) |> g`.
-        // `<|` is right-associative: `f <| g <| x` = `f <| (g <| x)`.
-        b"|>" => (0, Assoc::Left),
-        b"<|" => (0, Assoc::Right),
-        // Elm-exact composition precedence: tightest operators (prec 9).
-        // `<<` is right-associative: `f << g << h` = `f << (g << h)`.
-        // `>>` is left-associative (`(f >> g) >> h`) — that is exactly the `9 L`
-        // catch-all below, so it needs no arm of its own.
-        b"<<" => (9, Assoc::Right),
-        _ => (9, Assoc::Left),
-    }
-}
-
 /// Canonicalise a binary-operator chain into a precedence-correct tree.
 ///
 /// The parser records a chain `e0 op0 e1 op1 … opN-1 eN` as a *flat* list of
 /// `(operand, operator)` pairs plus a trailing operand, without consulting
 /// precedence. Here we re-associate it via precedence climbing (port of
 /// `Ipe.Canonicalise.Expression.canonicaliseBinops`), reading each operator's
-/// precedence + associativity from [`op_precedence`].
+/// precedence + associativity from [`fixity`].
 ///
 /// Unlike the reference compiler parser — which nests `Src.Binops` pairwise and so needs a
 /// flattening pre-pass — the Rust parser already emits one flat chain per
@@ -6542,15 +6502,15 @@ fn canonicalise_binops(
     // Canonicalise every operand once, left to right, into a front-poppable
     // queue; pair each operator with its precedence + associativity.
     let mut operands: VecDeque<canon::Expr> = VecDeque::with_capacity(pairs.len() + 1);
-    let mut ops: VecDeque<(Located<Symbol>, i32, Assoc)> = VecDeque::with_capacity(pairs.len());
+    let mut ops: VecDeque<(Located<Symbol>, Fixity)> = VecDeque::with_capacity(pairs.len());
     for (operand, op) in pairs {
         operands.push_back(canonicalise_expr(operand, env, interner)?);
-        let (prec, assoc) = op_precedence(resolve_or_bug(
+        let op_fixity = fixity(resolve_or_bug(
             interner,
             op.value,
             "ipe_canon::canonicalise_binops",
         )?);
-        ops.push_back((*op, prec, assoc));
+        ops.push_back((*op, op_fixity));
     }
     operands.push_back(canonicalise_expr(final_, env, interner)?);
 
@@ -6583,19 +6543,20 @@ fn canonicalise_binops(
 fn climb_binops(
     left0: canon::Expr,
     operands: &mut VecDeque<canon::Expr>,
-    ops: &mut VecDeque<(Located<Symbol>, i32, Assoc)>,
+    ops: &mut VecDeque<(Located<Symbol>, Fixity)>,
     basics: Symbol,
     interner: &mut Interner,
 ) -> DResult<canon::Expr> {
     // Pending frames: left operand + operator + its precedence, awaiting their
     // right subtree once higher-precedence operators to the right are reduced.
-    let mut pending: Vec<(canon::Expr, Located<Symbol>, i32)> = Vec::new();
+    let mut pending: Vec<(canon::Expr, Located<Symbol>, u8)> = Vec::new();
     let mut left = left0;
-    while let Some(&(op, prec, assoc)) = ops.front() {
+    while let Some(&(op, op_fixity)) = ops.front() {
+        let prec = op_fixity.prec();
         // Reduce any pending frame whose operator binds at least as tightly as
         // the incoming `op` (left/non-assoc) or strictly tighter (right-assoc).
         while let Some(&(_, _, top_prec)) = pending.last() {
-            let should_reduce = match assoc {
+            let should_reduce = match op_fixity.assoc() {
                 Assoc::Left | Assoc::None => top_prec >= prec,
                 Assoc::Right => top_prec > prec,
             };
