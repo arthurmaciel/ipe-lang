@@ -82,7 +82,7 @@ fn escape_into(t: &str, escape_quote: bool, out: &mut String) {
 /// The JSON `\u` spelling of one hazard character.
 ///
 /// Four lowercase hex digits for a BMP character, the UTF-16 surrogate pair
-/// for an astral one (U+E0041 is `󠁁`). Every runtime JSON writer
+/// for an astral one (U+E0041 is `\udb40\udc41`). Every runtime JSON writer
 /// spells a hazard through it, so the display escaper and the replay-log
 /// formatter cannot drift apart.
 pub(crate) struct JsonHazardEscape(pub(crate) char);

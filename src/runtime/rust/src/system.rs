@@ -186,24 +186,62 @@ pub(crate) fn is_log_hazard(c: char) -> bool {
 /// is `escape::json_str_body` (through `telemetry::json_escape`), which
 /// escapes the same hazard set.
 pub(crate) fn scrub_log_controls(s: &str) -> std::borrow::Cow<'_, str> {
-    use std::fmt::Write as _;
     if !s.chars().any(|c| c == '\\' || is_log_hazard(c)) {
         return std::borrow::Cow::Borrowed(s);
     }
     let mut out = String::with_capacity(s.len().saturating_add(16));
     for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if is_log_hazard(c) => {
-                let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
-            }
-            c => out.push(c),
-        }
+        push_scrubbed(c, &mut out);
     }
     std::borrow::Cow::Owned(out)
+}
+
+/// The marker [`scrub_log_controls_capped`] appends when it cuts its output.
+///
+/// The scrub writes `\` only as the start of `\\`, `\n`, `\r`, `\t` or
+/// `\u{…}`, so `\…` never occurs in scrubbed text: a cut record cannot pass
+/// for an uncut one.
+pub(crate) const SCRUB_TRUNCATED: &str = "\\…";
+
+/// [`scrub_log_controls`] for an untrusted record, bounded to `max_bytes`.
+///
+/// The bound applies to the escaped output, never the input, and to whole
+/// escapes only: when the next character's spelling would cross `max_bytes`
+/// the output stops there and ends in [`SCRUB_TRUNCATED`]. The result is at
+/// most `max_bytes + SCRUB_TRUNCATED.len()` bytes, and an uncut result decodes
+/// to its input, so a hazard in a remote request path or an ingested record
+/// shows as a visible escape and two distinct inputs never record alike.
+#[cfg_attr(
+    not(all(feature = "web-core", feature = "server")),
+    allow(dead_code) // only the served request log and console ingest call it
+)]
+pub(crate) fn scrub_log_controls_capped(s: &str, max_bytes: usize) -> String {
+    let mut out = String::with_capacity(s.len().min(max_bytes));
+    for c in s.chars() {
+        let before = out.len();
+        push_scrubbed(c, &mut out);
+        if out.len() > max_bytes {
+            out.truncate(before);
+            out.push_str(SCRUB_TRUNCATED);
+            break;
+        }
+    }
+    out
+}
+
+/// Append the scrubbed spelling of one character to `out`.
+fn push_scrubbed(c: char, out: &mut String) {
+    use std::fmt::Write as _;
+    match c {
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        c if is_log_hazard(c) => {
+            let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
+        }
+        c => out.push(c),
+    }
 }
 
 /// Write one line to stderr fallibly, dropping the error: `eprintln!` panics
@@ -2722,6 +2760,42 @@ mod scrub_log_controls_tests {
         ] {
             let out = scrub_log_controls(input);
             assert_eq!(unscrub(&out).as_deref(), Some(input), "{out:?}");
+        }
+    }
+
+    /// The cap bounds the escaped output, cuts on a whole escape, and marks the cut.
+    #[test]
+    fn capped_scrub_is_visible_bounded_and_marks_the_cut() {
+        use super::{SCRUB_TRUNCATED, scrub_log_controls_capped};
+        assert_ne!(
+            scrub_log_controls_capped("/adm\u{200b}in", 256),
+            scrub_log_controls_capped("/admin", 256)
+        );
+        assert_eq!(
+            scrub_log_controls_capped("/adm\u{200b}in", 256),
+            "/adm\\u{200b}in"
+        );
+        assert_eq!(scrub_log_controls_capped("/admin", 256), "/admin");
+        // A cut never splits an escape and never passes for an uncut record.
+        let cut = scrub_log_controls_capped("abc\u{e0041}", 8);
+        assert_eq!(cut, format!("abc{SCRUB_TRUNCATED}"));
+        assert_ne!(cut, scrub_log_controls_capped("abc\\…", 64));
+        assert_eq!(unscrub("abc\\…"), None);
+        for input in ["\u{202e}".repeat(100), "\\".repeat(300), "é".repeat(300)] {
+            let out = scrub_log_controls_capped(&input, 256);
+            assert!(out.len() <= 256 + SCRUB_TRUNCATED.len(), "{}", out.len());
+            assert!(out.ends_with(SCRUB_TRUNCATED), "{out:?}");
+            let kept = out.strip_suffix(SCRUB_TRUNCATED).unwrap_or(&out);
+            let decoded = unscrub(kept);
+            assert!(
+                decoded.as_deref().is_some_and(|d| input.starts_with(d)),
+                "{out:?}"
+            );
+        }
+        for input in ["GET /caf\u{e9}", "a\u{2028}b\u{200B}c\u{E0041}d", "C:\\x"] {
+            let out = scrub_log_controls_capped(input, 256);
+            assert_eq!(out, scrub_log_controls(input));
+            assert_eq!(unscrub(&out).as_deref(), Some(input));
         }
     }
 
