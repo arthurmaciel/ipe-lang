@@ -1140,34 +1140,17 @@ pub fn recent_errors(limit: usize) -> Vec<LogEntry> {
     g.iter().skip(n.saturating_sub(limit)).cloned().collect()
 }
 
-/// Minimal JSON string escaping for hand-built console payloads (avoids coupling
-/// the always-compiled sink to serde).
+/// The JSON string body of `s` for every JSON log record and console payload.
+///
+/// The display/log escaper is `crate::escape::json_str_body`, which spells
+/// every log hazard (`Cc ∪ Cf ∪ Zl ∪ Zp`, C1 and bidi controls included) as a
+/// `\u` escape, so a JSON log line read in a terminal carries no live control.
+/// Its callers are `log.rs` JSON mode, `core.rs`'s foreign-error and panic
+/// records and the console API payloads, each written or served as JSON; no
+/// inline `<script>` embeds this output.
 #[must_use]
 pub fn json_escape(s: &str) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(s.len() + 2);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            // cast is safe: we just checked c as u32 < 0x20
-            #[allow(clippy::cast_sign_loss)]
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            // U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR are valid JSON
-            // but are JS line terminators — unescaped, they break this payload
-            // when it is embedded in an inline <script> block (the console
-            // bootstrap does exactly that). Escape them defensively.
-            '\u{2028}' => out.push_str("\\u2028"),
-            '\u{2029}' => out.push_str("\\u2029"),
-            c => out.push(c),
-        }
-    }
-    out
+    crate::escape::json_str_body(s)
 }
 
 /// Render a log-entry slice as a JSON array.
@@ -1586,6 +1569,38 @@ mod tests {
         // Quotes, backslashes, and C0 controls stay escaped.
         assert_eq!(json_escape("\"\\\n\t"), "\\\"\\\\\\n\\t");
         assert_eq!(json_escape("\u{0001}"), "\\u0001");
+    }
+
+    /// Log and span records escape every hazard and stay JSON that decodes to the input.
+    #[test]
+    #[allow(clippy::expect_used)] // an invalid record fails the test
+    fn json_records_escape_the_hazard_set() {
+        let hostile = "a\u{9b}\u{202e}\u{200b}b";
+        let entries = entries_json(&[LogEntry {
+            ts_ms: 1,
+            level: hostile.to_string(),
+            message: hostile.to_string(),
+        }]);
+        record_span(hostile, 7, true);
+        let spans = spans_json(SPAN_CAP);
+        for json in [&entries, &spans] {
+            for raw in ['\u{9b}', '\u{202e}', '\u{200b}'] {
+                assert!(!json.contains(raw), "{raw:?} survived: {json}");
+            }
+        }
+        let parsed: serde_json::Value = serde_json::from_str(&entries).expect("entries JSON");
+        let entry = parsed.get(0).expect("one entry");
+        assert_eq!(entry.get("message").and_then(|v| v.as_str()), Some(hostile));
+        assert_eq!(entry.get("level").and_then(|v| v.as_str()), Some(hostile));
+        let parsed: serde_json::Value = serde_json::from_str(&spans).expect("spans JSON");
+        let spans_list = parsed.as_array().expect("span array");
+        assert!(
+            spans_list
+                .iter()
+                .any(|s| s.get("name").and_then(|v| v.as_str()) == Some(hostile)),
+            "{spans}"
+        );
+        assert_eq!(json_escape(hostile), crate::escape::json_str_body(hostile));
     }
 
     // Synthetic Debug types for `variant_name_extracts_only_the_bounded_variant_ident`.

@@ -407,32 +407,75 @@ pub(crate) fn is_log_hazard(c: char) -> bool {
     c.is_control() || LOG_FORMAT_HAZARDS.iter().any(|range| range.contains(&c))
 }
 
-/// Neutralise every log-hazard character (see [`is_log_hazard`]) in text
-/// bound for an operator log line by escaping it — `\n`, `\r`, `\t`, else
-/// `\u{XX}` — so untrusted
-/// input (a driver error, a request path, an env-derived path, a trace value)
-/// can neither forge extra records nor inject terminal escape sequences, and
-/// the escape stays visible rather than silently erased. The single log
-/// scrubber: every plain-text log sink routes untrusted text through it. Not a
-/// JSON escaper — JSON records keep `telemetry::json_escape`.
+/// Escape text bound for a plain operator log line, visibly and injectively.
+///
+/// Every log-hazard character (see [`is_log_hazard`]) becomes an escape (`\n`,
+/// `\r`, `\t`, else `\u{XX}`) and `\` itself becomes `\\`, so untrusted input
+/// (a driver error, a request path, an env-derived path, a trace value) can
+/// neither forge extra records nor inject terminal escape sequences, the
+/// escape stays visible rather than silently erased, and two distinct inputs
+/// never print alike (the literal text `\u{200b}` prints as `\\u{200b}`, a
+/// real U+200B as `\u{200b}`). The single plain-text log scrubber: every
+/// plain-text log sink routes untrusted text through it. Its JSON counterpart
+/// is `escape::json_str_body` (through `telemetry::json_escape`), which
+/// escapes the same hazard set.
 pub(crate) fn scrub_log_controls(s: &str) -> std::borrow::Cow<'_, str> {
-    use std::fmt::Write as _;
-    if !s.chars().any(is_log_hazard) {
+    if !s.chars().any(|c| c == '\\' || is_log_hazard(c)) {
         return std::borrow::Cow::Borrowed(s);
     }
     let mut out = String::with_capacity(s.len().saturating_add(16));
     for c in s.chars() {
-        match c {
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if is_log_hazard(c) => {
-                let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
-            }
-            c => out.push(c),
-        }
+        push_scrubbed(c, &mut out);
     }
     std::borrow::Cow::Owned(out)
+}
+
+/// The marker [`scrub_log_controls_capped`] appends when it cuts its output.
+///
+/// The scrub writes `\` only as the start of `\\`, `\n`, `\r`, `\t` or
+/// `\u{…}`, so `\…` never occurs in scrubbed text: a cut record cannot pass
+/// for an uncut one.
+pub(crate) const SCRUB_TRUNCATED: &str = "\\…";
+
+/// [`scrub_log_controls`] for an untrusted record, bounded to `max_bytes`.
+///
+/// The bound applies to the escaped output, never the input, and to whole
+/// escapes only: when the next character's spelling would cross `max_bytes`
+/// the output stops there and ends in [`SCRUB_TRUNCATED`]. The result is at
+/// most `max_bytes + SCRUB_TRUNCATED.len()` bytes, and an uncut result decodes
+/// to its input, so a hazard in a remote request path or an ingested record
+/// shows as a visible escape and two distinct inputs never record alike.
+#[cfg_attr(
+    not(all(feature = "web-core", feature = "server")),
+    allow(dead_code) // only the served request log and console ingest call it
+)]
+pub(crate) fn scrub_log_controls_capped(s: &str, max_bytes: usize) -> String {
+    let mut out = String::with_capacity(s.len().min(max_bytes));
+    for c in s.chars() {
+        let before = out.len();
+        push_scrubbed(c, &mut out);
+        if out.len() > max_bytes {
+            out.truncate(before);
+            out.push_str(SCRUB_TRUNCATED);
+            break;
+        }
+    }
+    out
+}
+
+/// Append the scrubbed spelling of one character to `out`.
+fn push_scrubbed(c: char, out: &mut String) {
+    use std::fmt::Write as _;
+    match c {
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        c if is_log_hazard(c) => {
+            let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
+        }
+        c => out.push(c),
+    }
 }
 
 /// Write one line to stderr fallibly, dropping the error: `eprintln!` panics
@@ -3280,6 +3323,97 @@ mod scrub_log_controls_tests {
             }))
             .collect();
         assert_eq!(parsed, expected);
+    }
+
+    /// Inverse of the scrub, for the injectivity proof: `\\`, `\n`, `\r`, `\t`, `\u{h}`.
+    fn unscrub(s: &str) -> Option<String> {
+        let mut out = String::new();
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            match chars.next()? {
+                '\\' => out.push('\\'),
+                'n' => out.push('\n'),
+                'r' => out.push('\r'),
+                't' => out.push('\t'),
+                'u' => {
+                    if chars.next()? != '{' {
+                        return None;
+                    }
+                    let hex: String = chars.by_ref().take_while(|&h| h != '}').collect();
+                    out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
+                }
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
+    #[test]
+    fn backslash_is_escaped_so_distinct_inputs_never_print_alike() {
+        assert_ne!(
+            scrub_log_controls("a\\u{200b}"),
+            scrub_log_controls("a\u{200b}")
+        );
+        assert_ne!(scrub_log_controls("a\\nb"), scrub_log_controls("a\nb"));
+        let path = scrub_log_controls("C:\\x");
+        assert!(matches!(path, std::borrow::Cow::Owned(_)), "{path:?}");
+        assert_eq!(path, "C:\\\\x");
+    }
+
+    #[test]
+    fn scrub_output_decodes_back_to_its_input() {
+        for input in [
+            "a\nb\r\x1b[2J\x7f\u{9b}\u{85}\0c\td",
+            "a\u{2028}b\u{2029}c\u{202e}d\u{2066}e\u{2069}f\u{200f}g\u{61c}h\u{202a}i",
+            "adm\u{200B}in\u{E0041}\u{AD}\u{2060}\u{FEFF}",
+            "GET /caf\u{e9} 200 3ms",
+            "a\\u{200b}",
+            "a\u{200b}",
+            "C:\\x\\\\y\\",
+        ] {
+            let out = scrub_log_controls(input);
+            assert_eq!(unscrub(&out).as_deref(), Some(input), "{out:?}");
+        }
+    }
+
+    /// The cap bounds the escaped output, cuts on a whole escape, and marks the cut.
+    #[test]
+    fn capped_scrub_is_visible_bounded_and_marks_the_cut() {
+        use super::{SCRUB_TRUNCATED, scrub_log_controls_capped};
+        assert_ne!(
+            scrub_log_controls_capped("/adm\u{200b}in", 256),
+            scrub_log_controls_capped("/admin", 256)
+        );
+        assert_eq!(
+            scrub_log_controls_capped("/adm\u{200b}in", 256),
+            "/adm\\u{200b}in"
+        );
+        assert_eq!(scrub_log_controls_capped("/admin", 256), "/admin");
+        // A cut never splits an escape and never passes for an uncut record.
+        let cut = scrub_log_controls_capped("abc\u{e0041}", 8);
+        assert_eq!(cut, format!("abc{SCRUB_TRUNCATED}"));
+        assert_ne!(cut, scrub_log_controls_capped("abc\\…", 64));
+        assert_eq!(unscrub("abc\\…"), None);
+        for input in ["\u{202e}".repeat(100), "\\".repeat(300), "é".repeat(300)] {
+            let out = scrub_log_controls_capped(&input, 256);
+            assert!(out.len() <= 256 + SCRUB_TRUNCATED.len(), "{}", out.len());
+            assert!(out.ends_with(SCRUB_TRUNCATED), "{out:?}");
+            let kept = out.strip_suffix(SCRUB_TRUNCATED).unwrap_or(&out);
+            let decoded = unscrub(kept);
+            assert!(
+                decoded.as_deref().is_some_and(|d| input.starts_with(d)),
+                "{out:?}"
+            );
+        }
+        for input in ["GET /caf\u{e9}", "a\u{2028}b\u{200B}c\u{E0041}d", "C:\\x"] {
+            let out = scrub_log_controls_capped(input, 256);
+            assert_eq!(out, scrub_log_controls(input));
+            assert_eq!(unscrub(&out).as_deref(), Some(input));
+        }
     }
 
     #[test]

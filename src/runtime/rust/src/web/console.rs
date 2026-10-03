@@ -461,7 +461,7 @@ pub async fn ingest(headers: axum::http::HeaderMap, body: String) -> axum::respo
     StatusCode::NO_CONTENT.into_response()
 }
 
-/// Drop every log-hazard character and cap the length of UNTRUSTED ingest text.
+/// Escape every log-hazard character and cap the length of UNTRUSTED ingest text.
 ///
 /// The text enters the operator console rings, which render to a terminal AND
 /// re-export over OTLP. A malicious or compromised sub-app could otherwise
@@ -469,13 +469,13 @@ pub async fn ingest(headers: axum::http::HeaderMap, body: String) -> axum::respo
 /// overrides, zero-width splits or hidden tag-block text — forged log lines,
 /// clear-screen, cursor moves, reordered or invisible content — into the
 /// operator's terminal. The set is the runtime's one predicate,
-/// `system::is_log_hazard`. First-party `Log.*` does NOT route through
+/// `system::is_log_hazard`; each hazard becomes a visible escape
+/// (`system::scrub_log_controls_capped`), so a record with a hidden character
+/// never reads as one without it. First-party `Log.*` does NOT route through
 /// ingest, so it is unaffected.
 fn sanitise_ingest(s: &str) -> String {
-    s.chars()
-        .filter(|c| !crate::system::is_log_hazard(*c))
-        .take(2048)
-        .collect()
+    const MAX_INGEST_BYTES: usize = 8192;
+    crate::system::scrub_log_controls_capped(s, MAX_INGEST_BYTES)
 }
 
 /// Fold one ingested log object `{level, message}` into the local rings.
@@ -1190,7 +1190,18 @@ mod tests {
     }
 
     #[test]
-    fn ingest_drops_every_log_hazard() {
-        assert_eq!(sanitise_ingest("a\u{2028}b\u{200B}c\u{E0041}d"), "abcd");
+    fn ingest_escapes_every_log_hazard_visibly() {
+        assert_eq!(
+            sanitise_ingest("a\u{2028}b\u{200B}c\u{E0041}d"),
+            "a\\u{2028}b\\u{200b}c\\u{e0041}d"
+        );
+        assert_ne!(sanitise_ingest("adm\u{200B}in"), sanitise_ingest("admin"));
+        let long = sanitise_ingest(&"\u{1b}".repeat(4096));
+        assert!(
+            long.len() <= 8192 + crate::system::SCRUB_TRUNCATED.len(),
+            "{}",
+            long.len()
+        );
+        assert!(long.ends_with(crate::system::SCRUB_TRUNCATED), "{long:?}");
     }
 }
