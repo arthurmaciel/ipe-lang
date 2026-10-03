@@ -22,7 +22,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ipe_db::{Db as _, ImportResolution, IpeDatabase, SourceRoot};
-use ipe_diagnostics::{Diagnostic, Severity, Span};
+use ipe_diagnostics::{Diagnostic, NameError, Severity, Span};
 use ipe_intern::Symbol;
 use lsp_types::{DiagnosticSeverity, NumberOrString};
 
@@ -228,11 +228,15 @@ fn home_for_span(linked: &ipe_canon::ast::Module, span: Span) -> Option<Vec<Symb
     best.map(|(_, _, home)| home.to_vec())
 }
 
+/// The `data` key carrying an IPE-N0034 diagnostic's importable modules.
+const IMPORT_CANDIDATES_KEY: &str = "importCandidates";
+
 /// Map one compiler diagnostic to its LSP form.
 ///
 /// `text` is the owning module's source. The message is the compiler's own
 /// snippet-free rendering ([`ipe_diagnostics::plain_message`]) — the wording
-/// cannot drift from `ipe build`'s.
+/// cannot drift from `ipe build`'s. An import-required diagnostic carries its
+/// typed candidate modules in `data`, so a quick-fix never parses the prose.
 #[must_use]
 pub fn to_lsp(diag: &Diagnostic, text: &str, encoding: PositionEncoding) -> lsp_types::Diagnostic {
     let span = diag.primary_span();
@@ -254,8 +258,38 @@ pub fn to_lsp(diag: &Diagnostic, text: &str, encoding: PositionEncoding) -> lsp_
         message: ipe_diagnostics::plain_message(diag, text),
         related_information: None,
         tags: None,
-        data: None,
+        data: import_candidates_data(diag),
     }
+}
+
+/// The `data` payload of an import-required diagnostic: its candidate modules.
+fn import_candidates_data(diag: &Diagnostic) -> Option<serde_json::Value> {
+    let Diagnostic::Name {
+        msg: NameError::ImportRequired { candidates, .. },
+        ..
+    } = diag
+    else {
+        return None;
+    };
+    let modules: Vec<&str> = candidates.iter().map(|m| &**m).collect();
+    Some(serde_json::json!({ IMPORT_CANDIDATES_KEY: modules }))
+}
+
+/// The candidate modules an LSP diagnostic's `data` carries, in order; empty
+/// when it carries none.
+#[must_use]
+pub fn import_candidates(diag: &lsp_types::Diagnostic) -> Vec<String> {
+    diag.data
+        .as_ref()
+        .and_then(|d| d.get(IMPORT_CANDIDATES_KEY))
+        .and_then(serde_json::Value::as_array)
+        .map(|ms| {
+            ms.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Run the linter over the project's user modules and return each finding as an

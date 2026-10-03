@@ -2788,4 +2788,46 @@ mod tests {
              wrong-type value into `Nothing`, the fail-open boundary of #2692",
         );
     }
+
+    /// Every compiled-source module used unimported by its last segment is the
+    /// must-import diagnostic naming it, over a catalog built the way the build
+    /// driver builds it.
+    #[test]
+    fn compiled_std_modules_are_in_the_catalog() {
+        let catalog = ipe_canon::ModuleCatalog::new(
+            std::iter::once(Box::<str>::from("Main")).chain(
+                COMPILED_STD_MODULES
+                    .iter()
+                    .map(|module| Box::<str>::from(module.dotted)),
+            ),
+        );
+        for module in COMPILED_STD_MODULES {
+            let qualifier = module.dotted.rsplit('.').next().unwrap_or(module.dotted);
+            let src = format!("module Main exposing (main)\n\nmain =\n    {qualifier}.x\n");
+            let mut interner = Interner::new();
+            let result = ipe_parse::parse_module(&src, &mut interner).and_then(|parsed| {
+                let expected = parsed.name.value.clone();
+                ipe_canon::canonicalise_module_in_project(
+                    &parsed,
+                    &expected,
+                    &std::collections::BTreeMap::new(),
+                    &catalog,
+                    ipe_canon::ModuleOrigin::User,
+                    &mut interner,
+                )
+            });
+            let diag = result.err();
+            assert!(diag.is_some(), "{qualifier}.x must not resolve unimported");
+            let Some(diag) = diag else {
+                return;
+            };
+            assert_eq!(diag.code().as_str(), "IPE-N0034", "{qualifier}: {diag:?}");
+            let quoted = format!("{:?}", module.dotted);
+            assert!(
+                format!("{diag:?}").contains(&quoted),
+                "{qualifier}: N0034 must name {}: {diag:?}",
+                module.dotted
+            );
+        }
+    }
 }

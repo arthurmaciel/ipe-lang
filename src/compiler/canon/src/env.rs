@@ -12,7 +12,7 @@ use ipe_diagnostics::DResult;
 use ipe_intern::{Interner, Symbol};
 use ipe_kernels::StdlibKernel;
 
-use crate::resolve::ModuleOrigin;
+use crate::resolve::{ModuleOrigin, QualifierForm, import_qualifier_forms};
 
 /// Authoritative map from a stdlib module's full import path to its canonical
 /// qualifier short-name.
@@ -43,39 +43,10 @@ use crate::resolve::ModuleOrigin;
 /// Only real `Ipe.*` module paths belong here — the first segment must
 /// be `Ipe`, matching the guard in `resolve::register_stdlib_import_aliases`.
 pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
-    // ── Compiled-source exclusions (NOT kernel qualifiers) ─────────────────
-    //
-    // The modules listed below are compiled-source Layer-3 modules registered in
-    // `ipe::stdlib::COMPILED_STD_MODULES`.  A module is EITHER a kernel qualifier
-    // here OR compiled-source — never both (`compiled_vs_kernel_qualifier_disjoint`).
-    // Their members reach kernels via `Kernel.kernel "X_*"` aliases resolved by
-    // `detect_kernel_alias`, so they must stay out of this table.
-    //
-    //   Absent module          Kernel family / note
-    //   ─────────────────────  ────────────────────────────────────────────────
-    //   Ipe.String             String_*   (also re-exports the String builtin type)
-    //   Ipe.Char               Char_*
-    //   Ipe.List               List_*  + pure Ipê members
-    //   Ipe.Math               Math_*
-    //   Ipe.Bitwise            Bitwise_*
-    //   Ipe.Dict               Dict_*   (also re-exports the Dict builtin type)
-    //   Ipe.Set                Set_*
-    //   Ipe.Bytes              Bytes_*
-    //   Ipe.Encoding           Encoding_*
-    //   Ipe.Uuid               UuidV4 / UuidV7 / UuidParse
-    //   Ipe.Task               Task_*  + pure Ipê (BackoffStrategy / RetryPolicy)
-    //                          (also re-exports the Task builtin type)
-    //   Ipe.Io                 Io_*
-    //   Ipe.Debug              Debug_*
-    //   Ipe.Time               Time_*
-    //   Ipe.Random             Random_*  + pure Ipê (range, seeded helpers, Seed)
-    //   Ipe.Decimal            Decimal_*  (also re-exports the Decimal builtin type)
-    //   Ipe.Css                Css_*  + pure Ipê layout builders
-    //   Ipe.Ui                 Ui_*   + pure Ipê layout builders
-    //   Ipe.Html               Html element/attr builders over node/voidNode
-    //   Ipe.Html.Attributes    Html attribute builders
-    //   Ipe.Path               Path_*
-    //   Ipe.Regex              Regex_*
+    // A compiled-source module (`ipe_stdlib::COMPILED_STD_MODULES`) never appears
+    // here: a module is EITHER a kernel qualifier OR compiled source
+    // (`compiled_vs_kernel_qualifier_disjoint`). Its members reach kernels via
+    // `Kernel.kernel "X_*"` aliases resolved by `detect_kernel_alias`.
     //
     // ── Ipe.* pure + effect modules (kernel qualifiers) ────────────────────
     (&["Ipe", "Crypto"], "Crypto"),
@@ -222,6 +193,57 @@ pub fn stdlib_module_dot_paths() -> Vec<Box<str>> {
         .iter()
         .map(|(segments, _)| segments.join(".").into_boxed_str())
         .collect()
+}
+
+/// The importable-module catalog: every dotted module path a qualifier may name.
+///
+/// Kernel paths from [`STDLIB_MODULE_QUALIFIERS`] are always present; the
+/// driver adds compiled-source stdlib paths and the project's own modules.
+/// Text only, so building it never interns.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ModuleCatalog {
+    modules: Rc<BTreeSet<Box<str>>>,
+}
+
+impl ModuleCatalog {
+    /// The catalog of the kernel paths plus `extra` dotted module paths.
+    #[must_use]
+    pub fn new(extra: impl IntoIterator<Item = Box<str>>) -> Self {
+        Self {
+            modules: Rc::new(stdlib_module_dot_paths().into_iter().chain(extra).collect()),
+        }
+    }
+
+    /// The dotted module paths, sorted.
+    pub fn paths(&self) -> impl Iterator<Item = &str> {
+        self.modules.iter().map(|m| &**m)
+    }
+
+    /// The modules other than `home` a bare `import` of which binds `qualifier`.
+    ///
+    /// A bare import binds the forms of `import_qualifier_forms(false, len)`:
+    /// the last segment, plus the dotted path when the path has more than one
+    /// segment. Sorted and deduplicated (the catalog is a set).
+    #[must_use]
+    pub fn modules_bound_by(&self, qualifier: &str, home: &str) -> Box<[Box<str>]> {
+        self.modules
+            .iter()
+            .filter(|module| &***module != home && binds(module, qualifier))
+            .cloned()
+            .collect()
+    }
+}
+
+/// `true` when a bare `import module` registers `qualifier`.
+fn binds(module: &str, qualifier: &str) -> bool {
+    let len = module.split('.').count();
+    import_qualifier_forms(false, len)
+        .iter()
+        .any(|form| match form {
+            QualifierForm::LastSegment => module.rsplit('.').next() == Some(qualifier),
+            QualifierForm::DottedPath => module == qualifier,
+            QualifierForm::Alias => false,
+        })
 }
 
 /// `true` when `name` is the canonical short qualifier of some stdlib module in
@@ -483,6 +505,12 @@ pub struct Env {
     /// present here; anything absent surfaces IPE-N0034. Non-gated qualifiers
     /// (user modules, the Tier-A `Basics`) never consult this set.
     pub imported_stdlib_quals: BTreeSet<Symbol>,
+    /// Ambient qualifiers that are neither gated nor Tier-A: compiler-internal
+    /// kernel qualifiers (`Host`, …) no user is meant to type. Usable only when
+    /// an import binds the same spelling.
+    pub internal_quals: Rc<BTreeSet<Symbol>>,
+    /// Every module this module could import, for the unbound-qualifier verdict.
+    pub module_catalog: ModuleCatalog,
     /// The module's driver-vouched trust provenance. `Ffi.binding` bodies
     /// resolve ONLY under [`ModuleOrigin::FfiInterface`]; any other origin
     /// falls through to ordinary qualified-name resolution (and fails there —
@@ -1285,6 +1313,7 @@ impl Env {
     pub fn initial(home: Vec<Symbol>, interner: &mut Interner) -> DResult<Self> {
         let mut env = Self {
             home,
+            module_catalog: ModuleCatalog::new(std::iter::empty()),
             ..Self::default()
         };
         // Pre-intern the view type names so both the engine-tagged carrier
@@ -1349,8 +1378,28 @@ impl Env {
             }
             canon_to_path.entry(canon_sym).or_insert(segs);
         }
+        self.internal_quals = Rc::new(
+            self.qual_vars
+                .keys()
+                .filter(|q| **q != basics && !canon_to_path.contains_key(q))
+                .copied()
+                .collect(),
+        );
         self.gated_stdlib_quals = Rc::new(canon_to_path);
         Ok(())
+    }
+
+    /// The qualifiers a use site may be pointed at by a did-you-mean.
+    ///
+    /// A bound qualifier passes when the Tier-C gate lets it resolve
+    /// ([`Self::stdlib_import_required`] is `None`) and it is not an internal
+    /// qualifier the module never imported. A gated, unimported qualifier is
+    /// never offered: the filter is the gate predicate itself.
+    pub fn usable_qualifiers(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.qual_vars.keys().copied().filter(|q| {
+            self.stdlib_import_required(*q).is_none()
+                && (!self.internal_quals.contains(q) || self.imported_stdlib_quals.contains(q))
+        })
     }
 
     /// Record that a Tier-C stdlib qualifier `q` (a canonical short-name, its

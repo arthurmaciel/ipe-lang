@@ -29,7 +29,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use ipe_diagnostics::DResult;
 use ipe_intern::{Interner, Symbol};
 
-pub use env::{CtorHome, Env, STDLIB_MODULE_QUALIFIERS, VarHome, stdlib_canonical_qualifier};
+pub use env::{
+    CtorHome, Env, ModuleCatalog, STDLIB_MODULE_QUALIFIERS, VarHome, stdlib_canonical_qualifier,
+};
 pub use resolve::{
     ModuleOrigin, QualifierForm, RESERVED_BUILTIN_TYPES, builtin_empty_home_arity,
     import_qualifier_forms, import_qualifiers, is_reserved_builtin_type_name,
@@ -171,10 +173,10 @@ pub fn canonicalise_module_with_origin(
 ///
 /// Like [`canonicalise_module_with_origin`] but takes the dep interfaces by
 /// reference (the `module_interface` query memos — no per-importer deep clone)
-/// and an explicit `known_modules` universe (dot-joined module paths) used
-/// ONLY for the IPE-N0020 did-you-mean list. `deps` must contain exactly this
-/// module's resolved imports; `known_modules` should list every module in the
-/// project. Strings only on the suggestion path — it never interns.
+/// and the importable-module `catalog`, read only on diagnostic paths: the
+/// IPE-N0020 did-you-mean list and the IPE-N0034 verdict for an unbound
+/// qualifier. `deps` must contain exactly this module's resolved imports; the
+/// catalog should list every project module and compiled-source stdlib module.
 ///
 /// # Errors
 /// Same set as [`canonicalise_module_with_origin`].
@@ -182,11 +184,11 @@ pub fn canonicalise_module_in_project(
     m: &ipe_syntax::Module,
     expected_path: &[Symbol],
     deps: &BTreeMap<Vec<Symbol>, &ModuleExports>,
-    known_modules: &BTreeSet<Box<str>>,
+    catalog: &ModuleCatalog,
     origin: ModuleOrigin,
     interner: &mut Interner,
 ) -> DResult<(ast::Module, ModuleExports)> {
-    resolve::canonicalise_module_in_project(m, expected_path, deps, known_modules, origin, interner)
+    resolve::canonicalise_module_in_project(m, expected_path, deps, catalog, origin, interner)
 }
 
 #[cfg(test)]
@@ -666,7 +668,7 @@ mod tests {
         };
         assert_eq!(&*member, "getcw");
         assert!(
-            suggestions.iter().any(|s| &**s == "getcwd"),
+            suggestions.names.iter().any(|s| &**s == "getcwd"),
             "suggestions should include `getcwd`, got {suggestions:?}"
         );
     }
@@ -684,7 +686,7 @@ mod tests {
             return;
         };
         assert!(
-            suggestions.is_empty(),
+            suggestions.names.is_empty(),
             "no suggestion within edit-distance 2, got {suggestions:?}"
         );
     }
@@ -705,6 +707,7 @@ mod tests {
             return;
         };
         let keys: Vec<(usize, String)> = suggestions
+            .names
             .iter()
             .map(|s| (test_levenshtein("sha", s), s.to_string()))
             .collect();
@@ -715,8 +718,9 @@ mod tests {
 
     #[test]
     fn unknown_qualifier_is_unknown_module() {
-        // `Crpyto` is one transposition from the `Crypto` kernel qualifier.
-        let err = canon_err("module Main exposing (main)\n\nmain = Crpyto.sha256\n");
+        // `Crpyto` is one transposition from the imported `Crypto` qualifier.
+        let err =
+            canon_err("module Main exposing (main)\nimport Ipe.Crypto\n\nmain = Crpyto.sha256\n");
         let Some(Diagnostic::Name {
             msg:
                 NameError::UnknownModule {
@@ -731,7 +735,7 @@ mod tests {
         };
         assert_eq!(&*qualifier, "Crpyto");
         assert!(
-            suggestions.iter().any(|s| &**s == "Crypto"),
+            suggestions.names.iter().any(|s| &**s == "Crypto"),
             "should suggest `Crypto`, got {suggestions:?}"
         );
     }
@@ -837,7 +841,7 @@ mod tests {
         assert_eq!(&*module, "Crypto");
         assert_eq!(&*member, "sha25");
         assert!(
-            suggestions.iter().any(|s| &**s == "sha256"),
+            suggestions.names.iter().any(|s| &**s == "sha256"),
             "should suggest `sha256`, got {suggestions:?}"
         );
     }
@@ -865,7 +869,7 @@ mod tests {
         };
         assert_eq!(&*name, "Ipe.Crpyto");
         assert!(
-            suggestions.iter().any(|s| &**s == "Ipe.Crypto"),
+            suggestions.names.iter().any(|s| &**s == "Ipe.Crypto"),
             "should suggest `Ipe.Crypto`, got {suggestions:?}"
         );
     }
@@ -892,7 +896,7 @@ mod tests {
         };
         assert_eq!(&*name, "Ipe.Crpyto");
         assert!(
-            suggestions.iter().any(|s| &**s == "Ipe.Crypto"),
+            suggestions.names.iter().any(|s| &**s == "Ipe.Crypto"),
             "should suggest `Ipe.Crypto`, got {suggestions:?}"
         );
     }
@@ -967,18 +971,18 @@ mod tests {
         let err = canon_err("module Main exposing (main)\n\nmain = Crypto.sha256 \"x\"\n");
         let Some(Diagnostic::Name {
             msg:
-                NameError::StdlibImportRequired {
+                NameError::ImportRequired {
                     qualifier,
-                    import_path,
+                    candidates,
                 },
             ..
         }) = err
         else {
-            assert!(false_marker(), "expected StdlibImportRequired (IPE-N0034)");
+            assert!(false_marker(), "expected ImportRequired (IPE-N0034)");
             return;
         };
         assert_eq!(&*qualifier, "Crypto");
-        assert_eq!(&*import_path, "Ipe.Crypto");
+        assert_eq!(&*candidates, &[Box::<str>::from("Ipe.Crypto")]);
     }
 
     /// The counterpart to the gate: WITH `import Ipe.Crypto`, the same qualified
@@ -1012,7 +1016,7 @@ mod tests {
         };
         assert_eq!(&*name, "Incremen");
         assert!(
-            suggestions.iter().any(|s| &**s == "Increment"),
+            suggestions.names.iter().any(|s| &**s == "Increment"),
             "should suggest `Increment`, got {suggestions:?}"
         );
     }
@@ -4492,7 +4496,7 @@ mod tests {
             matches!(
                 err.as_ref().err(),
                 Some(Diagnostic::Name {
-                    msg: NameError::StdlibImportRequired { .. },
+                    msg: NameError::ImportRequired { .. },
                     ..
                 })
             ),
