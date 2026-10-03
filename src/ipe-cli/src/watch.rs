@@ -260,15 +260,16 @@ enum WatchRole {
     Failure,
 }
 
-/// The single source of truth for the "first SIGTERM consumed" ack.
+/// The single source of truth for the "first SIGTERM received" ack.
 ///
-/// The forwarder emits this text once, through [`watch_line`] (so the printed
-/// line wraps it in gutter/colour escapes — match it as a substring, never for
-/// byte-equality), the moment it consumes the first SIGTERM and begins the
-/// orderly teardown. Any supervisor or test that must observe consumption waits
-/// for this line rather than a timing guess: a second SIGTERM sent only after
-/// it appears is provably after the forwarder spent its one registration, so it
-/// is guaranteed absorbed.
+/// The shutdown subscriber emits this text once, through [`watch_line`] (so the
+/// printed line wraps it in gutter/colour escapes — match it as a substring,
+/// never for byte-equality), the moment the first SIGTERM reaches it and the
+/// orderly teardown begins. Any supervisor or test that must observe the first
+/// request waits for this line rather than a timing guess: a second SIGTERM
+/// sent only after it appears is provably a later request, so it ends the
+/// process by the signal (after ending every remote transfer) instead of
+/// waiting on a teardown that may hang.
 pub const SIGTERM_TEARDOWN_MARKER: &str = "[ipe watch] SIGTERM received; shutting down";
 
 /// `text` is already-sanitised [`TerminalSafe`], mirroring [`crate::screen::error_screen`]:
@@ -1034,33 +1035,33 @@ fn run_inner(
     // SIGTERM → orderly shutdown, for the CLI `run()` path ONLY (`external_stop`
     // is `None` exactly there). A supervisor's `kill -TERM <ipe-pid>` (systemd's
     // default, PID-only — not the foreground process group Ctrl-C signals) would
-    // otherwise hard-kill this process before ANY teardown code runs, orphaning
-    // the supervised child on its port forever. The forwarder is a third instance
-    // of the existing "send into the unified event channel" pattern; the
-    // `Shutdown => break` arm below then runs the full, already-tested teardown.
+    // otherwise end this process before ANY teardown code runs, orphaning the
+    // supervised child on its port. The subscriber is a third instance of the
+    // existing "send into the unified event channel" pattern; the
+    // `Shutdown => break` arm below then runs the full teardown. The process's
+    // one SIGTERM owner (`crate::terminate`) ends every remote transfer on each
+    // request, runs this subscriber on the first, and ends the process by the
+    // signal on any later one, so a teardown that hangs is ended by a second
+    // SIGTERM.
     //
-    // NEVER installed for `spawn()` (`external_stop` is `Some`): `spawn()` runs
-    // on a same-process background thread inside an EMBEDDING HOST — installing a
-    // process-wide SIGTERM handler there would silently and permanently change
-    // the HOST's signal disposition (signal-hook does not restore the previous
-    // disposition once its action is gone). `spawn()` keeps relying exclusively
-    // on `WatchHandle`'s stop channel + `Drop` safety net.
+    // NEVER subscribed for `spawn()` (`external_stop` is `Some`): `spawn()` runs
+    // on a same-process background thread inside an EMBEDDING HOST, whose own
+    // shutdown is the host's to decide. `spawn()` keeps relying exclusively on
+    // `WatchHandle`'s stop channel + `Drop` safety net.
     if external_stop.is_none() {
         #[cfg(unix)]
         {
             let evt_tx = evt_tx.clone();
             // Errors are logged, never fatal — a platform where signal
-            // registration fails degrades to the pre-existing behaviour (no
-            // PID-only-SIGTERM handling), never a hard failure of `ipe watch`.
-            if let Err(e) = ipe_watch::install_sigterm_forwarder(move || {
-                // Announce, on the forwarder thread, that the FIRST SIGTERM has
-                // been consumed and the orderly teardown is starting — the one
-                // registration `signal-hook` holds is now spent, so every later
-                // SIGTERM is absorbed (a stuck `ipe watch` needs SIGKILL). This
-                // notice is emitted BEFORE the `Shutdown` event is sent, so its
-                // appearance is a happens-before proof that the forwarder has
-                // consumed the signal: a supervisor (or the double-SIGTERM proof
-                // test) can wait for this line as an explicit ack rather than
+            // registration fails degrades to no PID-only-SIGTERM handling,
+            // never a hard failure of `ipe watch`.
+            if let Err(e) = crate::terminate::on_shutdown(move || {
+                // Announce, on the owner's thread, that the FIRST SIGTERM has
+                // arrived and the orderly teardown is starting. This notice is
+                // emitted BEFORE the `Shutdown` event is sent, so its
+                // appearance is a happens-before proof that the first request
+                // was answered: a supervisor (or the double-SIGTERM proof test)
+                // can wait for this line as an explicit ack rather than
                 // guessing a delay. Not `--quiet`-gated: a shutdown-on-signal
                 // notice is a load-bearing operational fact, not chatter.
                 emit_watch_line(
@@ -2807,7 +2808,7 @@ fn child_command(exe_path: &Path, env: &[(String, String)]) -> Command {
 /// Spawn the dev child through the runtime's parent-death floor.
 ///
 /// The supervisor reaps this child on every GRACEFUL path (shutdown /
-/// SIGTERM-forwarder / Drop), but a SIGKILL/OOM/panic-abort of `ipe watch`
+/// termination request / Drop), but a SIGKILL/OOM/panic-abort of `ipe watch`
 /// would otherwise orphan it holding the dev port. `spawn_hardened` forks it
 /// from the runtime's process-lifetime spawner thread, so on Linux the kernel
 /// SIGTERMs it when `ipe watch` dies by ANY means, and never earlier (the

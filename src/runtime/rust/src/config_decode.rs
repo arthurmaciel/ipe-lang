@@ -102,15 +102,20 @@ pub fn config_decode_toml<E: From<String> + 'static, T>(
 /// Default cap on a YAML source string parsed directly via `Config.decodeYaml`
 /// (the file-load path enforces its own `IPE_CONFIG_MAX_BYTES` cap before reading).
 /// 4 MiB; override via `IPE_YAML_MAX_BYTES`.
-const YAML_SOURCE_CAP_DEFAULT: usize = 4 * 1024 * 1024;
+const YAML_SOURCE_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_YAML_MAX_BYTES",
+    4 * 1024 * 1024,
+    crate::system::ZeroCeiling::Refused,
+    "decimal byte count",
+);
 
-fn yaml_source_cap() -> usize {
-    crate::system::read_env_var("IPE_YAML_MAX_BYTES")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(YAML_SOURCE_CAP_DEFAULT)
-}
+/// Cap on a file read by `Config.loadFromFile`: `IPE_CONFIG_MAX_BYTES`, default 16 MiB.
+const CONFIG_FILE_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_CONFIG_MAX_BYTES",
+    16 * 1024 * 1024,
+    crate::system::ZeroCeiling::Refused,
+    "decimal byte count",
+);
 
 // Config.decodeYaml : String -> Decoder a -> Result Error a
 pub fn config_decode_yaml<E: From<String> + 'static, T>(
@@ -123,7 +128,10 @@ pub fn config_decode_yaml<E: From<String> + 'static, T>(
     //   2. serde_yaml 0.9 itself bounds alias/anchor EXPANSION — a recursive
     //      anchor bomb trips its built-in "repetition limit exceeded" (verified),
     //      so a small-but-exponential input cannot expand without bound.
-    let cap = yaml_source_cap();
+    let cap: usize = match YAML_SOURCE_CEILING.read() {
+        Ok(cap) => cap,
+        Err(refusal) => return IpeResult::Err(str_err(&format!("yaml parse: {refusal}"))),
+    };
     if s.len() > cap {
         return IpeResult::Err(str_err(&format!(
             "yaml parse: input is {} bytes, over the {} byte cap (IPE_YAML_MAX_BYTES)",
@@ -208,11 +216,10 @@ pub fn config_load_from_file<
         // Cap the file size before slurping it into memory so a Config.loadFromFile
         // on an attacker-influenced path can't force an unbounded in-memory copy
         // (memory DoS). Default 16 MiB; override via IPE_CONFIG_MAX_BYTES.
-        let cap: u64 = crate::system::read_env_var("IPE_CONFIG_MAX_BYTES")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .filter(|n| *n > 0)
-            .unwrap_or(16 * 1024 * 1024);
+        let cap: u64 = match CONFIG_FILE_CEILING.read() {
+            Ok(cap) => cap,
+            Err(refusal) => return IpeResult::Err(str_err(&refusal.to_string())),
+        };
         let contents = match crate::threads::run_blocking::<_, E, _>(
             "Config.loadFromFile",
             "background config-file task panicked",
@@ -240,6 +247,12 @@ pub fn config_load_from_file<
 #[cfg(test)]
 mod load_from_file_tests {
     use super::*;
+
+    #[test]
+    fn env_ceilings_honour_the_shared_contract() {
+        crate::system::assert_env_ceiling_contract(YAML_SOURCE_CEILING);
+        crate::system::assert_env_ceiling_contract(CONFIG_FILE_CEILING);
+    }
     use crate::json::{decode_field, json_decode_string};
 
     fn block<T>(fut: impl std::future::Future<Output = T>) -> T {
