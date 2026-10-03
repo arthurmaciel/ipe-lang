@@ -308,9 +308,10 @@ pub struct FileStore<Model, Msg> {
 ///
 /// The wrapped I/O error can carry the on-disk map path in its message (a
 /// [`crate::scratch_core::ScratchError`] displays the path it refused), so
-/// [`PersistError`]'s own `Display` names only the step, never that message —
-/// the same credential-free posture [`StoreOpenError`] keeps for a driver
-/// error that could echo the connection URL.
+/// [`PersistError`]'s own `Display` names the step and the I/O error's
+/// [`std::io::ErrorKind`] (a fixed phrase), never that message — the same
+/// credential-free posture [`StoreOpenError`] keeps for a driver error that
+/// could echo the connection URL.
 #[cfg(feature = "web")]
 #[derive(Debug)]
 pub enum PersistError {
@@ -329,13 +330,17 @@ pub enum PersistError {
 #[cfg(feature = "web")]
 impl std::fmt::Display for PersistError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let step = match self {
-            Self::Encode(_) => "encode",
-            Self::CreateTemp(_) => "create temp file",
-            Self::WriteTemp(_) => "write temp file",
-            Self::Commit(_) => "commit (flush/rename)",
+        let (step, io) = match self {
+            Self::Encode(_) => ("encode", None),
+            Self::CreateTemp(e) => ("create temp file", Some(e)),
+            Self::WriteTemp(e) => ("write temp file", Some(e)),
+            Self::Commit(e) => ("commit (flush/rename)", Some(e)),
         };
-        write!(f, "session store persist failed at step: {step}")
+        write!(f, "session store persist failed at step: {step}")?;
+        if let Some(e) = io {
+            write!(f, " ({})", e.kind())?;
+        }
+        Ok(())
     }
 }
 
@@ -383,10 +388,10 @@ impl<Model, Msg> FileStore<Model, Msg> {
     /// not even momentarily. The rename carries the mode to the final path, and
     /// a refused or failed write removes the temp file.
     ///
-    /// The first failure after a success is logged, naming its cause (a refused
-    /// temp file names the refusal); repeats stay silent until a write succeeds
-    /// again, so a persistently failing disk yields one line, not one per
-    /// mutation.
+    /// The first failure after a success is logged, naming the failed step and
+    /// its I/O error kind but never the map path; repeats stay silent until a
+    /// write succeeds again, so a persistently failing disk yields one line,
+    /// not one per mutation.
     fn persist(&self, disk: &HashMap<String, (String, i64)>) {
         let failed = self.write_map(disk).err();
         let was_failing = self
@@ -2321,6 +2326,34 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `PersistError`'s `Display` (the text the persist log line carries) names
+    /// the step and the error kind, never the inner message — a refused
+    /// scratch location displays the path it refused.
+    #[cfg(feature = "web")]
+    #[test]
+    fn persist_error_display_omits_the_inner_message() {
+        let secret_path = "/srv/app/ipe-sessions/private-map.json";
+        let inner = || std::io::Error::other(format!("refusing scratch location {secret_path}"));
+        let shown = [
+            PersistError::CreateTemp(inner()),
+            PersistError::WriteTemp(inner()),
+            PersistError::Commit(inner()),
+        ]
+        .map(|e| e.to_string());
+        for text in &shown {
+            assert!(!text.contains(secret_path), "path leaked: {text}");
+            assert!(!text.contains("refusing"), "inner message leaked: {text}");
+        }
+        assert_eq!(
+            shown,
+            [
+                "session store persist failed at step: create temp file (other error)",
+                "session store persist failed at step: write temp file (other error)",
+                "session store persist failed at step: commit (flush/rename) (other error)",
+            ]
+        );
     }
 
     /// A persist failure sets the streak flag once; a later successful
