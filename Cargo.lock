@@ -3026,6 +3026,7 @@ dependencies = [
  "ipe_env",
  "ipe_ffi",
  "ipe_fmt",
+ "ipe_fs_open",
  "ipe_intern",
  "ipe_ir",
  "ipe_kernels",
@@ -3056,7 +3057,6 @@ dependencies = [
  "ureq",
  "wasmtime",
  "wasmtime-wasi",
- "winapi-util",
  "zeroize",
 ]
 
@@ -3302,6 +3302,16 @@ dependencies = [
  "ipe_intern",
  "ipe_parse",
  "ipe_syntax",
+]
+
+[[package]]
+name = "ipe_fs_open"
+version = "0.4.0"
+dependencies = [
+ "cap-primitives",
+ "ipe-test-temp",
+ "rustix 0.38.44",
+ "winapi-util",
 ]
 
 [[package]]

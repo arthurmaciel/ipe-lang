@@ -13,13 +13,19 @@
 //! A subdirectory is removed only through [`Released`], a proof that its name
 //! still named the held directory the instant its handles were let go, and only
 //! by a primitive that removes nothing but an empty directory — a file, a link,
-//! or a populated tree swapped in at the name is refused, never removed. The
-//! per-platform primitives live in `unix` (descriptor-relative `*at` calls) and
-//! `windows` (handle-relative opens; path acts run under a sentinel pin).
+//! or a populated tree swapped in at the name is refused, never removed.
+//!
+//! Opening, classifying, reading, and identifying a held level go through
+//! [`ipe_fs_open`], the one home of handle-relative opens; the per-platform
+//! write acts live in `unix` (descriptor-relative `*at` calls) and `windows`
+//! (handle-relative creates and deletes; path acts run under a sentinel pin).
 
 use std::ffi::OsStr;
 use std::io::{self, Read as _, Seek as _, Write as _};
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+
+use ipe_fs_open::{ByteCap, EntryName, FileKind, OpenRefusal};
 
 use super::{
     CLAIM_FILE, CLAIM_POLL, MARKER_HEADER, MARKER_READ_CAP, MARKER_TEXT, MAX_CLAIM_POLLS,
@@ -45,11 +51,13 @@ compile_error!("held output-directory handles are implemented for Unix and Windo
 pub const MAX_REMOVE_DEPTH: usize = 128;
 
 /// The volume and file number of a directory or file, its identity across path lookups.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DirId {
-    dev: u64,
-    ino: u64,
-}
+pub type DirId = ipe_fs_open::FileId;
+
+/// How much of the marker file a marker read takes.
+///
+/// A `MARKER_READ_CAP` of zero underflows here and fails the build.
+const MARKER_CAP: ByteCap =
+    ByteCap::from_nonzero(NonZeroU64::MIN.saturating_add(MARKER_READ_CAP - 1));
 
 /// Who owns a held directory, as [`HeldDir::ownership`] reads it for display and preflight.
 ///
@@ -105,7 +113,7 @@ enum MarkerState {
     /// Nothing.
     Absent,
     /// A regular file with the marker header, held open so its identity is pinned.
-    Genuine(std::fs::File),
+    Genuine(ipe_fs_open::RegularFile),
     /// A non-file, a link, or a file without the marker header.
     NotGenuine,
 }
@@ -113,8 +121,6 @@ enum MarkerState {
 /// What an entry of a held directory is for an ownership listing, read without following a link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListedKind {
-    /// No entry by that name (it vanished after the listing named it).
-    Absent,
     /// A regular file.
     RegularFile,
     /// A directory, a link, a FIFO, a socket, a device, or a Windows reparse point.
@@ -158,7 +164,7 @@ pub enum EntryKind {
 /// The path serves diagnostics only; every act goes through the handle.
 #[derive(Debug)]
 pub struct HeldDir {
-    dir: sys::Dir,
+    dir: ipe_fs_open::HeldDir,
     path: PathBuf,
 }
 
@@ -245,6 +251,25 @@ fn act_err(path: &Path, error: io::Error) -> CliError {
     io_err(path, error)
 }
 
+/// The error for an open or read of `path` that `refusal` turned back.
+///
+/// An entry another program holds open is refused with
+/// [`OutputRefusal::InUse`], as [`act_err`] refuses a write act on one.
+fn refused(path: &Path, refusal: OpenRefusal) -> CliError {
+    match refusal {
+        OpenRefusal::InUse => OutputRefusal::InUse(path.to_path_buf()).into(),
+        OpenRefusal::Absent
+        | OpenRefusal::Link
+        | OpenRefusal::NotRegular(_)
+        | OpenRefusal::Denied
+        | OpenRefusal::TooLarge(_)
+        | OpenRefusal::TooManyEntries(_)
+        | OpenRefusal::BadName
+        | OpenRefusal::NotUtf8
+        | OpenRefusal::Io(_) => act_err(path, refusal.into_io()),
+    }
+}
+
 impl HeldDir {
     /// Open `path` as a directory, following links on the way.
     ///
@@ -257,25 +282,18 @@ impl HeldDir {
     /// [`OutputRefusal::ReparsePoint`] when a level of it is a reparse point
     /// (Windows); [`CliError::Io`] on another failure.
     pub fn open_following(path: &Path) -> Result<Option<Self>, CliError> {
-        let target = if path.as_os_str().is_empty() {
-            Path::new(".")
-        } else {
-            path
-        };
-        match sys::open_following(target) {
+        match ipe_fs_open::HeldDir::open_root(path) {
             Ok(dir) => Ok(Some(Self {
                 dir,
                 path: path.to_path_buf(),
             })),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) if e.kind() == io::ErrorKind::NotADirectory => {
+            Err(OpenRefusal::Absent) => Ok(None),
+            Err(OpenRefusal::NotRegular(_) | OpenRefusal::Io(io::ErrorKind::NotADirectory)) => {
                 Err(OutputRefusal::NotADirectory(path.to_path_buf()).into())
             }
             #[cfg(windows)]
-            Err(e) if sys::is_reparse_refusal(&e) => {
-                Err(OutputRefusal::ReparsePoint(path.to_path_buf()).into())
-            }
-            Err(e) => Err(act_err(path, e)),
+            Err(OpenRefusal::Link) => Err(OutputRefusal::ReparsePoint(path.to_path_buf()).into()),
+            Err(refusal) => Err(refused(path, refusal)),
         }
     }
 
@@ -307,7 +325,25 @@ impl HeldDir {
     /// # Errors
     /// [`CliError::Io`] when the handle cannot be stat'd.
     pub fn id(&self) -> Result<DirId, CliError> {
-        self.dir.id().map_err(|e| act_err(&self.path, e))
+        self.dir
+            .id()
+            .map_err(|refusal| refused(&self.path, refusal))
+    }
+
+    /// The entry `name` of this directory as one plain entry name.
+    ///
+    /// # Errors
+    /// [`CliError::Io`] of [`io::ErrorKind::InvalidInput`] when it is not one.
+    fn entry(&self, name: &OsStr) -> Result<EntryName, CliError> {
+        EntryName::new(name).ok_or_else(|| {
+            act_err(
+                &self.path.join(name),
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{} is not a plain entry name", name.to_string_lossy()),
+                ),
+            )
+        })
     }
 
     /// Classify the entry `name` without following a link.
@@ -315,9 +351,20 @@ impl HeldDir {
     /// # Errors
     /// [`CliError::Io`] on a failure other than absence.
     pub fn kind_of(&self, name: &OsStr) -> Result<EntryKind, CliError> {
-        self.dir
-            .kind(name)
-            .map_err(|e| act_err(&self.path.join(name), e))
+        let entry = self.entry(name)?;
+        match self.dir.kind_of(&entry) {
+            Ok(None) => Ok(EntryKind::Absent),
+            Ok(Some(FileKind::Dir)) => Ok(EntryKind::Directory),
+            Ok(Some(FileKind::Symlink)) => Ok(EntryKind::Symlink),
+            Ok(Some(
+                FileKind::Regular
+                | FileKind::Fifo
+                | FileKind::Socket
+                | FileKind::Device
+                | FileKind::Other,
+            )) => Ok(EntryKind::Other),
+            Err(refusal) => Err(refused(&self.path.join(name), refusal)),
+        }
     }
 
     /// Open the subdirectory `name`, refusing a link or a non-directory.
@@ -328,15 +375,14 @@ impl HeldDir {
     /// [`OutputRefusal::Symlink`] or [`OutputRefusal::NotADirectory`]; [`CliError::Io`]
     /// on another failure.
     pub fn child(&self, name: &OsStr) -> Result<Option<Self>, CliError> {
+        let entry = self.entry(name)?;
         let path = self.path.join(name);
-        match self.dir.open_dir(name) {
+        match self.dir.child_dir(&entry) {
             Ok(dir) => Ok(Some(Self { dir, path })),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => match self.kind_of(name)? {
-                EntryKind::Symlink => Err(OutputRefusal::Symlink(path).into()),
-                EntryKind::Other => Err(OutputRefusal::NotADirectory(path).into()),
-                EntryKind::Absent | EntryKind::Directory => Err(act_err(&path, e)),
-            },
+            Err(OpenRefusal::Absent) => Ok(None),
+            Err(OpenRefusal::Link) => Err(OutputRefusal::Symlink(path).into()),
+            Err(OpenRefusal::NotRegular(_)) => Err(OutputRefusal::NotADirectory(path).into()),
+            Err(refusal) => Err(refused(&path, refusal)),
         }
     }
 
@@ -347,8 +393,9 @@ impl HeldDir {
     /// # Errors
     /// As [`HeldDir::child`].
     pub fn create_child(&self, name: &OsStr) -> Result<(Self, bool), CliError> {
+        let entry = self.entry(name)?;
         let path = self.path.join(name);
-        let created = match self.dir.mkdir(name) {
+        let created = match sys::mkdir(&self.dir, &entry) {
             Ok(()) => true,
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => false,
             Err(e) => return Err(act_err(&path, e)),
@@ -387,7 +434,11 @@ impl HeldDir {
         if self.claim_present()? {
             return Ok(OwnedNow::Claiming);
         }
-        Ok(if self.links(OsStr::new(OWNERSHIP_MARKER), &marker)? {
+        let name = OsStr::new(OWNERSHIP_MARKER);
+        let held = marker
+            .id()
+            .map_err(|refusal| refused(&self.path.join(name), refusal))?;
+        Ok(if self.links(name, held)? {
             OwnedNow::Owned
         } else {
             OwnedNow::Unowned
@@ -401,27 +452,17 @@ impl HeldDir {
     /// [`MarkerState::NotGenuine`], never [`MarkerState::Absent`].
     fn genuine_marker(&self) -> Result<MarkerState, CliError> {
         let name = OsStr::new(OWNERSHIP_MARKER);
+        let entry = self.entry(name)?;
         let path = self.path.join(name);
-        let mut file = match self.dir.open_file(name) {
+        let mut file = match self.dir.open_regular(&entry) {
             Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(MarkerState::Absent),
-            Err(e) => {
-                return match self.kind_of(name)? {
-                    EntryKind::Absent => Ok(MarkerState::Absent),
-                    EntryKind::Symlink | EntryKind::Directory => Ok(MarkerState::NotGenuine),
-                    EntryKind::Other => Err(act_err(&path, e)),
-                };
-            }
+            Err(OpenRefusal::Absent) => return Ok(MarkerState::Absent),
+            Err(OpenRefusal::Link) => return Ok(MarkerState::NotGenuine),
+            Err(refusal) => return Err(refused(&path, refusal)),
         };
-        let meta = file.metadata().map_err(|e| act_err(&path, e))?;
-        if !meta.is_file() {
-            return Ok(MarkerState::NotGenuine);
-        }
-        let mut head = Vec::new();
-        io::Read::by_ref(&mut file)
-            .take(MARKER_READ_CAP)
-            .read_to_end(&mut head)
-            .map_err(|e| act_err(&path, e))?;
+        let head = file
+            .read_head(MARKER_CAP)
+            .map_err(|refusal| refused(&path, refusal))?;
         Ok(if head.starts_with(MARKER_HEADER.as_bytes()) {
             MarkerState::Genuine(file)
         } else {
@@ -435,28 +476,32 @@ impl HeldDir {
     /// closes) counts as present.
     fn claim_present(&self) -> Result<bool, CliError> {
         let name = OsStr::new(CLAIM_FILE);
-        match self.dir.kind(name) {
-            Ok(EntryKind::Absent) => Ok(false),
-            Ok(EntryKind::Directory | EntryKind::Symlink | EntryKind::Other) => Ok(true),
-            Err(e) if sys::is_delete_pending(&e) => Ok(true),
-            Err(e) => Err(act_err(&self.path.join(name), e)),
+        let entry = self.entry(name)?;
+        match self.dir.kind_of(&entry) {
+            Ok(None) => Ok(false),
+            Ok(Some(_)) => Ok(true),
+            Err(refusal) if sys::is_delete_pending_refusal(refusal) => Ok(true),
+            Err(refusal) => Err(refused(&self.path.join(name), refusal)),
         }
     }
 
-    /// Whether the entry `name` links the very file `file` holds, read without following a link.
+    /// Whether the entry `name` links the very object whose identity is `held`, read without following a link.
     ///
     /// An absent entry, or one being deleted, links nothing.
-    fn links(&self, name: &OsStr, file: &std::fs::File) -> Result<bool, CliError> {
-        let path = self.path.join(name);
-        let linked = match self.dir.entry_id(name) {
-            Ok(id) => id,
-            Err(e) if e.kind() == io::ErrorKind::NotFound || sys::is_delete_pending(&e) => {
-                return Ok(false);
-            }
-            Err(e) => return Err(act_err(&path, e)),
-        };
-        let held = sys::file_id(file).map_err(|e| act_err(&path, e))?;
-        Ok(linked == held)
+    fn links(&self, name: &OsStr, held: DirId) -> Result<bool, CliError> {
+        let entry = self.entry(name)?;
+        match self.dir.entry_id(&entry) {
+            Ok(linked) => Ok(linked == Some(held)),
+            Err(refusal) if sys::is_delete_pending_refusal(refusal) => Ok(false),
+            Err(refusal) => Err(refused(&self.path.join(name), refusal)),
+        }
+    }
+
+    /// Whether the entry `name` links the very file the open `file` holds.
+    fn links_file(&self, name: &OsStr, file: &std::fs::File) -> Result<bool, CliError> {
+        let held =
+            DirId::of_file(file).map_err(|refusal| refused(&self.path.join(name), refusal))?;
+        self.links(name, held)
     }
 
     /// Whether this directory holds an entry no claim tolerates.
@@ -464,18 +509,29 @@ impl HeldDir {
     /// Only a regular-file marker and a regular-file claim file are tolerated
     /// ([`super::tolerated_entry`]); the listing stops at the first other entry.
     fn holds_foreign(&self) -> Result<bool, CliError> {
-        let names = self.dir.names().map_err(|e| act_err(&self.path, e))?;
+        let names = sys::names(&self.dir).map_err(|e| act_err(&self.path, e))?;
         for name in names {
             let name = match name {
                 Ok(name) => name,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(act_err(&self.path, e)),
             };
-            let kind = match self.dir.listed_kind(&name) {
-                Ok(ListedKind::Absent) => continue,
-                Ok(kind) => kind,
-                Err(e) if name == CLAIM_FILE && sys::is_delete_pending(&e) => continue,
-                Err(e) => return Err(act_err(&self.path.join(&name), e)),
+            let entry = self.entry(&name)?;
+            let kind = match self.dir.kind_of(&entry) {
+                Ok(None) => continue,
+                Ok(Some(FileKind::Regular)) => ListedKind::RegularFile,
+                Ok(Some(
+                    FileKind::Dir
+                    | FileKind::Symlink
+                    | FileKind::Fifo
+                    | FileKind::Socket
+                    | FileKind::Device
+                    | FileKind::Other,
+                )) => ListedKind::Other,
+                Err(refusal) if name == CLAIM_FILE && sys::is_delete_pending_refusal(refusal) => {
+                    continue;
+                }
+                Err(refusal) => return Err(refused(&self.path.join(&name), refusal)),
             };
             if super::tolerated_entry(&name, kind) == super::Tolerated::Foreign {
                 return Ok(true);
@@ -564,7 +620,7 @@ impl HeldDir {
             return Ok(None);
         };
         claim_point(ClaimPoint::AfterLock, &self.path);
-        if !self.links(OsStr::new(CLAIM_FILE), &claim)? {
+        if !self.links_file(OsStr::new(CLAIM_FILE), &claim)? {
             return Ok(None);
         }
         let phase = self.phase_of(&mut claim)?;
@@ -597,13 +653,16 @@ impl HeldDir {
     /// filesystem refuses the lock.
     fn lock_claim(&self) -> Result<Option<std::fs::File>, CliError> {
         let name = OsStr::new(CLAIM_FILE);
+        let entry = self.entry(name)?;
         let path = self.path.join(name);
-        let (claim, created) = match self.dir.create_claim(name) {
+        let (claim, created) = match sys::create_claim(&self.dir, &entry) {
             Ok(claim) => (claim, true),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => match self.dir.open_claim(name) {
-                Ok(claim) => (claim, false),
-                Err(e) => return self.unopenable_claim(e),
-            },
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                match sys::open_claim(&self.dir, &entry) {
+                    Ok(claim) => (claim, false),
+                    Err(e) => return self.unopenable_claim(e),
+                }
+            }
             Err(e) if sys::is_delete_pending(&e) => return Ok(None),
             Err(e) => return Err(act_err(&path, e)),
         };
@@ -615,7 +674,7 @@ impl HeldDir {
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
             Err(std::fs::TryLockError::Error(e)) if sys::is_delete_pending(&e) => Ok(None),
             Err(std::fs::TryLockError::Error(e)) => {
-                if created && self.links(name, &claim)? {
+                if created && self.links_file(name, &claim)? {
                     self.unlink(name)?;
                 }
                 Err(OutputRefusal::ClaimLockUnavailable {
@@ -636,13 +695,13 @@ impl HeldDir {
         if error.kind() == io::ErrorKind::NotFound {
             return Ok(None);
         }
-        match self.dir.kind(name) {
-            Ok(EntryKind::Symlink | EntryKind::Directory) => {
+        match self.dir.kind_of(&self.entry(name)?) {
+            Ok(Some(FileKind::Symlink | FileKind::Dir)) => {
                 Err(OutputRefusal::NotIpeOwned(self.path.clone()).into())
             }
-            Ok(EntryKind::Absent) => Ok(None),
-            Ok(EntryKind::Other) | Err(_) if sys::is_delete_pending(&error) => Ok(None),
-            Ok(EntryKind::Other) | Err(_) => Err(act_err(&self.path.join(name), error)),
+            Ok(None) => Ok(None),
+            Ok(Some(_)) | Err(_) if sys::is_delete_pending(&error) => Ok(None),
+            Ok(Some(_)) | Err(_) => Err(act_err(&self.path.join(name), error)),
         }
     }
 
@@ -657,7 +716,7 @@ impl HeldDir {
     fn phase_of(&self, claim: &mut std::fs::File) -> Result<ClaimPhase, CliError> {
         let path = self.path.join(CLAIM_FILE);
         let not_ours = || Err(OutputRefusal::NotIpeOwned(self.path.clone()).into());
-        if sys::link_count(claim).map_err(|e| act_err(&path, e))? != 1 {
+        if ipe_fs_open::link_count(claim).map_err(|refusal| refused(&path, refusal))? != 1 {
             return not_ours();
         }
         let len = claim.metadata().map_err(|e| act_err(&path, e))?.len();
@@ -718,7 +777,9 @@ impl HeldDir {
     /// Called only by [`HeldDir::claim`], under the claim lock. A marker whose
     /// fill fails is removed while its name still links it.
     fn publish_marker(&self) -> io::Result<std::fs::File> {
-        let mut marker = self.dir.create_new(OsStr::new(OWNERSHIP_MARKER))?;
+        let entry = EntryName::new(OsStr::new(OWNERSHIP_MARKER))
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let mut marker = sys::create_new(&self.dir, &entry)?;
         match marker
             .write_all(MARKER_TEXT.as_bytes())
             .and_then(|()| marker.sync_data())
@@ -734,7 +795,7 @@ impl HeldDir {
     /// Unlink the marker only while its name still links the file `marker` holds.
     fn unmark_if(&self, marker: &std::fs::File) -> Result<(), CliError> {
         let name = OsStr::new(OWNERSHIP_MARKER);
-        if self.links(name, marker)? {
+        if self.links_file(name, marker)? {
             self.unlink(name)?;
         }
         Ok(())
@@ -746,7 +807,7 @@ impl HeldDir {
     /// claimant never removes a claim file another claimant holds.
     fn drop_claim(&self, claim: std::fs::File) -> Result<(), CliError> {
         let name = OsStr::new(CLAIM_FILE);
-        if self.links(name, &claim)? {
+        if self.links_file(name, &claim)? {
             self.unlink(name)?;
         }
         drop(claim);
@@ -795,22 +856,18 @@ impl HeldDir {
         permissions: Option<std::fs::Permissions>,
         fill: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
     ) -> Result<(), CliError> {
+        let (target, staging) = (self.entry(name)?, self.entry(tmp)?);
         let tmp_path = self.path.join(tmp);
-        let mut staged = self
-            .dir
-            .create_new(tmp)
-            .map_err(|e| act_err(&tmp_path, e))?;
+        let mut staged = sys::create_new(&self.dir, &staging).map_err(|e| act_err(&tmp_path, e))?;
         let filled = fill(&mut staged).and_then(|()| {
             permissions.map_or(Ok(()), |permissions| staged.set_permissions(permissions))
         });
         drop(staged);
         let result = filled.map_err(|e| act_err(&tmp_path, e)).and_then(|()| {
-            self.dir
-                .rename(tmp, name)
-                .map_err(|e| act_err(&self.path.join(name), e))
+            sys::rename(&self.dir, &staging, &target).map_err(|e| act_err(&self.path.join(name), e))
         });
         if result.is_err() {
-            let _ = self.dir.unlink(tmp);
+            let _ = sys::unlink(&self.dir, &staging);
         }
         result
     }
@@ -839,7 +896,8 @@ impl HeldDir {
     /// # Errors
     /// [`CliError::Io`] on a filesystem failure, a directory at `name` included.
     pub fn unlink(&self, name: &OsStr) -> Result<(), CliError> {
-        match self.dir.unlink(name) {
+        let entry = self.entry(name)?;
+        match sys::unlink(&self.dir, &entry) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(act_err(&self.path.join(name), e)),
@@ -879,7 +937,7 @@ impl HeldDir {
 
     /// Remove every entry of this directory, which sits at nesting `depth`.
     fn remove_contents(&self, depth: usize) -> Result<(), CliError> {
-        let names = self.dir.names().map_err(|e| act_err(&self.path, e))?;
+        let names = sys::names(&self.dir).map_err(|e| act_err(&self.path, e))?;
         for name in names {
             let name = match name {
                 Ok(name) => name,
@@ -905,7 +963,7 @@ impl HeldDir {
         let path = self.path.parent().unwrap_or(&self.path).to_path_buf();
         match self.dir.parent() {
             Ok(dir) => Ok(dir.map(|dir| Self { dir, path })),
-            Err(e) => Err(act_err(&path, e)),
+            Err(refusal) => Err(refused(&path, refusal)),
         }
     }
 
@@ -914,7 +972,7 @@ impl HeldDir {
     /// # Errors
     /// [`CliError::Io`] when `path` cannot be stat'd or the handle cannot be.
     pub fn is_at(&self, path: &Path) -> Result<bool, CliError> {
-        let found = sys::id_of_path(path).map_err(|e| act_err(path, e))?;
+        let found = DirId::of_path(path).map_err(|refusal| refused(path, refusal))?;
         Ok(found == self.id()?)
     }
 
@@ -993,10 +1051,10 @@ impl HeldDir {
     /// at the name; [`OutputRefusal::InUse`] for an entry another program
     /// holds open (Windows); [`CliError::Io`] on another filesystem failure.
     fn rmdir_released(&self, released: Released<'_>) -> Result<Rmdir, CliError> {
-        let name = released.name();
+        let entry = self.entry(released.name())?;
         subdir_released(released.path());
         let path = released.into_path();
-        match self.dir.rmdir(name) {
+        match sys::rmdir(&self.dir, &entry) {
             Ok(()) => Ok(Rmdir::Removed),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Rmdir::Vanished),
             Err(e)
@@ -1017,7 +1075,7 @@ impl HeldDir {
     /// # Errors
     /// [`CliError::Io`] when the directory cannot be listed.
     fn holds_no_entries(&self) -> Result<bool, CliError> {
-        let mut names = self.dir.names().map_err(|e| act_err(&self.path, e))?;
+        let mut names = sys::names(&self.dir).map_err(|e| act_err(&self.path, e))?;
         names.next().map_or(Ok(true), |name| {
             name.map(|_| false).map_err(|e| act_err(&self.path, e))
         })
@@ -1047,7 +1105,7 @@ impl HeldDir {
             }
             .into());
         }
-        let names = self.dir.names().map_err(|e| act_err(&self.path, e))?;
+        let names = sys::names(&self.dir).map_err(|e| act_err(&self.path, e))?;
         for name in names {
             let name = match name {
                 Ok(name) => name,
@@ -1081,25 +1139,25 @@ impl HeldDir {
     /// Whether the entry `name` is a regular file holding exactly `contents`.
     ///
     /// A link, a non-file, an absent entry, or any read failure counts as not
-    /// holding them, so the caller rewrites.
+    /// holding them, so the caller rewrites. At most one byte past `contents`
+    /// is read, so a longer file is never read without bound.
     #[must_use]
     pub fn holds_contents(&self, name: &OsStr, contents: &[u8]) -> bool {
-        let Ok(file) = self.dir.open_file(name) else {
+        let Some(entry) = EntryName::new(name) else {
+            return false;
+        };
+        let Ok(file) = self.dir.open_regular(&entry) else {
             return false;
         };
         let Ok(len) = u64::try_from(contents.len()) else {
             return false;
         };
-        if !file
-            .metadata()
-            .is_ok_and(|meta| meta.is_file() && meta.len() == len)
-        {
+        if file.len() != len {
             return false;
         }
-        let mut existing = Vec::with_capacity(contents.len());
-        file.take(len.saturating_add(1))
-            .read_to_end(&mut existing)
-            .is_ok_and(|_| existing == contents)
+        let cap = ByteCap::from_nonzero(NonZeroU64::new(len).unwrap_or(NonZeroU64::MIN));
+        file.read_bytes(cap)
+            .is_ok_and(|existing| existing == contents)
     }
 }
 
@@ -1492,8 +1550,9 @@ mod tests {
             .expect("open dir")
             .expect("dir exists")
             .dir
-            .entry_id(OsStr::new(name))
+            .entry_id(&EntryName::new(OsStr::new(name)).expect("plain name"))
             .expect("entry identity")
+            .expect("entry present")
     }
 
     /// Whether `dir` holds an entry named `name`, of any kind.
@@ -1937,5 +1996,167 @@ mod tests {
         );
         assert!(!present(dir.path(), CLAIM_FILE), "no claim file is written");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An empty subdirectory turned into a junction is refused as a link, never entered.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_child_is_link() {
+        use super::super::test_links::junction_in_place;
+
+        let base = scratch("junction_child");
+        let victim = base.join("victim");
+        std::fs::create_dir(&victim).expect("make victim");
+        std::fs::write(victim.join("keep.txt"), "keep").expect("victim file");
+        let link = base.join("link");
+        std::fs::create_dir(&link).expect("make link dir");
+        junction_in_place(&link, &victim);
+
+        let held = HeldDir::open(&base)
+            .expect("open base")
+            .expect("base exists");
+        let name = EntryName::new(OsStr::new("link")).expect("plain name");
+        let refused = held.dir.child_dir(&name);
+        assert_eq!(refused.err(), Some(OpenRefusal::Link));
+        let child = held.child(OsStr::new("link"));
+        assert!(
+            matches!(
+                child,
+                Err(CliError::OutputRefused(OutputRefusal::Symlink(_)))
+            ),
+            "the junction is refused as a link, got {child:?}"
+        );
+        assert!(victim.join("keep.txt").is_file(), "the target is untouched");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A held empty directory turned into a junction refuses its listing rather than listing the target.
+    #[cfg(windows)]
+    #[test]
+    fn a_held_empty_dir_turned_junction_refuses_entries() {
+        use super::super::test_links::junction_in_place;
+
+        let base = scratch("junction_held");
+        let victim = base.join("victim");
+        std::fs::create_dir(&victim).expect("make victim");
+        std::fs::write(victim.join("keep.txt"), "keep").expect("victim file");
+        let level = base.join("level");
+        std::fs::create_dir(&level).expect("make level");
+        let held = HeldDir::open(&level)
+            .expect("open level")
+            .expect("level exists");
+        junction_in_place(&level, &victim);
+
+        let cap = ipe_fs_open::EntryCap::new(16).expect("non-zero cap");
+        let listed = held.dir.entries(cap);
+        assert_eq!(listed.err(), Some(OpenRefusal::Link));
+        assert!(victim.join("keep.txt").is_file(), "the target is untouched");
+        drop(held);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A directory at the marker name is refused, never read as an empty directory awaiting its marker.
+    #[test]
+    fn a_directory_at_the_marker_name_refuses_ownership() {
+        let base = scratch("marker_dir");
+        let marker = base.join(OWNERSHIP_MARKER);
+        std::fs::create_dir(&marker).expect("make marker-named dir");
+        std::fs::write(marker.join("keep.txt"), "keep").expect("user file");
+        let held = HeldDir::open(&base)
+            .expect("open base")
+            .expect("base exists");
+        let ownership = held.ownership();
+        assert!(
+            matches!(ownership, Err(CliError::Io { .. })),
+            "a directory at the marker name is refused, got {ownership:?}"
+        );
+        let claimed = held.claim();
+        assert!(claimed.is_err(), "no claim takes it, got {claimed:?}");
+        assert!(
+            marker.join("keep.txt").is_file(),
+            "the user file is untouched"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A symbolic link at the marker name is no marker, and never followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_at_the_marker_name_is_no_marker() {
+        let base = scratch("marker_link");
+        let elsewhere = base.join("elsewhere");
+        std::fs::write(&elsewhere, MARKER_TEXT).expect("write lookalike marker");
+        let level = base.join("level");
+        std::fs::create_dir(&level).expect("make level");
+        std::os::unix::fs::symlink(&elsewhere, level.join(OWNERSHIP_MARKER)).expect("link marker");
+        let held = HeldDir::open(&level)
+            .expect("open level")
+            .expect("level exists");
+        let marked = held.has_marker();
+        assert!(
+            matches!(marked, Ok(false)),
+            "a linked marker is not followed, got {marked:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A subdirectory another program holds open without sharing is refused, in use, when entered.
+    #[cfg(windows)]
+    #[test]
+    fn a_child_held_open_elsewhere_is_in_use() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        /// `FILE_FLAG_BACKUP_SEMANTICS`: allows opening a directory handle.
+        const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+        let base = scratch("win_child_in_use");
+        let busy = base.join("busy");
+        std::fs::create_dir(&busy).expect("make busy");
+        let other = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .custom_flags(BACKUP_SEMANTICS)
+            .open(&busy)
+            .expect("hold busy open elsewhere");
+        let parent = HeldDir::open(&base)
+            .expect("open base")
+            .expect("base exists");
+        let child = parent.child(OsStr::new("busy"));
+        assert!(
+            matches!(child, Err(CliError::OutputRefused(OutputRefusal::InUse(_)))),
+            "the in-use subdirectory is refused, got {child:?}"
+        );
+        drop(other);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An in-use refusal stays in use on every platform; every other refusal is an I/O error of its kind.
+    #[test]
+    fn every_open_refusal_maps_to_its_cli_error() {
+        let path = Path::new("held/entry");
+        let in_use = refused(path, OpenRefusal::InUse);
+        assert!(
+            matches!(&in_use, CliError::OutputRefused(OutputRefusal::InUse(p)) if p == path),
+            "an in-use entry is refused as in use, got {in_use:?}"
+        );
+        let cap = ByteCap::new(4).expect("non-zero cap");
+        let entries = ipe_fs_open::EntryCap::new(4).expect("non-zero cap");
+        for refusal in [
+            OpenRefusal::Absent,
+            OpenRefusal::Link,
+            OpenRefusal::NotRegular(FileKind::Fifo),
+            OpenRefusal::Denied,
+            OpenRefusal::TooLarge(cap),
+            OpenRefusal::TooManyEntries(entries),
+            OpenRefusal::BadName,
+            OpenRefusal::NotUtf8,
+            OpenRefusal::Io(io::ErrorKind::Interrupted),
+        ] {
+            let error = refused(path, refusal);
+            assert!(
+                matches!(&error, CliError::Io { source, .. } if source.kind() == refusal.kind()),
+                "{refusal:?} is an I/O error of its kind, got {error:?}"
+            );
+        }
     }
 }

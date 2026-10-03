@@ -218,6 +218,13 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::Tunable,
     },
     EnvVar {
+        name: "IPE_INSTALL_DIR",
+        default: "$HOME/.local/bin",
+        purpose: "Directory `install.sh` installs the `ipe` binary into.",
+        subsystem: Subsystem::Build,
+        class: Class::Tunable,
+    },
+    EnvVar {
         name: "IPE_PUBLISH_SIGNING_KEY",
         default: "unset",
         purpose: "Path to the SSH private-key file `ipe package publish` signs the index \

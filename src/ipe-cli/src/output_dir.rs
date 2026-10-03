@@ -44,8 +44,6 @@ use crate::{CliError, io_err, text};
 
 pub(crate) mod held;
 mod proven;
-#[cfg(any(windows, test))]
-mod win32_name;
 
 use proven::{ProvenOutPath, prove_parent_steps};
 
@@ -898,9 +896,7 @@ fn tolerated_entry(name: &std::ffi::OsStr, kind: held::ListedKind) -> Tolerated 
     match kind {
         held::ListedKind::RegularFile if name == OWNERSHIP_MARKER => Tolerated::Marker,
         held::ListedKind::RegularFile if name == CLAIM_FILE => Tolerated::ClaimFile,
-        held::ListedKind::Absent | held::ListedKind::RegularFile | held::ListedKind::Other => {
-            Tolerated::Foreign
-        }
+        held::ListedKind::RegularFile | held::ListedKind::Other => Tolerated::Foreign,
     }
 }
 
@@ -2608,12 +2604,13 @@ mod tests {
             Tolerated::ClaimFile
         ));
         for name in [OWNERSHIP_MARKER, CLAIM_FILE] {
-            for kind in [held::ListedKind::Other, held::ListedKind::Absent] {
-                assert!(
-                    matches!(tolerated_entry(OsStr::new(name), kind), Tolerated::Foreign),
-                    "{name:?} of a non-file kind is user data"
-                );
-            }
+            assert!(
+                matches!(
+                    tolerated_entry(OsStr::new(name), held::ListedKind::Other),
+                    Tolerated::Foreign
+                ),
+                "{name:?} of a non-file kind is user data"
+            );
         }
         for name in [
             ".ipe-output-evil",

@@ -62,6 +62,7 @@ ipe_backend_rust = { path = "../compiler/backend/rust" }
 ipe_ffi = { path = "../compiler/ffi" }
 ipe_sandbox = { path = "../compiler/sandbox" }
 ipe_env = { path = "../compiler/env" }
+ipe_fs_open = { path = "../compiler/fs_open" }
 ipe_lsp_server = { path = "../lsp/server" }
 # Phase 7 (`crate::watch` — Tasks 21-25): the confined watcher + process
 # supervisor primitives, and the two crates `watch.rs` drives directly —
@@ -185,14 +186,12 @@ rustix = { version = "0.38", features = ["fs", "process", "termios"] }
 # signal-hook's safe handler registry (already vetted and in the graph).
 signal-hook = "0.3"
 
-# Held output-directory handles read a handle's volume serial number and file
-# index (`GetFileInformationByHandle`) through a safe wrapper, and open entries
-# relative to a held directory handle (`NtCreateFile` with a root directory)
-# through cap-primitives, so the Windows side acts through handles with no
-# `unsafe` of our own. cap-primitives is already in the dependency graph.
+# Held output-directory handles create and remove entries relative to a held
+# directory handle (`NtCreateFile` with a root directory) through
+# cap-primitives, so the Windows side acts through handles with no `unsafe` of
+# our own; opening and identifying a held level lives in `ipe_fs_open`.
 [target.'cfg(windows)'.dependencies]
 cap-primitives = "3.4.6"
-winapi-util = "0.1"
 
 [dev-dependencies]
 ipe-test-temp = { path = "../../tools/test-temp" }
