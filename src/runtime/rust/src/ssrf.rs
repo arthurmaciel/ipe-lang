@@ -97,8 +97,8 @@ pub(crate) fn ssrf_deny_private_enabled() -> bool {
     let (setting, recognised) =
         DenyPrivateSetting::parse(crate::telemetry::RawEnv::from_read(&read));
     if !recognised {
-        static NOTICE: std::sync::Once = std::sync::Once::new();
-        NOTICE.call_once(|| {
+        static UNRECOGNISED_NOTICE: std::sync::Once = std::sync::Once::new();
+        UNRECOGNISED_NOTICE.call_once(|| {
             crate::system::emit_runtime_log("ssrf", &unrecognised_notice(&read));
         });
     }

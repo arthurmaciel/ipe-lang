@@ -338,8 +338,8 @@ impl Posture {
         let ipe_env = crate::system::read_env_var("IPE_ENV");
         let (env, ipe_env) = (RawEnv::from_read(&env), RawEnv::from_read(&ipe_env));
         if release_ignores_dev_marker(env, ipe_env, BuildPosture::COMPILED) {
-            static NOTICE: std::sync::Once = std::sync::Once::new();
-            NOTICE.call_once(|| {
+            static DEV_MARKER_NOTICE: std::sync::Once = std::sync::Once::new();
+            DEV_MARKER_NOTICE.call_once(|| {
                 crate::system::emit_runtime_log("posture", RELEASE_IGNORES_DEV_MARKER);
             });
         }
