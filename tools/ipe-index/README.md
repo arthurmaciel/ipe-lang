@@ -166,10 +166,12 @@ files `.gitignore` does not exclude, read from NUL-separated git listings
 (`git ls-files -z -s`, `git diff --raw -z`), so a newline in a name never
 splits it. The walk refuses, and names on stderr as `ipe-index: not indexing
 …`, any entry git records as a symbolic link (mode 120000) or a submodule
-(160000), any name that is not UTF-8, and any path that is not a regular file
-on disk, checked without following links at the file and at every directory
-above it. A file that becomes a link drops out of the index on the next
-`update`. A tracked `leak.rs -> /etc/passwd` never reaches the index or the
+(160000), an untracked nested repository, any name that is not UTF-8, and any
+path that is not a regular file on disk, checked without following links at the
+file and at every directory above it. Every read (indexing and `rename-symbol`)
+repeats that check, reads from the handle it opened only if it is the file the
+check saw, and stops at the 2 MB read ceiling. A file that becomes a link drops
+out of the index on the next `update`. A tracked `leak.rs -> /etc/passwd` never reaches the index or the
 review app:
 
 ```bash

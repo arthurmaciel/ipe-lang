@@ -7,12 +7,16 @@
 //! (mode 160000) is refused from its mode, and every listed path is then
 //! checked on disk without following links (`symlink_metadata` on the leaf and
 //! on each directory above it), so a working-tree link, tracked or untracked,
-//! never leads a read outside the repository.
+//! never leads a read outside the repository. Reading goes through
+//! [`read_indexed`] only: it re-parses the name, repeats the no-follow check,
+//! refuses a handle whose file is not the one that check saw, and reads at
+//! most [`MAX_FILE_BYTES`] from the held handle.
 
 use crate::model::{Lang, Role, lang_of, role_of};
 use anyhow::{Result, bail};
 use std::fmt::{self, Write as _};
-use std::io;
+use std::fs::File;
+use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -125,6 +129,8 @@ pub enum Refusal {
     GitlinkEntry { path: String },
     /// Git records a mode that names no regular file.
     UnknownMode { path: String, mode: String },
+    /// `--others` lists an untracked nested repository as `<path>/`.
+    NestedRepository { path: String },
     /// On disk the path is not a regular file reached through real directories.
     NotRegularOnDisk { path: String, found: DiskRefusal },
 }
@@ -147,7 +153,7 @@ pub enum DiskRefusal {
 /// `\` becomes `\\` and every char that is neither a space nor ASCII graphic
 /// becomes `\u{..}`, so a name can never move the terminal cursor or forge a
 /// line.
-fn shown(text: &str) -> String {
+pub fn shown(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match c {
@@ -181,18 +187,25 @@ impl fmt::Display for Refusal {
             Self::UnknownMode { path, mode } => {
                 write!(f, "{}: tracked with mode {}", shown(path), shown(mode))
             }
+            Self::NestedRepository { path } => {
+                write!(f, "{}/: an untracked nested repository", shown(path))
+            }
             Self::NotRegularOnDisk { path, found } => {
-                let why = match found {
-                    DiskRefusal::Symlink => "is a symbolic link".to_string(),
-                    DiskRefusal::LinkedAncestor { ancestor } => {
-                        format!("sits under {}, not a real directory", shown(ancestor))
-                    }
-                    DiskRefusal::NotAFile => "is not a regular file".to_string(),
-                    DiskRefusal::Unreadable { kind } => format!("cannot be inspected ({kind})"),
-                };
-                write!(f, "{}: {why}", shown(path))
+                write!(f, "{}: {}", shown(path), disk_why(found))
             }
         }
+    }
+}
+
+/// What a [`DiskRefusal`] found, as a predicate on the refused path.
+fn disk_why(found: &DiskRefusal) -> String {
+    match found {
+        DiskRefusal::Symlink => "is a symbolic link".to_string(),
+        DiskRefusal::LinkedAncestor { ancestor } => {
+            format!("sits under {}, not a real directory", shown(ancestor))
+        }
+        DiskRefusal::NotAFile => "is not a regular file".to_string(),
+        DiskRefusal::Unreadable { kind } => format!("cannot be inspected ({kind})"),
     }
 }
 
@@ -326,6 +339,14 @@ pub fn parse_untracked(out: &[u8]) -> Result<Vec<Listed>, WalkError> {
         if name.is_empty() {
             return Err(WalkError::MalformedRecord { listing, record });
         }
+        if let Some(dir) = name.strip_suffix(b"/")
+            && let Ok(path) = path_of(dir)
+        {
+            if is_indexable(&path) {
+                listed.push(Err(Refusal::NestedRepository { path }));
+            }
+            continue;
+        }
         match path_of(name) {
             Err(refusal) => listed.push(Err(refusal)),
             Ok(path) if !is_indexable(&path) => {}
@@ -335,11 +356,39 @@ pub fn parse_untracked(out: &[u8]) -> Result<Vec<Listed>, WalkError> {
     Ok(listed)
 }
 
+/// The identity of a file: device and inode on unix.
+///
+/// Off unix every file compares equal, so the handle check in [`read_held`]
+/// is the no-follow check alone there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileId {
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
+}
+
+impl FileId {
+    #[cfg(unix)]
+    fn of(md: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt as _;
+        Self {
+            dev: md.dev(),
+            ino: md.ino(),
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn of(_md: &std::fs::Metadata) -> Self {
+        Self {}
+    }
+}
+
 /// What the no-follow disk check found at a listed path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OnDisk {
     /// A regular file reached through real directories only.
-    Regular,
+    Regular(FileId),
     /// Nothing at the path (deleted in the working tree).
     Absent,
     /// Something other than a regular file.
@@ -366,7 +415,7 @@ fn on_disk(root: &Path, rel: &str) -> OnDisk {
     }
     at.push(leaf);
     match std::fs::symlink_metadata(&at) {
-        Ok(md) if md.file_type().is_file() => OnDisk::Regular,
+        Ok(md) if md.file_type().is_file() => OnDisk::Regular(FileId::of(&md)),
         Ok(md) if md.file_type().is_symlink() => OnDisk::Refused(DiskRefusal::Symlink),
         Ok(_) => OnDisk::Refused(DiskRefusal::NotAFile),
         Err(e) if e.kind() == io::ErrorKind::NotFound => OnDisk::Absent,
@@ -386,7 +435,7 @@ fn on_disk(root: &Path, rel: &str) -> OnDisk {
 ///   * `GIT_TERMINAL_PROMPT=0` + a null stdin — a credential helper / askpass /
 ///     pager that tries to prompt would otherwise block on stdin forever and
 ///     wedge the indexer; both make any such prompt fail fast instead.
-fn git_command(repo: &str) -> Command {
+pub(crate) fn git_command(repo: &str) -> Command {
     let mut cmd = Command::new("git");
     cmd.arg("-c")
         .arg("core.quotePath=false")
@@ -430,7 +479,7 @@ fn admit(root: &Path, listed: Vec<Listed>) -> (Vec<Tracked>, Vec<Refusal>) {
         match entry {
             Err(refusal) => refused.push(refusal),
             Ok(path) => match on_disk(root, &path) {
-                OnDisk::Regular => files.push(Tracked::at(path)),
+                OnDisk::Regular(_) => files.push(Tracked::at(path)),
                 OnDisk::Absent => {}
                 OnDisk::Refused(found) => refused.push(Refusal::NotRegularOnDisk { path, found }),
             },
@@ -554,7 +603,9 @@ pub fn changed(repo: &str, since: &str) -> Result<(Vec<Tracked>, Vec<String>)> {
     // `--no-renames` decomposes renames into a `D oldpath` + `A newpath` pair,
     // so every change record carries exactly one path.
     let range = format!("{since}..HEAD");
-    let out = git_stdout(repo, &["diff", "--raw", "-z", "--no-renames", &range])?;
+    // `--` ends the revisions, so a range git cannot resolve is an error,
+    // never a pathspec naming a file called `<since>..HEAD`.
+    let out = git_stdout(repo, &["diff", "--raw", "-z", "--no-renames", &range, "--"])?;
     let root = Path::new(repo);
     let mut upserts = Vec::new();
     let mut deletes = Vec::new();
@@ -564,7 +615,7 @@ pub fn changed(repo: &str, since: &str) -> Result<(Vec<Tracked>, Vec<String>)> {
             Change::Delete(path) => deletes.push(path),
             Change::Refused(refusal) => refused.push(refusal),
             Change::Upsert(path) => match on_disk(root, &path) {
-                OnDisk::Regular => upserts.push(Tracked::at(path)),
+                OnDisk::Regular(_) => upserts.push(Tracked::at(path)),
                 OnDisk::Absent => deletes.push(path),
                 OnDisk::Refused(found) => {
                     refused.push(Refusal::NotRegularOnDisk {
@@ -578,6 +629,95 @@ pub fn changed(repo: &str, since: &str) -> Result<(Vec<Tracked>, Vec<String>)> {
     }
     report(&refused);
     Ok((upserts, deletes))
+}
+
+/// Why [`read_indexed`] returned no text for a path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadRefusal {
+    /// The name is not a plain repository-relative UTF-8 path.
+    Name(Refusal),
+    /// Nothing at the path.
+    Absent,
+    /// The no-follow check found something other than a regular file.
+    NotRegular(DiskRefusal),
+    /// The opened handle names another file than the no-follow check saw.
+    Replaced,
+    /// The file holds more than [`MAX_FILE_BYTES`]; `at_least` bytes were seen.
+    TooLarge { at_least: u64 },
+    /// The content is not UTF-8 (a binary file).
+    NotUtf8,
+    /// Opening or reading failed.
+    Io(io::ErrorKind),
+}
+
+impl ReadRefusal {
+    /// Whether the refusal is worth a line on stderr: an absent or binary file is not.
+    pub fn is_reported(&self) -> bool {
+        match self {
+            Self::Absent | Self::NotUtf8 => false,
+            Self::Name(_)
+            | Self::NotRegular(_)
+            | Self::Replaced
+            | Self::TooLarge { .. }
+            | Self::Io(_) => true,
+        }
+    }
+}
+
+impl fmt::Display for ReadRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Name(refusal) => write!(f, "{refusal}"),
+            Self::Absent => f.write_str("absent"),
+            Self::NotRegular(found) => f.write_str(&disk_why(found)),
+            Self::Replaced => f.write_str("replaced while it was opened"),
+            Self::TooLarge { at_least } => write!(
+                f,
+                "larger than the {MAX_FILE_BYTES}-byte read ceiling ({at_least}+ bytes)"
+            ),
+            Self::NotUtf8 => f.write_str("not UTF-8 text"),
+            Self::Io(kind) => write!(f, "unreadable ({kind})"),
+        }
+    }
+}
+
+/// Reads the regular file `root/rel` as text, refusing anything the walk would.
+///
+/// `rel` is parsed again, so a stored name never escapes `root`; the leaf and
+/// every directory above it are checked without following links; the opened
+/// handle must be the file that check saw; at most [`MAX_FILE_BYTES`] are read.
+pub fn read_indexed(root: &Path, rel: &str) -> Result<String, ReadRefusal> {
+    let rel = path_of(rel.as_bytes()).map_err(ReadRefusal::Name)?;
+    let seen = match on_disk(root, &rel) {
+        OnDisk::Regular(id) => id,
+        OnDisk::Absent => return Err(ReadRefusal::Absent),
+        OnDisk::Refused(found) => return Err(ReadRefusal::NotRegular(found)),
+    };
+    let file = File::open(root.join(&rel)).map_err(|e| match e.kind() {
+        io::ErrorKind::NotFound => ReadRefusal::Absent,
+        kind => ReadRefusal::Io(kind),
+    })?;
+    read_held(file, seen)
+}
+
+/// Reads an opened file that must be the regular file `seen` names, capped.
+fn read_held(file: File, seen: FileId) -> Result<String, ReadRefusal> {
+    let md = file.metadata().map_err(|e| ReadRefusal::Io(e.kind()))?;
+    if !md.is_file() || FileId::of(&md) != seen {
+        return Err(ReadRefusal::Replaced);
+    }
+    if md.len() > MAX_FILE_BYTES {
+        return Err(ReadRefusal::TooLarge { at_least: md.len() });
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| ReadRefusal::Io(e.kind()))?;
+    let read = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if read > MAX_FILE_BYTES {
+        return Err(ReadRefusal::TooLarge { at_least: read });
+    }
+    String::from_utf8(bytes).map_err(|_| ReadRefusal::NotUtf8)
 }
 
 pub fn head_sha(repo: &str) -> Result<String> {
@@ -739,7 +879,7 @@ mod tests {
 
     #[test]
     fn a_name_that_is_not_repo_relative_is_refused() {
-        for name in ["/etc/passwd", "a/../b.rs", "./a.rs", "a//b.rs", "a/"] {
+        for name in ["/etc/passwd", "a/../b.rs", "./a.rs", "a//b.rs", "a//", "/"] {
             assert_eq!(
                 parse_untracked(format!("{name}\0").as_bytes()).unwrap(),
                 [Listed::Err(Refusal::NotRepoRelative {
@@ -748,6 +888,53 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    // `git ls-files --others` names an untracked nested repository `<dir>/`.
+    #[test]
+    fn an_untracked_nested_repository_is_its_own_refusal() {
+        assert_eq!(
+            parse_untracked(b"worktrees/sync/\0ok.rs\0target/x/\0").unwrap(),
+            [
+                Listed::Err(Refusal::NestedRepository {
+                    path: "worktrees/sync".to_string()
+                }),
+                Listed::Ok("ok.rs".to_string()),
+            ]
+        );
+        assert_eq!(
+            Refusal::NestedRepository {
+                path: "w/s".to_string()
+            }
+            .to_string(),
+            "w/s/: an untracked nested repository"
+        );
+    }
+
+    // A stored name is parsed again before a read, so `..` never leaves the root.
+    #[test]
+    fn a_read_refuses_a_name_that_leaves_the_root() {
+        let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for rel in ["../ipe-index/Cargo.toml", "/etc/passwd", "./Cargo.toml"] {
+            assert_eq!(
+                read_indexed(here, rel),
+                Err(ReadRefusal::Name(Refusal::NotRepoRelative {
+                    path: rel.to_string()
+                })),
+                "{rel}"
+            );
+        }
+        assert!(read_indexed(here, "Cargo.toml").is_ok());
+    }
+
+    // The held handle must be the file the no-follow check saw.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_refuses_a_handle_to_another_file() {
+        let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let seen = FileId::of(&std::fs::symlink_metadata(here.join("Cargo.toml")).unwrap());
+        let other = File::open(here.join("README.md")).unwrap();
+        assert_eq!(read_held(other, seen), Err(ReadRefusal::Replaced));
     }
 
     #[test]
@@ -956,5 +1143,46 @@ mod tests {
         );
         assert_eq!(on_disk(&fx.0, "gone.rs"), OnDisk::Absent);
         assert_eq!(fx.paths(), ["moved/a.rs"]);
+        assert_eq!(
+            read_indexed(&fx.0, "b.rs"),
+            Err(ReadRefusal::NotRegular(DiskRefusal::Symlink))
+        );
+        assert_eq!(
+            read_indexed(&fx.0, "dir/a.rs"),
+            Err(ReadRefusal::NotRegular(DiskRefusal::LinkedAncestor {
+                ancestor: "dir".to_string()
+            }))
+        );
+        assert_eq!(
+            read_indexed(&fx.0, "moved/a.rs").as_deref(),
+            Ok("fn a() {}")
+        );
+    }
+
+    // The read ceiling holds at the handle: one byte past it is refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_past_the_ceiling_is_refused() {
+        let fx = Fixture::new("read-ceiling");
+        let limit = usize::try_from(MAX_FILE_BYTES).unwrap();
+        std::fs::write(fx.0.join("at.rs"), vec![b'a'; limit]).unwrap();
+        std::fs::write(fx.0.join("past.rs"), vec![b'a'; limit + 1]).unwrap();
+        assert_eq!(read_indexed(&fx.0, "at.rs").map(|s| s.len()), Ok(limit));
+        assert_eq!(
+            read_indexed(&fx.0, "past.rs"),
+            Err(ReadRefusal::TooLarge {
+                at_least: MAX_FILE_BYTES + 1
+            })
+        );
+    }
+
+    // A range git cannot resolve is an error, never a pathspec for a file of that name.
+    #[cfg(unix)]
+    #[test]
+    fn an_unresolvable_since_ref_is_an_error_not_a_pathspec() {
+        let fx = Fixture::new("since-pathspec");
+        std::fs::write(fx.0.join("abc..HEAD"), "x").unwrap();
+        fx.git(&["add", "abc..HEAD"]);
+        assert!(changed(fx.root(), "abc").is_err());
     }
 }
