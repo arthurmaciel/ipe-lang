@@ -18,7 +18,7 @@
 //! `windows` (handle-relative opens; path acts run under a sentinel pin).
 
 use std::ffi::OsStr;
-use std::io::{self, Read as _, Write as _};
+use std::io::{self, Read as _, Seek as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use super::{
@@ -83,6 +83,9 @@ pub enum OwnedNow {
 #[must_use]
 #[derive(Debug)]
 pub struct Claimed(());
+
+/// The one byte a claim file holds once its holder begins publishing the marker.
+const PHASE_FINALIZING: u8 = 1;
 
 /// How far a claim file's holder got, recorded in the claim file's length.
 ///
@@ -415,7 +418,7 @@ impl HeldDir {
             return Ok(MarkerState::NotGenuine);
         }
         let mut head = Vec::new();
-        file.by_ref()
+        io::Read::by_ref(&mut file)
             .take(MARKER_READ_CAP)
             .read_to_end(&mut head)
             .map_err(|e| act_err(&path, e))?;
@@ -557,14 +560,14 @@ impl HeldDir {
         if self.owned_now()? == OwnedNow::Owned {
             return Ok(Some(Claimed(())));
         }
-        let Some(claim) = self.lock_claim()? else {
+        let Some(mut claim) = self.lock_claim()? else {
             return Ok(None);
         };
         claim_point(ClaimPoint::AfterLock, &self.path);
         if !self.links(OsStr::new(CLAIM_FILE), &claim)? {
             return Ok(None);
         }
-        let phase = self.phase_of(&claim)?;
+        let phase = self.phase_of(&mut claim)?;
         match (phase, self.genuine_marker()?) {
             (ClaimPhase::Pending, MarkerState::NotGenuine) => {
                 self.drop_claim(claim)?;
@@ -643,17 +646,37 @@ impl HeldDir {
         }
     }
 
-    /// The phase the locked `claim` records in its length.
-    fn phase_of(&self, claim: &std::fs::File) -> Result<ClaimPhase, CliError> {
-        let len = claim
-            .metadata()
-            .map_err(|e| act_err(&self.path.join(CLAIM_FILE), e))?
-            .len();
-        Ok(if len == 0 {
-            ClaimPhase::Pending
+    /// The phase the locked `claim` records, parsed from the file itself.
+    ///
+    /// A claim file only this protocol wrote has one link and holds nothing
+    /// ([`ClaimPhase::Pending`]) or the one byte [`PHASE_FINALIZING`]
+    /// ([`ClaimPhase::Finalizing`]). Anything else at the claim name, a second
+    /// link to a file elsewhere or a file with other contents, is not ipe's: it
+    /// refuses the claim [`OutputRefusal::NotIpeOwned`] and is never written to
+    /// nor removed.
+    fn phase_of(&self, claim: &mut std::fs::File) -> Result<ClaimPhase, CliError> {
+        let path = self.path.join(CLAIM_FILE);
+        let not_ours = || Err(OutputRefusal::NotIpeOwned(self.path.clone()).into());
+        if sys::link_count(claim).map_err(|e| act_err(&path, e))? != 1 {
+            return not_ours();
+        }
+        let len = claim.metadata().map_err(|e| act_err(&path, e))?.len();
+        if len == 0 {
+            return Ok(ClaimPhase::Pending);
+        }
+        if len != 1 {
+            return not_ours();
+        }
+        let mut byte = [0_u8];
+        claim
+            .seek(io::SeekFrom::Start(0))
+            .and_then(|_| claim.read_exact(&mut byte))
+            .map_err(|e| act_err(&path, e))?;
+        if byte == [PHASE_FINALIZING] {
+            Ok(ClaimPhase::Finalizing)
         } else {
-            ClaimPhase::Finalizing
-        })
+            not_ours()
+        }
     }
 
     /// Pre-check, publish the marker, post-check, and commit, all under the locked `claim`.
@@ -668,7 +691,8 @@ impl HeldDir {
         }
         claim_point(ClaimPoint::AfterPreCheck, &self.path);
         claim
-            .write_all(&[1])
+            .seek(io::SeekFrom::Start(0))
+            .and_then(|_| claim.write_all(&[PHASE_FINALIZING]))
             .and_then(|()| claim.sync_data())
             .map_err(|e| act_err(&self.path.join(CLAIM_FILE), e))?;
         let marker = match self.publish_marker() {
@@ -1193,7 +1217,6 @@ mod tests {
     use super::*;
 
     use std::cell::Cell;
-    use std::io::Write as _;
     use std::rc::Rc;
 
     /// A fresh, empty scratch directory unique to this test process.
@@ -1639,7 +1662,7 @@ mod tests {
         let polls = Rc::new(Cell::new(0_u32));
         let count = Rc::clone(&polls);
         on_claim(ClaimPoint::Polled, move |_| {
-            count.set(count.get().saturating_add(1))
+            count.set(count.get().saturating_add(1));
         });
         let claimed = dir.claim();
         set_claim_hook(None);
@@ -1724,20 +1747,20 @@ mod tests {
         );
         assert!(!present(&out, CLAIM_FILE), "the claim file is removed");
 
-        let (base_bare, bare) = held_empty("finalizing_bare");
-        let out = bare.path().to_path_buf();
+        let (base_unpublished, unpublished) = held_empty("finalizing_bare");
+        let out = unpublished.path().to_path_buf();
         std::fs::write(out.join(CLAIM_FILE), [1_u8]).expect("finalizing claim file");
-        let claimed = bare.claim();
+        let claimed = unpublished.claim();
         assert!(
             claimed.is_ok(),
             "an unpublished claim is redone, got {claimed:?}"
         );
         assert!(
-            bare.has_marker().expect("read ownership"),
+            unpublished.has_marker().expect("read ownership"),
             "the marker is published"
         );
         assert!(!present(&out, CLAIM_FILE), "the claim file is removed");
-        for base in [base, base_marked, base_bare] {
+        for base in [base, base_marked, base_unpublished] {
             let _ = std::fs::remove_dir_all(&base);
         }
     }
@@ -1831,6 +1854,56 @@ mod tests {
             let now = dir.owned_now();
             set_claim_hook(None);
             assert!(matches!(now, Ok(OwnedNow::Unowned)), "got {now:?}");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A claim file this protocol never wrote is refused, and is neither written to nor removed.
+    #[test]
+    fn a_claim_name_ipe_never_wrote_is_refused_and_kept() {
+        let (base, dir) = held_empty("foreign_claim_file");
+        let out = dir.path().to_path_buf();
+        std::fs::write(out.join(CLAIM_FILE), "user notes").expect("user file at the claim name");
+        let claimed = dir.claim();
+        assert!(not_ipe_owned(&claimed), "got {claimed:?}");
+        assert_eq!(
+            std::fs::read(out.join(CLAIM_FILE)).ok().as_deref(),
+            Some(b"user notes".as_slice()),
+            "the user file keeps its bytes"
+        );
+        assert!(!present(&out, OWNERSHIP_MARKER), "no marker is written");
+
+        std::fs::write(out.join(CLAIM_FILE), [b'u']).expect("one foreign byte");
+        let claimed = dir.claim();
+        assert!(not_ipe_owned(&claimed), "a foreign byte, got {claimed:?}");
+        assert_eq!(
+            std::fs::read(out.join(CLAIM_FILE)).ok().as_deref(),
+            Some(b"u".as_slice()),
+            "the one-byte file is kept"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A claim name hard-linked to a file elsewhere is refused, and the linked file is untouched.
+    #[test]
+    fn a_hard_linked_claim_name_is_refused_and_its_file_untouched() {
+        let (base, dir) = held_empty("linked_claim_file");
+        let out = dir.path().to_path_buf();
+        for bytes in [b"".as_slice(), [PHASE_FINALIZING].as_slice()] {
+            let victim = base.join("victim");
+            std::fs::write(&victim, bytes).expect("victim file");
+            std::fs::hard_link(&victim, out.join(CLAIM_FILE)).expect("link the claim name");
+            let claimed = dir.claim();
+            assert!(not_ipe_owned(&claimed), "got {claimed:?}");
+            assert_eq!(
+                std::fs::read(&victim).ok().as_deref(),
+                Some(bytes),
+                "the linked file is never written to"
+            );
+            assert!(present(&out, CLAIM_FILE), "the link is kept");
+            assert!(!present(&out, OWNERSHIP_MARKER), "no marker is written");
+            std::fs::remove_file(out.join(CLAIM_FILE)).expect("drop the link");
+            std::fs::remove_file(&victim).expect("drop the victim");
         }
         let _ = std::fs::remove_dir_all(&base);
     }

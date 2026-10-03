@@ -3016,8 +3016,11 @@ mod tests {
             .expect("write into the claimed level");
         let _ = written_tx.send(());
         let handle = racer.borrow_mut().take().expect("the racing claim ran");
-        let raced = handle.join().expect("racing claim thread");
-        assert!(raced.is_ok(), "the racing claim succeeds, got {raced:?}");
+        let race_outcome = handle.join().expect("racing claim thread");
+        assert!(
+            race_outcome.is_ok(),
+            "the racing claim succeeds, got {race_outcome:?}"
+        );
         let now = level.owned_now();
         assert!(
             matches!(now, Ok(held::OwnedNow::Owned)),

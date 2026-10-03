@@ -1,351 +1,262 @@
 #![forbid(unsafe_code)]
-//! The ownership marker and the claim file are acted on only by the claim protocol.
+//! The ownership marker and the claim file are named only by the claim protocol and an inventory.
 //!
-//! Every create, rename, unlink, open, or path join that names
-//! `OWNERSHIP_MARKER`, `CLAIM_FILE`, or a `.ipe-output` literal lives in
-//! `output_dir/held.rs`, which runs it under the claim lock. Outside it, a
-//! non-test function that names either and also reaches a filesystem act fails
-//! this test; the one allow-listed site is `HandoverDir::release_to_user`,
-//! the hand-over to the user. No `fn adopt` or `fn write_marker` exists, and
-//! `fn publish_marker` is never `pub`.
+//! `output_dir/held.rs` runs every create, write, rename, and unlink of
+//! `OWNERSHIP_MARKER` and `CLAIM_FILE` under the claim lock. Outside it, every
+//! non-test item of `src/` that names either, the marker's contents
+//! (`MARKER_TEXT`, `MARKER_HEADER`), or a `.ipe-output` literal must be an
+//! entry of [`ALLOWED`]: the constants' own definitions, the refusal messages,
+//! the listing classifier, and the hand-over to the user. A new item naming
+//! one is a violation until it is reviewed into the inventory, and an
+//! inventory entry no item matches is stale. No `fn adopt` or
+//! `fn write_marker` exists, and `fn publish_marker` is never `pub`.
 //!
-//! The source is read with comments and string literals stripped, so a name in
-//! a comment is not a use and a brace in a string does not shift the items.
+//! Each file is parsed into a syntax tree, so a comment is not a use, a string
+//! is classified by its value, and an item under `#[test]` or a `cfg` that
+//! requires `test` is exempt by its attribute, not by a text pattern. A file
+//! that does not parse fails the scan.
 
 use std::path::{Path, PathBuf};
 
-/// The file whose functions run the claim protocol.
+use proc_macro2::{TokenStream, TokenTree};
+use syn::visit::{self, Visit};
+
+/// The file whose items run the claim protocol.
 const PROTOCOL_FILE: &str = "output_dir/held.rs";
 
-/// Non-test functions outside [`PROTOCOL_FILE`] allowed to act on a marker name, by file and name.
-const ALLOWED: &[(&str, &str)] = &[("output_dir.rs", "release_to_user")];
-
-/// The word a string literal holding `.ipe-output` is replaced by.
-const MARKER_LITERAL: &str = "__ipe_marker_literal__";
-
-/// The words that name the marker or the claim file.
-const MARKER_WORDS: &[&str] = &["OWNERSHIP_MARKER", "CLAIM_FILE", MARKER_LITERAL];
-
-/// The text of a filesystem act or of a path built from a name.
-const FS_ACTS: &[&str] = &[
-    "fs::",
-    "File::",
-    "OpenOptions",
-    ".join(",
-    ".unlink(",
-    ".rename(",
-    ".create_new(",
-    ".create_claim(",
-    ".open_claim(",
-    ".open_file(",
-    ".write_file(",
-    ".remove_entry(",
+/// The non-test items outside [`PROTOCOL_FILE`] allowed to name a marker word, by file and item name.
+const ALLOWED: &[(&str, &str)] = &[
+    ("output_dir.rs", "OWNERSHIP_MARKER"),
+    ("output_dir.rs", "CLAIM_FILE"),
+    ("output_dir.rs", "MARKER_HEADER"),
+    ("output_dir.rs", "MARKER_TEXT"),
+    ("output_dir.rs", "fmt"),
+    ("output_dir.rs", "tolerated_entry"),
+    ("output_dir.rs", "release_to_user"),
 ];
 
-/// Whether `byte` can be part of an identifier.
-const fn is_ident(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
+/// The identifiers that name the marker, its contents, or the claim file.
+const MARKER_WORDS: &[&str] = &[
+    "OWNERSHIP_MARKER",
+    "CLAIM_FILE",
+    "MARKER_TEXT",
+    "MARKER_HEADER",
+];
+
+/// The text a literal naming the marker or the claim file holds.
+const MARKER_LITERAL: &str = ".ipe-output";
+
+/// Whether `word` is one of [`MARKER_WORDS`].
+fn is_marker_word(ident: &proc_macro2::Ident) -> bool {
+    MARKER_WORDS.iter().any(|word| ident == *word)
 }
 
-/// The identifier ending just before `at` in `bytes`.
-fn ident_before(bytes: &[u8], at: usize) -> &[u8] {
-    let head = bytes.get(..at).unwrap_or_default();
-    let start = head
-        .iter()
-        .rposition(|&byte| !is_ident(byte))
-        .map_or(0, |pos| pos.saturating_add(1));
-    head.get(start..).unwrap_or_default()
-}
-
-/// Whether a raw string literal starts at `at` (an `r`, after nothing or a `b`/`c` prefix).
-fn is_raw_start(bytes: &[u8], at: usize) -> bool {
-    let prefix = ident_before(bytes, at);
-    if !(prefix.is_empty() || prefix == b"b" || prefix == b"c") {
-        return false;
-    }
-    let hashes = bytes
-        .get(at.saturating_add(1)..)
-        .unwrap_or_default()
-        .iter()
-        .take_while(|&&byte| byte == b'#')
-        .count();
-    bytes.get(at.saturating_add(1).saturating_add(hashes)) == Some(&b'"')
-}
-
-/// Skip the string literal starting at `at` and append its stand-in to `out`.
-///
-/// The stand-in is [`MARKER_LITERAL`] for a literal holding `.ipe-output`,
-/// else an empty literal. Returns the index just past the literal.
-fn skip_string(bytes: &[u8], at: usize, out: &mut Vec<u8>) -> usize {
-    let mut i = at;
-    let mut hashes = 0;
-    let raw = bytes.get(i) == Some(&b'r');
-    if raw {
-        i = i.saturating_add(1);
-        while bytes.get(i) == Some(&b'#') {
-            hashes += 1;
-            i = i.saturating_add(1);
-        }
-    }
-    i = i.saturating_add(1);
-    let start = i;
-    let end = loop {
-        match bytes.get(i) {
-            None => break i,
-            Some(b'\\') if !raw => i = i.saturating_add(2),
-            Some(b'"') => {
-                let close = bytes
-                    .get(i.saturating_add(1)..)
-                    .unwrap_or_default()
-                    .iter()
-                    .take_while(|&&byte| byte == b'#')
-                    .count();
-                if close >= hashes {
-                    break i;
-                }
-                i = i.saturating_add(1);
-            }
-            Some(_) => i = i.saturating_add(1),
-        }
-    };
-    let content = bytes.get(start..end).unwrap_or_default();
-    if content
-        .windows(b".ipe-output".len())
-        .any(|w| w == b".ipe-output")
-    {
-        out.push(b' ');
-        out.extend_from_slice(MARKER_LITERAL.as_bytes());
-        out.push(b' ');
-    } else {
-        out.extend_from_slice(b"\"\"");
-    }
-    end.saturating_add(1).saturating_add(hashes)
-}
-
-/// Skip the char literal or lifetime starting at the quote `at`, appending its stand-in to `out`.
-fn skip_quote(src: &str, at: usize, out: &mut Vec<u8>) -> usize {
-    let bytes = src.as_bytes();
-    let after = at.saturating_add(1);
-    if bytes.get(after) == Some(&b'\\') {
-        let from = after.saturating_add(2);
-        let close = bytes
-            .get(from..)
-            .unwrap_or_default()
-            .iter()
-            .position(|&byte| byte == b'\'')
-            .map_or(bytes.len(), |pos| from.saturating_add(pos));
-        out.extend_from_slice(b"' '");
-        return close.saturating_add(1);
-    }
-    let width = src
-        .get(after..)
-        .and_then(|rest| rest.chars().next())
-        .map_or(0, char::len_utf8);
-    if width > 0 && bytes.get(after.saturating_add(width)) == Some(&b'\'') {
-        out.extend_from_slice(b"' '");
-        return after.saturating_add(width).saturating_add(1);
-    }
-    out.push(b'\'');
-    after
-}
-
-/// `src` with every comment blanked and every string or char literal replaced by a stand-in.
-fn strip(src: &str) -> String {
-    let bytes = src.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while let Some(&byte) = bytes.get(i) {
-        let next = bytes.get(i.saturating_add(1)).copied();
-        match (byte, next) {
-            (b'/', Some(b'/')) => {
-                while let Some(&byte) = bytes.get(i) {
-                    if byte == b'\n' {
-                        break;
-                    }
-                    out.push(b' ');
-                    i = i.saturating_add(1);
-                }
-            }
-            (b'/', Some(b'*')) => {
-                let mut depth = 0_usize;
-                while let Some(&byte) = bytes.get(i) {
-                    let next = bytes.get(i.saturating_add(1)).copied();
-                    if byte == b'/' && next == Some(b'*') {
-                        depth = depth.saturating_add(1);
-                        out.extend_from_slice(b"  ");
-                        i = i.saturating_add(2);
-                    } else if byte == b'*' && next == Some(b'/') {
-                        depth = depth.saturating_sub(1);
-                        out.extend_from_slice(b"  ");
-                        i = i.saturating_add(2);
-                        if depth == 0 {
-                            break;
-                        }
-                    } else {
-                        out.push(if byte == b'\n' { b'\n' } else { b' ' });
-                        i = i.saturating_add(1);
-                    }
-                }
-            }
-            (b'"', _) => i = skip_string(bytes, i, &mut out),
-            (b'r', _) if is_raw_start(bytes, i) => i = skip_string(bytes, i, &mut out),
-            (b'\'', _) => i = skip_quote(src, i, &mut out),
-            _ => {
-                out.push(byte);
-                i = i.saturating_add(1);
+/// Whether the `cfg` predicate `meta` holds only in a test build.
+fn requires_test(meta: &syn::Meta) -> bool {
+    match meta {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) => {
+            let Ok(args) = list.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            ) else {
+                return false;
+            };
+            if list.path.is_ident("all") {
+                args.iter().any(requires_test)
+            } else if list.path.is_ident("any") {
+                !args.is_empty() && args.iter().all(requires_test)
+            } else {
+                false
             }
         }
+        syn::Meta::NameValue(_) => false,
     }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The index of the bracket closing the one at `open` in `code`, or the end of `code`.
-fn matching(code: &[u8], open: usize) -> usize {
-    let (up, down) = match code.get(open) {
-        Some(b'[') => (b'[', b']'),
-        Some(b'(') => (b'(', b')'),
-        _ => (b'{', b'}'),
-    };
-    let mut depth = 0_usize;
-    for (i, &byte) in code.iter().enumerate().skip(open) {
-        if byte == up {
-            depth = depth.saturating_add(1);
-        } else if byte == down {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                return i;
-            }
+/// Whether `attrs` exempt their item as test-only: `#[test]`, or a `cfg` that requires `test`.
+fn is_test_only(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if attr.path().is_ident("test") {
+            return true;
         }
-    }
-    code.len()
-}
-
-/// The end of the item starting at `from`: its closing brace, or its `;`.
-fn item_end(code: &[u8], from: usize) -> usize {
-    let mut i = from;
-    while let Some(&byte) = code.get(i) {
-        match byte {
-            b'(' | b'[' => i = matching(code, i).saturating_add(1),
-            b'{' => return matching(code, i),
-            b';' => return i,
-            _ => i = i.saturating_add(1),
-        }
-    }
-    code.len()
-}
-
-/// The byte ranges of `code` that only test builds compile: items under `#[test]` or `#[cfg(test)]`.
-fn test_regions(code: &str) -> Vec<(usize, usize)> {
-    let bytes = code.as_bytes();
-    let mut regions = Vec::new();
-    for (at, _) in code.match_indices("#[") {
-        let open = at.saturating_add(1);
-        let close = matching(bytes, open);
-        let attr: String = code
-            .get(open.saturating_add(1)..close)
-            .unwrap_or_default()
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
-        if attr == "test" || attr == "cfg(test)" || attr.starts_with("cfg(all(test,") {
-            regions.push((at, item_end(bytes, close.saturating_add(1))));
-        }
-    }
-    regions
-}
-
-/// A function of a source file: its name and the byte range from its `fn` to its body's end.
-struct Function {
-    name: String,
-    span: (usize, usize),
-}
-
-/// Every function with a body in `code`, nested ones included.
-fn functions(code: &str) -> Vec<Function> {
-    let bytes = code.as_bytes();
-    let mut found = Vec::new();
-    for (at, _) in code.match_indices("fn") {
-        let before = at.checked_sub(1).and_then(|i| bytes.get(i)).copied();
-        let after = bytes.get(at.saturating_add(2)).copied();
-        if before.is_some_and(is_ident) || !after.is_some_and(|b| b.is_ascii_whitespace()) {
-            continue;
-        }
-        let rest = code.get(at.saturating_add(2)..).unwrap_or_default();
-        let name: String = rest
-            .trim_start()
-            .chars()
-            .take_while(|&c| c.is_alphanumeric() || c == '_')
-            .collect();
-        if name.is_empty() {
-            continue;
-        }
-        let end = item_end(bytes, at);
-        if bytes.get(end) == Some(&b'}') {
-            found.push(Function {
-                name,
-                span: (at, end),
-            });
-        }
-    }
-    found
-}
-
-/// Whether `text` holds `word` with no identifier character on either side.
-fn has_word(text: &str, word: &str) -> bool {
-    let bytes = text.as_bytes();
-    text.match_indices(word).any(|(at, _)| {
-        let before = at.checked_sub(1).and_then(|i| bytes.get(i)).copied();
-        let after = bytes.get(at.saturating_add(word.len())).copied();
-        !before.is_some_and(is_ident) && !after.is_some_and(is_ident)
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<syn::Meta>()
+                .is_ok_and(|meta| requires_test(&meta))
     })
 }
 
-/// The non-test functions of `src` that name a marker and reach a filesystem act.
-fn marker_acts(src: &str) -> Vec<String> {
-    let code = strip(src);
-    if code.contains("#![cfg(test)]") {
-        return Vec::new();
-    }
-    let regions = test_regions(&code);
-    functions(&code)
-        .into_iter()
-        .filter(|function| {
-            !regions
-                .iter()
-                .any(|&(start, end)| start <= function.span.0 && function.span.0 <= end)
-        })
-        .filter(|function| {
-            let body = code
-                .get(function.span.0..=function.span.1)
-                .unwrap_or_default();
-            MARKER_WORDS.iter().any(|word| has_word(body, word))
-                && FS_ACTS.iter().any(|act| body.contains(act))
-        })
-        .map(|function| function.name)
-        .collect()
+/// Whether `tokens`, a macro body, names a marker word or holds a marker literal.
+fn tokens_name_marker(tokens: TokenStream) -> bool {
+    tokens.into_iter().any(|tree| match tree {
+        TokenTree::Ident(ident) => is_marker_word(&ident),
+        TokenTree::Literal(literal) => literal.to_string().contains(MARKER_LITERAL),
+        TokenTree::Group(group) => tokens_name_marker(group.stream()),
+        TokenTree::Punct(_) => false,
+    })
 }
 
-/// The banned marker writers `src` declares: `fn adopt`, `fn write_marker`, or a `pub fn publish_marker`.
-fn banned_writers(src: &str) -> Vec<String> {
-    let code = strip(src);
-    functions(&code)
-        .into_iter()
-        .filter_map(|function| {
-            let head = code.get(..function.span.0).unwrap_or_default();
-            let qualifiers = head
-                .rfind(['\n', ';', '{', '}'])
-                .and_then(|at| head.get(at.saturating_add(1)..))
-                .unwrap_or(head);
-            let public = qualifiers
-                .split_whitespace()
-                .any(|word| word.starts_with("pub"));
-            match function.name.as_str() {
-                "adopt" | "write_marker" => Some(function.name),
-                "publish_marker" if public => Some(function.name),
-                _ => None,
+/// A visitor recording whether a syntax node names a marker word or literal.
+#[derive(Default)]
+struct Mentions(bool);
+
+impl<'ast> Visit<'ast> for Mentions {
+    fn visit_ident(&mut self, ident: &'ast proc_macro2::Ident) {
+        if is_marker_word(ident) {
+            self.0 = true;
+        }
+    }
+
+    fn visit_lit(&mut self, lit: &'ast syn::Lit) {
+        let text = match lit {
+            syn::Lit::Str(s) => s.value(),
+            syn::Lit::ByteStr(s) => String::from_utf8_lossy(&s.value()).into_owned(),
+            syn::Lit::CStr(s) => s.value().to_string_lossy().into_owned(),
+            _ => String::new(),
+        };
+        if text.contains(MARKER_LITERAL) {
+            self.0 = true;
+        }
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if tokens_name_marker(mac.tokens.clone()) {
+            self.0 = true;
+        }
+        visit::visit_macro(self, mac);
+    }
+}
+
+/// Whether the syntax node `walk` walks names a marker word or literal.
+fn names_marker(walk: impl FnOnce(&mut Mentions)) -> bool {
+    let mut mentions = Mentions::default();
+    walk(&mut mentions);
+    mentions.0
+}
+
+/// What a scan of one file found.
+#[derive(Default)]
+struct Found {
+    /// The non-test items that name a marker word or literal.
+    naming: Vec<String>,
+    /// The banned marker writers declared: `fn adopt`, `fn write_marker`, or a `pub fn publish_marker`.
+    banned: Vec<String>,
+}
+
+impl Found {
+    /// Record the function `name` of visibility `vis` whose node `walk` walks.
+    fn function(&mut self, name: String, vis: &syn::Visibility, walk: impl FnOnce(&mut Mentions)) {
+        let public = !matches!(vis, syn::Visibility::Inherited);
+        match name.as_str() {
+            "adopt" | "write_marker" => self.banned.push(name.clone()),
+            "publish_marker" if public => self.banned.push(name.clone()),
+            _ => {}
+        }
+        self.named(name, walk);
+    }
+
+    /// Record the item `name` when the node `walk` walks names a marker word or literal.
+    fn named(&mut self, name: String, walk: impl FnOnce(&mut Mentions)) {
+        if names_marker(walk) {
+            self.naming.push(name);
+        }
+    }
+
+    /// Scan the items of a module.
+    fn items(&mut self, items: &[syn::Item]) {
+        for item in items {
+            self.item(item);
+        }
+    }
+
+    /// Scan one non-test item: functions and constants by name, impls, traits, and modules by member.
+    fn item(&mut self, item: &syn::Item) {
+        if is_test_only(item_attrs(item)) {
+            return;
+        }
+        match item {
+            syn::Item::Fn(f) => {
+                self.function(f.sig.ident.to_string(), &f.vis, |m| m.visit_item_fn(f));
             }
-        })
-        .collect()
+            syn::Item::Const(c) => self.named(c.ident.to_string(), |m| m.visit_item_const(c)),
+            syn::Item::Static(s) => self.named(s.ident.to_string(), |m| m.visit_item_static(s)),
+            syn::Item::Mod(module) => {
+                if let Some((_, items)) = &module.content {
+                    self.items(items);
+                }
+            }
+            syn::Item::Impl(imp) => self.impl_items(&imp.items),
+            syn::Item::Trait(tr) => self.trait_items(&tr.items),
+            syn::Item::Use(_) => {}
+            other => self.named("<item>".to_owned(), |m| m.visit_item(other)),
+        }
+    }
+
+    /// Scan the non-test members of an `impl` block.
+    fn impl_items(&mut self, items: &[syn::ImplItem]) {
+        for member in items {
+            match member {
+                syn::ImplItem::Fn(f) if !is_test_only(&f.attrs) => {
+                    self.function(f.sig.ident.to_string(), &f.vis, |m| {
+                        m.visit_impl_item_fn(f);
+                    });
+                }
+                syn::ImplItem::Const(c) if !is_test_only(&c.attrs) => {
+                    self.named(c.ident.to_string(), |m| m.visit_impl_item_const(c));
+                }
+                syn::ImplItem::Fn(_) | syn::ImplItem::Const(_) => {}
+                other => self.named("<impl item>".to_owned(), |m| m.visit_impl_item(other)),
+            }
+        }
+    }
+
+    /// Scan the non-test members of a trait.
+    fn trait_items(&mut self, items: &[syn::TraitItem]) {
+        for member in items {
+            match member {
+                syn::TraitItem::Fn(f) if !is_test_only(&f.attrs) => {
+                    let vis = syn::Visibility::Inherited;
+                    self.function(f.sig.ident.to_string(), &vis, |m| {
+                        m.visit_trait_item_fn(f);
+                    });
+                }
+                syn::TraitItem::Fn(_) => {}
+                other => self.named("<trait item>".to_owned(), |m| m.visit_trait_item(other)),
+            }
+        }
+    }
+}
+
+/// The attributes of `item`; an item kind without attributes has none.
+fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
+    match item {
+        syn::Item::Const(i) => &i.attrs,
+        syn::Item::Enum(i) => &i.attrs,
+        syn::Item::ExternCrate(i) => &i.attrs,
+        syn::Item::Fn(i) => &i.attrs,
+        syn::Item::ForeignMod(i) => &i.attrs,
+        syn::Item::Impl(i) => &i.attrs,
+        syn::Item::Macro(i) => &i.attrs,
+        syn::Item::Mod(i) => &i.attrs,
+        syn::Item::Static(i) => &i.attrs,
+        syn::Item::Struct(i) => &i.attrs,
+        syn::Item::Trait(i) => &i.attrs,
+        syn::Item::TraitAlias(i) => &i.attrs,
+        syn::Item::Type(i) => &i.attrs,
+        syn::Item::Union(i) => &i.attrs,
+        syn::Item::Use(i) => &i.attrs,
+        _ => &[],
+    }
+}
+
+/// Scan the source `src`, or say why it cannot be parsed.
+fn scan(src: &str) -> Result<Found, String> {
+    let file = syn::parse_file(src).map_err(|e| e.to_string())?;
+    let mut found = Found::default();
+    if !is_test_only(&file.attrs) {
+        found.items(&file.items);
+    }
+    Ok(found)
 }
 
 /// Every `.rs` file under `root` that a non-test build compiles, relative to `root` with `/` separators.
@@ -353,11 +264,9 @@ fn production_files(root: &Path) -> Vec<(String, PathBuf)> {
     let mut found = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
+        let entries = std::fs::read_dir(&dir).expect("list a source directory");
+        for entry in entries {
+            let path = entry.expect("read a source directory entry").path();
             if path.is_dir() {
                 pending.push(path);
             } else if path.extension().is_some_and(|e| e == "rs")
@@ -381,7 +290,7 @@ fn production_files(root: &Path) -> Vec<(String, PathBuf)> {
 }
 
 #[test]
-fn marker_and_claim_file_acts_stay_in_the_claim_protocol() {
+fn marker_and_claim_file_names_stay_in_the_claim_protocol() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let files = production_files(&root);
     assert!(
@@ -393,25 +302,32 @@ fn marker_and_claim_file_acts_stay_in_the_claim_protocol() {
     let mut allowed_seen = Vec::new();
     for (rel, path) in &files {
         let src = std::fs::read_to_string(path).expect("read source file");
-        for writer in banned_writers(&src) {
+        let found = match scan(&src) {
+            Ok(found) => found,
+            Err(e) => {
+                violations.push(format!("{rel}: does not parse: {e}"));
+                continue;
+            }
+        };
+        for writer in found.banned {
             violations.push(format!("{rel}: `fn {writer}` is banned"));
         }
         if rel == PROTOCOL_FILE {
             continue;
         }
-        for name in marker_acts(&src) {
+        for name in found.naming {
             if ALLOWED.contains(&(rel.as_str(), name.as_str())) {
                 allowed_seen.push((rel.clone(), name));
             } else {
                 violations.push(format!(
-                    "{rel}: `fn {name}` acts on the marker or claim file outside `{PROTOCOL_FILE}`"
+                    "{rel}: `{name}` names the marker or claim file outside `{PROTOCOL_FILE}`"
                 ));
             }
         }
     }
     assert!(
         violations.is_empty(),
-        "marker acts outside the claim protocol:\n{}",
+        "marker names outside the claim protocol:\n{}",
         violations.join("\n")
     );
     for &(file, name) in ALLOWED {
@@ -419,14 +335,14 @@ fn marker_and_claim_file_acts_stay_in_the_claim_protocol() {
             allowed_seen
                 .iter()
                 .any(|(rel, seen)| rel == file && seen == name),
-            "the allow-listed `{file}::{name}` no longer acts on the marker; drop it from `ALLOWED`"
+            "the allow-listed `{file}::{name}` no longer names the marker; drop it from `ALLOWED`"
         );
     }
 }
 
 #[test]
-fn a_planted_marker_act_is_caught() {
-    let planted = r#"
+fn a_planted_marker_name_is_caught() {
+    let planted = r##"
         use std::path::Path;
         fn braces() -> &'static str { "}{" }
         fn forge(dir: &Path) {
@@ -437,20 +353,57 @@ fn a_planted_marker_act_is_caught() {
         }
         fn char_brace(c: char) -> bool { c == '{' }
         fn raw_forge(dir: &Path) {
-            let _ = dir.unlink(r"x/.ipe-output");
+            let _ = dir.unlink(r#"x/.ipe-output"#);
         }
-    "#;
+        fn bytes_forge(dir: &Path) {
+            let _ = std::fs::write(dir.join("m"), MARKER_TEXT);
+            let _ = b".ipe-output";
+        }
+        fn in_macro(dir: &Path) {
+            let _ = std::fs::write(format!("{}/{}", dir.display(), CLAIM_FILE), "x");
+        }
+        #[cfg(not(test))]
+        fn not_test(dir: &Path) {
+            let _ = dir.join(OWNERSHIP_MARKER);
+        }
+        #[cfg(any(test, unix))]
+        fn maybe_test(dir: &Path) {
+            let _ = dir.join(OWNERSHIP_MARKER);
+        }
+        impl Held {
+            fn method(&self) {
+                let _ = self.unlink(OWNERSHIP_MARKER);
+            }
+        }
+        mod inner {
+            fn nested(dir: &Path) {
+                let _ = dir.join(CLAIM_FILE);
+            }
+        }
+        static ALIAS: &str = OWNERSHIP_MARKER;
+    "##;
+    let found = scan(planted).expect("the fixture parses");
     assert_eq!(
-        marker_acts(planted),
-        ["forge", "forge_claim", "raw_forge"],
-        "each planted act is caught"
+        found.naming,
+        [
+            "forge",
+            "forge_claim",
+            "raw_forge",
+            "bytes_forge",
+            "in_macro",
+            "not_test",
+            "maybe_test",
+            "method",
+            "nested",
+            "ALIAS"
+        ],
+        "each planted name is caught"
     );
 }
 
 #[test]
-fn test_code_comments_and_plain_acts_are_not_marker_acts() {
+fn test_code_and_comments_are_not_marker_names() {
     let clean = r#"
-        fn display() -> String { format!("{}", OWNERSHIP_MARKER) }
         fn commented(dir: &Path) {
             // std::fs::write(dir.join(OWNERSHIP_MARKER), "x");
             /* dir.unlink(CLAIM_FILE) */
@@ -462,15 +415,24 @@ fn test_code_comments_and_plain_acts_are_not_marker_acts() {
                 let _ = std::fs::write(dir.join(OWNERSHIP_MARKER), "x");
             }
         }
+        #[cfg(all(test, unix))]
+        fn unix_plant(dir: &Path) {
+            let _ = dir.join(CLAIM_FILE);
+        }
         #[test]
         fn planted() {
             let _ = std::fs::write(Path::new(".ipe-output"), "x");
         }
+        use crate::output_dir::OWNERSHIP_MARKER;
     "#;
+    let found = scan(clean).expect("the fixture parses");
+    assert!(found.naming.is_empty(), "got {:?}", found.naming);
+    let test_file = "#![cfg(test)]\nfn plant() { let _ = OWNERSHIP_MARKER; }";
+    let found = scan(test_file).expect("the fixture parses");
     assert!(
-        marker_acts(clean).is_empty(),
-        "got {:?}",
-        marker_acts(clean)
+        found.naming.is_empty(),
+        "a test-only file, got {:?}",
+        found.naming
     );
 }
 
@@ -486,13 +448,23 @@ fn a_banned_marker_writer_is_caught() {
             pub fn publish_marker(&self) {}
         }
     ";
+    let found = scan(banned).expect("the fixture parses");
     assert_eq!(
-        banned_writers(banned),
+        found.banned,
         ["adopt", "write_marker", "publish_marker", "publish_marker"]
     );
     let private = "impl HeldDir { fn publish_marker(&self) {} }";
+    let found = scan(private).expect("the fixture parses");
     assert!(
-        banned_writers(private).is_empty(),
+        found.banned.is_empty(),
         "a private publish is the protocol's"
+    );
+}
+
+#[test]
+fn an_unparsable_file_fails_the_scan() {
+    assert!(
+        scan("fn broken( {").is_err(),
+        "a parse failure is never a pass"
     );
 }

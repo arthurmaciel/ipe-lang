@@ -222,6 +222,14 @@ pub fn file_id(file: &File) -> io::Result<DirId> {
     id_of(file)
 }
 
+/// How many directory entries link the object the open `file` holds.
+///
+/// # Errors
+/// When the handle cannot be queried.
+pub fn link_count(file: &File) -> io::Result<u64> {
+    Ok(winapi_util::file::information(file)?.number_of_links())
+}
+
 /// The volume serial number and file index of the object `file` holds.
 fn id_of(file: &File) -> io::Result<DirId> {
     let info = winapi_util::file::information(file)?;

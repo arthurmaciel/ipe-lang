@@ -66,6 +66,14 @@ pub fn file_id(file: &File) -> io::Result<DirId> {
     stat_id(&rustix::fs::fstat(file)?)
 }
 
+/// How many directory entries link the object the open `file` holds.
+///
+/// # Errors
+/// When the handle cannot be stat'd.
+pub fn link_count(file: &File) -> io::Result<u64> {
+    Ok(file.metadata()?.nlink())
+}
+
 /// The identity a `stat` record carries.
 ///
 /// [`file_id`] and [`Dir::entry_id`] both read it here, so a held file and a
