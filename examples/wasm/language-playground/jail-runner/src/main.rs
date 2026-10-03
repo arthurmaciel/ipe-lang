@@ -125,6 +125,16 @@ fn usage() {
 }
 
 fn cmd_run(args: &[String]) -> u8 {
+    cmd_run_with(args, &OUTCOME_CLAIM, start_watchdog)
+}
+
+/// [`cmd_run`] with the stdout claim and the watchdog start supplied by the
+/// caller; the watchdog must write through the same `claim`.
+fn cmd_run_with(
+    args: &[String],
+    claim: &'static OutcomeClaim,
+    start_watchdog: impl FnOnce(u64, &Path, &'static OutcomeClaim) -> std::io::Result<()>,
+) -> u8 {
     let parsed = match parse_run_args(args) {
         Ok(parsed) => parsed,
         Err(message) => {
@@ -133,11 +143,27 @@ fn cmd_run(args: &[String]) -> u8 {
             return 2;
         }
     };
-    start_watchdog(parsed.wall_secs, &parsed.project_dir);
+    // Fail closed: without the watchdog thread, a submitted program could run
+    // unbounded (no wall-clock cap), so a refused watchdog spawn must stop
+    // the harness BEFORE any build or run starts, not just log and continue.
+    if let Err(e) = start_watchdog(parsed.wall_secs, &parsed.project_dir, claim) {
+        let outcome = Outcome::failure(format!(
+            "failed to start the harness wall-clock watchdog: {:?}",
+            e.kind()
+        ));
+        let printed = emit_outcome(claim, &outcome);
+        cleanup_project(&parsed.project_dir);
+        return if printed { 2 } else { 1 };
+    }
     let outcome = run_project(&parsed.project_dir, &parsed.warm_dir);
-    let printed = emit_outcome(&outcome);
+    let printed = emit_outcome(claim, &outcome);
     cleanup_project(&parsed.project_dir);
-    printed
+    exit_code_after_print(printed)
+}
+
+/// `0` once the outcome document was printed, `1` when it could not be.
+const fn exit_code_after_print(printed: bool) -> u8 {
+    if printed { 0 } else { 1 }
 }
 
 struct RunArgs {
@@ -228,7 +254,7 @@ fn cmd_prewarm(args: &[String]) -> u8 {
         }
     };
     let outcome = prewarm(&warm_dir);
-    emit_outcome(&outcome)
+    exit_code_after_print(emit_outcome(&OUTCOME_CLAIM, &outcome))
 }
 
 /// Harness-level wall-clock: after `wall_secs` the watchdog prints a timeout
@@ -237,30 +263,35 @@ fn cmd_prewarm(args: &[String]) -> u8 {
 ///
 /// When the run's own outcome has already claimed stdout, the watchdog does
 /// nothing: the run is past its jailed phases and `main` is about to exit.
-fn start_watchdog(wall_secs: u64, project_dir: &Path) {
+///
+/// # Errors
+/// The OS refused the watchdog thread; the caller must not start the run.
+fn start_watchdog(
+    wall_secs: u64,
+    project_dir: &Path,
+    claim: &'static OutcomeClaim,
+) -> std::io::Result<()> {
     let project_dir = project_dir.to_path_buf();
-    thread::spawn(move || {
-        thread::sleep(Duration::from_secs(wall_secs));
-        if !OUTCOME_CLAIM.claim() {
-            return;
-        }
-        let outcome = Outcome {
-            ok: false,
-            unsandboxed: false,
-            build: None,
-            run: None,
-            exit: None,
-            error: Some(format!("timed out after {wall_secs}s (harness wall-clock)")),
-        };
-        let _printed = write_claimed_outcome(&outcome);
-        // Best-effort: remove the staged project (compiled artifacts can be
-        // large). Children may still hold cwd entries; leftover files in that
-        // race are bounded by the wall budget and harmless.
-        cleanup_project(&project_dir);
-        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — watchdog expiry: process
-        // exit kills all threads; --die-with-parent reaps the bwrap tree.
-        std::process::exit(2);
-    });
+    thread::Builder::new()
+        .name("jail-runner-watchdog".to_owned())
+        .spawn(move || {
+            thread::sleep(Duration::from_secs(wall_secs));
+            if !claim.claim() {
+                return;
+            }
+            let outcome =
+                Outcome::failure(format!("timed out after {wall_secs}s (harness wall-clock)"));
+            let printed = write_claimed_outcome(&outcome);
+            // Best-effort: remove the staged project (compiled artifacts can be
+            // large). Children may still hold cwd entries; leftover files in that
+            // race are bounded by the wall budget and harmless.
+            cleanup_project(&project_dir);
+            let code = if printed { 2 } else { 1 };
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — watchdog expiry: process
+            // exit kills all threads; --die-with-parent reaps the bwrap tree.
+            std::process::exit(code);
+        })?;
+    Ok(())
 }
 
 /// Best-effort removal of a staged project tree. The harness owns the
@@ -496,11 +527,18 @@ struct Captured {
     stderr: String,
 }
 
-/// Bounded capture: each stream is read up to `cap_bytes + 1` so oversize
+/// Bounded capture: each stream is kept up to `cap_bytes + 1` so oversize
 /// output is truncated but still distinguishable from an exact fit.
-fn read_capped<R: std::io::Read>(stream: R, cap_bytes: u64) -> String {
+///
+/// The rest of the stream is read and discarded, so a child writing past the
+/// cap never blocks on a full pipe.
+fn read_capped<R: std::io::Read>(mut stream: R, cap_bytes: u64) -> String {
     let mut buf = Vec::new();
-    let _ = stream.take(cap_bytes + 1).read_to_end(&mut buf);
+    let _ = stream
+        .by_ref()
+        .take(cap_bytes.saturating_add(1))
+        .read_to_end(&mut buf);
+    let _ = std::io::copy(&mut stream, &mut std::io::sink());
     String::from_utf8_lossy(&buf).into_owned()
 }
 
@@ -514,14 +552,36 @@ fn run_captured(cmd: &mut Command, cap_bytes: u64) -> Result<Captured, String> {
             cmd.get_program().to_string_lossy()
         )
     })?;
+    // stderr drains on its own thread while stdout drains here: reading one
+    // stream to EOF before the other deadlocks a child that fills the second
+    // stream's pipe first.
+    let stderr_drain = match child.stderr.take() {
+        Some(stream) => {
+            match thread::Builder::new()
+                .name("jail-runner-stderr".to_owned())
+                .spawn(move || read_capped(stream, cap_bytes))
+            {
+                Ok(handle) => Some(handle),
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "failed to start the stderr drain for {}: {:?}",
+                        cmd.get_program().to_string_lossy(),
+                        error.kind()
+                    ));
+                }
+            }
+        }
+        None => None,
+    };
     let stdout = child
         .stdout
         .take()
         .map_or_else(String::new, |stream| read_capped(stream, cap_bytes));
-    let stderr = child
-        .stderr
-        .take()
-        .map_or_else(String::new, |stream| read_capped(stream, cap_bytes));
+    let stderr = stderr_drain
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
     let status = child.wait().map_err(|error| {
         format!(
             "failed to wait on {}: {error}",
@@ -624,12 +684,12 @@ fn prewarm(warm_dir: &Path) -> Outcome {
 
 /// The last `max_bytes` of `text` at most, cut forward to a char boundary.
 fn tail(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
+    let Some(cut) = text.len().checked_sub(max_bytes).filter(|cut| *cut > 0) else {
         return text.to_owned();
-    }
-    let cut = text.len().saturating_sub(max_bytes);
+    };
     let kept = (cut..=text.len())
-        .find_map(|start| text.get(start..))
+        .find(|at| text.is_char_boundary(*at))
+        .and_then(|at| text.get(at..))
         .unwrap_or_default();
     format!("…{kept}")
 }
@@ -654,13 +714,13 @@ impl OutcomeClaim {
 
 static OUTCOME_CLAIM: OutcomeClaim = OutcomeClaim::new();
 
-/// Print the run's outcome, returning the process exit code: `0` once the
-/// document is written, `1` when it could not be.
+/// Print `outcome` under `claim`; `true` once the whole document is written.
 ///
 /// When the watchdog has claimed stdout first, this thread waits for the
 /// watchdog's exit rather than return and end the process mid-document.
-fn emit_outcome(outcome: &Outcome) -> u8 {
-    if !OUTCOME_CLAIM.claim() {
+#[must_use]
+fn emit_outcome(claim: &OutcomeClaim, outcome: &Outcome) -> bool {
+    if !claim.claim() {
         loop {
             thread::park();
         }
@@ -668,14 +728,15 @@ fn emit_outcome(outcome: &Outcome) -> u8 {
     write_claimed_outcome(outcome)
 }
 
-/// Write `outcome` to stdout; the caller holds [`OUTCOME_CLAIM`].
-fn write_claimed_outcome(outcome: &Outcome) -> u8 {
+/// Write `outcome` to stdout; the caller holds the claim. `false` when the
+/// document could not be written, so the caller never exits `0` without one.
+#[must_use]
+fn write_claimed_outcome(outcome: &Outcome) -> bool {
     match write_outcome(&mut std::io::stdout().lock(), outcome) {
-        Ok(()) => 0,
+        Ok(()) => true,
         Err(error) => {
-            // Never exit 0 without a whole document on stdout.
             eprintln!("[jail-runner] fatal: failed to write the outcome: {error}");
-            1
+            false
         }
     }
 }
@@ -693,11 +754,116 @@ fn write_outcome(out: &mut impl Write, outcome: &Outcome) -> std::io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_WARM_DIR, Outcome, OutcomeClaim, WarmDirError, resolve_warm_dir_from, tail,
-        write_outcome,
+        DEFAULT_WARM_DIR, Outcome, OutcomeClaim, WarmDirError, cmd_run_with, resolve_warm_dir_from,
+        run_captured, tail, write_outcome,
     };
     use std::ffi::OsString;
     use std::path::PathBuf;
+    use std::process::Command;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Runs `cmd` through `run_captured` on a helper thread, failing the test
+    /// rather than hanging when the capture does not return.
+    fn capture_within(mut cmd: Command, cap_bytes: u64) -> super::Captured {
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("capture-test".to_owned())
+            .spawn(move || {
+                let _ = tx.send(run_captured(&mut cmd, cap_bytes));
+            })
+            .expect("test thread starts");
+        rx.recv_timeout(Duration::from_secs(60))
+            .expect("run_captured must return, not deadlock on a full pipe")
+            .expect("the child runs")
+    }
+
+    #[test]
+    fn a_child_filling_stderr_first_is_captured_without_deadlock() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("head -c 300000 /dev/zero | tr '\\0' e 1>&2; echo done");
+        let captured = capture_within(cmd, 1024 * 1024);
+        assert_eq!(captured.stdout, "done\n");
+        assert_eq!(captured.stderr.len(), 300_000);
+    }
+
+    #[test]
+    fn a_child_writing_past_the_cap_still_runs_to_exit() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("head -c 300000 /dev/zero | tr '\\0' o; exit 3");
+        let captured = capture_within(cmd, 1000);
+        assert_eq!(captured.stdout.len(), 1001);
+        assert_eq!(captured.status, Some(3));
+    }
+
+    #[test]
+    fn a_tail_cut_inside_a_char_moves_to_its_boundary() {
+        // Each `é` is two bytes, so a 3-byte tail starts inside one.
+        assert_eq!(tail("éééé", 3), "…é");
+        assert_eq!(tail("éé", 4), "éé");
+        assert_eq!(tail("abc", 2), "…bc");
+    }
+
+    #[test]
+    fn a_refused_watchdog_stops_the_run_before_any_build() {
+        static CLAIM: OutcomeClaim = OutcomeClaim::new();
+        let staged = tempfile::tempdir_in(ipe_test_temp::temp_root()).expect("tempdir");
+        let project = staged.path().join("project");
+        std::fs::create_dir(&project).expect("project dir");
+        let args = vec![
+            project.display().to_string(),
+            "--warm".to_owned(),
+            staged.path().join("warm").display().to_string(),
+        ];
+        let code = cmd_run_with(&args, &CLAIM, |_, _, _| {
+            Err(std::io::Error::other("refused"))
+        });
+        assert_eq!(code, 2, "a refused watchdog must fail the run closed");
+        assert!(
+            !project.exists(),
+            "the staged project is cleaned up when the run is refused"
+        );
+        assert!(
+            !CLAIM.claim(),
+            "the refusal document is written through the stdout claim"
+        );
+    }
+
+    /// With stdout already claimed (the watchdog's timeout document), the
+    /// refusal neither writes a second document nor returns an exit code.
+    #[test]
+    fn a_refusal_after_the_watchdog_claimed_stdout_never_writes_or_returns() {
+        static CLAIM: OutcomeClaim = OutcomeClaim::new();
+        assert!(CLAIM.claim());
+        let staged = tempfile::tempdir_in(ipe_test_temp::temp_root()).expect("tempdir");
+        let project = staged.path().join("project");
+        std::fs::create_dir(&project).expect("project dir");
+        let args = vec![
+            project.display().to_string(),
+            "--warm".to_owned(),
+            staged.path().join("warm").display().to_string(),
+        ];
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("claimed-refusal-test".to_owned())
+            .spawn(move || {
+                let code = cmd_run_with(&args, &CLAIM, |_, _, _| {
+                    Err(std::io::Error::other("refused"))
+                });
+                let _ = tx.send(code);
+            })
+            .expect("test thread starts");
+        assert!(
+            rx.recv_timeout(Duration::from_millis(500)).is_err(),
+            "a run that lost the claim must park, not return an exit code"
+        );
+        assert!(
+            project.exists(),
+            "the losing side leaves cleanup to the watchdog that owns the exit"
+        );
+    }
 
     /// A cut inside a multi-byte char moves forward to the next boundary
     /// instead of splitting the char.

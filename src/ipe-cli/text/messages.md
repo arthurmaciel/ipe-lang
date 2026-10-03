@@ -743,6 +743,46 @@ could not access `{path}` — {kind}
 
 could not create a private scratch directory under the OS temp directory — {kind}
 
+## cli-thread-refused
+
+the OS refused a thread for the {role} — {kind}
+
+## thread-role-watch-session
+
+watch session
+
+## thread-role-watch-coalesce
+
+watch change coalescer
+
+## thread-role-watch-fs-relay
+
+watch filesystem relay
+
+## thread-role-watch-stop-relay
+
+watch stop relay
+
+## thread-role-watch-resolve-retry
+
+watch dependency-resolve retry
+
+## thread-role-watch-compile
+
+watch compile worker
+
+## thread-role-watch-cargo-waiter
+
+watch cargo-build waiter
+
+## thread-role-wasi-wall-clock
+
+WASI wall-clock deadline
+
+## watch-thread-refused
+
+[ipe watch] warning: {detail}; the dependency-resolve retry is skipped
+
 # Publish refusals
 
 ## publish-dirty-tree
@@ -1203,7 +1243,7 @@ package.ipe: program entry {entry} names no module
 
 ## bundle-name-not-a-component
 
-package.ipe: name `{name}` cannot be a macOS bundle directory — a bundle root must be a single path component, but this name introduces a path separator, a `..` traversal, or an absolute path. Choose a name without `/`, `\`, or `..`.
+package.ipe: name `{name}` cannot be a macOS bundle directory — a bundle root must be one directory name that reads back as itself, and this name holds a path separator, a `..` traversal, an absolute path, a NUL byte, or a form the host file system would rewrite (on Windows: a trailing `.` or space, a control character, one of `:*?"<>|`, or a device name such as `NUL`). Choose a plain name without `/`, `\`, `..`, or control characters.
 
 # Mobile shell bundles
 

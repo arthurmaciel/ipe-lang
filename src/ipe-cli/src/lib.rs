@@ -79,6 +79,7 @@ pub mod style;
 #[cfg(unix)]
 mod terminate;
 pub mod text;
+pub mod threads;
 pub mod toolchain;
 pub mod unsafe_ack;
 pub mod version_check;
