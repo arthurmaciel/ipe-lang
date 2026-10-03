@@ -345,7 +345,7 @@ pub fn auth_verify_token<E: From<String>>(
 /// token) the re-issue path structurally cannot accept a forged or caller-inflated
 /// cap, nor a replaced session id.
 #[cfg(feature = "jwt")]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ReissueContext {
     /// Original issue timestamp (immutable across all re-issues).
     pub iat: i64,
@@ -356,6 +356,14 @@ pub struct ReissueContext {
     /// Per-session id (immutable across all re-issues; used for session-scoped revocation).
     pub jti: String,
 }
+
+// The subject identifies the caller and the jti names the session, so `Debug`
+// masks both, as it masks a `Principal`'s identity.
+#[cfg(feature = "jwt")]
+crate::redact::redacting_debug!(ReissueContext {
+    shown: [iat, cap],
+    masked: [subject, jti],
+});
 
 /// Parse a `ReissueContext` from a signature-verified claims map (the output of
 /// `auth_verify_token`). Returns `None` when any required field is missing or
@@ -1117,6 +1125,20 @@ mod tests {
     }
 
     // ── Sliding re-issue (P2) ─────────────────────────────────────────────────
+
+    #[test]
+    fn reissue_context_debug_prints_neither_subject_nor_jti() {
+        let ctx = crate::auth::ReissueContext {
+            iat: 1,
+            cap: 2,
+            subject: "user-S3CR3T".to_owned(),
+            jti: "J71T0K3N".to_owned(),
+        };
+        let shown = format!("{ctx:?}");
+        assert!(!shown.contains("S3CR3T"), "{shown}");
+        assert!(!shown.contains("J71T0K3N"), "{shown}");
+        assert!(shown.contains("cap: 2"), "{shown}");
+    }
 
     /// Build a ReissueContext directly from a signed+verified token.
     fn reissue_ctx_from_token(token: &str) -> crate::auth::ReissueContext {

@@ -959,6 +959,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
+      # `dev-posture` is the dev-intent build outside `full`; its pins prove a
+      # dev build on a loopback listener opens each dev-only surface.
+      - run: cargo nextest run -p ipe-runtime-rust --features full,dev-posture --profile ci -E 'test(dev_posture_pin_)'
       # `debugger` is a build-mode opt-in outside `full`; named here so its
       # overlay and recorder tests run.
       - run: cargo nextest run -p ipe-runtime-rust --features full,debugger --profile ci
