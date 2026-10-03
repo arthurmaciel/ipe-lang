@@ -41,11 +41,14 @@ where
     F: FnOnce() + Send + 'static,
 {
     let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGTERM])?;
-    Ok(std::thread::spawn(move || {
-        if signals.forever().next().is_some() {
-            on_sigterm();
-        }
-    }))
+    let handle = std::thread::Builder::new()
+        .name("ipe-watch-sigterm".to_owned())
+        .spawn(move || {
+            if signals.forever().next().is_some() {
+                on_sigterm();
+            }
+        })?;
+    Ok(handle)
 }
 
 #[cfg(all(test, unix))]

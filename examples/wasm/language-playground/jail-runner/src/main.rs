@@ -78,7 +78,7 @@ impl Outcome {
     }
 }
 
-fn main() {
+fn main() -> std::process::ExitCode {
     // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — playground binary `main`
     // process-boundary entry: argv in, JSON out, no other surface.
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -95,7 +95,7 @@ fn main() {
             2
         }
     };
-    std::process::exit(code);
+    std::process::ExitCode::from(code)
 }
 
 fn usage() {
@@ -115,7 +115,15 @@ fn usage() {
     );
 }
 
-fn cmd_run(args: &[String]) -> i32 {
+fn cmd_run(args: &[String]) -> u8 {
+    cmd_run_with(args, start_watchdog)
+}
+
+/// [`cmd_run`] with the watchdog start supplied by the caller.
+fn cmd_run_with(
+    args: &[String],
+    start_watchdog: impl FnOnce(u64, &Path) -> std::io::Result<()>,
+) -> u8 {
     let parsed = match parse_run_args(args) {
         Ok(parsed) => parsed,
         Err(message) => {
@@ -124,11 +132,27 @@ fn cmd_run(args: &[String]) -> i32 {
             return 2;
         }
     };
-    start_watchdog(parsed.wall_secs, &parsed.project_dir);
+    // Fail closed: without the watchdog thread, a submitted program could run
+    // unbounded (no wall-clock cap), so a refused watchdog spawn must stop
+    // the harness BEFORE any build or run starts, not just log and continue.
+    if let Err(e) = start_watchdog(parsed.wall_secs, &parsed.project_dir) {
+        let outcome = Outcome::failure(format!(
+            "failed to start the harness wall-clock watchdog: {:?}",
+            e.kind()
+        ));
+        let printed = print_json(&outcome);
+        cleanup_project(&parsed.project_dir);
+        return if printed { 2 } else { 1 };
+    }
     let outcome = run_project(&parsed.project_dir, &parsed.warm_dir);
-    print_json(&outcome);
+    let printed = print_json(&outcome);
     cleanup_project(&parsed.project_dir);
-    0
+    exit_code_after_print(printed)
+}
+
+/// `0` once the outcome document was printed, `1` when it could not be.
+const fn exit_code_after_print(printed: bool) -> u8 {
+    if printed { 0 } else { 1 }
 }
 
 struct RunArgs {
@@ -183,7 +207,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
     })
 }
 
-fn cmd_prewarm(args: &[String]) -> i32 {
+fn cmd_prewarm(args: &[String]) -> u8 {
     let mut warm_dir: Option<PathBuf> = None;
     let mut index = 0;
     while index < args.len() {
@@ -219,34 +243,37 @@ fn cmd_prewarm(args: &[String]) -> i32 {
         }
     };
     let outcome = prewarm(&warm_dir);
-    print_json(&outcome);
-    0
+    exit_code_after_print(print_json(&outcome))
 }
 
 /// Harness-level wall-clock: after `wall_secs` the watchdog prints a timeout
 /// JSON document and exits hard. The jail wrapper runs with
 /// `--die-with-parent`, so the whole bwrap tree dies with the harness.
-fn start_watchdog(wall_secs: u64, project_dir: &Path) {
+fn start_watchdog(wall_secs: u64, project_dir: &Path) -> std::io::Result<()> {
     let project_dir = project_dir.to_path_buf();
-    thread::spawn(move || {
-        thread::sleep(Duration::from_secs(wall_secs));
-        let outcome = Outcome {
-            ok: false,
-            unsandboxed: false,
-            build: None,
-            run: None,
-            exit: None,
-            error: Some(format!("timed out after {wall_secs}s (harness wall-clock)")),
-        };
-        print_json(&outcome);
-        // Best-effort: remove the staged project (compiled artifacts can be
-        // large). Children may still hold cwd entries; leftover files in that
-        // race are bounded by the wall budget and harmless.
-        cleanup_project(&project_dir);
-        // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — watchdog expiry: process
-        // exit kills all threads; --die-with-parent reaps the bwrap tree.
-        std::process::exit(2);
-    });
+    thread::Builder::new()
+        .name("jail-runner-watchdog".to_owned())
+        .spawn(move || {
+            thread::sleep(Duration::from_secs(wall_secs));
+            let outcome = Outcome {
+                ok: false,
+                unsandboxed: false,
+                build: None,
+                run: None,
+                exit: None,
+                error: Some(format!("timed out after {wall_secs}s (harness wall-clock)")),
+            };
+            let printed = print_json(&outcome);
+            // Best-effort: remove the staged project (compiled artifacts can be
+            // large). Children may still hold cwd entries; leftover files in that
+            // race are bounded by the wall budget and harmless.
+            cleanup_project(&project_dir);
+            let code = if printed { 2 } else { 1 };
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — watchdog expiry: process
+            // exit kills all threads; --die-with-parent reaps the bwrap tree.
+            std::process::exit(code);
+        })?;
+    Ok(())
 }
 
 /// Best-effort removal of a staged project tree. The harness owns the
@@ -480,11 +507,18 @@ struct Captured {
     stderr: String,
 }
 
-/// Bounded capture: each stream is read up to `cap_bytes + 1` so oversize
+/// Bounded capture: each stream is kept up to `cap_bytes + 1` so oversize
 /// output is truncated but still distinguishable from an exact fit.
-fn read_capped<R: std::io::Read>(stream: R, cap_bytes: u64) -> String {
+///
+/// The rest of the stream is read and discarded, so a child writing past the
+/// cap never blocks on a full pipe.
+fn read_capped<R: std::io::Read>(mut stream: R, cap_bytes: u64) -> String {
     let mut buf = Vec::new();
-    let _ = stream.take(cap_bytes + 1).read_to_end(&mut buf);
+    let _ = stream
+        .by_ref()
+        .take(cap_bytes.saturating_add(1))
+        .read_to_end(&mut buf);
+    let _ = std::io::copy(&mut stream, &mut std::io::sink());
     String::from_utf8_lossy(&buf).into_owned()
 }
 
@@ -498,14 +532,36 @@ fn run_captured(cmd: &mut Command, cap_bytes: u64) -> Result<Captured, String> {
             cmd.get_program().to_string_lossy()
         )
     })?;
+    // stderr drains on its own thread while stdout drains here: reading one
+    // stream to EOF before the other deadlocks a child that fills the second
+    // stream's pipe first.
+    let stderr_drain = match child.stderr.take() {
+        Some(stream) => {
+            match thread::Builder::new()
+                .name("jail-runner-stderr".to_owned())
+                .spawn(move || read_capped(stream, cap_bytes))
+            {
+                Ok(handle) => Some(handle),
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "failed to start the stderr drain for {}: {:?}",
+                        cmd.get_program().to_string_lossy(),
+                        error.kind()
+                    ));
+                }
+            }
+        }
+        None => None,
+    };
     let stdout = child
         .stdout
         .take()
         .map_or_else(String::new, |stream| read_capped(stream, cap_bytes));
-    let stderr = child
-        .stderr
-        .take()
-        .map_or_else(String::new, |stream| read_capped(stream, cap_bytes));
+    let stderr = stderr_drain
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
     let status = child.wait().map_err(|error| {
         format!(
             "failed to wait on {}: {error}",
@@ -606,32 +662,106 @@ fn prewarm(warm_dir: &Path) -> Outcome {
     }
 }
 
+/// The last `max_bytes` of `text` at most, cut forward to a char boundary.
 fn tail(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
+    let Some(cut) = text.len().checked_sub(max_bytes).filter(|cut| *cut > 0) else {
         return text.to_owned();
-    }
-    let mut result = text.to_owned();
-    result.drain(..result.len() - max_bytes);
-    format!("…{result}")
+    };
+    let kept = (cut..=text.len())
+        .find(|at| text.is_char_boundary(*at))
+        .and_then(|at| text.get(at..))
+        .unwrap_or_default();
+    format!("…{kept}")
 }
 
-fn print_json(outcome: &Outcome) {
+/// Prints `outcome` as one JSON line; `false` when it could not be serialized.
+///
+/// The caller then exits `1`, never `0` with no document.
+#[must_use]
+fn print_json(outcome: &Outcome) -> bool {
     match serde_json::to_string(outcome) {
-        Ok(json) => println!("{json}"),
+        Ok(json) => {
+            println!("{json}");
+            true
+        }
         Err(error) => {
-            // JSON cannot fail here (all fields are simple), but never exit 0
-            // with a partial document: print the error on stderr and exit 1.
             eprintln!("[jail-runner] fatal: failed to serialize outcome: {error}");
-            std::process::exit(1);
+            false
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_WARM_DIR, WarmDirError, resolve_warm_dir_from};
+    use super::{
+        DEFAULT_WARM_DIR, WarmDirError, cmd_run_with, resolve_warm_dir_from, run_captured, tail,
+    };
     use std::ffi::OsString;
     use std::path::PathBuf;
+    use std::process::Command;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Runs `cmd` through `run_captured` on a helper thread, failing the test
+    /// rather than hanging when the capture does not return.
+    fn capture_within(mut cmd: Command, cap_bytes: u64) -> super::Captured {
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("capture-test".to_owned())
+            .spawn(move || {
+                let _ = tx.send(run_captured(&mut cmd, cap_bytes));
+            })
+            .expect("test thread starts");
+        rx.recv_timeout(Duration::from_secs(60))
+            .expect("run_captured must return, not deadlock on a full pipe")
+            .expect("the child runs")
+    }
+
+    #[test]
+    fn a_child_filling_stderr_first_is_captured_without_deadlock() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("head -c 300000 /dev/zero | tr '\\0' e 1>&2; echo done");
+        let captured = capture_within(cmd, 1024 * 1024);
+        assert_eq!(captured.stdout, "done\n");
+        assert_eq!(captured.stderr.len(), 300_000);
+    }
+
+    #[test]
+    fn a_child_writing_past_the_cap_still_runs_to_exit() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("head -c 300000 /dev/zero | tr '\\0' o; exit 3");
+        let captured = capture_within(cmd, 1000);
+        assert_eq!(captured.stdout.len(), 1001);
+        assert_eq!(captured.status, Some(3));
+    }
+
+    #[test]
+    fn a_tail_cut_inside_a_char_moves_to_its_boundary() {
+        // Each `é` is two bytes, so a 3-byte tail starts inside one.
+        assert_eq!(tail("éééé", 3), "…é");
+        assert_eq!(tail("éé", 4), "éé");
+        assert_eq!(tail("abc", 2), "…bc");
+    }
+
+    #[test]
+    fn a_refused_watchdog_stops_the_run_before_any_build() {
+        let staged = tempfile::tempdir_in(ipe_test_temp::temp_root()).expect("tempdir");
+        let project = staged.path().join("project");
+        std::fs::create_dir(&project).expect("project dir");
+        let args = vec![
+            project.display().to_string(),
+            "--warm".to_owned(),
+            staged.path().join("warm").display().to_string(),
+        ];
+        let code = cmd_run_with(&args, |_, _| Err(std::io::Error::other("refused")));
+        assert_eq!(code, 2, "a refused watchdog must fail the run closed");
+        assert!(
+            !project.exists(),
+            "the staged project is cleaned up when the run is refused"
+        );
+    }
 
     #[test]
     fn a_missing_home_without_an_override_is_refused() {

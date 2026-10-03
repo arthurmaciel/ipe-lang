@@ -29,8 +29,8 @@ mod support;
 /// The ceilings every child this suite starts runs under: a wedged or
 /// flooding child is killed rather than hanging or filling the runner.
 const CHILD_BOUNDS: BoundedRun = BoundedRun {
-    max_total: Duration::from_secs(1800),
-    idle_window: Duration::from_secs(900),
+    max_total: Duration::from_mins(30),
+    idle_window: Duration::from_mins(15),
     out_cap: 64 * 1024 * 1024,
 };
 

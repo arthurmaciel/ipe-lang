@@ -247,6 +247,7 @@ pub mod ct_eq;
 pub mod crypto_core;
 pub mod decimal;
 pub mod task;
+pub mod threads;
 pub mod dict;
 pub mod encoding;
 pub mod error;
