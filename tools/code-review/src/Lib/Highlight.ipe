@@ -1,4 +1,4 @@
-module Lib.Highlight exposing (Lang(..), Token(..), langFor, sourceTokenStyle, tokenText, tokenize)
+module Lib.Highlight exposing (Lang(..), SourceLine, Token(..), langFor, sourceTokenStyle, tokenText, tokenize)
 
 import Ipe.Char as Char
 import Ipe.List as List
@@ -24,6 +24,13 @@ type Token
     | Num String
     | Ident String
     | Plain String
+
+
+-- One numbered source line as a page draws it, tokenized once.
+type alias SourceLine =
+    { number : Int
+    , tokens : List Token
+    }
 
 
 -- The highlighting language of a file, from the language ipe-index stores

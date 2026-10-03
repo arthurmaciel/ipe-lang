@@ -394,6 +394,139 @@ outdatedReadNeverSettles =
 
 
 
+-- ── one source read per session ─────────────────────────────────────────
+--
+-- The unit page reads its unit through the same single-flight view as the
+-- queue card, so the session holds at most one source read in flight
+-- whichever page asked for it.
+
+-- N unit-page entries during a read start no second read, and only the
+-- latest entered unit is read once the in-flight read returns. Red if a
+-- unit-page entry starts a read beside the one in flight.
+unitEntriesDuringReadCoalesce : Bool
+unitEntriesDuringReadCoalesce =
+    let
+        ( first, firstRead ) =
+            Queue.reloadView "u1" NoneSelected
+
+        ( second, secondRead ) =
+            Queue.reloadView "u2" first
+
+        ( third, thirdRead ) =
+            Queue.reloadView "u3" second
+
+        ( fourth, fourthRead ) =
+            Queue.reloadView "u4" third
+
+        ( arrived, next ) =
+            Queue.viewArrived "u1" (Ok Nothing) fourth
+
+        ( settled, settledNext ) =
+            Queue.viewArrived "u4" (Ok Nothing) arrived
+    in
+    firstRead
+        == Just "u1"
+        && secondRead
+        == Nothing
+        && thirdRead
+        == Nothing
+        && fourthRead
+        == Nothing
+        && selectedTag fourth
+        == "loading u1 wanting u4"
+        && next
+        == Just "u4"
+        && selectedTag arrived
+        == "loading u4"
+        && isNotFound (Queue.unitPageOf "u4" settled)
+        && settledNext
+        == Nothing
+
+
+
+-- One slot for both pages: a unit-page read in flight blocks a queue-card
+-- read, and a queue-card read in flight blocks a unit-page read; the page
+-- moved to is read once the in-flight read returns. Red if either page keeps
+-- a read slot of its own.
+oneReadSlotAcrossPages : Bool
+oneReadSlotAcrossPages =
+    let
+        ( unitReading, _ ) =
+            Queue.reloadView "u" NoneSelected
+
+        ( cardWanted, cardRead ) =
+            Queue.selectView "q" unitReading
+
+        ( cardNext, cardNextRead ) =
+            Queue.viewArrived "u" (Ok Nothing) cardWanted
+
+        ( cardReading, _ ) =
+            Queue.selectView "q" NoneSelected
+
+        ( unitWanted, unitRead ) =
+            Queue.reloadView "u" cardReading
+
+        ( unitNext, unitNextRead ) =
+            Queue.viewArrived "q" (Ok Nothing) unitWanted
+    in
+    cardRead
+        == Nothing
+        && cardNextRead
+        == Just "q"
+        && selectedTag cardNext
+        == "loading q"
+        && unitRead
+        == Nothing
+        && unitNextRead
+        == Just "u"
+        && isUnitLoading (Queue.unitPageOf "u" unitWanted)
+        && selectedTag unitNext
+        == "loading u"
+
+
+
+-- A view response for a unit other than the one in flight leaves the unit
+-- page loading and starts no read; a missing unit settles the unit page as
+-- not found, and another unit's page never reads that as its own. Red if a
+-- late response settles the unit page, or a missing unit shows as loading.
+unitPageSettlesOnItsOwnRead : Bool
+unitPageSettlesOnItsOwnRead =
+    let
+        ( reading, _ ) =
+            Queue.reloadView "u" NoneSelected
+
+        ( afterOther, otherRead ) =
+            Queue.viewArrived "other" (Ok Nothing) reading
+
+        missing =
+            settledFor "u" (Ok Nothing)
+
+        failed =
+            settledFor "u" (Err (Error.conflict "boom"))
+    in
+    otherRead
+        == Nothing
+        && selectedTag afterOther
+        == "loading u"
+        && isUnitLoading (Queue.unitPageOf "u" afterOther)
+        && isNotFound (Queue.unitPageOf "u" missing)
+        && isUnitLoading (Queue.unitPageOf "other" missing)
+        && isUnitFailed (Queue.unitPageOf "u" failed)
+        && isUnitLoading (Queue.unitPageOf "other" failed)
+
+
+
+-- The view a fresh read of `uid` settles with `result`.
+settledFor : String -> Result Error (Maybe Index.UnitView) -> Queue.SelectedView
+settledFor uid result =
+    let
+        ( settled, _ ) =
+            Queue.viewArrived uid result (ViewLoading { uid = uid, wanted = Nothing, fresh = True })
+    in
+    settled
+
+
+
 selectedTag : Queue.SelectedView -> String
 selectedTag state =
     case state of
@@ -742,11 +875,45 @@ unitPageStatesDistinct =
         loaded <- Queue.loadUnitView "no-such-uid"
         cleanupIndex at.indexDb at.repo
         Task.succeed
-            (isNotFound (Queue.unitPageFromResult (Ok loaded))
+            (isNotFound (Queue.unitPageOf "no-such-uid" (settledFor "no-such-uid" (Ok loaded)))
                 && List.length pageTexts == 3
                 && List.length sourceTexts == 4
                 && pairwiseDistinct (pageTexts ++ sourceTexts)
             )
+
+
+
+isUnitLoading : Queue.UnitPageState -> Bool
+isUnitLoading state =
+    case state of
+        UnitLoading ->
+            True
+
+        UnitNotFound ->
+            False
+
+        UnitLoaded _ ->
+            False
+
+        UnitFailed _ ->
+            False
+
+
+
+isUnitFailed : Queue.UnitPageState -> Bool
+isUnitFailed state =
+    case state of
+        UnitFailed _ ->
+            True
+
+        UnitLoading ->
+            False
+
+        UnitLoaded _ ->
+            False
+
+        UnitNotFound ->
+            False
 
 
 
@@ -1689,6 +1856,9 @@ checks =
         , Task.succeed ( "a selection during a source read starts no second read", selectionsDuringReadCoalesce )
         , Task.succeed ( "a source read's outdated response is dropped", outdatedResponseDropped )
         , Task.succeed ( "a source read that predates a page reload never settles the view", outdatedReadNeverSettles )
+        , Task.succeed ( "unit-page navigations during a source read start no second read", unitEntriesDuringReadCoalesce )
+        , Task.succeed ( "a unit-page read in flight blocks a queue-card read", oneReadSlotAcrossPages )
+        , Task.succeed ( "a unit page settles only on its own read, a missing unit as not found", unitPageSettlesOnItsOwnRead )
         , Task.succeed ( "queue state texts distinguish loading/empty/failed/loaded", queueStateTextsDistinct )
         , check "progress counts decided pairs over decided-or-queued units" progressCountsDecidedPairs
         , check "progress total holds while the queue drains" progressStableAcrossDrain

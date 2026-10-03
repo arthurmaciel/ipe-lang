@@ -1,4 +1,4 @@
-module Lib.Queue exposing (HistoryPage, HistoryRow, HistoryState(..), LoadTicket, Progress, QueuePage, QueueState(..), QueuedUnit, ResyncBound, SelectedView(..), UnitPageState(..), clearView, decidableSource, decide, drainThenLoad, firstTicket, historyStateFromResult, historyStatusText, isCurrentLoad, loadHistoryPage, loadPage, nextTicket, loadUnitView, pageHeaderText, queueStatusText, reloadView, resyncBound, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, selectView, selectedViewOf, selectedViewStatusText, sourceStatusText, stateFromResult, unitPageFromResult, unitPageStatusText, viewArrived)
+module Lib.Queue exposing (HistoryPage, HistoryRow, HistoryState(..), LoadTicket, Progress, QueuePage, QueueState(..), QueuedUnit, ResyncBound, SelectedView(..), UnitPageState(..), clearView, decidableSource, decide, drainThenLoad, firstTicket, historyStateFromResult, historyStatusText, isCurrentLoad, loadHistoryPage, loadPage, nextTicket, loadUnitView, pageHeaderText, queueStatusText, reloadView, resyncBound, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, selectView, selectedViewOf, selectedViewStatusText, sourceStatusText, stateFromResult, unitPageOf, unitPageStatusText, viewArrived)
 
 import Ipe.Db as Db
 import Ipe.Error as Error
@@ -339,15 +339,17 @@ decide db shown decision =
         Task.succeed ( attested, n )
 
 
--- The selected queue card's source: nothing selected, one read in flight
--- (with the unit wanted once it returns, when the selection moved during the
--- read), the loaded view, no unit with the read's uid, or a failed read. At
--- most one read is in flight: a selection made during a read only records
--- `wanted`, and a response for any uid but the in-flight one is dropped.
--- `fresh` is False once the queue page reloaded or cleared during the read,
--- so its result predates the page and never settles the view: the in-flight
--- unit selected again is read afresh, and with nothing wanted the result is
--- dropped.
+-- The session's one source read and the view it settles: the queue page's
+-- selected card and the unit page both show their source from this one
+-- value, so at most one read is in flight per session whichever page asked
+-- for it. Nothing selected, one read in flight (with the unit wanted once it
+-- returns, when the selection or the page moved during the read), the loaded
+-- view, no unit with the read's uid, or a failed read. A selection or a unit
+-- page entered during a read only records `wanted`, and a response for any
+-- uid but the in-flight one is dropped. `fresh` is False once the page
+-- reloaded, cleared or changed during the read, so its result predates the
+-- page and never settles the view: the in-flight unit selected again is read
+-- afresh, and with nothing wanted the result is dropped.
 type SelectedView
     = NoneSelected
     | ViewLoading { uid : String, wanted : Maybe String, fresh : Bool }
@@ -571,17 +573,38 @@ type UnitPageState
     | UnitFailed Error
 
 
-unitPageFromResult : Result Error (Maybe Index.UnitView) -> UnitPageState
-unitPageFromResult result =
-    case result of
-        Ok (Just loaded) ->
-            UnitLoaded loaded
+-- The unit page of `uid`, read off the session's one source view: its view
+-- once the read of `uid` settles, and loading while any read is in flight or
+-- the view settled is another unit's.
+unitPageOf : String -> SelectedView -> UnitPageState
+unitPageOf uid state =
+    case state of
+        ViewShown shown ->
+            if shown.unit.uid == uid then
+                UnitLoaded shown
 
-        Ok Nothing ->
-            UnitNotFound
+            else
+                UnitLoading
 
-        Err e ->
-            UnitFailed e
+        ViewMissing missing ->
+            if missing == uid then
+                UnitNotFound
+
+            else
+                UnitLoading
+
+        ViewFailed failed e ->
+            if failed == uid then
+                UnitFailed e
+
+            else
+                UnitLoading
+
+        ViewLoading _ ->
+            UnitLoading
+
+        NoneSelected ->
+            UnitLoading
 
 
 -- The one-line text for a unit page that has no unit to show; Nothing once
