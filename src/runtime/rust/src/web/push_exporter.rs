@@ -103,8 +103,55 @@ impl ExporterEnv {
 
     /// This process's value for the name; `None` when unset or not UTF-8.
     pub(crate) fn read(self) -> Option<String> {
-        crate::system::read_env_var(self.name()).ok()
+        self.raw().ok()
     }
+
+    /// The numeric ceiling this tuning name carries; `0` is refused, and a
+    /// queue depth is bounded by what a `tokio` channel can hold.
+    pub(crate) const fn ceiling(
+        self,
+        default: u64,
+        unit: &'static str,
+    ) -> crate::system::EnvCeiling {
+        let ceiling = crate::system::EnvCeiling::new(
+            self.name(),
+            default,
+            crate::system::ZeroCeiling::Refused,
+            unit,
+        );
+        match self {
+            Self::PushBuffer => ceiling.at_most(tokio::sync::Semaphore::MAX_PERMITS as u64),
+            Self::ParentUrl
+            | Self::IngestToken
+            | Self::PushInterval
+            | Self::HubUrl
+            | Self::HubToken
+            | Self::HubInterval
+            | Self::ServiceName => ceiling,
+        }
+    }
+
+    /// This process's value for the name, parsed as [`Self::ceiling`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal for a present, malformed value.
+    pub(crate) fn read_ceiling<T: TryFrom<u64>>(
+        self,
+        default: u64,
+        unit: &'static str,
+    ) -> Result<T, crate::system::EnvCeilingRefusal> {
+        self.ceiling(default, unit).parse_as(self.raw())
+    }
+
+    fn raw(self) -> Result<String, std::env::VarError> {
+        crate::system::read_env_var(self.name())
+    }
+}
+
+/// Logs a refused exporter ceiling; the exporter stays disabled.
+pub(crate) fn log_refused_ceiling(label: &str, refusal: &crate::system::EnvCeilingRefusal) {
+    crate::system::emit_runtime_log(label, &format!("{refusal}; exporter disabled"));
 }
 
 const DEFAULT_QUEUE_CAP: usize = 1024;
@@ -218,10 +265,12 @@ pub async fn enable_from_env() {
         );
         return;
     }
-    let interval_ms = ExporterEnv::PushInterval
-        .read()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_INTERVAL_MS);
+    let interval_ms: u64 = match ExporterEnv::PushInterval
+        .read_ceiling(DEFAULT_INTERVAL_MS, "decimal millisecond count")
+    {
+        Ok(ms) => ms,
+        Err(refusal) => return log_refused_ceiling("push", &refusal),
+    };
     let ingest_url = format!("{}/_ipe/observability/ingest", parent.trim_end_matches('/'));
     enable(
         "federation",
@@ -351,11 +400,12 @@ fn enable(label: &str, pipeline: Pipeline) {
         );
         return;
     };
-    let cap = ExporterEnv::PushBuffer
-        .read()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&c| c > 0)
-        .unwrap_or(DEFAULT_QUEUE_CAP);
+    let cap: usize = match ExporterEnv::PushBuffer
+        .read_ceiling(DEFAULT_QUEUE_CAP as u64, "decimal entry count")
+    {
+        Ok(cap) => cap,
+        Err(refusal) => return log_refused_ceiling("push", &refusal),
+    };
     let (tx, rx) = mpsc::channel::<Entry>(cap);
     if SENDER.set(tx).is_err() {
         return; // lost an enable race
@@ -1082,6 +1132,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn exporter_ceilings_honour_the_shared_contract() {
+        for env in [
+            ExporterEnv::PushInterval,
+            ExporterEnv::PushBuffer,
+            ExporterEnv::HubInterval,
+        ] {
+            assert_eq!(env.role(), ExporterEnvRole::Tuning);
+            crate::system::assert_env_ceiling_contract(env.ceiling(2000, "decimal count"));
+        }
+    }
+
+    #[test]
+    fn a_push_buffer_past_the_tokio_permit_limit_is_refused() {
+        let ceiling = ExporterEnv::PushBuffer.ceiling(DEFAULT_QUEUE_CAP as u64, "decimal count");
+        let limit = tokio::sync::Semaphore::MAX_PERMITS as u64;
+        assert_eq!(ceiling.parse(Ok(limit.to_string())), Ok(limit));
+        assert!(
+            ceiling
+                .parse(Ok((limit + 1).to_string()))
+                .is_err_and(|r| r.defect() == crate::system::CeilingDefect::TooLarge),
+            "a queue depth tokio cannot hold must be refused, not reach mpsc::channel"
+        );
     }
 
     #[test]
