@@ -198,7 +198,7 @@ enum Sign {
 fn int_value(magnitude: IntMagnitude, sign: Sign, span: Span) -> DResult<i64> {
     match sign {
         Sign::Minus => Ok(magnitude.negated()),
-        Sign::Plus => magnitude.positive().ok_or_else(|| Diagnostic::Parse {
+        Sign::Plus => magnitude.positive().ok_or(Diagnostic::Parse {
             span,
             msg: ParseError::IntLiteralOutOfRange,
         }),

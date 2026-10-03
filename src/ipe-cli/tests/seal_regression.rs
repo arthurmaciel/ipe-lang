@@ -591,8 +591,10 @@ fn int_min_literal_builds() {
          \x20   case m of\n\
          \x20       Just (-9223372036854775808) ->\n\
          \x20           \"just min\"\n\n\
-         \x20       _ ->\n\
+         \x20       Just _ ->\n\
          \x20           \"other\"\n\n\
+         \x20       Nothing ->\n\
+         \x20           \"nothing\"\n\n\
          pairFirst : ( Int, Int ) -> Int\n\
          pairFirst pair =\n\
          \x20   case pair of\n\
