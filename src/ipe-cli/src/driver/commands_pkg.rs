@@ -12,6 +12,7 @@ use crate::cargo_step::{
 use crate::contained_path::ResolvedPath;
 use crate::output_dir::{EmitTarget, OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::publisher::{AttestedActor, BlessedPublisher};
+use crate::remote_ingest::{InheritedError, InheritedInput, InheritedRole, run_inherited};
 use crate::{
     Applicability, BTreeMap, Diagnostic, HelpLine, Interner, Path, PathBuf, Suggestion, Write,
     audit, cli_args, contained_path, delivery, ffi, fmt, fs, index, pack, progress, project,
@@ -633,15 +634,18 @@ pub fn build_wasm_for_mobile(
         BundleProfile::Dev => "build",
         BundleProfile::Release => "release",
     };
-    let status = std::process::Command::new(&exe)
+    let mut build = std::process::Command::new(&exe);
+    build
         .arg(verb)
         .arg(project_dir)
         .args(["--target", "wasm", "--out"])
-        .arg(output_root)
-        .status()
-        .map_err(|source| CliError::Io {
-            path: exe.clone(),
-            source,
+        .arg(output_root);
+    let status =
+        run_inherited(build, InheritedRole::SelfBuild, InheritedInput::Terminal).map_err(|e| {
+            CliError::Io {
+                path: exe.clone(),
+                source: e.into(),
+            }
         })?;
     if !status.success() {
         return Err(CliError::Usage(text::msg::mobile_wasm_build_failed(
@@ -1555,27 +1559,13 @@ pub fn build_and_run_test_entry(
     // failure — propagate that as a stage error. Under `--json` the child's own
     // human summary is captured and re-emitted on OUR stderr, so our stdout stays
     // a single JSON line a consumer can parse.
-    let run_status = match stdio {
-        TestStdio::Inherit => {
-            std::process::Command::new(&bin)
-                .status()
-                .map_err(|e| CliError::Io {
-                    path: bin.clone(),
-                    source: e,
-                })?
-        }
-        TestStdio::Quiet => {
-            let output = std::process::Command::new(&bin)
-                .stdout(std::process::Stdio::piped())
-                .output()
-                .map_err(|e| CliError::Io {
-                    path: bin.clone(),
-                    source: e,
-                })?;
-            let _ = std::io::stderr().write_all(&output.stdout);
-            output.status
-        }
-    };
+    let run_status = run_test_binary(
+        &bin,
+        match stdio {
+            TestStdio::Inherit => None,
+            TestStdio::Quiet => Some(QuietSinks::cli_stderr()),
+        },
+    )?;
 
     if run_status.success() {
         Ok(TestOutcome::AllPassed)
@@ -1586,6 +1576,49 @@ pub fn build_and_run_test_entry(
         let code = run_status.code().unwrap_or(1);
         Err(CliError::TestFailed { code })
     }
+}
+
+/// Where a quiet test binary's stdout and stderr go.
+struct QuietSinks {
+    /// The binary's stdout.
+    stdout: std::process::Stdio,
+    /// The binary's stderr.
+    stderr: std::process::Stdio,
+}
+
+impl QuietSinks {
+    /// Both streams on the CLI's stderr, so the CLI's stdout carries only its own output.
+    fn cli_stderr() -> Self {
+        Self {
+            stdout: std::io::stderr().into(),
+            stderr: std::process::Stdio::inherit(),
+        }
+    }
+}
+
+/// Run the compiled test binary `bin` to its exit, its output on the terminal or on `quiet`.
+///
+/// Nothing the binary writes is held in the CLI's memory.
+///
+/// # Errors
+/// [`CliError::Io`] when the binary cannot start or be waited on.
+fn run_test_binary(
+    bin: &Path,
+    quiet: Option<QuietSinks>,
+) -> Result<std::process::ExitStatus, CliError> {
+    let mut command = std::process::Command::new(bin);
+    if let Some(sinks) = quiet {
+        command.stdout(sinks.stdout).stderr(sinks.stderr);
+    }
+    run_inherited(
+        command,
+        InheritedRole::UserProgram,
+        InheritedInput::Terminal,
+    )
+    .map_err(|e| CliError::Io {
+        path: bin.to_path_buf(),
+        source: e.into(),
+    })
 }
 
 /// Stage 4 of `ipe verify`: run the project's tests via the shared
@@ -2179,9 +2212,10 @@ fn download_installer() -> Result<crate::scratch::ScratchFile, CliError> {
 
 /// Download the installer script, then run it and wait for it to finish.
 ///
-/// The script reaches `sh` on its standard input from the retained handle of
-/// the file it was downloaded into, exactly as a `curl | sh` pipe would, so the
-/// bytes run are the bytes that were downloaded and measured. The installer
+/// The script is read back from the file it was downloaded into, under the
+/// same [`crate::remote_ingest::INSTALLER_MAX_BYTES`] ceiling, and reaches `sh`
+/// on its standard input exactly as a `curl | sh` pipe would, so the bytes run
+/// are the bytes that were downloaded and measured. The installer
 /// exits 2 when no prebuilt binary exists for the current platform; any other
 /// non-zero exit is a generic failure.
 ///
@@ -2203,11 +2237,12 @@ pub fn run_installer() -> Result<(), CliError> {
             path: script.path().to_path_buf(),
             source,
         })?;
-        let stdin = script.file.try_clone().map_err(|source| CliError::Io {
-            path: script.path().to_path_buf(),
-            source,
-        })?;
-        Ok((script, stdin))
+        let body = crate::io_bounded::read_opened_capped(
+            &script.file,
+            script.path(),
+            crate::remote_ingest::INSTALLER_MAX_BYTES.get(),
+        )?;
+        Ok(zeroize::Zeroizing::new(body.into_bytes()))
     }) {
         Ok(script) => {
             download.success("Installer downloaded.");
@@ -2218,48 +2253,39 @@ pub fn run_installer() -> Result<(), CliError> {
             return Err(e);
         }
     };
-    let (_script, script_stdin) = script;
 
     // Render the hand-off to the installer as a stage on stderr: a running
-    // light-yellow line while we spawn `sh`, settled to a green success (or a
-    // red failure) BEFORE the child inherits the terminal, so the installer's
-    // own staged output begins on a fresh, uncorrupted line.
+    // light-yellow line settled to a green success BEFORE the child inherits
+    // the terminal, so the installer's own staged output begins on a fresh,
+    // uncorrupted line.
     let stage = progress::Stage::start(std::io::stderr(), "Launching the release installer…");
     // IPE_UPGRADE_WRAPPED tells install.sh it is running under us: on its
     // "no prebuilt binary" failure it skips its own stderr banner (we render
     // the one failure message ourselves, below) and writes the tag it actually
     // resolved and probed into the private (0600, unpredictably named) file
     // named by IPE_UPGRADE_TAG_FILE, so we report the real target version
-    // instead of guessing. The script arrives on stdin from its private file;
-    // stdout and stderr stay inherited, untouched. Without a
+    // instead of guessing. The script arrives on stdin as the bytes that were
+    // downloaded and measured; stdout and stderr stay inherited, untouched. Without a
     // tag file install.sh keeps its own banner.
     let mut tag_file = crate::scratch::ScratchFile::create("ipe-upgrade-tag").ok();
     let mut installer = std::process::Command::new("sh");
-    installer
-        .arg("-s")
-        .stdin(script_stdin)
-        .env(UPGRADE_WRAPPED_ENV, "1");
+    installer.arg("-s").env(UPGRADE_WRAPPED_ENV, "1");
     match &tag_file {
         Some(file) => installer.env(UPGRADE_TAG_FILE_ENV, file.path()),
         None => installer.env_remove(UPGRADE_TAG_FILE_ENV),
     };
-    let child = installer.spawn();
-    let mut child = match child {
-        Ok(child) => {
-            stage.success("Installer launched — following its progress below.");
-            child
+    stage.success("Handing off to the installer — following its progress below.");
+    let status = run_inherited(
+        installer,
+        InheritedRole::InteractiveInstall,
+        InheritedInput::Bytes(script),
+    )
+    .map_err(|e| match e {
+        InheritedError::Spawn(refusal) => {
+            CliError::Usage(text::msg::upgrade_installer_launch_failed(&refusal))
         }
-        Err(e) => {
-            stage.failure(format!("Could not launch the installer (needs `sh`): {e}"));
-            return Err(CliError::Usage(text::msg::upgrade_installer_launch_failed(
-                &e,
-            )));
-        }
-    };
-
-    let status = child
-        .wait()
-        .map_err(|e| CliError::Usage(text::msg::upgrade_installer_wait_failed(&e)))?;
+        InheritedError::Wait(e) => CliError::Usage(text::msg::upgrade_installer_wait_failed(&e)),
+    })?;
     if status.success() {
         return Ok(());
     }
@@ -3313,6 +3339,61 @@ pub const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
 // project on disk: they pass `Some(declared)` so `classify_entry_shape` (which
 // reads source files) is bypassed. Any rejected path that no test drives is one
 // edit away from silently passing — pin them here.
+
+#[cfg(test)]
+#[cfg(unix)]
+mod quiet_test_binary_tests {
+    use super::{QuietSinks, run_test_binary};
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::PathBuf;
+
+    /// A stub test binary printing `out` on stdout and `err` on stderr, with the files its sinks write.
+    fn quiet_run(tag: &str) -> (PathBuf, Vec<u8>, Vec<u8>) {
+        let base = ipe_test_temp::temp_root().join(format!(
+            "ipe-quiet-test-binary-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("scratch base");
+        let bin = base.join("runner");
+        std::fs::write(&bin, "#!/bin/sh\nprintf out\nprintf err >&2\nexit 1\n").expect("stub");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let out_path = base.join("stdout");
+        let err_path = base.join("stderr");
+        let status = run_test_binary(
+            &bin,
+            Some(QuietSinks {
+                stdout: std::fs::File::create(&out_path)
+                    .expect("stdout sink")
+                    .into(),
+                stderr: std::fs::File::create(&err_path)
+                    .expect("stderr sink")
+                    .into(),
+            }),
+        )
+        .expect("the stub runs");
+        assert_eq!(status.code(), Some(1), "the binary's exit code is kept");
+        let out = std::fs::read(&out_path).expect("stdout sink");
+        let err = std::fs::read(&err_path).expect("stderr sink");
+        (base, out, err)
+    }
+
+    /// A quiet test binary's stderr reaches its sink rather than being dropped.
+    #[test]
+    fn a_quiet_test_binary_keeps_its_stderr() {
+        let (base, _, err) = quiet_run("stderr");
+        assert_eq!(err, b"err");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A quiet test binary's stdout reaches the sink standing for the CLI's stderr.
+    #[test]
+    fn a_quiet_test_binary_stdout_reaches_the_cli_stderr() {
+        let (base, out, _) = quiet_run("stdout");
+        assert_eq!(out, b"out");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
 
 #[cfg(test)]
 mod installer_tag_tests {
