@@ -671,14 +671,28 @@ mod tests {
         );
     }
 
-    // A rebuild over an older-schema index (no `residual_hash`) keeps its
-    // queue: unchanged children stay drained, and each file unit is queued
-    // once because its change key cannot be compared across the schemas.
+    /// The attestation of the whole of `src`, which a pre-residual index
+    /// stored as a file unit's `body_hash`.
+    fn whole_file_hash(src: &str) -> String {
+        let whole = extract::view::view_text(src, 1, extract::view::view_line_count(src)).unwrap();
+        extract::view::attest(&whole)
+    }
+
+    // A rebuild over an older-schema index (no `residual_hash`, file units
+    // attesting the whole file) keeps its queue: unchanged children stay
+    // drained, and each file unit is queued once because its change key
+    // cannot be compared across the schemas.
     #[test]
     fn a_rebuild_over_an_older_schema_keeps_the_queue() {
         let s = store::Store::open(":memory:").unwrap();
         rebuild_from(&s, &[(PATH, BASE)], "s1");
         drain_all(&s);
+        s.conn
+            .execute(
+                "UPDATE units SET body_hash=? WHERE kind='file'",
+                [whole_file_hash(BASE)],
+            )
+            .unwrap();
         s.conn
             .execute_batch(
                 "ALTER TABLE units DROP COLUMN residual_hash; \
@@ -692,6 +706,51 @@ mod tests {
             .map(|(uid, change, _, _)| (uid, change))
             .collect();
         assert_eq!(changed, vec![(file, "modified".to_string())]);
+        assert!(s.schema_is_current().unwrap());
+    }
+
+    // A rebuild over a v4 index, whose file unit attested the whole file and
+    // kept its residual beside it, re-points the pending file row at the
+    // residual attestation, so the review app's drain of the shown residual
+    // matches. Nothing else is queued.
+    #[test]
+    fn a_rebuild_over_a_v4_index_repoints_a_pending_file_row() {
+        let s = store::Store::open(":memory:").unwrap();
+        rebuild_from(&s, &[(PATH, BASE)], "s1");
+        let file = uid_of(&s, "file", "lib.rs");
+        let residual = body_of(&s, &file);
+        let whole = whole_file_hash(BASE);
+        assert_ne!(residual, whole);
+        s.conn
+            .execute("DELETE FROM change_queue WHERE uid != ?", [file.as_str()])
+            .unwrap();
+        s.conn
+            .execute(
+                "UPDATE units SET residual_hash=body_hash, body_hash=? WHERE kind='file'",
+                [whole.as_str()],
+            )
+            .unwrap();
+        s.conn
+            .execute(
+                "UPDATE change_queue SET new_hash=? WHERE uid=?",
+                [whole.as_str(), file.as_str()],
+            )
+            .unwrap();
+        s.conn
+            .execute_batch("UPDATE meta SET v='4' WHERE k='schema_version';")
+            .unwrap();
+        assert!(!s.schema_is_current().unwrap());
+        rebuild_from(&s, &[(PATH, BASE)], "s2");
+        assert_eq!(
+            queue(&s),
+            vec![(
+                file.clone(),
+                "new".to_string(),
+                Some(residual.clone()),
+                "s1".to_string()
+            )]
+        );
+        assert_eq!(body_of(&s, &file), residual);
         assert!(s.schema_is_current().unwrap());
     }
 

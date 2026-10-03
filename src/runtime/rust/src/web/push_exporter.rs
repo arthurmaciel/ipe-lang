@@ -759,14 +759,19 @@ mod tests {
     /// `flush_now`: the ack proves the buffered batch was processed before
     /// the pre-exit window expires.
     ///
-    /// Uses a fake HTTP server (httptest) is not a dep here — instead we
-    /// verify the sentinel path purely at the channel level: the batcher
-    /// receives the Flush, calls flush() on the buf (which POSTs; we use a
-    /// channel cap=0 so the buf is empty → the POST is skipped), and sends
-    /// the ack. We send a Log first to ensure non-empty buf, but since
-    /// we can't stand up a real HTTP server in a unit test, we rely on the
-    /// "flush POST fails with a log warning" path (best-effort) and confirm
-    /// the ack still arrives — i.e. a flush failure does NOT prevent the ack.
+    /// A flush failure must never withhold the ack.
+    ///
+    /// The ingest endpoint is a bare listener that accepts the flush POST's
+    /// connection and closes it unread: the connect succeeds immediately on
+    /// every host, so the POST still fails (a reset, never a response),
+    /// exercising the "flush POST fails with a log warning" best-effort
+    /// path. We send a Log first so the buf is non-empty, then confirm the
+    /// ack still arrives. An unreachable port would instead measure the
+    /// OS's own connection-refused timing, which is platform-dependent (on
+    /// Windows a refused connect can take seconds of SYN retries) and would
+    /// make this 500 ms bound flaky by host rather than by the code under
+    /// test.
+    #[allow(clippy::expect_used)] // test setup: a bind/local_addr failure is a test environment issue
     #[tokio::test]
     async fn flush_sentinel_acks_even_when_ingest_unreachable() {
         let (tx, rx) = mpsc::channel::<Entry>(16);
@@ -783,8 +788,19 @@ mod tests {
         // Drop the sender so the batcher exits after the ack.
         drop(tx);
 
-        // Spawn the batcher against an unreachable URL.
-        let url = "http://127.0.0.1:19999".to_string();
+        // Accept-then-close: the flush POST connects at once, then the
+        // connection resets before any response, on every host.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an accept-then-close listener");
+        let addr = listener.local_addr().expect("listener local addr");
+        tokio::spawn(async move {
+            if let Ok((socket, _)) = listener.accept().await {
+                drop(socket);
+            }
+        });
+
+        let url = format!("http://{addr}");
         tokio::spawn(batcher(
             rx,
             client(&url),
