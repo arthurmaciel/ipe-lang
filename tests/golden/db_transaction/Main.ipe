@@ -4,6 +4,7 @@ import Ipe.Error as Error
 import Ipe.Io as Io
 import Ipe.Db
 import Ipe.Db.Unsafe
+import Ipe.Dict
 import Ipe.List
 import Ipe.String
 import Ipe.Task
@@ -32,7 +33,7 @@ main =
                                     (\rows ->
                                         Io.println
                                             (String.join ","
-                                                (List.map (\r -> Unsafe.unsafeGetString "msg" r) rows)
+                                                (List.map (\r -> cellText "msg" r) rows)
                                             )
                                     )
                                     (Unsafe.unsafeQuery conn
@@ -61,3 +62,18 @@ main =
                     )
         )
         (Db.open "sqlite" "/tmp/ipe_txn_golden.db")
+
+
+-- The text of column `key` in a raw Db row: a SQL `NULL` cell reads as `NULL`,
+-- a missing column as the empty string.
+cellText : String -> Dict String (Maybe String) -> String
+cellText key row =
+    case Dict.get key row of
+        Just (Just s) ->
+            s
+
+        Just Nothing ->
+            "NULL"
+
+        Nothing ->
+            ""
