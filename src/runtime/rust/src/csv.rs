@@ -24,21 +24,22 @@ use super::*;
 // for its own `run_blocking` helper (see
 // `docs/adr/0003-security-render-and-data-access-invariants.md` §2.2).
 #[cfg(feature = "tokio")]
-async fn run_blocking<T, F>(f: F) -> Result<T, String>
+async fn run_blocking<T, Er, F>(f: F) -> Result<T, Er>
 where
-    F: FnOnce() -> Result<T, String> + Send + 'static,
+    F: FnOnce() -> Result<T, Er> + Send + 'static,
     T: Send + 'static,
+    Er: From<String> + Send + 'static,
 {
     match tokio::task::spawn_blocking(f).await {
         Ok(r) => r,
-        Err(_) => Err("background csv task panicked".to_string()),
+        Err(_) => Err(Er::from("background csv task panicked".to_string())),
     }
 }
 
 #[cfg(not(feature = "tokio"))]
-async fn run_blocking<T, F>(f: F) -> Result<T, String>
+async fn run_blocking<T, Er, F>(f: F) -> Result<T, Er>
 where
-    F: FnOnce() -> Result<T, String> + Send + 'static,
+    F: FnOnce() -> Result<T, Er> + Send + 'static,
     T: Send + 'static,
 {
     f()
@@ -110,18 +111,29 @@ fn csv_max_bytes() -> Result<u64, String> {
 /// bytes actually retained in the returned rows), so the ceiling bounds the
 /// heap the parsed document occupies — the real exhaustion vector — rather than
 /// the on-wire size. Saturating so the accumulator itself cannot overflow.
-fn accrue_record_bytes(seen: &mut u64, rec: &::csv::StringRecord, cap: u64) -> Result<(), String> {
+fn accrue_record_bytes(
+    seen: &mut u64,
+    rec: &::csv::StringRecord,
+    cap: u64,
+) -> Result<(), LimitRefusal> {
     let record_bytes: u64 = rec.iter().map(|f| f.len() as u64).sum();
     *seen = seen.saturating_add(record_bytes);
     if *seen > cap {
-        return Err(format!(
+        return Err(LimitRefusal::new(format!(
             "exceeds byte cap of {cap} (raise IPE_CSV_MAX_BYTES)"
-        ));
+        )));
     }
     Ok(())
 }
 
-fn parse_delim<E: From<String>>(text: &str, delim: u8) -> IpeResult<E, CsvDoc> {
+/// The row-count ceiling refusal, shared by the in-memory and the streaming parse.
+fn row_cap_refusal(max_rows: usize) -> LimitRefusal {
+    LimitRefusal::new(format!(
+        "exceeds row cap of {max_rows} (raise IPE_CSV_MAX_ROWS)"
+    ))
+}
+
+fn parse_delim<E: From<String> + FromLimitExceeded>(text: &str, delim: u8) -> IpeResult<E, CsvDoc> {
     let mut rdr = ::csv::ReaderBuilder::new()
         .delimiter(delim)
         .has_headers(true)
@@ -139,7 +151,7 @@ fn parse_delim<E: From<String>>(text: &str, delim: u8) -> IpeResult<E, CsvDoc> {
     let header: Vec<String> = match rdr.headers() {
         Ok(h) => {
             if let Err(e) = accrue_record_bytes(&mut seen_bytes, h, max_bytes) {
-                return IpeResult::Err(format!("Csv.parse: {e}").into());
+                return IpeResult::Err(e.context("Csv.parse").into_error());
             }
             h.iter().map(|s| s.to_string()).collect()
         }
@@ -151,15 +163,11 @@ fn parse_delim<E: From<String>>(text: &str, delim: u8) -> IpeResult<E, CsvDoc> {
             Ok(r) => {
                 if rows.len() >= max_rows {
                     return IpeResult::Err(
-                        format!(
-                            "Csv.parse: exceeds row cap of {} (raise IPE_CSV_MAX_ROWS)",
-                            max_rows
-                        )
-                        .into(),
+                        row_cap_refusal(max_rows).context("Csv.parse").into_error(),
                     );
                 }
                 if let Err(e) = accrue_record_bytes(&mut seen_bytes, &r, max_bytes) {
-                    return IpeResult::Err(format!("Csv.parse: {e}").into());
+                    return IpeResult::Err(e.context("Csv.parse").into_error());
                 }
                 rows.push(r.iter().map(|s| s.to_string()).collect());
             }
@@ -218,12 +226,12 @@ fn encode_delim(doc: &CsvDoc, delim: u8) -> String {
 }
 
 /// Csv.parse : String -> Result Error Csv
-pub fn csv_parse<E: From<String>>(text: String) -> IpeResult<E, CsvDoc> {
+pub fn csv_parse<E: From<String> + FromLimitExceeded>(text: String) -> IpeResult<E, CsvDoc> {
     parse_delim(&text, b',')
 }
 
 /// Csv.parseWithDelimiter : String -> String -> Result Error Csv
-pub fn csv_parse_with_delimiter<E: From<String>>(
+pub fn csv_parse_with_delimiter<E: From<String> + FromLimitExceeded>(
     delim: String,
     text: String,
 ) -> IpeResult<E, CsvDoc> {
@@ -252,7 +260,7 @@ pub fn csv_encode_with_delimiter(delim: String, doc: CsvDoc) -> String {
     encode_delim(&doc, byte)
 }
 
-fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, String> {
+fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, KernelFailure> {
     // Stream rows from a BufReader<File> rather than slurping the whole file
     // into a String first — the csv reader pulls records incrementally, so a
     // large/untrusted file no longer forces a full-file in-memory copy.
@@ -273,10 +281,7 @@ fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, Strin
     for rec in rdr.records() {
         let r = rec.map_err(|e| e.to_string())?;
         if out.len() >= max_rows {
-            return Err(format!(
-                "exceeds row cap of {} (raise IPE_CSV_MAX_ROWS)",
-                max_rows
-            ));
+            return Err(row_cap_refusal(max_rows).into());
         }
         accrue_record_bytes(&mut seen_bytes, &r, max_bytes)?;
         out.push(r.iter().map(|s| s.to_string()).collect());
@@ -294,14 +299,14 @@ fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, Strin
 /// file I/O + incremental CSV parsing (bounded by `IPE_CSV_MAX_ROWS` AND
 /// `IPE_CSV_MAX_BYTES`) is offloaded to tokio's blocking pool via `run_blocking`
 /// — see the module-level doc comment on `run_blocking` above.
-pub fn csv_parse_stream_from_file<E: From<String> + Send + 'static>(
+pub fn csv_parse_stream_from_file<E: From<String> + FromLimitExceeded + Send + 'static>(
     path: crate::path::Path,
 ) -> IpeTask<E, Vec<Vec<String>>> {
     let path = path.into_string();
     Box::pin(async move {
         match run_blocking(move || csv_parse_stream_from_file_sync(&path)).await {
             Ok(v) => ok_res(v),
-            Err(e) => IpeResult::Err(format!("Csv.parseStreamFromFile: {}", e).into()),
+            Err(e) => IpeResult::Err(e.context("Csv.parseStreamFromFile").into_error()),
         }
     })
 }
@@ -342,11 +347,14 @@ mod tests {
         let big_field = "x".repeat(1000);
         let text = format!("h\n{big_field}\n");
         crate::system::locked_set_var("IPE_CSV_MAX_BYTES", "100");
-        let res: IpeResult<String, CsvDoc> = csv_parse(text);
+        let res: IpeResult<IpeError, CsvDoc> = csv_parse(text);
         crate::system::locked_remove_var("IPE_CSV_MAX_BYTES");
-        assert!(
-            matches!(res, IpeResult::Err(_)),
-            "a record past the byte cap must Err, not accumulate unboundedly"
+        assert_eq!(
+            res,
+            IpeResult::Err(IpeError::limit_exceeded(
+                "Csv.parse: exceeds byte cap of 100 (raise IPE_CSV_MAX_BYTES)"
+            )),
+            "a record past the byte cap must be a LimitExceeded refusal"
         );
     }
 
@@ -441,13 +449,16 @@ mod tests {
             .join(format!("ipe_csv_stream_cap_{}.csv", std::process::id()));
         std::fs::write(&p, "a\n1\n2\n3\n4\n5\n").unwrap();
         crate::system::locked_set_var("IPE_CSV_MAX_ROWS", "2");
-        let res: IpeResult<String, Vec<Vec<String>>> =
+        let res: IpeResult<IpeError, Vec<Vec<String>>> =
             block(csv_parse_stream_from_file(make_path(&p.to_string_lossy())));
         crate::system::locked_remove_var("IPE_CSV_MAX_ROWS");
         let _ = std::fs::remove_file(&p);
-        assert!(
-            matches!(res, IpeResult::Err(_)),
-            "6-row file under a 2-row cap must Err"
+        assert_eq!(
+            res,
+            IpeResult::Err(IpeError::limit_exceeded(
+                "Csv.parseStreamFromFile: exceeds row cap of 2 (raise IPE_CSV_MAX_ROWS)"
+            )),
+            "6-row file under a 2-row cap must be a LimitExceeded refusal"
         );
     }
 
