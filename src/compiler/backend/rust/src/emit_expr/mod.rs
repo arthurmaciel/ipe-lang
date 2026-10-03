@@ -24,6 +24,7 @@ mod expr;
 mod ffi;
 mod func;
 mod kernel_calls;
+mod numeric;
 mod patterns;
 mod records;
 #[cfg(test)]
@@ -34,5 +35,6 @@ pub use expr::*;
 pub use ffi::*;
 pub use func::*;
 pub use kernel_calls::*;
+pub use numeric::*;
 pub use patterns::*;
 pub use records::*;
