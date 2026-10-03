@@ -314,10 +314,13 @@ candidateRule =
         == [ "mycrate::util::g" ]
 
 
+-- A Rust `.` is a field or method access, never a path: `a.b.c` names `a`
+-- alone and `self.go` names nothing, so no lookup is spent on a name no Rust
+-- unit can hold. A `..` range starts no member, so its end still names.
 referencesFollowTokens : Bool
 referencesFollowTokens =
-    Links.references Highlight.Rust "a.b.c x::<T>::new() self.go ::std::io crate::m::f fn"
-        == [ Path "a.b.c", Bare "x", Bare "T", Path "self.go", Path "crate::m::f" ]
+    Links.references Highlight.Rust "a.b.c x::<T>::new() self.go ::std::io crate::m::f fn Foo::bar.baz a..b"
+        == [ Bare "a", Bare "x", Bare "T", Path "crate::m::f", Path "Foo::bar", Bare "a", Bare "b" ]
         && Links.references Highlight.Ipe "Foo.bar(x) model.count"
         == [ Path "Foo.bar", Bare "x", Path "model.count" ]
         && List.isEmpty (Links.references Highlight.Shell "Foo.bar x")
@@ -338,12 +341,55 @@ candidateSqlBound =
                 == ""
 
 
+-- One row of ipe-index's `tests/callee_vectors.json`: a caller unit's stored
+-- identity, a callee as written, and the names ipe-index's callee rule looks
+-- it up as.
+type alias CalleeVector =
+    { unit : Links.UnitName
+    , callee : String
+    , candidates : List String
+    }
+
+
+-- Every row's candidates, read through this page's own references and
+-- candidate rule, are ipe-index's. Red if the vectors file is absent or empty,
+-- or if the two rules drift.
+calleeVectorsHold : Task.Task Error Bool
+calleeVectorsHold =
+    do
+        cwd <- System.cwd ()
+        path <- Task.fromResult (Path.fromString (ipeIndexTestFile cwd "callee_vectors.json"))
+        text <- File.readFileLimit path (ByteSize.kib 16)
+        vectors <- Task.fromResult (Decode.decodeString (Decode.list calleeVectorDecoder) text)
+        Task.succeed (not (List.isEmpty vectors) && List.all calleeVectorHolds vectors)
+
+
+calleeVectorHolds : CalleeVector -> Bool
+calleeVectorHolds v =
+    (Links.candidates Highlight.Rust v.unit (List.take 1 (Links.references Highlight.Rust v.callee))).names == v.candidates
+
+
+calleeVectorDecoder : Decode.Decoder CalleeVector
+calleeVectorDecoder =
+    Decode.map3
+        (\unit callee wanted -> { unit = unit, callee = callee, candidates = wanted })
+        (Decode.map3
+            (\kind name qualified -> { kind = kind, name = name, qualified = qualified })
+            (Decode.field "kind" Decode.string)
+            (Decode.field "name" Decode.string)
+            (Decode.field "qualified" Decode.string)
+        )
+        (Decode.field "callee" Decode.string)
+        (Decode.field "candidates" (Decode.list Decode.string))
+
+
 checks : Task.Task Error (List ( String, Bool ))
 checks =
-    linksFixture
+    Task.map2 (\got callee -> ( got, callee )) linksFixture calleeVectorsHold
         |> Task.map
-            (\got ->
+            (\( got, callee ) ->
                 [ ( "a source with more distinct references than the candidate ceiling binds only the ceiling and sets hidden to AtLeast", candidateCeiling )
+                , ( "candidates match the shared ipe-index callee vectors", callee )
                 , ( "links past the link ceiling set hidden to Exactly the cut count", linkCeilingCut )
                 , ( "first occurrence wins across candidates, resolved links and urls", firstOccurrence )
                 , ( "candidates follow ipe-index's callee rule", candidateRule )

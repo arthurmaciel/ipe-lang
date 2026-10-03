@@ -130,11 +130,12 @@ type alias UnitName =
 -- The references of a shown source, in source order, folded over the tokens
 -- the page displays, so a link always names a token the reader sees. A
 -- reference is a maximal chain of word tokens (identifiers and keywords)
--- joined with no space by a separator: `.` in Ipê, `::` or `.` in Rust. A
+-- joined with no space by a path separator: `.` in Ipê, `::` in Rust. A
 -- chain that follows a separator (`x.0.len`, `(a).b`, `::std`, the `::new`
--- after a turbofish) is a member access and names nothing; neither does a
--- lone keyword. A `::<` turbofish ends a chain. Shell and unknown languages
--- have no references.
+-- after a turbofish) or a Rust `.` (`a.len`, `self.go`) is a member access and
+-- names nothing; neither does a lone keyword. A `::<` turbofish ends a chain;
+-- a `..` range does not start a member. Shell and unknown languages have no
+-- references.
 references : Lang -> String -> List Reference
 references lang source =
     case lang of
@@ -167,12 +168,22 @@ referencesGo lang tokens acc =
                     referencesGo lang chain.after (consReference word.reserved chain acc)
 
                 Nothing ->
-                    case separatorAt lang tokens of
-                        Just afterSep ->
-                            referencesGo lang (skipChain lang afterSep) acc
+                    case rangeAt tokens of
+                        Just afterDots ->
+                            referencesGo lang afterDots acc
 
                         Nothing ->
-                            referencesGo lang rest acc
+                            case separatorAt lang tokens of
+                                Just afterSep ->
+                                    referencesGo lang (skipChain lang afterSep.rest) acc
+
+                                Nothing ->
+                                    case memberAt lang tokens of
+                                        Just afterDot ->
+                                            referencesGo lang (skipChain lang afterDot) acc
+
+                                        Nothing ->
+                                            referencesGo lang rest acc
 
 
 type alias Chain =
@@ -215,29 +226,31 @@ chainGo lang text segments tokens =
             { text = text, segments = segments, after = tokens }
 
 
--- Drops the member-access chain that follows a separator.
-skipChain : Lang -> { sep : String, rest : List Token } -> List Token
-skipChain lang afterSep =
-    case afterSep.rest of
+-- Drops the member-access chain at the head of `tokens`, the tokens after
+-- a separator.
+skipChain : Lang -> List Token -> List Token
+skipChain lang tokens =
+    case tokens of
         next :: rest ->
             case wordOf next of
                 Just word ->
                     (chainGo lang word.text 1 rest).after
 
                 Nothing ->
-                    afterSep.rest
+                    tokens
 
         [] ->
             []
 
 
--- The separator at the head of `tokens`, with the tokens after it. The
--- tokenizer emits punctuation one character per `Plain` token.
+-- The path separator at the head of `tokens`, with the tokens after it:
+-- `.` in Ipê, `::` in Rust. The tokenizer emits punctuation one character per
+-- `Plain` token.
 separatorAt : Lang -> List Token -> Maybe { sep : String, rest : List Token }
 separatorAt lang tokens =
     case tokens of
         (Plain first) :: rest ->
-            if first == "." then
+            if first == "." && lang == Ipe then
                 Just { sep = ".", rest = rest }
 
             else if first == ":" && lang == Rust then
@@ -251,6 +264,38 @@ separatorAt lang tokens =
 
                     _ ->
                         Nothing
+
+            else
+                Nothing
+
+        _ ->
+            Nothing
+
+
+-- A Rust `.` at the head of `tokens` — a field or method access on the
+-- expression before it, never a path — with the tokens after it.
+memberAt : Lang -> List Token -> Maybe (List Token)
+memberAt lang tokens =
+    case tokens of
+        (Plain first) :: rest ->
+            if first == "." && lang == Rust then
+                Just rest
+
+            else
+                Nothing
+
+        _ ->
+            Nothing
+
+
+-- A `..` at the head of `tokens` (a Rust range, an Ipê `exposing (..)`), with
+-- the tokens after it: what follows it is no member.
+rangeAt : List Token -> Maybe (List Token)
+rangeAt tokens =
+    case tokens of
+        (Plain first) :: (Plain second) :: rest ->
+            if first == "." && second == "." then
+                Just rest
 
             else
                 Nothing
