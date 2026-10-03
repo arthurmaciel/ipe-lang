@@ -178,8 +178,10 @@ fn volatile_path_prefixes(repo_root: &Path) -> Vec<VolatilePrefix> {
     if let Some(temp_root) = ipe_sandbox::scratch::TempRootRedactor::current() {
         prefixes.push(VolatilePrefix::TempRoot(temp_root));
     }
-    if let Some(home) = crate::env_dir::home() {
-        prefixes.push(VolatilePrefix::Text(home.to_string_lossy().into_owned()));
+    // A refused home is redacted too: the transcript carries the raw value
+    // whether or not the parser trusts it as a directory.
+    if let Some(home) = ipe_sandbox::home::home_text_to_redact() {
+        prefixes.push(VolatilePrefix::Text(home));
     }
     prefixes.sort_by_key(|p| std::cmp::Reverse(p.byte_len()));
     prefixes

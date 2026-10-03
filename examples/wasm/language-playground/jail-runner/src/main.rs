@@ -284,7 +284,10 @@ impl std::fmt::Display for WarmDirError {
 }
 
 fn resolve_warm_dir() -> Result<PathBuf, WarmDirError> {
-    resolve_warm_dir_from(ipe_env::var_os(WARM_DIR_ENV), ipe_sandbox::home::home_dir())
+    resolve_warm_dir_from(
+        ipe_env::var_os(WARM_DIR_ENV),
+        ipe_sandbox::home::home_dir().ok().as_ref(),
+    )
 }
 
 /// Resolve the warm-cache directory, refusing any cwd-relative spelling.
@@ -292,7 +295,7 @@ fn resolve_warm_dir() -> Result<PathBuf, WarmDirError> {
 /// An empty override counts as unset.
 fn resolve_warm_dir_from(
     raw: Option<std::ffi::OsString>,
-    home: Option<PathBuf>,
+    home: Option<&ipe_sandbox::home::HomeDir>,
 ) -> Result<PathBuf, WarmDirError> {
     if let Some(value) = raw.filter(|value| !value.is_empty()) {
         let path = PathBuf::from(value);
@@ -302,8 +305,7 @@ fn resolve_warm_dir_from(
             Err(WarmDirError::RelativeOverride)
         };
     }
-    home.filter(|home| home.is_absolute())
-        .map(|home| home.join(DEFAULT_WARM_DIR))
+    home.map(|home| home.join(DEFAULT_WARM_DIR))
         .ok_or(WarmDirError::HomeUnresolved)
 }
 
@@ -633,6 +635,11 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
+    /// The home the parser makes of the raw value `raw`, when it accepts one.
+    fn parsed(raw: &str) -> Option<ipe_sandbox::home::HomeDir> {
+        ipe_sandbox::home::HomeDir::try_parse(Some(raw.into())).ok()
+    }
+
     #[test]
     fn a_missing_home_without_an_override_is_refused() {
         assert_eq!(
@@ -644,7 +651,7 @@ mod tests {
             Err(WarmDirError::HomeUnresolved)
         );
         assert_eq!(
-            resolve_warm_dir_from(None, Some(PathBuf::from("relative/home"))),
+            resolve_warm_dir_from(None, parsed("relative/home").as_ref()),
             Err(WarmDirError::HomeUnresolved)
         );
     }
@@ -652,7 +659,7 @@ mod tests {
     #[test]
     fn a_relative_override_is_refused() {
         assert_eq!(
-            resolve_warm_dir_from(Some(OsString::from("warm")), Some(PathBuf::from("/home/u"))),
+            resolve_warm_dir_from(Some(OsString::from("warm")), parsed("/home/u").as_ref()),
             Err(WarmDirError::RelativeOverride)
         );
     }
@@ -664,7 +671,7 @@ mod tests {
             Ok(PathBuf::from("/srv/warm"))
         );
         assert_eq!(
-            resolve_warm_dir_from(None, Some(PathBuf::from("/home/u"))),
+            resolve_warm_dir_from(None, parsed("/home/u").as_ref()),
             Ok(PathBuf::from("/home/u").join(DEFAULT_WARM_DIR))
         );
     }
