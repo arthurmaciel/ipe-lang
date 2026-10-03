@@ -173,22 +173,27 @@ pub(crate) fn is_log_hazard(c: char) -> bool {
     c.is_control() || LOG_FORMAT_HAZARDS.iter().any(|range| range.contains(&c))
 }
 
-/// Neutralise every log-hazard character (see [`is_log_hazard`]) in text
-/// bound for an operator log line by escaping it — `\n`, `\r`, `\t`, else
-/// `\u{XX}` — so untrusted
-/// input (a driver error, a request path, an env-derived path, a trace value)
-/// can neither forge extra records nor inject terminal escape sequences, and
-/// the escape stays visible rather than silently erased. The single log
-/// scrubber: every plain-text log sink routes untrusted text through it. Not a
-/// JSON escaper — JSON records keep `telemetry::json_escape`.
+/// Escape text bound for a plain operator log line, visibly and injectively.
+///
+/// Every log-hazard character (see [`is_log_hazard`]) becomes an escape (`\n`,
+/// `\r`, `\t`, else `\u{XX}`) and `\` itself becomes `\\`, so untrusted input
+/// (a driver error, a request path, an env-derived path, a trace value) can
+/// neither forge extra records nor inject terminal escape sequences, the
+/// escape stays visible rather than silently erased, and two distinct inputs
+/// never print alike (the literal text `\u{200b}` prints as `\\u{200b}`, a
+/// real U+200B as `\u{200b}`). The single plain-text log scrubber: every
+/// plain-text log sink routes untrusted text through it. Its JSON counterpart
+/// is `escape::json_str_body` (through `telemetry::json_escape`), which
+/// escapes the same hazard set.
 pub(crate) fn scrub_log_controls(s: &str) -> std::borrow::Cow<'_, str> {
     use std::fmt::Write as _;
-    if !s.chars().any(is_log_hazard) {
+    if !s.chars().any(|c| c == '\\' || is_log_hazard(c)) {
         return std::borrow::Cow::Borrowed(s);
     }
     let mut out = String::with_capacity(s.len().saturating_add(16));
     for c in s.chars() {
         match c {
+            '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
@@ -2663,6 +2668,61 @@ mod scrub_log_controls_tests {
             }))
             .collect();
         assert_eq!(parsed, expected);
+    }
+
+    /// Inverse of the scrub, for the injectivity proof: `\\`, `\n`, `\r`, `\t`, `\u{h}`.
+    fn unscrub(s: &str) -> Option<String> {
+        let mut out = String::new();
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            match chars.next()? {
+                '\\' => out.push('\\'),
+                'n' => out.push('\n'),
+                'r' => out.push('\r'),
+                't' => out.push('\t'),
+                'u' => {
+                    if chars.next()? != '{' {
+                        return None;
+                    }
+                    let hex: String = chars.by_ref().take_while(|&h| h != '}').collect();
+                    out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
+                }
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
+    #[test]
+    fn backslash_is_escaped_so_distinct_inputs_never_print_alike() {
+        assert_ne!(
+            scrub_log_controls("a\\u{200b}"),
+            scrub_log_controls("a\u{200b}")
+        );
+        assert_ne!(scrub_log_controls("a\\nb"), scrub_log_controls("a\nb"));
+        let path = scrub_log_controls("C:\\x");
+        assert!(matches!(path, std::borrow::Cow::Owned(_)), "{path:?}");
+        assert_eq!(path, "C:\\\\x");
+    }
+
+    #[test]
+    fn scrub_output_decodes_back_to_its_input() {
+        for input in [
+            "a\nb\r\x1b[2J\x7f\u{9b}\u{85}\0c\td",
+            "a\u{2028}b\u{2029}c\u{202e}d\u{2066}e\u{2069}f\u{200f}g\u{61c}h\u{202a}i",
+            "adm\u{200B}in\u{E0041}\u{AD}\u{2060}\u{FEFF}",
+            "GET /caf\u{e9} 200 3ms",
+            "a\\u{200b}",
+            "a\u{200b}",
+            "C:\\x\\\\y\\",
+        ] {
+            let out = scrub_log_controls(input);
+            assert_eq!(unscrub(&out).as_deref(), Some(input), "{out:?}");
+        }
     }
 
     #[test]

@@ -178,10 +178,12 @@ fn normalize_method(method: &str) -> &'static str {
     }
 }
 
-/// Cap the request path to a sane length and strip control characters before it
-/// is recorded into the telemetry rings / federation push. Mirrors the Ipe.Tui
-/// `sanitiseRune` discipline — the path is user-supplied and otherwise
-/// unbounded, a low-grade log-injection / memory-amplification vector.
+/// Cap the request path to a sane length and drop every log hazard before it
+/// is recorded into the telemetry rings / federation push.
+///
+/// The hazard set is the runtime's one predicate, `crate::system::is_log_hazard`
+/// (Unicode `Cc ∪ Cf ∪ Zl ∪ Zp`): the path is remote-supplied and otherwise
+/// unbounded, a log-injection / memory-amplification vector.
 fn sanitise_path(path: &str) -> String {
     const MAX_PATH_BYTES: usize = 256;
     let mut out = String::with_capacity(path.len().min(MAX_PATH_BYTES));
