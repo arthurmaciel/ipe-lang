@@ -515,8 +515,10 @@ web = ["web-core", "widget-assets", "server", "dep:serde_json", "json", "serde",
 widget-assets = ["crypto-core", "encoding"]
 # `db-postgres` (not bare `db`) selects a concrete sqlx driver — it also pulls
 # `sqlite`, so both driver code paths compile. `jwt` + `url` cover the
-# JWT/auth and URL/SSRF surfaces that `db`/`web`/`http_client` reach.
-full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "crypto-core", "secret", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time", "log", "regex", "uuid", "random", "decimal", "char-category"]
+# JWT/auth and URL/SSRF surfaces that `db`/`web`/`http_client` reach. `locale`
+# rides here so the `full` clippy leg, the runtime test run, and `cargo deny`'s
+# `full` graph all reach `locale.rs` and its ICU4X deps.
+full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "crypto-core", "secret", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time", "log", "regex", "uuid", "random", "decimal", "char-category", "locale"]
 # Development-only time-travelling debugger core (recorder / re-fold / export /
 # import). NOT in `full` and NOT implied by `wasm-client` — the debugger is a
 # build-mode opt-in (`ipe build/run --debugger`), never a default. `ipe release`
@@ -685,6 +687,12 @@ tokio = { version = "1", features = ["full", "test-util", "macros"] }
 # A fake TLS PostgreSQL server proves the pinned relay keeps SNI and
 # certificate host-name verification.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# `clippy_leg_coverage` evaluates every source `cfg` against the CI clippy
+# legs: `cfg-expr` evaluates the predicates, `serde_yaml` reads `ci.yml`, and
+# `toml` reads the manifests' feature graphs.
+cfg-expr = "0.15"
+serde_yaml = "0.9"
+toml = "0.8"
 
 # `pipe`: the echo-guard tests build a non-tty fd pair.
 [target.'cfg(unix)'.dev-dependencies]
