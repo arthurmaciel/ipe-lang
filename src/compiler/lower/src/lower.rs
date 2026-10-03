@@ -17671,6 +17671,127 @@ impl<'a> Lowerer<'a> {
         self.ir_type_from_canon(t, generics)
     }
 
+    /// Whether `(home, name)` is the builtin type of that name.
+    ///
+    /// Decided by the type checker's head-identity rule
+    /// ([`ipe_types::con_heads_compatible`] against the empty builtin home), so
+    /// inference and lowering share one answer: a stdlib union listed as its own
+    /// head (`Ipe.Db.Store`'s `Order`) or a user union is never the builtin.
+    fn is_builtin_head(&self, home: &[Symbol], name: Symbol) -> bool {
+        ipe_types::con_heads_compatible(home, name, &[], name, self.interner)
+    }
+
+    /// Whether `(home, name)` is a program union distinct from the same-named builtin.
+    ///
+    /// Such a union must lower to its own enum ahead of every bare-name builtin
+    /// arm in [`Self::ir_type_from_canon`] and [`Self::ir_type_from_ty`].
+    fn is_distinct_program_union(&self, home: &[Symbol], name: Symbol) -> bool {
+        !self.is_builtin_head(home, name)
+            && self
+                .enum_variants
+                .contains_key(&(ModPath(home.to_vec()), name))
+    }
+
+    /// Lower an annotated program-union application to its `IrType::Enum`.
+    fn program_enum_from_canon(
+        &self,
+        home: &[Symbol],
+        name: Symbol,
+        args: &[canon::Type],
+        generics: &[Symbol],
+    ) -> DResult<IrType> {
+        // drop the phantom `k`/`v` of `Ipe.Cache.Cache k v`
+        // (backed by the non-generic `IpeCacheHandle`) and the phantom
+        // `row` of `Ipe.Db.Store.Cond row` (untyped runtime data) —
+        // twin of the solved-Ty arm; see its comment for the E0283
+        // rationale.
+        let ir_args = if self.is_cache_handle_con(home, name)
+            || self.is_cond_con(home, name)
+            || self.is_policy_con(home, name)
+            || self.is_pred_con(home, name)
+            || self.is_exists_ref_con(home, name)
+            || self.is_select_con(home, name)
+        {
+            Vec::new()
+        } else {
+            let mut v = Vec::with_capacity(args.len());
+            for a in args {
+                // A type argument filling a generic payload slot that
+                // instantiates to a function takes the same `Arc<dyn Fn>`
+                // carrier the decl-side flip
+                // ([`normalize_enum_payload_fun_carrier`]) stamps on a
+                // direct-function payload and the value-side flip
+                // ([`promote_stored_fn_carrier`]) constructs with
+                // `Arc::new`. Without it the type application spells the
+                // slot `Box<dyn Fn>` while the construction fills it with
+                // an `Arc`, an `Arc`-vs-`Box` E0308 (and the composite's
+                // derived `Clone` fails on the non-`Clone` `Box`). The
+                // flip is a no-op for every non-function argument.
+                v.push(normalize_enum_payload_fun_carrier(
+                    self.ir_type_from_canon(a, generics)?,
+                ));
+            }
+            v
+        };
+        Ok(IrType::Enum {
+            home: ModPath(home.to_vec()),
+            name,
+            args: ir_args,
+        })
+    }
+
+    /// Lower a solved program-union application to its `IrType::Enum`.
+    fn program_enum_from_ty(
+        &self,
+        module: &[Symbol],
+        name: Symbol,
+        args: &[Ty],
+        span: Span,
+    ) -> DResult<IrType> {
+        // A use-site enum type carries its solved type arguments, so
+        // `Opt Int` → `Enum { Opt, [Int] }` (rendered `MainOpt<i64>`).
+        // `module` is the type's HOME (the solver threads it on
+        // `Ty::Con`), which is the same identity the union was keyed
+        // under.
+        //
+        // `Ipe.Cache.Cache k v` is backed by the NON-generic
+        // runtime `IpeCacheHandle`, so drop its `k`/`v` args here —
+        // otherwise they surface as unused generic params on the
+        // `Ipe.Cache` wrapper fns (`new : CacheCfg -> Task Error
+        // (Cache k v)` whose result no longer mentions them), an
+        // uninferrable `T` at the call site (E0283).
+        let ir_args = if self.is_cache_handle_con(module, name)
+            || self.is_cond_con(module, name)
+            || self.is_policy_con(module, name)
+            || self.is_pred_con(module, name)
+            || self.is_exists_ref_con(module, name)
+            || self.is_select_con(module, name)
+        {
+            Vec::new()
+        } else {
+            let mut v = Vec::with_capacity(args.len());
+            for a in args {
+                // A generic payload slot instantiated to a function takes
+                // the `Arc<dyn Fn>` carrier, matching the decl-side flip
+                // ([`normalize_enum_payload_fun_carrier`]) and the
+                // value-side construction ([`promote_stored_fn_carrier`]).
+                // Twin of the annotation-path flip in
+                // [`Self::ir_type_from_canon`]; both spellings of the enum
+                // type argument must agree or the emitted slot is an
+                // `Arc`-vs-`Box` E0308. A no-op for a non-function argument.
+                v.push(normalize_enum_payload_fun_carrier(
+                    self.ir_type_from_ty(a, span)?,
+                ));
+            }
+            v
+        };
+        Ok(IrType::Enum {
+            home: ModPath(module.to_vec()),
+            name,
+            args: ir_args,
+        })
+    }
+
     #[allow(clippy::too_many_lines)] // declarative type-constructor dispatch — each builtin listed explicitly for safety
     fn ir_type_from_canon(&self, t: &canon::Type, generics: &[Symbol]) -> DResult<IrType> {
         match t {
@@ -17679,6 +17800,13 @@ impl<'a> Lowerer<'a> {
             // the same generic scope so `Opt Int` → `Enum { Opt, [Int] }` and
             // `Opt a` (inside a generic signature) → `Enum { Opt, [Generic a] }`.
             canon::Type::Con { home, name, args } => match self.resolve(*name)? {
+                // A program union that is NOT the builtin of its name (a user ADT,
+                // or a stdlib union listed as its own head) lowers by its
+                // `(home, name)` identity before any bare-name builtin arm below,
+                // so a same-named builtin carrier can never hijack it.
+                _ if self.is_distinct_program_union(home, *name) => {
+                    self.program_enum_from_canon(home, *name, args, generics)
+                }
                 // The closed config-tag ADTs (`HostMode` / `LogLevel` / `CsrfMode` /
                 // `RevocationMode`) erase to the raw `Int` tag their constructor kernels
                 // project to — the setting builders consume that `Int` directly.
@@ -18288,44 +18416,7 @@ impl<'a> Lowerer<'a> {
                     .enum_variants
                     .contains_key(&(ModPath(home.clone()), *name)) =>
                 {
-                    // drop the phantom `k`/`v` of `Ipe.Cache.Cache k v`
-                    // (backed by the non-generic `IpeCacheHandle`) and the phantom
-                    // `row` of `Ipe.Db.Store.Cond row` (untyped runtime data) —
-                    // twin of the solved-Ty arm; see its comment for the E0283
-                    // rationale.
-                    let ir_args = if self.is_cache_handle_con(home, *name)
-                        || self.is_cond_con(home, *name)
-                        || self.is_policy_con(home, *name)
-                        || self.is_pred_con(home, *name)
-                        || self.is_exists_ref_con(home, *name)
-                        || self.is_select_con(home, *name)
-                    {
-                        Vec::new()
-                    } else {
-                        let mut v = Vec::with_capacity(args.len());
-                        for a in args {
-                            // A type argument filling a generic payload slot that
-                            // instantiates to a function takes the same `Arc<dyn Fn>`
-                            // carrier the decl-side flip
-                            // ([`normalize_enum_payload_fun_carrier`]) stamps on a
-                            // direct-function payload and the value-side flip
-                            // ([`promote_stored_fn_carrier`]) constructs with
-                            // `Arc::new`. Without it the type application spells the
-                            // slot `Box<dyn Fn>` while the construction fills it with
-                            // an `Arc`, an `Arc`-vs-`Box` E0308 (and the composite's
-                            // derived `Clone` fails on the non-`Clone` `Box`). The
-                            // flip is a no-op for every non-function argument.
-                            v.push(normalize_enum_payload_fun_carrier(
-                                self.ir_type_from_canon(a, generics)?,
-                            ));
-                        }
-                        v
-                    };
-                    Ok(IrType::Enum {
-                        home: ModPath(home.clone()),
-                        name: *name,
-                        args: ir_args,
-                    })
+                    self.program_enum_from_canon(home, *name, args, generics)
                 }
                 // The opaque JSON value type (`Value = any` in Ipê). Placed AFTER
                 // the `enum_variants` guard so a user-declared `type Value = …`
@@ -19407,6 +19498,11 @@ impl<'a> Lowerer<'a> {
             // matches `ir_type_from_canon`, so the inferred and annotated paths
             // agree. See RESERVED_BUILTIN_TYPES for the per-name cite list.
             Ty::Con { name, args, module } => match self.resolve(*name)? {
+                // Twin of the `ir_type_from_canon` arm: a program union that is not
+                // the builtin of its name lowers by its own identity first.
+                _ if self.is_distinct_program_union(module, *name) => {
+                    self.program_enum_from_ty(module, *name, args, span)
+                }
                 // The closed config-tag ADTs (`HostMode` / `LogLevel` / `CsrfMode` /
                 // `RevocationMode`) erase to the raw `Int` tag their constructor kernels
                 // project to.
@@ -19946,48 +20042,7 @@ impl<'a> Lowerer<'a> {
                     .enum_variants
                     .contains_key(&(ModPath(module.clone()), *name)) =>
                 {
-                    // A use-site enum type carries its solved type arguments, so
-                    // `Opt Int` → `Enum { Opt, [Int] }` (rendered `MainOpt<i64>`).
-                    // `module` is the type's HOME (the solver threads it on
-                    // `Ty::Con`), which is the same identity the union was keyed
-                    // under.
-                    //
-                    // `Ipe.Cache.Cache k v` is backed by the NON-generic
-                    // runtime `IpeCacheHandle`, so drop its `k`/`v` args here —
-                    // otherwise they surface as unused generic params on the
-                    // `Ipe.Cache` wrapper fns (`new : CacheCfg -> Task Error
-                    // (Cache k v)` whose result no longer mentions them), an
-                    // uninferrable `T` at the call site (E0283).
-                    let ir_args = if self.is_cache_handle_con(module, *name)
-                        || self.is_cond_con(module, *name)
-                        || self.is_policy_con(module, *name)
-                        || self.is_pred_con(module, *name)
-                        || self.is_exists_ref_con(module, *name)
-                        || self.is_select_con(module, *name)
-                    {
-                        Vec::new()
-                    } else {
-                        let mut v = Vec::with_capacity(args.len());
-                        for a in args {
-                            // A generic payload slot instantiated to a function takes
-                            // the `Arc<dyn Fn>` carrier, matching the decl-side flip
-                            // ([`normalize_enum_payload_fun_carrier`]) and the
-                            // value-side construction ([`promote_stored_fn_carrier`]).
-                            // Twin of the annotation-path flip in
-                            // [`Self::ir_type_from_canon`]; both spellings of the enum
-                            // type argument must agree or the emitted slot is an
-                            // `Arc`-vs-`Box` E0308. A no-op for a non-function argument.
-                            v.push(normalize_enum_payload_fun_carrier(
-                                self.ir_type_from_ty(a, span)?,
-                            ));
-                        }
-                        v
-                    };
-                    Ok(IrType::Enum {
-                        home: ModPath(module.clone()),
-                        name: *name,
-                        args: ir_args,
-                    })
+                    self.program_enum_from_ty(module, *name, args, span)
                 }
                 // ── Kernel-implicit opaque server / Ipe.Web types ────────
                 // Mirror of the `ir_type_from_canon` arms: these are the
@@ -36493,6 +36548,94 @@ mod tests {
             ),
             "the canon mirror refuses the Ipe.Css Color union too"
         );
+    }
+
+    /// A union that is not the builtin of its name lowers to its own enum on both lowering paths.
+    ///
+    /// `Ipe.Db.Store`'s `Order` (a stdlib union listed as its own head) and a
+    /// user `Order` must never take the builtin `IrType::Order` carrier, while
+    /// the empty-home `Order` and a stdlib union that IS a builtin's spelling
+    /// (`Ipe.Task`'s `BackoffStrategy`) still lower to the builtin.
+    #[test]
+    fn distinct_union_named_like_a_builtin_lowers_to_its_own_enum() {
+        use ipe_ir::ModPath;
+        let mut interner = Interner::new();
+        let builtins = build_test_builtin_ctors(&mut interner);
+        #[allow(clippy::expect_used)] // a fresh interner accepts these names
+        let [main, ipe, db, store, task, order, asc, buy, backoff, fixed] = [
+            "Main",
+            "Ipe",
+            "Db",
+            "Store",
+            "Task",
+            "Order",
+            "Asc",
+            "Buy",
+            "BackoffStrategy",
+            "Fixed",
+        ]
+        .map(|name| interner.intern(name).expect("intern name"));
+        let store_home = vec![ipe, db, store];
+        let module = canon::Module {
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
+            name: vec![main],
+            unions: vec![
+                covers_fixture_union(store_home.clone(), order, vec![], asc),
+                covers_fixture_union(vec![main], order, vec![], buy),
+                covers_fixture_union(vec![ipe, task], backoff, vec![], fixed),
+            ],
+            defs: vec![],
+        };
+        let types = empty_solved_types();
+        let lowerer = covers_fixture_lowerer(&module, &types, &interner, &builtins);
+        let lower_both = |home: Vec<Symbol>, name: Symbol| {
+            let canon_ir = lowerer.ir_type_from_canon(
+                &canon::Type::Con {
+                    home: home.clone(),
+                    name,
+                    args: vec![],
+                },
+                &[],
+            );
+            let ty_ir = lowerer.ir_type_from_ty(
+                &Ty::Con {
+                    module: home,
+                    name,
+                    args: vec![],
+                },
+                Span::DUMMY,
+            );
+            (canon_ir, ty_ir)
+        };
+        let own_enum = |home: &[Symbol], name: Symbol| IrType::Enum {
+            home: ModPath(home.to_vec()),
+            name,
+            args: vec![],
+        };
+        for home in [store_home, vec![main]] {
+            let (canon_ir, ty_ir) = lower_both(home.clone(), order);
+            assert_eq!(
+                canon_ir.ok(),
+                Some(own_enum(&home, order)),
+                "the annotated path must lower a non-builtin `Order` to its own enum"
+            );
+            assert_eq!(
+                ty_ir.ok(),
+                Some(own_enum(&home, order)),
+                "the solved path must lower a non-builtin `Order` to its own enum"
+            );
+        }
+        let (canon_ir, ty_ir) = lower_both(vec![], order);
+        assert_eq!(canon_ir.ok(), Some(IrType::Order));
+        assert_eq!(ty_ir.ok(), Some(IrType::Order));
+        let (canon_ir, ty_ir) = lower_both(vec![ipe, task], backoff);
+        assert_eq!(
+            canon_ir.ok(),
+            Some(IrType::BackoffStrategy),
+            "a stdlib spelling of a builtin keeps the builtin carrier"
+        );
+        assert_eq!(ty_ir.ok(), Some(IrType::BackoffStrategy));
     }
 
     /// A reserved builtin spelled under its stdlib home covers its empty-home kernel spelling.

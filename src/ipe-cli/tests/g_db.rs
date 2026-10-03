@@ -32,6 +32,8 @@ mod golden_db_store_join_seal;
 mod golden_db_store_order_builtin_order_rejected;
 #[path = "g_db/golden_db_store_order_by_seal.rs"]
 mod golden_db_store_order_by_seal;
+#[path = "g_db/golden_db_store_order_value.rs"]
+mod golden_db_store_order_value;
 #[path = "g_db/golden_db_store_policy_algebra.rs"]
 mod golden_db_store_policy_algebra;
 #[path = "g_db/golden_db_store_projection_arith_seal.rs"]
