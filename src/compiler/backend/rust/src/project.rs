@@ -1950,9 +1950,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         rust_sources.push((RelPath::new("src/main.rs")?, out));
     }
 
-    let project = assemble_project_files(ctx, rust_sources)?;
-    refuse_lexer_hazards(&project)?;
-    Ok(project)
+    assemble_project_files(ctx, rust_sources)
 }
 
 /// Refuse a project whose emitted Rust holds a character the Rust lexer
@@ -1970,7 +1968,10 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 /// hazard found.
 fn refuse_lexer_hazards(project: &EmittedProject) -> DResult<()> {
     for (path, text) in &project.files {
-        if !path.as_str().ends_with(".rs") {
+        let is_rust = std::path::Path::new(path.as_str())
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
+        if !is_rust {
             continue;
         }
         if let Some(hazard) = ipe_intern::find_lexer_hazard(text) {
@@ -1987,23 +1988,6 @@ fn refuse_lexer_hazards(project: &EmittedProject) -> DResult<()> {
     Ok(())
 }
 
-/// Assemble the final [`EmittedProject`] from the already-rendered Rust source
-/// files (`src/main.rs` plus, in the real split, each `src/ipe_mods/<ident>.rs`)
-/// — appending the manifest (`Cargo.toml`) and the trimmed runtime module
-/// files (`ipe_runtime/mod.rs` + `config.rs`).
-///
-/// **Factored out of [`emit_program`] (design doc §4.4).** This block
-/// is file-count-agnostic — it depends ONLY on `ctx`'s used-kernel flags, never
-/// on how many Rust source files `rust_sources` carries — so the salsa
-/// `emit_manifest` query (`ipe_db`) reuses it verbatim after assembling
-/// `rust_sources` from the per-file [`emit_spine`]/[`emit_module_file`] query
-/// outputs, guaranteeing byte-identity with the single-file `emit_program`
-/// path. Kept a shared helper rather than duplicated, exactly as §4.4 requires.
-///
-/// # Errors
-///
-/// Propagates any [`Diagnostic`] from the `Cargo.toml`/runtime-module
-/// construction (e.g. a drifted server/db/tui/webview manifest anchor).
 /// A string that is safe to use as the body of a TOML basic (double-quoted)
 /// string. The only constructor is [`SafeTomlString::escape`], which runs the
 /// exhaustive escaper over raw input, so no caller can reach a manifest `"..."`
@@ -2730,8 +2714,44 @@ const _: () = assert!(
      and MOD_APPENDS must carry no append text absent from ALL_MOD_APPEND_TEXTS"
 );
 
-#[allow(clippy::too_many_lines)] // one linear manifest/runtime assembly pass
+/// Assemble the final [`EmittedProject`] and refuse it when an emitted `.rs`
+/// text holds a raw lexer hazard.
+///
+/// The one join point of [`emit_program`] and [`assemble_split_manifest`], so
+/// the lexable seal covers the single-file and the split emit alike.
+///
+/// # Errors
+///
+/// Every [`Diagnostic`] of [`assemble_project_text`] and of
+/// [`refuse_lexer_hazards`].
 fn assemble_project_files(
+    ctx: &EmitCtx,
+    rust_sources: Vec<(RelPath, String)>,
+) -> DResult<EmittedProject> {
+    let project = assemble_project_text(ctx, rust_sources)?;
+    refuse_lexer_hazards(&project)?;
+    Ok(project)
+}
+
+/// Assemble the final [`EmittedProject`] from the already-rendered Rust source
+/// files (`src/main.rs` plus, in the real split, each `src/ipe_mods/<ident>.rs`)
+/// — appending the manifest (`Cargo.toml`) and the trimmed runtime module
+/// files (`ipe_runtime/mod.rs` + `config.rs`).
+///
+/// **Shared by [`emit_program`] and [`assemble_split_manifest`].** This block
+/// is file-count-agnostic — it depends ONLY on `ctx`'s used-kernel flags, never
+/// on how many Rust source files `rust_sources` carries — so the salsa
+/// `emit_manifest` query (`ipe_db`) reuses it verbatim after assembling
+/// `rust_sources` from the per-file [`emit_spine`]/[`emit_module_file`] query
+/// outputs, guaranteeing byte-identity with the single-file `emit_program`
+/// path.
+///
+/// # Errors
+///
+/// Propagates any [`Diagnostic`] from the `Cargo.toml`/runtime-module
+/// construction (e.g. a drifted server/db/tui/webview manifest anchor).
+#[allow(clippy::too_many_lines)] // one linear manifest/runtime assembly pass
+fn assemble_project_text(
     ctx: &EmitCtx,
     rust_sources: Vec<(RelPath, String)>,
 ) -> DResult<EmittedProject> {
@@ -6769,6 +6789,9 @@ mod escape_toml_basic_tests {
 
 #[cfg(test)]
 mod non_serde_tests {
+    use std::collections::BTreeMap;
+
+    use ipe_backend::RelPath;
     use ipe_diagnostics::DResult;
     use ipe_intern::Interner;
     use ipe_ir::{EnumDef, EnumPayloadTable, IrType, ModPath, Variant, enum_payload_table};
@@ -6885,6 +6908,11 @@ mod non_serde_tests {
                 "src/ipe_runtime/x.rs",
                 "// line one\rpub fn f() {}\n",
                 "U+000D",
+            ),
+            (
+                "src/ipe_mods/upper.RS",
+                "pub fn g() { let _ = \"\u{2066}\"; }\n",
+                "U+2066",
             ),
         ] {
             let project = project_of(&[("src/lib_ok.rs", "pub fn ok() {}\n"), (path, text)]);

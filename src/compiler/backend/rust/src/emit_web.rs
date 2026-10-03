@@ -316,8 +316,8 @@ fn granted_web_features_register_stmt(ctx: &EmitCtx) -> String {
     if ctx.web_capabilities.is_empty() {
         return String::new();
     }
-    // Deterministic order (BTreeSet iteration is sorted); `{:?}` renders each
-    // `&'static str` suffix as a valid Rust string literal.
+    // Deterministic order (BTreeSet iteration is sorted); `rust_str_lit` renders
+    // each `&'static str` suffix as a valid Rust string literal.
     let suffixes: Vec<String> = ctx
         .web_capabilities
         .iter()
@@ -999,7 +999,7 @@ fn msg_set_descriptor_item(ctx: &EmitCtx, update_e: &Expr) -> String {
         return String::new();
     };
     // The descriptor JSON is a plain double-quoted Rust string literal; embed it
-    // via `{:?}` so any `"`/`\` in a variant name is escaped exactly. The trailing
+    // via `rust_str_lit` so any `"`/`\` in a variant name is escaped exactly. The trailing
     // space separates the item from the following `ipe_runtime::…` token when the
     // gate is on; with the gate off this helper returns `""`, leaving the emitted
     // text byte-identical.

@@ -2232,9 +2232,6 @@ pub fn build_emit_manifest(
     Ok(manifest)
 }
 
-/// The `where_` a lexability refusal of emitted Rust names.
-const EMIT_LEXABLE: &str = "emit.lexable";
-
 /// Refuse a manifest whose `.rs` text holds a character the Rust lexer refuses raw.
 ///
 /// The scan covers the FINAL manifest — vendored runtime, backend emit, post-emit
@@ -2248,16 +2245,20 @@ const EMIT_LEXABLE: &str = "emit.lexable";
 fn refuse_unlexable_rust(manifest: &BTreeMap<PathBuf, String>) -> Result<(), CliError> {
     let hit = manifest
         .iter()
-        .filter(|(path, _)| path.extension().is_some_and(|ext| ext == "rs"))
+        .filter(|(path, _)| {
+            path.extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+        })
         .find_map(|(path, text)| ipe_intern::find_lexer_hazard(text).map(|hazard| (path, hazard)));
     hit.map_or(Ok(()), |(path, hazard)| {
+        let shown = path.to_string_lossy();
         Err(CliError::Pipeline {
             file: path.clone(),
             src: String::new(),
             diag: Box::new(Diagnostic::CompilerBug {
-                where_: EMIT_LEXABLE,
+                where_: ipe_intern::EMIT_LEXABLE,
                 detail: format!(
-                    "emitted {path:?} holds {hazard}, which the Rust lexer refuses raw"
+                    "emitted {shown:?} holds {hazard}, which the Rust lexer refuses raw"
                 ),
             }),
         })
@@ -2755,6 +2756,7 @@ mod tests {
         for (path, body) in [
             ("src/main.rs", "fn main() { let _ = \"a\u{202E}b\"; }\n"),
             ("src/ipe_runtime/x.rs", "// a\rb\n"),
+            ("src/ipe_mods/upper.RS", "// a\u{2066}b\n"),
         ] {
             let refused = build_emit_manifest(&vendored_project(&[(path, body)]), missing, true);
             assert!(
@@ -2769,7 +2771,7 @@ mod tests {
                 matches!(
                     &*diag,
                     Diagnostic::CompilerBug {
-                        where_: EMIT_LEXABLE,
+                        where_: ipe_intern::EMIT_LEXABLE,
                         ..
                     }
                 ),

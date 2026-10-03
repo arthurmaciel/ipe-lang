@@ -413,12 +413,12 @@ fn each_hand_built_literal_shape_is_refused() -> Result<(), String> {
             2,
         ),
         (
-            r##"fn emit() -> &'static str { "let x = r#\"" }"##,
+            r#"fn emit() -> &'static str { "let x = r#\"" }"#,
             Breach::RawLiteral,
             1,
         ),
         (
-            r#"fn emit(s: &str) -> String { s.escape_default().to_string() }"#,
+            r"fn emit(s: &str) -> String { s.escape_default().to_string() }",
             Breach::EscapeMethod,
             1,
         ),

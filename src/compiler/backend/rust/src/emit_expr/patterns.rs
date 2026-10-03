@@ -602,9 +602,8 @@ pub fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
         Pat::Wildcard => Ok("_".to_owned()),
         // Literal leaves render as Rust literals. Int reuses the same spelling as
         // the `Expr::Int` emitter; Bool maps to the Rust keyword constant; Char
-        // and Str escape via the `{:?}` Debug form, which produces a valid Rust
-        // literal (quotes, backslashes and control chars escaped) and is
-        // deterministic.
+        // and Str render through `rust_char_lit` / `rust_str_lit`, a valid Rust
+        // literal with every lexer hazard escaped.
         Pat::Int(n) => Ok(n.to_string()),
         Pat::Bool(b) => Ok(if *b { "true" } else { "false" }.to_owned()),
         // A well-formed Char pattern carries exactly one character → Rust char

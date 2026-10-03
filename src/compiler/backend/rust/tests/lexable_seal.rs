@@ -15,6 +15,8 @@
 
 mod seal_e2e;
 
+use std::collections::BTreeMap;
+
 use ipe_backend::{Backend, EmittedProject};
 use ipe_backend_rust::RustBackend;
 use ipe_diagnostics::{DResult, Diagnostic};
@@ -74,16 +76,16 @@ const fn func(
 fn hazard_program(interner: &mut Interner) -> DResult<Program> {
     let main_mod = interner.intern("Main")?;
     let tag = interner.intern("Tag")?;
-    let a = interner.intern("A")?;
-    let b = interner.intern("B")?;
+    let ctor_a = interner.intern("A")?;
+    let ctor_b = interner.intern("B")?;
     let pick = interner.intern("pick")?;
     let same = interner.intern("same")?;
     let is_override = interner.intern("isOverride")?;
     let override_name = interner.intern("overrideChar")?;
     let main_name = interner.intern("main")?;
-    let w = interner.intern("w")?;
-    let s = interner.intern("s")?;
-    let c = interner.intern("c")?;
+    let tagged = interner.intern("w")?;
+    let text = interner.intern("s")?;
+    let ch = interner.intern("c")?;
 
     let tag_ty = IrType::Enum {
         home: ModPath(vec![]),
@@ -95,11 +97,11 @@ fn hazard_program(interner: &mut Interner) -> DResult<Program> {
         type_params: vec![],
         variants: vec![
             Variant {
-                name: a,
+                name: ctor_a,
                 fields: vec![IrType::Str],
             },
             Variant {
-                name: b,
+                name: ctor_b,
                 fields: vec![],
             },
         ],
@@ -117,31 +119,31 @@ fn hazard_program(interner: &mut Interner) -> DResult<Program> {
     let pick_fn = func(
         0,
         pick,
-        vec![(w, tag_ty.clone())],
+        vec![(tagged, tag_ty)],
         IrType::Str,
         Expr::Match(Match::new(
-            Expr::Var(w),
+            Expr::Var(tagged),
             vec![
                 Arm::new(
-                    ctor_pat(a, vec![Pat::Str(HAZARD_VALUE.to_owned())]),
+                    ctor_pat(ctor_a, vec![Pat::Str(HAZARD_VALUE.to_owned())]),
                     Expr::Str(HAZARD_VALUE.to_owned()),
                 ),
                 Arm::new(
-                    ctor_pat(a, vec![Pat::Wildcard]),
+                    ctor_pat(ctor_a, vec![Pat::Wildcard]),
                     Expr::Str("other".to_owned()),
                 ),
-                Arm::new(ctor_pat(b, vec![]), Expr::Str("none".to_owned())),
+                Arm::new(ctor_pat(ctor_b, vec![]), Expr::Str("none".to_owned())),
             ],
-            &[a, b],
+            &[ctor_a, ctor_b],
         )?),
     );
     let same_fn = func(
         1,
         same,
-        vec![(s, IrType::Str)],
+        vec![(text, IrType::Str)],
         IrType::Bool,
         Expr::Match(Match::new_flat(
-            Expr::Var(s),
+            Expr::Var(text),
             vec![
                 Arm::new(Pat::Str(HAZARD_VALUE.to_owned()), Expr::Bool(true)),
                 Arm::new(Pat::Wildcard, Expr::Bool(false)),
@@ -151,10 +153,10 @@ fn hazard_program(interner: &mut Interner) -> DResult<Program> {
     let is_override_fn = func(
         2,
         is_override,
-        vec![(c, IrType::Char)],
+        vec![(ch, IrType::Char)],
         IrType::Bool,
         Expr::Match(Match::new_flat(
-            Expr::Var(c),
+            Expr::Var(ch),
             vec![
                 Arm::new(Pat::Char(HAZARD_CHAR.to_owned()), Expr::Bool(true)),
                 Arm::new(Pat::Wildcard, Expr::Bool(false)),
@@ -180,7 +182,7 @@ fn hazard_program(interner: &mut Interner) -> DResult<Program> {
                 vec![Expr::Ctor {
                     home: ModPath(vec![]),
                     ty: tag,
-                    variant: a,
+                    variant: ctor_a,
                     args: vec![Expr::Str(HAZARD_VALUE.to_owned())],
                 }],
             )],
@@ -259,7 +261,10 @@ fn emit_hazard_program() -> DResult<(EmittedProject, String)> {
 fn every_literal_position_escapes_lexer_hazards() -> DResult<()> {
     let (emitted, main) = emit_hazard_program()?;
     for (path, text) in &emitted.files {
-        if path.as_str().ends_with(".rs") {
+        if std::path::Path::new(path.as_str())
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+        {
             let hazard = find_lexer_hazard(text);
             assert!(hazard.is_none(), "{}: {hazard:?}", path.as_str());
         }
@@ -338,5 +343,44 @@ fn end_to_end_hazard_value_builds_and_prints() -> DResult<()> {
     if target_dir == out.join("target") {
         let _ = std::fs::remove_dir_all(&target_dir);
     }
+    Ok(())
+}
+
+/// The split emit (`assemble_split_manifest`, the `ipe_db::emit_manifest` path
+/// for a 2+-module program) refuses a raw lexer hazard in a per-module text
+/// and in the spine text, past every renderer: both emit paths end at the one
+/// lexability check, never only the single-file `emit_program`.
+#[test]
+fn split_emit_refuses_a_raw_lexer_hazard() -> DResult<()> {
+    let mut interner = Interner::new();
+    let prog = hazard_program(&mut interner)?;
+    let main_mod = interner.intern("Main")?;
+    let clean_spine = "fn spine() {}\n";
+    let clean_module = "pub fn f() {}\n".to_owned();
+    let raw_module = format!("pub fn f() {{ let _ = \"{HAZARD_VALUE}\"; }}\n");
+    let raw_spine = "// a\rb\nfn spine() {}\n";
+    for (spine, module, shown) in [
+        (clean_spine, raw_module, "U+202E"),
+        (raw_spine, clean_module.clone(), "U+000D"),
+    ] {
+        let texts = BTreeMap::from([(ModPath(vec![main_mod]), module)]);
+        let refused = RustBackend::new(&interner).assemble_split_manifest(&prog, spine, &texts);
+        assert!(
+            matches!(
+                &refused,
+                Err(Diagnostic::CompilerBug { where_, detail })
+                    if *where_ == ipe_intern::EMIT_LEXABLE
+                        && detail.contains(shown)
+                        && find_lexer_hazard(detail).is_none()
+            ),
+            "a raw {shown} passed the split emit: {refused:?}"
+        );
+    }
+    let texts = BTreeMap::from([(ModPath(vec![main_mod]), clean_module)]);
+    let accepted = RustBackend::new(&interner).assemble_split_manifest(&prog, clean_spine, &texts);
+    assert!(
+        accepted.is_ok(),
+        "a lexable split emit was refused: {accepted:?}"
+    );
     Ok(())
 }
