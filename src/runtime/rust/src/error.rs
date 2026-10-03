@@ -414,7 +414,8 @@ impl FromUnavailable for IpeError {
 ///
 /// The blanket `From<String>` bridge yields `Unexpected`; a declared-ceiling
 /// refusal reaching such a sink goes through this trait instead, so it keeps
-/// its kind. Implemented only for `IpeError`, as `FromUnavailable` is.
+/// its kind. Implemented for `IpeError`, as `FromUnavailable` is (unit tests
+/// add the bare `String` sink below).
 pub trait FromLimitExceeded {
     fn from_limit_exceeded(message: String) -> Self;
 }
@@ -422,6 +423,108 @@ pub trait FromLimitExceeded {
 impl FromLimitExceeded for IpeError {
     fn from_limit_exceeded(message: String) -> Self {
         Self::limit_exceeded(message)
+    }
+}
+
+/// A unit test's bare-`String` error sink keeps only the message.
+///
+/// Kind assertions in tests use an `IpeError` sink.
+#[cfg(test)]
+impl FromLimitExceeded for String {
+    fn from_limit_exceeded(message: String) -> Self {
+        message
+    }
+}
+
+/// A declared ceiling turned the input back.
+///
+/// The message names the ceiling and, when one exists, the setting that
+/// raises it. The value reaches an error sink only as `LimitExceeded`: it has
+/// no conversion into `String`, so it cannot fall into the `From<String>`
+/// bridge that yields `Unexpected`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LimitRefusal(String);
+
+impl LimitRefusal {
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.0
+    }
+
+    /// Prefixes the message with the refusing operation, keeping the kind.
+    #[must_use]
+    pub fn context(self, operation: &str) -> Self {
+        Self(format!("{operation}: {}", self.0))
+    }
+
+    /// The refusal in a generic error sink, kinded `LimitExceeded`.
+    #[must_use]
+    pub fn into_error<E: FromLimitExceeded>(self) -> E {
+        E::from_limit_exceeded(self.0)
+    }
+}
+
+impl From<LimitRefusal> for IpeError {
+    fn from(refusal: LimitRefusal) -> Self {
+        Self::limit_exceeded(refusal.0)
+    }
+}
+
+/// A kernel failure whose kind is decided where it is built.
+///
+/// A bare `String` converts into `Unexpected`, so a `?` on an OS or library
+/// error keeps that classification; a ceiling refusal is built as
+/// `LimitExceeded` and keeps that kind through `into_error`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KernelFailure {
+    /// An unclassified failure (an OS or library error).
+    Unexpected(String),
+    /// A declared ceiling turned the input back.
+    LimitExceeded(LimitRefusal),
+}
+
+impl KernelFailure {
+    #[must_use]
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Unexpected(message) => message,
+            Self::LimitExceeded(refusal) => refusal.message(),
+        }
+    }
+
+    /// Prefixes the message with the failing operation, keeping the kind.
+    #[must_use]
+    pub fn context(self, operation: &str) -> Self {
+        match self {
+            Self::Unexpected(message) => Self::Unexpected(format!("{operation}: {message}")),
+            Self::LimitExceeded(refusal) => Self::LimitExceeded(refusal.context(operation)),
+        }
+    }
+
+    /// The failure in a generic error sink, each variant under its own kind.
+    #[must_use]
+    pub fn into_error<E: From<String> + FromLimitExceeded>(self) -> E {
+        match self {
+            Self::Unexpected(message) => E::from(message),
+            Self::LimitExceeded(refusal) => refusal.into_error(),
+        }
+    }
+}
+
+impl From<String> for KernelFailure {
+    fn from(message: String) -> Self {
+        Self::Unexpected(message)
+    }
+}
+
+impl From<LimitRefusal> for KernelFailure {
+    fn from(refusal: LimitRefusal) -> Self {
+        Self::LimitExceeded(refusal)
     }
 }
 
@@ -504,6 +607,25 @@ mod tests {
         assert_eq!(
             ipe_error_kind_name(IpeErrorKind::LimitExceeded),
             "LimitExceeded"
+        );
+    }
+
+    #[test]
+    fn kernel_failure_keeps_each_kind_through_a_generic_sink() {
+        let limit = KernelFailure::from(LimitRefusal::new("over 4 bytes")).context("Op");
+        let other = KernelFailure::from("disk gone".to_owned()).context("Op");
+        assert_eq!(limit.message(), "Op: over 4 bytes");
+        assert_eq!(
+            limit.into_error::<IpeError>().to_ipe_string(),
+            "LimitExceeded: Op: over 4 bytes"
+        );
+        assert_eq!(
+            other.into_error::<IpeError>().to_ipe_string(),
+            "Unexpected: Op: disk gone"
+        );
+        assert_eq!(
+            IpeError::from(LimitRefusal::new("x")),
+            IpeError::limit_exceeded("x")
         );
     }
 

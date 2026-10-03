@@ -8,7 +8,10 @@
 // `.into_string()` and proceeds — it never re-validates, because the type is
 // the proof.
 use super::path::{OsOrigin, Path, from_os, join_entry, name_from_os};
-use super::{IpeError, IpeResult, IpeTask, from_u8_slice, ok_res, str_err};
+use super::{
+    FromLimitExceeded, IpeError, IpeResult, IpeTask, KernelFailure, LimitRefusal, from_u8_slice,
+    ok_res, str_err,
+};
 
 // ── shared blocking-pool helper ───────────────────────────────────────
 //
@@ -89,7 +92,7 @@ fn file_read_ceiling() -> Result<u64, String> {
     FILE_READ_CEILING.read().map_err(String::from)
 }
 
-fn file_read_file_sync(path: &str, cap: u64) -> Result<String, String> {
+fn file_read_file_sync(path: &str, cap: u64) -> Result<String, KernelFailure> {
     use std::io::Read;
     let f = std::fs::File::open(path).map_err(|e| format!("{e}"))?;
     // take(cap + 1): if the source yields more than `cap` bytes we still
@@ -100,15 +103,18 @@ fn file_read_file_sync(path: &str, cap: u64) -> Result<String, String> {
         .read_to_string(&mut buf)
         .map_err(|e| format!("{e}"))?;
     if read as u64 > cap {
-        return Err(format!(
+        return Err(LimitRefusal::new(format!(
             "file exceeds read ceiling of {cap} bytes (raise IPE_FILE_READ_MAX or use File.readFileLimit): {path}"
-        ));
+        ))
+        .into());
     }
     Ok(buf)
 }
 
 #[must_use]
-pub fn file_read_file<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, String> {
+pub fn file_read_file<E: Send + From<String> + FromLimitExceeded + 'static>(
+    path: Path,
+) -> IpeTask<E, String> {
     let path = path.into_string();
     Box::pin(async move {
         let cap = match file_read_ceiling() {
@@ -117,7 +123,7 @@ pub fn file_read_file<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E
         };
         match run_blocking(move || file_read_file_sync(&path, cap)).await {
             Ok(s) => ok_res(s),
-            Err(e) => IpeResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(e.into_error()),
         }
     })
 }
@@ -183,7 +189,7 @@ pub fn file_mkdir_all<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E
 
 // ─── Read variants ─────────────────────────────────────────────────────────
 
-fn file_read_file_limit_sync(path: &str, cap: u64) -> Result<String, String> {
+fn file_read_file_limit_sync(path: &str, cap: u64) -> Result<String, KernelFailure> {
     use std::io::Read as _;
     let f = std::fs::File::open(path).map_err(|e| format!("{e}"))?;
     let mut buf = String::new();
@@ -192,9 +198,10 @@ fn file_read_file_limit_sync(path: &str, cap: u64) -> Result<String, String> {
         .read_to_string(&mut buf)
         .map_err(|e| format!("{e}"))?;
     if read as u64 > cap {
-        return Err(format!(
+        return Err(LimitRefusal::new(format!(
             "file exceeds {cap}-byte limit (stopped reading at the limit — actual size not reported to bound memory use): {path}"
-        ));
+        ))
+        .into());
     }
     Ok(buf)
 }
@@ -224,7 +231,7 @@ fn read_limit(limit: i64) -> Result<u64, String> {
 /// `file_read_file`, and `compression.rs`'s decompression-bomb check) leaves
 /// nothing to race against.
 #[must_use]
-pub fn file_read_file_limit<E: Send + From<String> + 'static>(
+pub fn file_read_file_limit<E: Send + From<String> + FromLimitExceeded + 'static>(
     path: Path,
     limit: i64,
 ) -> IpeTask<E, String> {
@@ -237,12 +244,12 @@ pub fn file_read_file_limit<E: Send + From<String> + 'static>(
         };
         match run_blocking(move || file_read_file_limit_sync(&path, cap)).await {
             Ok(s) => ok_res(s),
-            Err(e) => IpeResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(e.into_error()),
         }
     })
 }
 
-fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
+fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, KernelFailure> {
     use std::io::Read as _;
     let f = std::fs::File::open(path).map_err(|e| format!("{e}"))?;
     let mut buf = Vec::new();
@@ -254,9 +261,10 @@ fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
         .read_to_end(&mut buf)
         .map_err(|e| format!("{e}"))?;
     if read as u64 > READ_FILE_BYTES_CEILING {
-        return Err(format!(
+        return Err(LimitRefusal::new(format!(
             "file exceeds {READ_FILE_BYTES_CEILING}-byte limit (stopped reading at the limit — actual size not reported to bound memory use): {path}"
-        ));
+        ))
+        .into());
     }
     Ok(from_u8_slice(&buf))
 }
@@ -267,12 +275,14 @@ fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
 /// over the cap is an `Err`, never a silent truncation. For text content with
 /// guaranteed UTF-8, prefer `readFile` / `readFileLimit`.
 #[must_use]
-pub fn file_read_file_bytes<E: Send + From<String> + 'static>(path: Path) -> IpeTask<E, Vec<i64>> {
+pub fn file_read_file_bytes<E: Send + From<String> + FromLimitExceeded + 'static>(
+    path: Path,
+) -> IpeTask<E, Vec<i64>> {
     let path = path.into_string();
     Box::pin(async move {
         match run_blocking(move || file_read_file_bytes_sync(&path)).await {
             Ok(v) => ok_res(v),
-            Err(e) => IpeResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(e.into_error()),
         }
     })
 }
@@ -667,12 +677,15 @@ mod read_ceiling_tests {
             .join(format!("ipe_rc_over_{}.txt", std::process::id()));
         std::fs::write(&p, vec![b'x'; 8192]).unwrap();
         crate::system::locked_set_var("IPE_FILE_READ_MAX", "1024");
-        let res: IpeResult<String, String> = block(file_read_file(tp(&p)));
+        let res: IpeResult<IpeError, String> = block(file_read_file(tp(&p)));
         crate::system::locked_remove_var("IPE_FILE_READ_MAX");
         let _ = std::fs::remove_file(&p);
         assert!(
-            matches!(res, IpeResult::Err(_)),
-            "8 KiB read under a 1 KiB ceiling must Err"
+            matches!(&res, IpeResult::Err(IpeError::Error(crate::IpeErrorKind::LimitExceeded, info))
+            if info.message.starts_with(
+                "file exceeds read ceiling of 1024 bytes (raise IPE_FILE_READ_MAX or use File.readFileLimit): "
+            )),
+            "8 KiB read under a 1 KiB ceiling must be a LimitExceeded refusal: {res:?}"
         );
     }
 
@@ -851,11 +864,12 @@ mod read_file_limit_tests {
         let p = crate::scratch_core::test_temp_root()
             .join(format!("ipe_rfl_over_{}.txt", std::process::id()));
         std::fs::write(&p, vec![b'a'; 17]).unwrap();
-        let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 16));
+        let res: IpeResult<IpeError, String> = block(file_read_file_limit(tp(&p), 16));
         let _ = std::fs::remove_file(&p);
         assert!(
-            matches!(res, IpeResult::Err(_)),
-            "17 bytes under a 16-byte limit must Err, not silently truncate"
+            matches!(&res, IpeResult::Err(IpeError::Error(crate::IpeErrorKind::LimitExceeded, info))
+                if info.message.starts_with("file exceeds 16-byte limit (stopped reading at the limit")),
+            "17 bytes under a 16-byte limit must be a LimitExceeded refusal: {res:?}"
         );
     }
 
@@ -979,10 +993,11 @@ mod read_file_bytes_tests {
         let p = crate::scratch_core::test_temp_root()
             .join(format!("ipe_rfb_over_{}.bin", std::process::id()));
         std::fs::write(&p, vec![7u8; DEFAULT_CAP + 1]).unwrap();
-        let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
+        let res: IpeResult<IpeError, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
         assert!(
-            matches!(res, IpeResult::Err(_)),
+            matches!(&res, IpeResult::Err(IpeError::Error(crate::IpeErrorKind::LimitExceeded, info))
+                if info.message.starts_with("file exceeds 10485760-byte limit (stopped reading at the limit")),
             "a file one byte over the 10 MiB cap must Err, not silently truncate: {res:?}"
         );
     }
