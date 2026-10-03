@@ -743,6 +743,46 @@ could not access `{path}` — {kind}
 
 could not create a private scratch directory under the OS temp directory — {kind}
 
+## cli-thread-refused
+
+the OS refused a thread for the {role} — {kind}
+
+## thread-role-watch-session
+
+watch session
+
+## thread-role-watch-coalesce
+
+watch change coalescer
+
+## thread-role-watch-fs-relay
+
+watch filesystem relay
+
+## thread-role-watch-stop-relay
+
+watch stop relay
+
+## thread-role-watch-resolve-retry
+
+watch dependency-resolve retry
+
+## thread-role-watch-compile
+
+watch compile worker
+
+## thread-role-watch-cargo-waiter
+
+watch cargo-build waiter
+
+## thread-role-wasi-wall-clock
+
+WASI wall-clock deadline
+
+## watch-thread-refused
+
+[ipe watch] warning: {detail}; the dependency-resolve retry is skipped
+
 # Publish refusals
 
 ## publish-dirty-tree

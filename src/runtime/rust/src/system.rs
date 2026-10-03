@@ -547,32 +547,16 @@ fn decode_arg_at(
 // see `docs/adr/0003-security-render-and-data-access-invariants.md`
 // §2.2 — so the fallback only matters for this crate's own narrow-feature
 // standalone builds).
-// tokio is native-only (declared under the `cfg(not(target_arch = "wasm32"))`
-// dependency table), so the `spawn_blocking` offload compiles only there. On
-// wasm32 the synchronous fallback runs even when `feature = "tokio"` is set —
-// the browser has no blocking-thread pool to offload to.
-#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
-async fn run_blocking<T, F>(f: F) -> Result<T, String>
+// The offload is `threads::run_blocking`: a blocking pool that cannot start a
+// thread is an `Unavailable` error, and a build without the pool (no `tokio`, or
+// wasm32) runs the closure inline.
+async fn run_blocking<T, E, F>(f: F) -> Result<T, E>
 where
     F: FnOnce() -> Result<T, String> + Send + 'static,
     T: Send + 'static,
+    E: From<String> + crate::FromUnavailable,
 {
-    match tokio::task::spawn_blocking(f).await {
-        Ok(r) => r,
-        Err(_) => Err("background process task panicked".to_string()),
-    }
-}
-
-#[cfg(any(not(feature = "tokio"), target_arch = "wasm32"))]
-// `async` is required here to match the tokio variant's signature; callers
-// always use `.await` to work with both feature configurations uniformly.
-#[allow(clippy::unused_async)]
-async fn run_blocking<T, F>(f: F) -> Result<T, String>
-where
-    F: FnOnce() -> Result<T, String> + Send + 'static,
-    T: Send + 'static,
-{
-    f()
+    crate::threads::run_blocking("Process", "background process task panicked", f).await
 }
 
 /// The default combined-output capture ceiling (16 MiB), overridable via
@@ -640,14 +624,18 @@ impl Drop for ChildGuard {
 /// caps peak per-stream allocation regardless of how much the child writes.
 /// `limit` is a per-call value (`cap + 1`) passed by ownership, so concurrent
 /// `process_run` calls never share or clobber it.
+///
+/// # Errors
+///
+/// The OS refused the thread.
 fn spawn_capture_thread<R>(
     reader: Option<R>,
     limit: u64,
-) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>>
+) -> std::io::Result<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>
 where
     R: std::io::Read + Send + 'static,
 {
-    std::thread::spawn(move || {
+    crate::threads::spawn_named(CAPTURE_THREAD, move || {
         use std::io::Read as _;
         let mut buf = Vec::new();
         if let Some(reader) = reader {
@@ -656,6 +644,13 @@ where
         Ok::<_, std::io::Error>(buf)
     })
 }
+
+/// The name of each subprocess output capture thread.
+const CAPTURE_THREAD: &str = "ipe-capture";
+
+/// The name of the pty master reader thread.
+#[cfg(unix)]
+const PTY_READ_THREAD: &str = "ipe-pty-read";
 
 /// Spawn `cmd args` with NO shell (direct argv), capturing combined
 /// stdout+stderr under `cap`. stdout and stderr are drained on SEPARATE threads
@@ -1635,8 +1630,12 @@ fn process_run_sync(cmd: &str, args: &[String], cap: u64) -> Result<ProcessCaptu
             .ok_or_else(|| format!("{cmd}: child unexpectedly reaped"))?;
         (c.stdout.take(), c.stderr.take())
     };
-    let out_handle = spawn_capture_thread(stdout, limit);
-    let err_handle = spawn_capture_thread(stderr, limit);
+    // A refused capture thread returns through `?`; `guard` kills and reaps the
+    // child, which ends any capture already started.
+    let out_handle = spawn_capture_thread(stdout, limit)
+        .map_err(|e| format!("{cmd}: stdout capture thread refused: {e}"))?;
+    let err_handle = spawn_capture_thread(stderr, limit)
+        .map_err(|e| format!("{cmd}: stderr capture thread refused: {e}"))?;
 
     // A thread panic (e.g. OOM in the reader) surfaces as an `Err`, never a
     // propagated panic; `guard` still reaps the child on the `?` return.
@@ -1686,7 +1685,7 @@ fn process_run_sync(cmd: &str, args: &[String], cap: u64) -> Result<ProcessCaptu
 /// doc comment above) so a long-running subprocess can't stall the tokio worker
 /// thread polling this future.
 #[must_use]
-pub fn process_run<E: Send + From<String> + 'static>(
+pub fn process_run<E: Send + From<String> + crate::FromUnavailable + 'static>(
     cmd: String,
     args: Vec<String>,
 ) -> IpeTask<E, String> {
@@ -1699,16 +1698,16 @@ pub fn process_run<E: Send + From<String> + 'static>(
 /// so no test mutates the process-global environment (which would race a
 /// concurrent subprocess call reading the same var).
 #[must_use]
-fn process_run_with_cap<E: Send + From<String> + 'static>(
+fn process_run_with_cap<E: Send + From<String> + crate::FromUnavailable + 'static>(
     cmd: String,
     args: Vec<String>,
     cap: u64,
 ) -> IpeTask<E, String> {
     Box::pin(async move {
         // `process_run_sync` folds `cmd` into every `Err` string, so the outer
-        // `Err` arm (a `run_blocking` `JoinError`, i.e. the blocking task
-        // panicked) doesn't need `cmd` — it's moved into the closure.
-        match run_blocking(move || process_run_sync(&cmd, &args, cap)).await {
+        // `Err` arm (a refused or panicked blocking task) doesn't need `cmd` —
+        // it's moved into the closure.
+        match run_blocking::<_, E, _>(move || process_run_sync(&cmd, &args, cap)).await {
             Ok(out) => {
                 #[allow(clippy::disallowed_methods)] // process output reaches Ipê as `String` text
                 let text = String::from_utf8_lossy(&out.combined).into_owned();
@@ -1735,7 +1734,7 @@ fn process_run_with_cap<E: Send + From<String> + 'static>(
                     IpeResult::Err(str_err(&format!("{}: {}", snippet, out.status)))
                 }
             }
-            Err(e) => IpeResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(e),
         }
     })
 }
@@ -1799,8 +1798,12 @@ fn process_run_with_sync(
             .ok_or_else(|| format!("{cmd}: child unexpectedly reaped"))?;
         (c.stdout.take(), c.stderr.take())
     };
-    let out_handle = spawn_capture_thread(stdout_pipe, limit);
-    let err_handle = spawn_capture_thread(stderr_pipe, limit);
+    // A refused capture thread returns through `?`; `guard` kills and reaps the
+    // child, which ends any capture already started.
+    let out_handle = spawn_capture_thread(stdout_pipe, limit)
+        .map_err(|e| format!("{cmd}: stdout capture thread refused: {e}"))?;
+    let err_handle = spawn_capture_thread(stderr_pipe, limit)
+        .map_err(|e| format!("{cmd}: stderr capture thread refused: {e}"))?;
 
     let stdout_bytes = out_handle
         .join()
@@ -1852,7 +1855,7 @@ fn process_run_with_sync(
 /// inherits its confined environment from the parent, and the overrides are
 /// applied ON TOP of that already-confined environment.
 #[must_use]
-pub fn process_run_with<E: Send + From<String> + 'static>(
+pub fn process_run_with<E: Send + From<String> + crate::FromUnavailable + 'static>(
     cfg: ProcessRunWithCfg,
 ) -> IpeTask<E, ProcessRunOutput> {
     process_run_with_impl(cfg, process_output_ceiling())
@@ -1875,12 +1878,12 @@ pub struct ProcessRunWithCfg {
 }
 
 #[must_use]
-fn process_run_with_impl<E: Send + From<String> + 'static>(
+fn process_run_with_impl<E: Send + From<String> + crate::FromUnavailable + 'static>(
     cfg: ProcessRunWithCfg,
     cap: u64,
 ) -> IpeTask<E, ProcessRunOutput> {
     Box::pin(async move {
-        let result = run_blocking(move || {
+        let result = run_blocking::<_, E, _>(move || {
             let cwd_path: Option<std::path::PathBuf> = match &cfg.cwd {
                 IpeMaybe::Just(p) => Some(std::path::PathBuf::from(p)),
                 IpeMaybe::Nothing => None,
@@ -1890,7 +1893,7 @@ fn process_run_with_impl<E: Send + From<String> + 'static>(
         .await;
         match result {
             Ok(out) => ok_res(out),
-            Err(e) => IpeResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(e),
         }
     })
 }
@@ -1941,21 +1944,21 @@ pub struct ProcessPtyOutput {
 /// rather than a silent no-op. The blocking spawn+read+wait is offloaded via
 /// `run_blocking` so a long-running child cannot stall the tokio worker thread.
 #[must_use]
-pub fn process_run_in_pty<E: Send + From<String> + 'static>(
+pub fn process_run_in_pty<E: Send + From<String> + crate::FromUnavailable + 'static>(
     cfg: ProcessRunInPtyCfg,
 ) -> IpeTask<E, ProcessPtyOutput> {
     process_run_in_pty_impl(cfg, process_output_ceiling())
 }
 
 #[must_use]
-fn process_run_in_pty_impl<E: Send + From<String> + 'static>(
+fn process_run_in_pty_impl<E: Send + From<String> + crate::FromUnavailable + 'static>(
     cfg: ProcessRunInPtyCfg,
     cap: u64,
 ) -> IpeTask<E, ProcessPtyOutput> {
     Box::pin(async move {
-        match run_blocking(move || process_run_in_pty_sync(cfg, cap)).await {
+        match run_blocking::<_, E, _>(move || process_run_in_pty_sync(cfg, cap)).await {
             Ok(out) => ok_res(out),
-            Err(e) => IpeResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(e),
         }
     })
 }
@@ -2100,8 +2103,10 @@ fn process_run_in_pty_sync(cfg: ProcessRunInPtyCfg, cap: u64) -> Result<ProcessP
     // ceiling on peak allocation regardless.
     let mut master_file = std::fs::File::from(master);
     let limit = cap.saturating_add(1);
+    // A refused reader drops the master with its closure and returns through
+    // `?`; `guard` kills and reaps the child.
     let read_handle: std::thread::JoinHandle<std::io::Result<Vec<u8>>> =
-        std::thread::spawn(move || {
+        crate::threads::spawn_named(PTY_READ_THREAD, move || {
             let mut buf = Vec::new();
             let mut chunk = [0u8; 8192];
             loop {
@@ -2124,7 +2129,8 @@ fn process_run_in_pty_sync(cfg: ProcessRunInPtyCfg, cap: u64) -> Result<ProcessP
                 }
             }
             Ok(buf)
-        });
+        })
+        .map_err(|e| format!("{cmd}: pty read thread refused: {e}"))?;
 
     let combined = read_handle
         .join()
@@ -2348,25 +2354,23 @@ fn system_load_env_sync() {
 /// (process env wins, matching Ipê's precedence). A missing `.env` is a no-op
 /// success.
 ///
-/// `std::fs::read_to_string(".env")` is a blocking syscall, so it routes
-/// through the `run_blocking` helper this module defines (above, for
-/// `process_run`) rather than running inline inside the `async move` body —
-/// the same offload `file.rs`/`compression.rs`/`csv.rs`/`config_decode.rs`
-/// use. Real-world impact is low (`.env` is small and read once at startup),
-/// but on a slow/network filesystem an inline read would stall the tokio
-/// worker thread polling this future.
+/// `std::fs::read_to_string(".env")` is a blocking syscall, so it is offloaded
+/// to the blocking pool (`threads::join_blocking`) rather than run inline inside
+/// the `async move` body — the same offload `file.rs`/`compression.rs`/`csv.rs`/
+/// `config_decode.rs` use. Real-world impact is low (`.env` is small and read
+/// once at startup), but on a slow/network filesystem an inline read would stall
+/// the tokio worker thread polling this future.
 #[must_use]
 pub fn system_load_env<E: Send + 'static>(_: ()) -> IpeTask<E, ()> {
     Box::pin(async move {
-        // `run_blocking`'s `Err` arm (the blocking task panicked) is folded
-        // back into `Ok(())` here — `loadEnv` never surfaces an `Err` for a
-        // missing/unreadable `.env`, and a panicked blocking task shouldn't
-        // change that contract either.
-        let _: Result<(), String> = run_blocking(|| {
+        // `loadEnv` never surfaces an `Err` for a missing/unreadable `.env`, and
+        // a panicked read does not change that contract. A pool that cannot
+        // start a thread reads the small file inline instead, so the overlay is
+        // loaded either way.
+        let offloaded = crate::threads::join_blocking("System.loadEnv", system_load_env_sync).await;
+        if matches!(offloaded, Err(crate::threads::BlockingFailure::Refused(_))) {
             system_load_env_sync();
-            Ok(())
-        })
-        .await;
+        }
         ok_res(())
     })
 }
@@ -2816,7 +2820,9 @@ mod parent_death_floor_tests {
         }))
         .expect("queue the next job");
         drop(jobs);
-        let runner = std::thread::spawn(move || run_spawn_jobs(&queue));
+        let runner = std::thread::Builder::new()
+            .spawn(move || run_spawn_jobs(&queue))
+            .expect("spawn test thread");
         let next = seen.recv_timeout(Duration::from_secs(10));
         runner.join().expect("the spawner loop must not unwind");
         assert_eq!(next, Ok(()), "the job after an unwind must still run");
@@ -2828,7 +2834,9 @@ mod parent_death_floor_tests {
     fn a_panicking_spawn_is_refused_as_spawn_panicked() {
         use super::request_spawn;
         let (jobs, queue) = std::sync::mpsc::sync_channel::<SpawnJob>(1);
-        let runner = std::thread::spawn(move || run_spawn_jobs(&queue));
+        let runner = std::thread::Builder::new()
+            .spawn(move || run_spawn_jobs(&queue))
+            .expect("spawn test thread");
         let refused = request_spawn(
             &jobs,
             Duration::from_secs(10),
@@ -2872,10 +2880,12 @@ mod parent_death_floor_tests {
             "{refused:?}"
         );
         let (drained, eof) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut out = Vec::new();
-            let _ = drained.send(reader.read_to_end(&mut out).map(|_| out));
-        });
+        std::thread::Builder::new()
+            .spawn(move || {
+                let mut out = Vec::new();
+                let _ = drained.send(reader.read_to_end(&mut out).map(|_| out));
+            })
+            .expect("spawn test thread");
         let written = eof.recv_timeout(Duration::from_secs(10));
         assert!(
             matches!(&written, Ok(Ok(out)) if out.is_empty()),
@@ -2888,7 +2898,9 @@ mod parent_death_floor_tests {
     #[test]
     fn a_dropped_request_is_reported_gone() {
         let (jobs, queue) = std::sync::mpsc::sync_channel::<SpawnJob>(1);
-        let dropper = std::thread::spawn(move || drop(queue.recv()));
+        let dropper = std::thread::Builder::new()
+            .spawn(move || drop(queue.recv()))
+            .expect("spawn test thread");
         let refused = spawn_hardened_on(
             &jobs,
             Duration::from_secs(5),
@@ -3256,22 +3268,26 @@ mod env_overlay_tests {
         let writer = {
             let key = key.clone();
             let stop = stop.clone();
-            std::thread::spawn(move || {
-                let mut i: u64 = 0;
-                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    locked_set_var(&key, &i.to_string());
-                    locked_remove_var(&key);
-                    i = i.wrapping_add(1);
-                }
-            })
+            std::thread::Builder::new()
+                .spawn(move || {
+                    let mut i: u64 = 0;
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        locked_set_var(&key, &i.to_string());
+                        locked_remove_var(&key);
+                        i = i.wrapping_add(1);
+                    }
+                })
+                .expect("spawn test thread")
         };
 
-        let reader = std::thread::spawn(move || {
-            for _ in 0..200 {
-                // Exercises libc `getaddrinfo`, the unlocked `environ` reader.
-                let _ = "localhost:0".to_socket_addrs().map(Iterator::count);
-            }
-        });
+        let reader = std::thread::Builder::new()
+            .spawn(move || {
+                for _ in 0..200 {
+                    // Exercises libc `getaddrinfo`, the unlocked `environ` reader.
+                    let _ = "localhost:0".to_socket_addrs().map(Iterator::count);
+                }
+            })
+            .expect("spawn test thread");
 
         let _ = reader.join();
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -3400,6 +3416,62 @@ mod process_run_tests {
         assert!(
             matches!(res, IpeResult::Err(_)),
             "64 bytes of output under an 8-byte ceiling must Err, not OOM/truncate"
+        );
+    }
+
+    /// Whether a live process's command line carries `marker`.
+    #[cfg(target_os = "linux")]
+    fn a_process_carries(marker: &str) -> bool {
+        std::fs::read_dir("/proc").is_ok_and(|entries| {
+            entries.filter_map(Result::ok).any(|entry| {
+                std::fs::read(entry.path().join("cmdline")).is_ok_and(|cmdline| {
+                    cmdline
+                        .split(|b| *b == 0)
+                        .any(|arg| arg == marker.as_bytes())
+                })
+            })
+        })
+    }
+
+    /// A refused capture thread is an `Err`, and the child it would have
+    /// drained is killed and reaped rather than left running.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_refused_capture_thread_errs_and_reaps_the_child() {
+        let marker = format!("ipe-capture-refusal-probe-{}", std::process::id());
+        let _refusing = crate::threads::refusal_hook::refuse(CAPTURE_THREAD);
+        let args = [
+            "-c".to_owned(),
+            // A builtin-only loop: `sh` never forks, so no grandchild can carry
+            // the marker past the kill.
+            "while :; do :; done".to_owned(),
+            marker.clone(),
+        ];
+        let refused = process_run_sync("sh", &args, 64);
+        assert!(
+            matches!(&refused, Err(e) if e.contains("capture thread refused")),
+            "{:?}",
+            refused.as_ref().err()
+        );
+        assert!(
+            !a_process_carries(&marker),
+            "the child of a refused capture must be killed and reaped"
+        );
+    }
+
+    /// A blocking pool that cannot start a thread makes the Task fail as
+    /// `Unavailable`, the retryable kind.
+    #[cfg(feature = "tokio")]
+    #[test]
+    fn a_refused_offload_is_an_unavailable_task_error() {
+        let _refusing = crate::threads::refusal_hook::refuse("Process");
+        let res = block(process_run::<IpeError>("true".to_owned(), vec![]));
+        assert!(
+            matches!(
+                res,
+                IpeResult::Err(ref e) if crate::ipe_error_kind(e.clone()) == crate::IpeErrorKind::Unavailable
+            ),
+            "{res:?}"
         );
     }
 }

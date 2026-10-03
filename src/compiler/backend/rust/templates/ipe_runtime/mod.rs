@@ -45,6 +45,7 @@ pub mod string;
 pub mod stringify;
 pub mod system;
 pub mod task;
+pub mod threads;
 pub mod telemetry;
 pub mod time;
 pub mod trace;

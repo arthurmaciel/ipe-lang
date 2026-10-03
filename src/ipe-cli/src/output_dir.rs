@@ -3886,13 +3886,15 @@ mod tests {
                 .map(|n| {
                     let leaf = shared.join(format!("s{n}"));
                     let (proj, barrier) = (proj.clone(), std::sync::Arc::clone(&barrier));
-                    std::thread::spawn(move || {
-                        barrier.wait();
-                        OutputRoot::resolve(Some(&leaf.to_string_lossy()), &proj)
-                            .and_then(|root| root.claim())
-                            .map(|_| ())
-                            .map_err(|e| format!("{e:?}"))
-                    })
+                    std::thread::Builder::new()
+                        .spawn(move || {
+                            barrier.wait();
+                            OutputRoot::resolve(Some(&leaf.to_string_lossy()), &proj)
+                                .and_then(|root| root.claim())
+                                .map(|_| ())
+                                .map_err(|e| format!("{e:?}"))
+                        })
+                        .expect("spawn test thread")
                 })
                 .collect();
             for (n, claim) in claims.into_iter().enumerate() {
