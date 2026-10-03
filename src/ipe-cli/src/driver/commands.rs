@@ -10,9 +10,14 @@ use super::{
 };
 use crate::cargo_step::{
     CargoBuild, CargoCrate, CargoOutput, CargoProfile, CargoTarget, EmbeddedApp, Verbosity,
+    local_run_error,
 };
 use crate::contained_path::ResolvedPath;
 use crate::output_dir::{EmitTarget, OutputArea, OutputRoot, OwnedDir, ProjectPaths};
+use crate::remote_ingest::{
+    Captured, ChildStderr, LocalCeiling, LocalRefusal, LocalSource, RunError, WASM_TOOL_LIMITS,
+    run_local,
+};
 use crate::style::TerminalSafe;
 use crate::{
     ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, build_plan, cli_args, delivery,
@@ -1941,6 +1946,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
             bindgen: Path::new("wasm-bindgen"),
             opt: Path::new("wasm-opt"),
         },
+        WASM_TOOL_LIMITS,
     )
 }
 
@@ -1952,16 +1958,101 @@ struct WasmTools<'a> {
     opt: &'a Path,
 }
 
+/// What the optional `wasm-opt` size pass produced.
+#[derive(Debug)]
+enum WasmOptOutcome {
+    /// The optimised bundle is a regular file at its temp path, ready to replace the bundle.
+    Optimised,
+    /// `wasm-opt` is not installed, so the bundle stays as `wasm-bindgen` wrote it.
+    Absent,
+    /// `wasm-opt` produced no usable bundle, so the bundle stays as `wasm-bindgen` wrote it.
+    Skipped(WasmOptFailure),
+}
+
+/// Why a `wasm-opt` run produced no usable bundle.
+#[derive(Debug)]
+enum WasmOptFailure {
+    /// `wasm-opt` did not run to an exit within its ceiling.
+    Run(RunError<LocalRefusal>),
+    /// `wasm-opt` exited unsuccessfully.
+    Exit {
+        /// The exit code, when `wasm-opt` exited rather than being signalled.
+        code: Option<i32>,
+        /// What `wasm-opt` wrote to stderr.
+        stderr: ChildStderr,
+    },
+    /// `wasm-opt` exited successfully but left no regular file at its output path.
+    NoOutput,
+}
+
+impl std::fmt::Display for WasmOptFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Run(RunError::Exceeded(refusal)) => refusal.fmt(f),
+            Self::Run(RunError::Spawn(e) | RunError::Wait(e) | RunError::Measure(_, e)) => {
+                write!(f, "wasm-opt could not run: {e}")
+            }
+            Self::Run(RunError::PipeDrainTimeout(stream)) => {
+                write!(f, "a process wasm-opt started held its {stream} open")
+            }
+            Self::Run(RunError::PipeRead(stream, kind)) => {
+                write!(f, "reading the wasm-opt {stream} failed: {kind}")
+            }
+            Self::Exit {
+                code: Some(code),
+                stderr,
+            } => write!(f, "wasm-opt exited {code}\n{}", stderr.to_terminal()),
+            Self::Exit { code: None, stderr } => {
+                write!(
+                    f,
+                    "wasm-opt was stopped by a signal\n{}",
+                    stderr.to_terminal()
+                )
+            }
+            Self::NoOutput => f.write_str("wasm-opt exited 0 without writing its output"),
+        }
+    }
+}
+
+/// The outcome of a finished `wasm-opt` run that was told to write `optimised`.
+fn wasm_opt_outcome(
+    run: Result<Captured, RunError<LocalRefusal>>,
+    optimised: &Path,
+) -> WasmOptOutcome {
+    match run {
+        Err(RunError::Spawn(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            WasmOptOutcome::Absent
+        }
+        Err(e) => WasmOptOutcome::Skipped(WasmOptFailure::Run(e)),
+        Ok(captured) if !captured.status.success() => {
+            WasmOptOutcome::Skipped(WasmOptFailure::Exit {
+                code: captured.status.code(),
+                stderr: captured.stderr,
+            })
+        }
+        Ok(_) if std::fs::symlink_metadata(optimised).is_ok_and(|meta| meta.is_file()) => {
+            WasmOptOutcome::Optimised
+        }
+        Ok(_) => WasmOptOutcome::Skipped(WasmOptFailure::NoOutput),
+    }
+}
+
 /// Bundle the linked `wasm_path` into the owned crate's `www/pkg/` with `tools`.
+///
+/// Each tool runs under `ceiling`. `wasm-opt` writes a sibling temp file that
+/// replaces the bundle only when it succeeded, so a failed or stopped size pass
+/// leaves the bundle exactly as `wasm-bindgen` wrote it.
 ///
 /// # Errors
 /// [`CliError::Usage`] when `wasm-bindgen` fails; [`CliError::OutputRefused`]
 /// when `crate_dir` was replaced before or while either tool ran;
+/// [`CliError::LocalLimitExceeded`] when `wasm-bindgen` crosses `ceiling`;
 /// [`CliError::Io`] on a filesystem or spawn failure.
 fn bundle_wasm_pkg(
     crate_dir: &OwnedDir,
     wasm_path: &Path,
     tools: &WasmTools<'_>,
+    ceiling: LocalCeiling,
 ) -> Result<(), CliError> {
     let out_dir = crate_dir.path();
     // `wasm-bindgen` and `wasm-opt` write into `www/pkg/` by path, so it is
@@ -1978,22 +2069,22 @@ fn bundle_wasm_pkg(
         crate_dir.path_to(&pkg_rel).map(drop)
     };
 
-    let wb_status = std::process::Command::new(tools.bindgen)
-        .args([
-            wasm_path.to_string_lossy().as_ref(),
-            "--target",
-            "web",
-            "--no-typescript",
-            "--out-dir",
-            pkg_dir.to_string_lossy().as_ref(),
-        ])
-        .status()
-        .map_err(|e| CliError::Io {
-            path: wasm_path.to_path_buf(),
-            source: e,
-        })?;
-    if !wb_status.success() {
-        let code = wb_status.code().unwrap_or(1);
+    let mut bindgen = std::process::Command::new(tools.bindgen);
+    bindgen
+        .arg(wasm_path)
+        .args(["--target", "web", "--no-typescript", "--out-dir"])
+        .arg(&pkg_dir);
+    let bound = run_local(bindgen, ceiling, LocalSource::WasmTool)
+        .map_err(|e| local_run_error(wasm_path, e))?;
+    if !bound.status.success() {
+        if !bound.stderr.bytes().is_empty() {
+            crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::Text,
+                bound.stderr.to_terminal().as_str(),
+            );
+        }
+        let code = bound.status.code().unwrap_or(1);
         return Err(CliError::Usage(text::msg::wasm_bindgen_failed(
             &code,
             &WASM_BINDGEN_VERSION,
@@ -2001,30 +2092,36 @@ fn bundle_wasm_pkg(
     }
     prove_pkg()?;
 
-    // Step 3: wasm-opt -Oz — optional size pass; silently skip when absent
-    // (`Command::new` returns `Err` when the tool is missing).
+    // Step 3: wasm-opt -Oz, an optional size pass skipped when the tool is
+    // absent. It writes a sibling temp file, renamed over the bundle only on
+    // success; on any other outcome the temp is removed and the bundle kept.
     let bg_wasm = pkg_dir.join("ipe_app_bg.wasm");
-    if bg_wasm.is_file()
-        && let Ok(status) = std::process::Command::new(tools.opt)
-            .args([
-                bg_wasm.to_string_lossy().as_ref(),
-                "-Oz",
-                "-o",
-                bg_wasm.to_string_lossy().as_ref(),
-            ])
-            .status()
-        && !status.success()
-    {
-        // wasm-opt found but failed — non-fatal; the unoptimised bundle
-        // is still correct. Log and continue.
-        crate::screen::chatter(
-            crate::screen::Stream::Stderr,
-            crate::screen::Tone::Text,
-            &format!(
-                "note: wasm-opt exited {}; bundle is unoptimised but functional",
-                status.code().unwrap_or(1)
-            ),
-        );
+    if bg_wasm.is_file() {
+        let optimised = pkg_dir.join("ipe_app_bg.wasm-opt.tmp");
+        let mut opt = std::process::Command::new(tools.opt);
+        opt.arg(&bg_wasm).arg("-Oz").arg("-o").arg(&optimised);
+        let outcome = wasm_opt_outcome(run_local(opt, ceiling, LocalSource::WasmTool), &optimised);
+        prove_pkg()?;
+        match outcome {
+            WasmOptOutcome::Optimised => {
+                std::fs::rename(&optimised, &bg_wasm).map_err(|e| {
+                    let _ = std::fs::remove_file(&optimised);
+                    CliError::Io {
+                        path: bg_wasm.clone(),
+                        source: e,
+                    }
+                })?;
+            }
+            WasmOptOutcome::Absent => {}
+            WasmOptOutcome::Skipped(failure) => {
+                let _ = std::fs::remove_file(&optimised);
+                crate::screen::chatter(
+                    crate::screen::Stream::Stderr,
+                    crate::screen::Tone::Text,
+                    &format!("note: {failure}\nbundle is unoptimised but functional"),
+                );
+            }
+        }
     }
 
     prove_pkg()?;
@@ -2767,7 +2864,6 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
 
     #[cfg(unix)]
     {
-        use std::os::unix::process::CommandExt as _;
         if native {
             // The scoped writable tempdir (the sole writable mount when
             // `filesystem` is absent) and the working tree (bound read-write only
@@ -2795,7 +2891,8 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         let mut cmd = std::process::Command::new(&bin);
         cmd.args(&bin_args);
         set_session_env(&mut cmd, &session_env);
-        let err = cmd.exec();
+        let err =
+            ipe_runtime_rust::system::exec_naming(cmd, ipe_runtime_rust::system::NamedFds::none());
         Err(CliError::Io {
             path: bin,
             source: err,
@@ -2824,9 +2921,14 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         let mut cmd = std::process::Command::new(&bin);
         cmd.args(&bin_args);
         set_session_env(&mut cmd, &session_env);
-        let status = cmd.status().map_err(|e| CliError::Io {
+        let status = crate::remote_ingest::run_inherited(
+            cmd,
+            crate::remote_ingest::InheritedRole::UserProgram,
+            crate::remote_ingest::InheritedInput::Terminal,
+        )
+        .map_err(|e| CliError::Io {
             path: bin,
-            source: e,
+            source: e.into(),
         })?;
         // Propagate the child's exit code.  `CliError` only models failure, so
         // a non-zero exit is surfaced as a usage-owned message; the caller
@@ -2929,10 +3031,10 @@ pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
     // warning: run directly.
     #[cfg(unix)]
     {
-        use std::os::unix::process::CommandExt as _;
         let mut cmd = std::process::Command::new(&bin);
         cmd.args(app_args);
-        let err = cmd.exec();
+        let err =
+            ipe_runtime_rust::system::exec_naming(cmd, ipe_runtime_rust::system::NamedFds::none());
         Err(CliError::Io {
             path: bin,
             source: err,
@@ -2940,13 +3042,17 @@ pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
     }
     #[cfg(not(unix))]
     {
-        let status = std::process::Command::new(&bin)
-            .args(app_args)
-            .status()
-            .map_err(|e| CliError::Io {
-                path: bin.clone(),
-                source: e,
-            })?;
+        let mut cmd = std::process::Command::new(&bin);
+        cmd.args(app_args);
+        let status = crate::remote_ingest::run_inherited(
+            cmd,
+            crate::remote_ingest::InheritedRole::UserProgram,
+            crate::remote_ingest::InheritedInput::Terminal,
+        )
+        .map_err(|e| CliError::Io {
+            path: bin.clone(),
+            source: e.into(),
+        })?;
         if !status.success() {
             return Err(CliError::Usage(text::msg::program_exited(
                 &exec_bin_name,
@@ -3905,12 +4011,13 @@ mod held_crate_tests {
     use std::os::unix::fs::PermissionsExt as _;
     use std::path::{Path, PathBuf};
 
-    use super::{WasmTools, bundle_wasm_pkg};
+    use super::{WasmOptOutcome, WasmTools, bundle_wasm_pkg, wasm_opt_outcome};
     use crate::CliError;
     use crate::cargo_step::{
         CargoBuild, CargoCrate, CargoOutput, CargoProfile, CargoTarget, Verbosity,
     };
     use crate::output_dir::{OutputRefusal, OwnedDir};
+    use crate::remote_ingest::{LocalCeiling, LocalSource, LocalWall, WASM_TOOL_LIMITS, run_local};
     use crate::toolchain::CargoBin;
 
     /// A fresh scratch base for `tag`, holding a claimed `crate/`.
@@ -4007,6 +4114,17 @@ mod held_crate_tests {
         bindgen: &str,
         opt: &str,
     ) -> Result<(), CliError> {
+        bundle_within(base, crate_dir, bindgen, opt, WASM_TOOL_LIMITS)
+    }
+
+    /// Run [`bundle_wasm_pkg`] with stub tools under `ceiling`.
+    fn bundle_within(
+        base: &Path,
+        crate_dir: &OwnedDir,
+        bindgen: &str,
+        opt: &str,
+        ceiling: LocalCeiling,
+    ) -> Result<(), CliError> {
         let bindgen = stub(base, "wasm-bindgen", bindgen);
         let opt = stub(base, "wasm-opt", opt);
         bundle_wasm_pkg(
@@ -4016,7 +4134,101 @@ mod held_crate_tests {
                 bindgen: &bindgen,
                 opt: &opt,
             },
+            ceiling,
         )
+    }
+
+    /// The `wasm-bindgen` stub body that writes a known bundle into its `--out-dir`.
+    const WRITE_KNOWN_BUNDLE: &str = "printf unoptimised > \"$6/ipe_app_bg.wasm\"";
+
+    /// The bundle bytes and whether the `wasm-opt` temp file is left in `crate_dir`.
+    fn bundle_state(crate_dir: &OwnedDir) -> (Vec<u8>, bool) {
+        let pkg = crate_dir.path().join("www").join("pkg");
+        let bytes = std::fs::read(pkg.join("ipe_app_bg.wasm")).expect("the bundle");
+        (bytes, pkg.join("ipe_app_bg.wasm-opt.tmp").exists())
+    }
+
+    /// A `wasm-opt` that writes garbage to its `-o` then fails leaves the bundle byte-identical.
+    #[test]
+    fn a_failed_wasm_opt_leaves_the_bundle_byte_identical() {
+        let (base, crate_dir) = scratch("opt-fail");
+        let bundled = bundle_with(
+            &base,
+            &crate_dir,
+            WRITE_KNOWN_BUNDLE,
+            "printf garbage > \"$4\"; exit 1",
+        );
+        assert!(
+            bundled.is_ok(),
+            "a failed size pass is not fatal, got {bundled:?}"
+        );
+        assert_eq!(bundle_state(&crate_dir), (b"unoptimised".to_vec(), false));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A `wasm-opt` still writing at its wall is stopped and leaves the bundle byte-identical.
+    #[test]
+    fn a_wasm_opt_past_its_wall_leaves_the_bundle_byte_identical() {
+        let (base, crate_dir) = scratch("opt-wall");
+        let started = std::time::Instant::now();
+        let bundled = bundle_within(
+            &base,
+            &crate_dir,
+            WRITE_KNOWN_BUNDLE,
+            "printf garbage > \"$4\"; exec sleep 30",
+            WASM_TOOL_LIMITS.with_wall(LocalWall::of_secs::<1>()),
+        );
+        assert!(
+            bundled.is_ok(),
+            "a stopped size pass is not fatal, got {bundled:?}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert_eq!(bundle_state(&crate_dir), (b"unoptimised".to_vec(), false));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A `wasm-opt` that succeeds replaces the bundle with what it wrote.
+    #[test]
+    fn a_successful_wasm_opt_replaces_the_bundle() {
+        let (base, crate_dir) = scratch("opt-ok");
+        let bundled = bundle_with(
+            &base,
+            &crate_dir,
+            WRITE_KNOWN_BUNDLE,
+            "printf optimised > \"$4\"",
+        );
+        assert!(bundled.is_ok(), "got {bundled:?}");
+        assert_eq!(bundle_state(&crate_dir), (b"optimised".to_vec(), false));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A missing `wasm-opt` skips the size pass and keeps the bundle.
+    #[test]
+    fn a_missing_wasm_opt_skips_optimisation() {
+        let (base, crate_dir) = scratch("opt-missing");
+        let missing = base.join("no-such-wasm-opt");
+        let outcome = wasm_opt_outcome(
+            run_local(
+                std::process::Command::new(&missing),
+                WASM_TOOL_LIMITS,
+                LocalSource::WasmTool,
+            ),
+            &base.join("out.wasm"),
+        );
+        assert!(matches!(outcome, WasmOptOutcome::Absent), "{outcome:?}");
+        let bindgen = stub(&base, "wasm-bindgen", WRITE_KNOWN_BUNDLE);
+        let bundled = bundle_wasm_pkg(
+            &crate_dir,
+            &base.join("ipe_app.wasm"),
+            &WasmTools {
+                bindgen: &bindgen,
+                opt: &missing,
+            },
+            WASM_TOOL_LIMITS,
+        );
+        assert!(bundled.is_ok(), "got {bundled:?}");
+        assert_eq!(bundle_state(&crate_dir), (b"unoptimised".to_vec(), false));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// The `wasm-bindgen` stub body that writes the bundle into its `--out-dir`.

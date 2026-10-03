@@ -525,7 +525,7 @@ fn lock_offline_within(
 }
 
 /// The CLI error of a local cargo child that produced no result, naming `path` on an I/O failure.
-fn local_run_error(path: &Path, e: RunError<LocalRefusal>) -> CliError {
+pub(crate) fn local_run_error(path: &Path, e: RunError<LocalRefusal>) -> CliError {
     match e {
         RunError::Exceeded(refusal) => CliError::LocalLimitExceeded(refusal),
         RunError::Spawn(source) | RunError::Wait(source) => CliError::Io {
