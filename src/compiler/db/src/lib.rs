@@ -736,8 +736,9 @@ impl TypecheckError {
     }
 }
 
-/// The memoized result of type-checking [`linked_program`]'s whole-program
-/// merge, or why it was refused: the link diagnostic, or the type-checker
+/// The memoized result of type-checking [`linked_program`]'s merge.
+///
+/// The error is why it was refused: the link diagnostic, or the type-checker
 /// error sited at its owning module (see [`ipe_types::infer_attributed`]).
 pub type TypecheckResult = Result<Arc<ipe_types::SolvedTypes>, TypecheckError>;
 
