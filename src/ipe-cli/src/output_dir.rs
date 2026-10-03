@@ -3593,6 +3593,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// A link to a marked directory is refused as a marker check, never followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_marker_check_through_a_link_to_a_marked_dir_is_refused() {
+        let base = scratch("marker_link");
+        let marked = base.join("marked");
+        std::fs::create_dir(&marked).expect("make marked");
+        std::fs::write(marked.join(OWNERSHIP_MARKER), MARKER_TEXT).expect("marker");
+        let link = base.join("out");
+        plant_link(&marked, &link);
+
+        let checked = has_marker(&link);
+        assert!(
+            matches!(refused(&checked), Some(OutputRefusal::Symlink(_))),
+            "a link to a marked dir is refused, got {checked:?}"
+        );
+        assert!(
+            has_marker(&marked).expect("read marker"),
+            "the target is marked"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An output dir swapped for a link to a marked dir between checks is refused.
+    ///
+    /// The held handle keeps reading the unmarked directory it opened, and a
+    /// fresh check of the swapped name refuses the link.
+    #[cfg(unix)]
+    #[test]
+    fn an_output_dir_swapped_for_a_link_to_a_marked_dir_is_refused() {
+        let base = scratch("marker_swap");
+        let marked = base.join("marked");
+        std::fs::create_dir(&marked).expect("make marked");
+        std::fs::write(marked.join(OWNERSHIP_MARKER), MARKER_TEXT).expect("marker");
+        let out = base.join("out");
+        std::fs::create_dir(&out).expect("make out");
+        let held = held::HeldDir::open(&out)
+            .expect("open out")
+            .expect("out exists");
+
+        swap_for_link(&out, &marked);
+
+        assert!(
+            !held.has_marker().expect("read held marker"),
+            "the held dir is still the unmarked one"
+        );
+        let checked = has_marker(&out);
+        assert!(
+            matches!(refused(&checked), Some(OutputRefusal::Symlink(_))),
+            "the swapped-in link is refused, got {checked:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// Whether `dir` holds an entry whose name starts with `prefix` and contains `infix`.
     #[cfg(unix)]
     fn holds_temp(dir: &Path, prefix: &str, infix: &str) -> bool {
