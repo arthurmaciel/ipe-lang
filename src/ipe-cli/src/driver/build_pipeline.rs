@@ -1,4 +1,5 @@
 use super::{CliError, diag_span, io_err};
+use crate::env_dir::{HomeDir, HomeRefusal};
 #[cfg(not(unix))]
 use crate::output_dir::OutputRefusal;
 use crate::output_dir::{EmitTarget, OwnedDir, OwnedPath, ProjectPaths};
@@ -741,14 +742,15 @@ fn names_no_directory(err: &std::io::Error) -> bool {
 /// How the user's home bounds a manifest walk.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum HomeCeiling {
-    /// No home directory is configured, or none exists at the configured path.
+    /// The home variable is unset, or no directory exists at the home it names.
     ///
     /// A directory that does not exist is no ancestor of any file, so only
     /// version-control roots and the depth cap bound the walk.
     Absent,
     /// The walk stops at the directory with this identity.
     At(DirIdentity),
-    /// A home exists but its identity cannot be read.
+    /// A home exists but its identity cannot be read, or the home variable is
+    /// set to a value the parser refuses.
     ///
     /// No directory above the start can be shown to lie below the home, so
     /// the walk examines the start directory alone.
@@ -756,14 +758,29 @@ pub enum HomeCeiling {
 }
 
 impl HomeCeiling {
-    /// The ceiling a configured `home` sets, read once.
+    /// The ceiling the parsed `home` sets, read once.
+    ///
+    /// Only an unset home widens the walk to [`Self::Absent`]: a home that is
+    /// set but refused may still name the user's tree, so it fails closed to
+    /// [`Self::Unreadable`] rather than letting the walk climb past it.
     #[must_use]
-    pub fn of(home: Option<&Path>) -> Self {
-        home.map_or(Self::Absent, |dir| match DirIdentity::read(dir) {
-            Ok(identity) => Self::At(identity),
-            Err(err) if names_no_directory(&err) => Self::Absent,
-            Err(_) => Self::Unreadable,
-        })
+    pub fn of(home: Result<&HomeDir, HomeRefusal>) -> Self {
+        match home {
+            Ok(dir) => match DirIdentity::read(dir.as_path()) {
+                Ok(identity) => Self::At(identity),
+                Err(err) if names_no_directory(&err) => Self::Absent,
+                Err(_) => Self::Unreadable,
+            },
+            Err(HomeRefusal::Unset) => Self::Absent,
+            Err(
+                HomeRefusal::NotUtf8
+                | HomeRefusal::ContainsNul
+                | HomeRefusal::NotAbsolute
+                | HomeRefusal::ParentComponent
+                | HomeRefusal::WindowsDeviceOrVerbatim
+                | HomeRefusal::WindowsUnc,
+            ) => Self::Unreadable,
+        }
     }
 
     /// Whether the walk ends at `here` once its manifest has been looked for.
@@ -799,7 +816,7 @@ impl HomeCeiling {
 ///
 /// As [`find_manifest_bounded`].
 pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Result<Option<PathBuf>, CliError> {
-    let home = HomeCeiling::of(crate::env_dir::home().as_deref());
+    let home = HomeCeiling::of(crate::env_dir::home().as_ref().map_err(|refusal| *refusal));
     find_manifest_bounded(ipe_file, &home, MAX_MANIFEST_WALK_DEPTH)
 }
 
