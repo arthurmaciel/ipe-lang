@@ -485,8 +485,6 @@ fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
 #[test]
 fn double_sigterm_during_teardown_ends_the_process_and_every_transfer_group() -> Result<(), BoxError>
 {
-    use std::os::unix::process::ExitStatusExt;
-
     if e2e_support::e2e_tier() == e2e_support::Tier::Unit {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
@@ -549,7 +547,9 @@ fn double_sigterm_during_teardown_ends_the_process_and_every_transfer_group() ->
         return Err("a second SIGTERM must end ipe, never leave it waiting on its teardown".into());
     };
     assert!(
-        status.signal() == Some(signal_hook::consts::SIGTERM) || status.success(),
+        std::os::unix::process::ExitStatusExt::signal(&status)
+            == Some(signal_hook::consts::SIGTERM)
+            || status.success(),
         "a second SIGTERM must end the process by the signal (or find it already \
          exited cleanly), got {status}"
     );

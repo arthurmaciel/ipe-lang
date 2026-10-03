@@ -1279,9 +1279,9 @@ mod lexical {
             reason: "reads a fixed per-provider endpoint override name",
         },
         Allowed {
-            file: "src/runtime/rust/src/web/mod.rs",
-            func: "num",
-            reason: "callers pass server-limit literals, which the literal rule scans",
+            file: "src/runtime/rust/src/system.rs",
+            func: "read",
+            reason: "reads an `EnvCeiling`'s `&'static str` name; every ceiling is built from a literal the literal rule scans",
         },
     ];
 
