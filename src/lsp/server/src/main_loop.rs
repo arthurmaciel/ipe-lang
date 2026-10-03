@@ -2136,6 +2136,7 @@ mod tests {
                 detail: detail(),
             },
             LoadError::FfiUntrusted(detail()),
+            LoadError::FfiCatalogRefused(detail()),
             LoadError::ManifestUntrusted(detail()),
         ] {
             assert_eq!(
@@ -2162,13 +2163,14 @@ mod tests {
     }
 
     /// Every refusal a load can end in, one per refusing variant.
-    fn every_refusal() -> [LoadError; 3] {
+    fn every_refusal() -> [LoadError; 4] {
         [
             LoadError::Limit {
                 lifted_by: LimitSource::Filesystem,
                 detail: "ceiling".to_owned(),
             },
             LoadError::FfiUntrusted("untrusted".to_owned()),
+            LoadError::FfiCatalogRefused("inconsistent".to_owned()),
             LoadError::ManifestUntrusted("untrusted".to_owned()),
         ]
     }
