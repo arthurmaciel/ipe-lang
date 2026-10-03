@@ -85,13 +85,21 @@ enum WsEvent {
 
 /// Ipe.WebSocket.WebSocketCfg — built in Ipê (defaultCfg + with*).
 #[allow(non_snake_case)]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct WsClientCfg {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub timeout: i64,
     pub pingInterval: i64,
 }
+
+// The headers (`Authorization`) and URL (a token in the query) can carry a
+// credential; the Ipê record fixes the field types, so the masking lives in
+// `Debug`.
+crate::redact::redacting_debug!(WsClientCfg {
+    shown: [timeout, pingInterval],
+    masked: [url, headers],
+});
 
 #[cfg(not(target_arch = "wasm32"))]
 enum WsCmd {

@@ -38,6 +38,7 @@ pub mod scratch_core;
 pub mod scratch_host;
 pub mod path_core;
 pub mod path;
+pub mod redact;
 pub mod secret;
 pub mod app_config;
 pub mod set;

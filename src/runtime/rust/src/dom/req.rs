@@ -6,7 +6,7 @@
 
 use crate::dict::IpeDict;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct WebReq {
     pub path: String,
     pub query: String,
@@ -15,6 +15,14 @@ pub struct WebReq {
     pub headers: IpeDict<String>,
     pub cookies: IpeDict<String>,
 }
+
+// Every field but the method and path is client-supplied data that can carry a
+// credential (a session cookie, an `Authorization` header, a token in the
+// query); the Ipê record fixes the field types, so the masking lives in `Debug`.
+crate::redact::redacting_debug!(WebReq {
+    shown: [path, method],
+    masked: [query, params, headers, cookies],
+});
 
 impl WebReq {
     /// The initial-load request for a host with no incoming HTTP request — a

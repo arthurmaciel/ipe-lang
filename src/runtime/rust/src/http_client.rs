@@ -43,12 +43,19 @@ use super::ssrf::{
 };
 
 /// Ipe.Http.HttpResponse — field names/types match the Ipê record alias.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HttpResponse {
     pub status: i64,
     pub body: String,
     pub headers: HashMap<String, String>,
 }
+
+// The body and headers can carry a token or a `Set-Cookie` session id; the Ipê
+// record fixes the field types, so the masking lives in `Debug`.
+crate::redact::redacting_debug!(HttpResponse {
+    shown: [status],
+    masked: [body, headers],
+});
 
 /// Redirect behaviour for an outbound `HttpRequest` — the Rust mirror of the
 /// `RedirectPolicy` ADT in `Ipe.Http`.  Variant names match the Ipê
@@ -132,7 +139,7 @@ pub(crate) fn method_to_reqwest(m: HttpMethod) -> reqwest::Method {
 
 /// Ipe.Http.HttpRequest — built in Ipê (defaultRequest + with* updates),
 /// so every field is pub for external struct-literal construction.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HttpRequest {
     pub body: String,
     pub headers: Vec<(String, String)>,
@@ -141,6 +148,14 @@ pub struct HttpRequest {
     pub timeout: i64,
     pub url: String,
 }
+
+// The body, headers (`Authorization`) and URL (an API key in the query) can
+// carry a credential; the Ipê record fixes the field types, so the masking lives
+// in `Debug`.
+crate::redact::redacting_debug!(HttpRequest {
+    shown: [method, redirects, timeout],
+    masked: [body, headers, url],
+});
 
 /// `Http.methodFromString : String -> Maybe HttpMethod` — the typed parse
 /// boundary for inbound method strings.  Returns `Just` for the seven

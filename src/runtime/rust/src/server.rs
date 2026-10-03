@@ -24,22 +24,28 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::redact::{Redacted, redacting_debug};
+
 /// Ipe.Http.Server.Request — opaque parsed request handle.
 // camelCase field names are required because accessor kernels (server_body,
 // server_path, server_method, …) read these fields directly by name. These
 // fields are NOT part of the Ipê API — Ipê code always goes through a kernel.
 // `build_request` populates every field exactly once at the axum boundary.
+// Every field but the method and path is client-supplied data that can carry a
+// credential (an `Authorization` header, a session cookie, a token in the query
+// or body), so it is a `Redacted` carrier: the derived `Debug` prints those
+// fields as `<redacted>`.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct ServerRequest {
     pub method: String,
     pub path: String,
-    pub body: String,
-    pub headers: HashMap<String, String>,
-    pub params: HashMap<String, String>,
-    pub query: HashMap<String, String>,
-    pub cookies: HashMap<String, String>,
-    pub remoteAddr: String,
+    pub body: Redacted<String>,
+    pub headers: Redacted<HashMap<String, String>>,
+    pub params: Redacted<HashMap<String, String>>,
+    pub query: Redacted<HashMap<String, String>>,
+    pub cookies: Redacted<HashMap<String, String>>,
+    pub remoteAddr: Redacted<String>,
 }
 
 /// Ipe.Http.Server.Response — opaque response handle built by accessor kernels.
@@ -47,7 +53,7 @@ pub struct ServerRequest {
 // server_with_status, to_axum_response, …) write/read these fields directly.
 // These fields are NOT part of the Ipê API — Ipê code always uses builder kernels.
 #[allow(non_snake_case)]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ServerResponse {
     pub status: i64,
     pub body: String,
@@ -63,11 +69,19 @@ pub struct ServerResponse {
     pub cookies: Vec<String>,
 }
 
+// The body, headers and `Set-Cookie` values can carry a session id or a token;
+// the emitter builds this struct by field name, so the masking lives in `Debug`.
+redacting_debug!(ServerResponse {
+    shown: [status, contentType],
+    masked: [body, headers, cookies],
+});
+
 /// Ipe.Http.Server.Cookie (opaque) — safe defaults applied at attach time.
+// The value is the cookie's secret half (a session id, a token); the name is not.
 #[derive(Clone, Debug)]
 pub struct ServerCookie {
     pub name: String,
-    pub value: String,
+    pub value: Redacted<String>,
 }
 
 /// A handler erased of its Ipê error type `E`: it awaits the Ipê task and maps
@@ -714,7 +728,7 @@ pub fn server_get_cookie(name: String, req: ServerRequest) -> IpeMaybe<String> {
 // return plain `String`, NOT `IpeMaybe<String>`.  analogous
 // accessors return the raw parsed string values with no Maybe wrapper.
 pub fn server_body(req: ServerRequest) -> String {
-    req.body
+    req.body.into_inner()
 }
 pub fn server_path(req: ServerRequest) -> String {
     req.path
@@ -726,7 +740,10 @@ pub fn server_method(req: ServerRequest) -> String {
 // ─── cookies ──────────────────────────────────────────────────────────────
 
 pub fn server_cookie(name: String, value: String) -> ServerCookie {
-    ServerCookie { name, value }
+    ServerCookie {
+        name,
+        value: value.into(),
+    }
 }
 
 /// Strip any byte that could smuggle extra cookie attributes or inject a header
@@ -1127,12 +1144,12 @@ async fn build_request(
         ServerRequest {
             method,
             path,
-            body,
-            headers,
-            params,
-            query,
-            cookies,
-            remoteAddr: remote_addr,
+            body: body.into(),
+            headers: headers.into(),
+            params: params.into(),
+            query: query.into(),
+            cookies: cookies.into(),
+            remoteAddr: remote_addr.into(),
         },
         upgrader,
     ))
@@ -2925,12 +2942,12 @@ mod tests {
         let req = ServerRequest {
             method: "GET".to_string(),
             path: "/".to_string(),
-            body: String::new(),
-            headers,
-            params: HashMap::new(),
-            query: HashMap::new(),
-            cookies: HashMap::new(),
-            remoteAddr: String::new(),
+            body: Redacted::default(),
+            headers: headers.into(),
+            params: Redacted::default(),
+            query: Redacted::default(),
+            cookies: Redacted::default(),
+            remoteAddr: Redacted::default(),
         };
         for probe in ["content-type", "Content-Type", "CONTENT-TYPE"] {
             assert!(
@@ -2945,6 +2962,57 @@ mod tests {
             server_header("x-missing".to_string(), req.clone()),
             IpeMaybe::Nothing
         ));
+    }
+
+    /// A request carrying a planted credential in every client-supplied field.
+    fn secret_laden_request() -> ServerRequest {
+        let pair = |k: &str, v: &str| HashMap::from([(k.to_owned(), v.to_owned())]);
+        ServerRequest {
+            method: "POST".to_owned(),
+            path: "/login".to_owned(),
+            body: "password=PW0RD".to_owned().into(),
+            headers: pair("Authorization", "Bearer S3CR3T").into(),
+            params: pair("id", "P4R4M").into(),
+            query: pair("token", "QT0K3N").into(),
+            cookies: pair("sid", "T0K3N").into(),
+            remoteAddr: "203.0.113.9".to_owned().into(),
+        }
+    }
+
+    const PLANTED: [&str; 6] = ["S3CR3T", "T0K3N", "PW0RD", "P4R4M", "QT0K3N", "203.0.113.9"];
+
+    #[test]
+    fn request_debug_prints_no_client_supplied_value() {
+        let req = secret_laden_request();
+        for shown in [format!("{req:?}"), format!("{req:#?}")] {
+            for secret in PLANTED {
+                assert!(!shown.contains(secret), "{secret} leaked: {shown}");
+            }
+            assert!(shown.contains("\"POST\"") && shown.contains("\"/login\""));
+            assert!(shown.contains(crate::redact::REDACTED));
+        }
+        assert!(matches!(
+            server_get_cookie("sid".to_owned(), req),
+            IpeMaybe::Just(ref v) if v == "T0K3N"
+        ));
+    }
+
+    #[test]
+    fn cookie_and_response_debug_print_no_secret() {
+        let cookie = server_cookie("sid".to_owned(), "T0K3N".to_owned());
+        let shown = format!("{cookie:?}");
+        assert!(!shown.contains("T0K3N"), "{shown}");
+        assert!(shown.contains("\"sid\""));
+
+        let mut resp = server_text("session=T0K3N".to_owned());
+        resp.headers
+            .insert("Authorization".to_owned(), "Bearer S3CR3T".to_owned());
+        resp.cookies.push("sid=T0K3N; Path=/; HttpOnly".to_owned());
+        let shown = format!("{resp:?}");
+        for secret in ["T0K3N", "S3CR3T"] {
+            assert!(!shown.contains(secret), "{secret} leaked: {shown}");
+        }
+        assert!(shown.contains("status: 200"));
     }
 
     /// Run `build_request` inside a router matched on `pattern`.
@@ -3500,12 +3568,12 @@ mod tests {
         ServerRequest {
             method: "GET".to_string(),
             path: "/ws".to_string(),
-            body: String::new(),
-            headers: h,
-            params: HashMap::new(),
-            query: HashMap::new(),
-            cookies: HashMap::new(),
-            remoteAddr: String::new(),
+            body: Redacted::default(),
+            headers: h.into(),
+            params: Redacted::default(),
+            query: Redacted::default(),
+            cookies: Redacted::default(),
+            remoteAddr: Redacted::default(),
         }
     }
 
@@ -3797,12 +3865,12 @@ mod tests {
         ServerRequest {
             method: method.to_string(),
             path: "/".to_string(),
-            body: String::new(),
-            headers,
-            params: HashMap::new(),
-            query: HashMap::new(),
-            cookies,
-            remoteAddr: String::new(),
+            body: Redacted::default(),
+            headers: headers.into(),
+            params: Redacted::default(),
+            query: Redacted::default(),
+            cookies: cookies.into(),
+            remoteAddr: Redacted::default(),
         }
     }
 
@@ -4021,18 +4089,22 @@ mod tests {
             ServerRequest {
                 method: "GET".to_string(),
                 path: "/me".to_string(),
-                body: String::new(),
-                headers: headers
-                    .iter()
-                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-                    .collect(),
-                params: HashMap::new(),
-                query: HashMap::new(),
-                cookies: cookies
-                    .iter()
-                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-                    .collect(),
-                remoteAddr: String::new(),
+                body: Redacted::default(),
+                headers: Redacted::new(
+                    headers
+                        .iter()
+                        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                        .collect(),
+                ),
+                params: Redacted::default(),
+                query: Redacted::default(),
+                cookies: Redacted::new(
+                    cookies
+                        .iter()
+                        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                        .collect(),
+                ),
+                remoteAddr: Redacted::default(),
             }
         }
 
