@@ -3430,7 +3430,9 @@ mod process_run_tests {
         let _refusing = crate::threads::refusal_hook::refuse(CAPTURE_THREAD);
         let args = [
             "-c".to_owned(),
-            "while :; do sleep 1; done".to_owned(),
+            // A builtin-only loop: `sh` never forks, so no grandchild can carry
+            // the marker past the kill.
+            "while :; do :; done".to_owned(),
             marker.clone(),
         ];
         let refused = process_run_sync("sh", &args, 64);
