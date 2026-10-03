@@ -1397,6 +1397,34 @@ impl std::fmt::Display for DbConnectError {
 
 impl std::error::Error for DbConnectError {}
 
+impl DbConnectError {
+    /// Whether this refusal is a declared ceiling on the connection URL.
+    const fn is_ceiling(&self) -> bool {
+        match self {
+            Self::TooManyDialTargets { .. } => true,
+            Self::InvalidUrl
+            | Self::MisplacedUserinfo
+            | Self::UnsupportedScheme
+            | Self::EngineMismatch { .. }
+            | Self::HostRefused(_)
+            | Self::Unreachable(_)
+            | Self::RelayUnavailable
+            | Self::VersionUnreadable(_)
+            | Self::EngineRefused(_) => false,
+        }
+    }
+
+    /// This refusal as an Ipê error whose message is `context` then the refusal.
+    pub(crate) fn as_error<E: From<String> + FromLimitExceeded>(&self, context: &str) -> E {
+        let message = format!("{context}{self}");
+        if self.is_ceiling() {
+            E::from_limit_exceeded(message)
+        } else {
+            message.into()
+        }
+    }
+}
+
 #[cfg(unix)]
 impl From<crate::ssrf::RelayUnavailable> for DbConnectError {
     fn from(crate::ssrf::RelayUnavailable: crate::ssrf::RelayUnavailable) -> Self {
@@ -1876,10 +1904,12 @@ where
 /// URL selects a shared SQLite file, the same value that chose the driver's gate.
 /// Lock contention waits for [`SQLITE_BUSY_TIMEOUT`], which every connection
 /// carries from its connect options.
-async fn build_pool<E: Send + From<String> + 'static>(url: &str) -> IpeResult<E, Db> {
+async fn build_pool<E: Send + From<String> + FromLimitExceeded + 'static>(
+    url: &str,
+) -> IpeResult<E, Db> {
     let db_url = match DbUrl::parse(url) {
         Ok(db_url) => db_url,
-        Err(refused) => return IpeResult::Err(str_err(&refused.to_string())),
+        Err(refused) => return IpeResult::Err(refused.as_error("")),
     };
     let max_connections: u32 = match DB_CONNECTIONS_CEILING.read() {
         Ok(cap) => cap,
@@ -1887,7 +1917,7 @@ async fn build_pool<E: Send + From<String> + 'static>(url: &str) -> IpeResult<E,
     };
     let pool: Db = match VettedPool::<DbDatabase>::connect(&db_url, max_connections).await {
         Ok(vetted) => vetted.into_pool(),
-        Err(refused) => return IpeResult::Err(str_err(&refused.to_string())),
+        Err(refused) => return IpeResult::Err(refused.as_error("")),
     };
     if db_url.is_shared_sqlite_file() {
         let _ = sqlx::query("PRAGMA journal_mode=WAL;").execute(&pool).await;
@@ -1899,7 +1929,9 @@ async fn build_pool<E: Send + From<String> + 'static>(url: &str) -> IpeResult<E,
 /// pool is built with NO lock held (never block other tasks on connect I/O); a
 /// concurrent miss that built a redundant pool loses the `entry` race and its
 /// extra pool drops (closes) — steady state keeps exactly one pool per URL.
-async fn connect_cached<E: Send + From<String> + 'static>(url: String) -> IpeResult<E, Db> {
+async fn connect_cached<E: Send + From<String> + FromLimitExceeded + 'static>(
+    url: String,
+) -> IpeResult<E, Db> {
     let max_pools: usize = match DB_POOLS_CEILING.read() {
         Ok(cap) => cap,
         Err(refused) => return IpeResult::Err(str_err(&refused.to_string())),
@@ -1932,7 +1964,9 @@ async fn connect_cached<E: Send + From<String> + 'static>(url: String) -> IpeRes
     }
 }
 
-pub fn db_connect<E: Send + From<String> + 'static>(_unit: ()) -> IpeTask<E, Db> {
+pub fn db_connect<E: Send + From<String> + FromLimitExceeded + 'static>(
+    _unit: (),
+) -> IpeTask<E, Db> {
     Box::pin(connect_cached(ipe_db_url()))
 }
 
@@ -1942,7 +1976,10 @@ pub fn db_connect<E: Send + From<String> + 'static>(_unit: ()) -> IpeTask<E, Db>
 /// `sqlite://…?mode=rwc` URL (create-if-missing); other drivers pass `path`
 /// through as the connection string. (Was wrongly `(_unit: ())` → ignored both
 /// args → E0061 at every `Db.open "sqlite" "x.db"` call site.)
-pub fn db_open<E: Send + From<String> + 'static>(driver: String, path: String) -> IpeTask<E, Db> {
+pub fn db_open<E: Send + From<String> + FromLimitExceeded + 'static>(
+    driver: String,
+    path: String,
+) -> IpeTask<E, Db> {
     let url = if driver == "sqlite" && !path.contains(':') {
         format!("sqlite://{}?mode=rwc", path)
     } else {
@@ -1951,7 +1988,9 @@ pub fn db_open<E: Send + From<String> + 'static>(driver: String, path: String) -
     Box::pin(connect_cached(url))
 }
 
-pub fn db_open_with_path<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, Db> {
+pub fn db_open_with_path<E: Send + From<String> + FromLimitExceeded + 'static>(
+    path: String,
+) -> IpeTask<E, Db> {
     Box::pin(connect_cached(path))
 }
 
@@ -6030,6 +6069,37 @@ mod tests {
         );
         assert!(
             DbUrl::parse(&url_with(MAX_POSTGRES_DIAL_TARGETS + 1)).is_err_and(|e| e == too_many)
+        );
+        assert_eq!(
+            too_many.as_error::<IpeError>("external connect: "),
+            IpeError::limit_exceeded(format!(
+                "external connect: db: the connection URL names more than \
+                 {MAX_POSTGRES_DIAL_TARGETS} hosts to dial"
+            ))
+        );
+        assert_eq!(
+            DbConnectError::InvalidUrl.as_error::<IpeError>(""),
+            IpeError::unexpected("db: invalid connection URL".to_owned())
+        );
+    }
+
+    /// A connection URL past the dial-target ceiling fails the connect with a
+    /// `LimitExceeded` error, its message unchanged.
+    #[tokio::test]
+    async fn build_pool_past_the_dial_target_ceiling_is_limit_exceeded() {
+        let hosts: Vec<String> = (0..MAX_POSTGRES_DIAL_TARGETS)
+            .map(|i| format!("host=h{i}.example"))
+            .collect();
+        let url = format!("postgres://db.example/app?{}", hosts.join("&"));
+        let refused = match build_pool::<IpeError>(&url).await {
+            IpeResult::Err(e) => Some(e),
+            IpeResult::Ok(_) => None,
+        };
+        assert_eq!(
+            refused,
+            Some(IpeError::limit_exceeded(format!(
+                "db: the connection URL names more than {MAX_POSTGRES_DIAL_TARGETS} hosts to dial"
+            )))
         );
     }
 

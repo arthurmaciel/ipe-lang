@@ -28,7 +28,7 @@
 //! structurally, never echoing the URL or the `Secret` password. `close` is total
 //! and idempotent; a dropped `Connection` drops its pool via sqlx's own `Drop`.
 
-use super::IpeResult;
+use super::{FromLimitExceeded, IpeResult};
 use crate::core::{IpeTask, ok_res, str_err};
 use crate::db::{DbConnectError, DbUrl, VettedPool};
 use crate::dsn::{Dsn, DsnDriver};
@@ -72,8 +72,8 @@ const EXTERNAL_POOL_MAX_CONNECTIONS: u32 = 8;
 ///
 /// A [`DbConnectError`] holds no driver payload, so this never carries the URL
 /// or a credential.
-fn connect_err<E: From<String>>(refused: &DbConnectError) -> E {
-    str_err(&format!("external connect: {refused}"))
+fn connect_err<E: From<String> + FromLimitExceeded>(refused: &DbConnectError) -> E {
+    refused.as_error("external connect: ")
 }
 
 /// Open an external connection from a parsed, validated [`Dsn`]. The `Dsn` is a
@@ -86,7 +86,7 @@ fn connect_err<E: From<String>>(refused: &DbConnectError) -> E {
 /// failure, or an engine below its version floor all surface as a typed `Err`
 /// that carries no credential. The pool is independent (never a shared
 /// URL-keyed cache) and bounded.
-async fn open_external<E: Send + From<String> + 'static>(
+async fn open_external<E: Send + From<String> + FromLimitExceeded + 'static>(
     dsn: Dsn,
 ) -> IpeResult<E, ExternalConnection> {
     let url = match DbUrl::parse(&dsn.connection_url()) {
@@ -122,7 +122,9 @@ async fn open_external<E: Send + From<String> + 'static>(
 /// The `Dsn` arrived through a validating parse, so no unchecked string reaches
 /// the connector. Discloses `network` (the enforceable egress axis).
 #[must_use]
-pub fn db_conn_open<E: Send + From<String> + 'static>(dsn: Dsn) -> IpeTask<E, ExternalConnection> {
+pub fn db_conn_open<E: Send + From<String> + FromLimitExceeded + 'static>(
+    dsn: Dsn,
+) -> IpeTask<E, ExternalConnection> {
     Box::pin(open_external(dsn))
 }
 
