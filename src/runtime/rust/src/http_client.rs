@@ -511,16 +511,28 @@ async fn do_request<E: From<String> + Send + 'static>(
 /// read of an attacker- or upstream-controlled response is a memory-exhaustion
 /// (OOM) vector. Override via `IPE_HTTP_MAX_BODY_BYTES` (streaming consumers that
 /// need unbounded bodies use `Ipe.Http.Stream` instead).
-#[cfg(not(target_arch = "wasm32"))]
-const HTTP_BODY_CAP_DEFAULT: usize = 100 * 1024 * 1024;
+///
+/// One ceiling serves the native arm and the browser `fetch` arm alike.
+#[cfg(any(
+    not(target_arch = "wasm32"),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+const HTTP_BODY_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_HTTP_MAX_BODY_BYTES",
+    100 * 1024 * 1024,
+    crate::system::ZeroCeiling::Refused,
+    "decimal byte count",
+);
 
-#[cfg(not(target_arch = "wasm32"))]
-fn http_body_cap() -> usize {
-    crate::system::read_env_var("IPE_HTTP_MAX_BODY_BYTES")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(HTTP_BODY_CAP_DEFAULT)
+/// The buffered-body cap, refused as `http: …` when the variable is malformed.
+#[cfg(any(
+    not(target_arch = "wasm32"),
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
+fn http_body_cap() -> Result<usize, String> {
+    HTTP_BODY_CEILING
+        .read()
+        .map_err(|refusal| format!("http: {refusal}"))
 }
 
 /// Read a response body into a `String` with a hard byte cap. The
@@ -537,7 +549,10 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
     resp: reqwest::Response,
 ) -> IpeResult<E, String> {
     use futures_util::StreamExt;
-    let cap = http_body_cap();
+    let cap = match http_body_cap() {
+        Ok(cap) => cap,
+        Err(e) => return IpeResult::Err(e.into()),
+    };
     if let Some(len) = resp.content_length()
         && len as usize > cap
     {
@@ -671,25 +686,12 @@ pub fn http_parse_query(raw: String) -> IpeResult<crate::error::IpeError, HashMa
 // rather than trapping the instance; every rejection here routes through the
 // SAME generic `Task.fail` arm — never a panic, never a silent drop.
 
-/// `IPE_HTTP_MAX_BODY_BYTES` cap, mirrored from the native arm's
-/// `http_body_cap` (same env var, same default) — `fetch`'s `.text()` buffers
-/// the whole body itself, so this is a post-hoc size guard rather than a
-/// streamed one, but it keeps the same DoS floor on both targets.
 // The browser `fetch` substitute is gated on `all(wasm32, wasm-client)`, never a
 // bare `wasm32`: the co-located WASI target (`wasm32-wasip1`, `wasm-client` off)
 // is a native-ish wasm build that has no `web-sys`/`wasm-bindgen` in its graph,
 // so a bare-`wasm32` arm would compile these browser bindings into a WASI build
 // and fail cargo. `http_client` is not WASI-viable (reqwest is native-only), so
 // on WASI this whole substitute stays absent and no kernel references it.
-#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
-fn wasm_http_body_cap() -> usize {
-    crate::system::read_env_var("IPE_HTTP_MAX_BODY_BYTES")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(100 * 1024 * 1024)
-}
-
 #[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, HttpResponse> {
     use wasm_bindgen::{JsCast, JsValue};
@@ -788,7 +790,10 @@ async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, H
     // `read_body_capped` incremental floor. `content_length()` is unreliable in a
     // browser (absent under transfer-encoding, or a lie), so the load-bearing
     // guard is the per-chunk cap in the loop, not a header pre-check.
-    let cap = wasm_http_body_cap();
+    let cap = match http_body_cap() {
+        Ok(cap) => cap,
+        Err(e) => return IpeResult::Err(e.into()),
+    };
     let body = match read_wasm_body_capped(&resp, cap).await {
         Ok(b) => b,
         Err(e) => return IpeResult::Err(e.into()),
@@ -901,6 +906,11 @@ pub fn http_request<E: From<String> + 'static>(req: HttpRequest) -> IpeTask<E, H
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn env_ceilings_honour_the_shared_contract() {
+        crate::system::assert_env_ceiling_contract(HTTP_BODY_CEILING);
+    }
 
     /// Wiring seal: the response-header collection loop must route
     /// every key through `http_header::canonical_header` (reqwest's

@@ -66,6 +66,240 @@ pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
     }
 }
 
+/// Longest prefix of a refused environment value echoed in its refusal.
+pub const ENV_VALUE_SHOWN_CHARS: usize = 32;
+
+/// What a present `0` means for one environment ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZeroCeiling {
+    /// `0` is refused like any other malformed value.
+    Refused,
+    /// `0` is a legal setting whose meaning the ceiling's consumer documents.
+    Accepted,
+}
+
+/// One operator-tunable numeric ceiling read from the environment.
+///
+/// Every `IPE_*` numeric limit parses through [`EnvCeiling::parse`], the one
+/// parser: an absent variable yields the default; a present value must be a
+/// plain decimal (ASCII digits only) no larger than the ceiling's
+/// [`Self::at_most`] bound and the consumer's integer type, and `0` follows the
+/// ceiling's [`ZeroCeiling`]. Anything else — empty, signed,
+/// padded, suffixed, overflowing, non-Unicode — is an [`EnvCeilingRefusal`], so
+/// a typo never widens the ceiling to its default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnvCeiling {
+    name: &'static str,
+    default: u64,
+    zero: ZeroCeiling,
+    unit: &'static str,
+    max: u64,
+}
+
+impl EnvCeiling {
+    /// A ceiling read from `name`, with its default, zero rule and unit phrase.
+    ///
+    /// `unit` completes the refusal "`name` must be a …", e.g. `"decimal byte count"`.
+    #[must_use]
+    pub const fn new(
+        name: &'static str,
+        default: u64,
+        zero: ZeroCeiling,
+        unit: &'static str,
+    ) -> Self {
+        Self {
+            name,
+            default,
+            zero,
+            unit,
+            max: u64::MAX,
+        }
+    }
+
+    /// This ceiling with the largest value its consumer can apply without
+    /// failing (e.g. a `tokio` semaphore's permit limit); a larger setting is
+    /// refused as too large.
+    #[must_use]
+    pub const fn at_most(self, max: u64) -> Self {
+        Self { max, ..self }
+    }
+
+    /// The largest accepted value.
+    #[must_use]
+    pub const fn max_value(self) -> u64 {
+        self.max
+    }
+
+    /// The environment variable this ceiling reads.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        self.name
+    }
+
+    /// The value applied while the variable is absent.
+    #[must_use]
+    pub const fn default_value(self) -> u64 {
+        self.default
+    }
+
+    /// Parses a raw lookup of this ceiling's variable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a refusal naming the variable when the value is present but not a
+    /// plain decimal, is a refused `0`, or exceeds [`Self::max_value`].
+    pub fn parse(self, raw: Result<String, std::env::VarError>) -> Result<u64, EnvCeilingRefusal> {
+        let (shown, defect) = match raw {
+            Err(std::env::VarError::NotPresent) => return Ok(self.default),
+            Err(std::env::VarError::NotUnicode(os)) => (
+                shown_env_value(os.as_encoded_bytes()),
+                CeilingDefect::NotDecimal,
+            ),
+            Ok(v) => {
+                let defect = if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+                    CeilingDefect::NotDecimal
+                } else {
+                    match v.parse::<u64>() {
+                        Ok(0) if self.zero == ZeroCeiling::Refused => CeilingDefect::Zero,
+                        Ok(n) if n <= self.max => return Ok(n),
+                        Ok(_) | Err(_) => CeilingDefect::TooLarge,
+                    }
+                };
+                (shown_env_value(v.as_bytes()), defect)
+            }
+        };
+        Err(self.refusal(shown, defect))
+    }
+
+    /// [`Self::parse`] narrowed to the consumer's integer type `T`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`Self::parse`] refusal, or a too-large refusal when the
+    /// value (the default included) does not fit `T` on this platform.
+    pub fn parse_as<T: TryFrom<u64>>(
+        self,
+        raw: Result<String, std::env::VarError>,
+    ) -> Result<T, EnvCeilingRefusal> {
+        let n = self.parse(raw)?;
+        T::try_from(n).map_err(|_| self.refusal(n.to_string(), CeilingDefect::TooLarge))
+    }
+
+    /// Reads and parses this ceiling from the live environment (overlay first).
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`Self::parse_as`] refusal for a present, malformed value.
+    pub fn read<T: TryFrom<u64>>(self) -> Result<T, EnvCeilingRefusal> {
+        self.parse_as(read_env_var(self.name))
+    }
+
+    const fn refusal(self, shown: String, defect: CeilingDefect) -> EnvCeilingRefusal {
+        EnvCeilingRefusal {
+            name: self.name,
+            unit: self.unit,
+            shown,
+            defect,
+        }
+    }
+}
+
+/// Why a present ceiling value was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CeilingDefect {
+    /// Not a plain run of ASCII digits (empty, signed, padded, suffixed, non-Unicode).
+    NotDecimal,
+    /// `0` on a ceiling whose [`ZeroCeiling`] refuses it.
+    Zero,
+    /// Digits only, but larger than the ceiling's bound or the consumer's
+    /// integer type holds.
+    TooLarge,
+}
+
+/// A present-but-malformed environment ceiling, naming the variable.
+///
+/// The echoed value is truncated to [`ENV_VALUE_SHOWN_CHARS`] and escaped, so
+/// the refusal can neither flood nor forge the line it lands on. It reaches an
+/// `IpeError` channel as `InvalidInput`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvCeilingRefusal {
+    name: &'static str,
+    unit: &'static str,
+    shown: String,
+    defect: CeilingDefect,
+}
+
+impl EnvCeilingRefusal {
+    /// The refused variable's name.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// Why the value was refused.
+    #[must_use]
+    pub const fn defect(&self) -> CeilingDefect {
+        self.defect
+    }
+}
+
+impl std::fmt::Display for EnvCeilingRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            name, unit, shown, ..
+        } = self;
+        match self.defect {
+            CeilingDefect::NotDecimal => write!(f, "{name} must be a {unit} (got \"{shown}\")"),
+            CeilingDefect::Zero => write!(f, "{name} must be a positive {unit} (got \"{shown}\")"),
+            CeilingDefect::TooLarge => {
+                write!(f, "{name} is too large for this platform (got \"{shown}\")")
+            }
+        }
+    }
+}
+
+impl std::error::Error for EnvCeilingRefusal {}
+
+impl From<EnvCeilingRefusal> for String {
+    fn from(refusal: EnvCeilingRefusal) -> Self {
+        refusal.to_string()
+    }
+}
+
+impl From<EnvCeilingRefusal> for IpeError {
+    fn from(refusal: EnvCeilingRefusal) -> Self {
+        Self::invalid_input(refusal.to_string())
+    }
+}
+
+/// Renders a refused environment value for its error text without losing or
+/// smuggling a byte: valid UTF-8 keeps its printable characters and escapes
+/// every other one (`char::escape_debug` — controls, ESC, CR/LF, bidi
+/// overrides, `"` and `\`), and each byte that is not UTF-8 shows as `\xNN`.
+/// At most [`ENV_VALUE_SHOWN_CHARS`] source characters or bytes are shown.
+fn shown_env_value(raw: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let mut budget = ENV_VALUE_SHOWN_CHARS;
+    for chunk in raw.utf8_chunks() {
+        for c in chunk.valid().chars() {
+            let Some(left) = budget.checked_sub(1) else {
+                return out;
+            };
+            budget = left;
+            out.extend(c.escape_debug());
+        }
+        for b in chunk.invalid() {
+            let Some(left) = budget.checked_sub(1) else {
+                return out;
+            };
+            budget = left;
+            let _ = write!(out, "\\x{b:02X}");
+        }
+    }
+    out
+}
+
 /// The invoking user's home directory: the one runtime home reader.
 ///
 /// Reads the shared platform variable [`super::home_core::HOME_VAR`]
@@ -581,12 +815,23 @@ where
 /// `Command::output()` buffers ALL of it in memory and can OOM the host. Reading
 /// past the ceiling is an `Err`, never a silent truncation of a returned success
 /// value.
-fn process_output_ceiling() -> u64 {
-    read_env_var("IPE_PROCESS_OUTPUT_MAX")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(16 * 1024 * 1024)
+const PROCESS_OUTPUT_CEILING: EnvCeiling = EnvCeiling::new(
+    "IPE_PROCESS_OUTPUT_MAX",
+    16 * 1024 * 1024,
+    ZeroCeiling::Refused,
+    "decimal byte count",
+);
+
+/// Resolves [`PROCESS_OUTPUT_CEILING`]; a malformed setting fails the spawn closed.
+fn process_output_ceiling() -> Result<u64, EnvCeilingRefusal> {
+    PROCESS_OUTPUT_CEILING.read()
+}
+
+/// The task a spawn kernel returns when its output ceiling is malformed.
+fn refused_spawn<E: Send + From<String> + 'static, T: Send + 'static>(
+    refusal: EnvCeilingRefusal,
+) -> IpeTask<E, T> {
+    crate::task::task_fail(String::from(refusal).into())
 }
 
 /// The captured result of a subprocess: its combined stdout+stderr (bounded)
@@ -1690,7 +1935,10 @@ pub fn process_run<E: Send + From<String> + 'static>(
     cmd: String,
     args: Vec<String>,
 ) -> IpeTask<E, String> {
-    process_run_with_cap(cmd, args, process_output_ceiling())
+    match process_output_ceiling() {
+        Ok(cap) => process_run_with_cap(cmd, args, cap),
+        Err(refusal) => refused_spawn(refusal),
+    }
 }
 
 /// `process_run` with the capture ceiling supplied explicitly rather than read
@@ -1855,7 +2103,10 @@ fn process_run_with_sync(
 pub fn process_run_with<E: Send + From<String> + 'static>(
     cfg: ProcessRunWithCfg,
 ) -> IpeTask<E, ProcessRunOutput> {
-    process_run_with_impl(cfg, process_output_ceiling())
+    match process_output_ceiling() {
+        Ok(cap) => process_run_with_impl(cfg, cap),
+        Err(refusal) => refused_spawn(refusal),
+    }
 }
 
 /// `ProcessRunWithCfg` — the Ipê record `{ command, args, cwd, env }` lowered
@@ -1944,7 +2195,10 @@ pub struct ProcessPtyOutput {
 pub fn process_run_in_pty<E: Send + From<String> + 'static>(
     cfg: ProcessRunInPtyCfg,
 ) -> IpeTask<E, ProcessPtyOutput> {
-    process_run_in_pty_impl(cfg, process_output_ceiling())
+    match process_output_ceiling() {
+        Ok(cap) => process_run_in_pty_impl(cfg, cap),
+        Err(refusal) => refused_spawn(refusal),
+    }
 }
 
 #[must_use]
@@ -2369,6 +2623,369 @@ pub fn system_load_env<E: Send + 'static>(_: ()) -> IpeTask<E, ()> {
         .await;
         ok_res(())
     })
+}
+
+/// Asserts the shared [`EnvCeiling`] contract on `ceiling`.
+///
+/// Absent yields the default; every malformed spelling (empty, signed,
+/// suffixed, padded, separated, hex, fractional, non-ASCII digits, overflowing,
+/// non-Unicode) is refused naming the variable; `1` and the bound are
+/// accepted and one past the bound is refused; `0` follows the ceiling's
+/// [`ZeroCeiling`].
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn assert_env_ceiling_contract(ceiling: EnvCeiling) {
+    use std::env::VarError;
+    let name = ceiling.name();
+    let parse = |raw: &str| ceiling.parse(Ok(raw.to_owned()));
+    assert_eq!(
+        ceiling.parse(Err(VarError::NotPresent)),
+        Ok(ceiling.default_value()),
+        "{name}: an absent value yields the default"
+    );
+    for refused in [
+        "",
+        "-1",
+        "+1024",
+        "16MiB",
+        "1k",
+        " 1024",
+        "1024 ",
+        "\t1",
+        "1024\n",
+        "1_024",
+        "1,024",
+        "0x10",
+        "1.5",
+        "1e3",
+        "\u{FF11}",
+        "18446744073709551616",
+    ] {
+        let outcome = parse(refused);
+        assert!(
+            outcome
+                .as_ref()
+                .is_err_and(|r| r.name() == name && r.to_string().starts_with(name)),
+            "{name}: {refused:?} must be refused naming the variable, got {outcome:?}"
+        );
+    }
+    assert!(
+        parse("18446744073709551616").is_err_and(|r| r.defect() == CeilingDefect::TooLarge),
+        "{name}: an overflowing value is refused as too large"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt as _;
+        let not_unicode = std::ffi::OsString::from_vec(vec![b'1', 0xFF]);
+        assert!(
+            ceiling
+                .parse(Err(VarError::NotUnicode(not_unicode)))
+                .is_err_and(|r| r.defect() == CeilingDefect::NotDecimal),
+            "{name}: a non-Unicode value is refused"
+        );
+    }
+    assert_eq!(
+        parse("1"),
+        Ok(1),
+        "{name}: the least positive value is accepted"
+    );
+    let max = ceiling.max_value();
+    assert!(
+        ceiling.default_value() <= max,
+        "{name}: the default is within the bound"
+    );
+    assert_eq!(
+        parse(&max.to_string()),
+        Ok(max),
+        "{name}: the largest value is accepted"
+    );
+    if let Some(past) = max.checked_add(1) {
+        assert!(
+            parse(&past.to_string()).is_err_and(|r| r.defect() == CeilingDefect::TooLarge),
+            "{name}: one past the bound is refused as too large"
+        );
+    }
+    match ceiling.zero {
+        ZeroCeiling::Refused => assert!(
+            parse("0").is_err_and(|r| r.defect() == CeilingDefect::Zero),
+            "{name}: a refused zero is refused"
+        ),
+        ZeroCeiling::Accepted => assert_eq!(parse("0"), Ok(0), "{name}: zero is accepted"),
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod env_ceiling_tests {
+    use super::{
+        CeilingDefect, ENV_VALUE_SHOWN_CHARS, EnvCeiling, PROCESS_OUTPUT_CEILING, ZeroCeiling,
+        assert_env_ceiling_contract, locked_remove_var, locked_set_var, process_output_ceiling,
+    };
+
+    #[test]
+    fn both_zero_rules_honour_the_contract() {
+        for zero in [ZeroCeiling::Refused, ZeroCeiling::Accepted] {
+            assert_env_ceiling_contract(EnvCeiling::new("IPE_TEST_CEILING", 7, zero, "count"));
+        }
+    }
+
+    #[test]
+    fn process_output_ceiling_refuses_a_malformed_value() {
+        assert_env_ceiling_contract(PROCESS_OUTPUT_CEILING);
+        locked_set_var("IPE_PROCESS_OUTPUT_MAX", "16MiB");
+        let refused = process_output_ceiling();
+        locked_remove_var("IPE_PROCESS_OUTPUT_MAX");
+        assert!(
+            refused.is_err_and(|r| r.name() == "IPE_PROCESS_OUTPUT_MAX"),
+            "a suffixed output ceiling must refuse the spawn"
+        );
+    }
+
+    #[test]
+    fn a_narrowing_overflow_is_refused_too_large() {
+        let ceiling = EnvCeiling::new("IPE_TEST_CEILING", 7, ZeroCeiling::Refused, "count");
+        let refused = ceiling.parse_as::<u8>(Ok("256".to_owned()));
+        assert!(refused.is_err_and(|r| r.defect() == CeilingDefect::TooLarge));
+        assert_eq!(ceiling.parse_as::<u8>(Ok("255".to_owned())), Ok(255));
+    }
+
+    #[test]
+    fn the_echoed_value_is_truncated_and_escaped() {
+        let ceiling = EnvCeiling::new("IPE_TEST_CEILING", 7, ZeroCeiling::Refused, "count");
+        let long = format!("\u{1b}[31m{}", "9x".repeat(64));
+        let shown = ceiling
+            .parse(Ok(long))
+            .map_err(|r| r.to_string())
+            .expect_err("a non-decimal value is refused");
+        assert!(
+            !shown.contains('\u{1b}'),
+            "a control byte is escaped: {shown}"
+        );
+        assert!(
+            shown.len()
+                < "IPE_TEST_CEILING must be a count (got \"\")".len() + 8 * ENV_VALUE_SHOWN_CHARS,
+            "the echo is bounded: {shown}"
+        );
+    }
+
+    /// Every runtime source file, as `(path under src/, text)`.
+    fn runtime_sources() -> Vec<(String, String)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut pending = vec![root.clone()];
+        let mut out = Vec::new();
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the runtime source tree is readable") {
+                let path = entry.expect("a readable directory entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let rel = path
+                        .strip_prefix(&root)
+                        .expect("under src/")
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let text = std::fs::read_to_string(&path).expect("a UTF-8 source file");
+                    out.push((rel, text));
+                }
+            }
+        }
+        out
+    }
+
+    /// The functions that read the environment and parse a number without
+    /// [`EnvCeiling`], as `(file, fn, why)`.
+    const NON_CEILING_READS: [(&str, &str, &str); 10] = [
+        (
+            "control.rs",
+            "control_port_from_env",
+            "a port: absent or malformed opens no control socket",
+        ),
+        (
+            "system.rs",
+            "system_getenv_int",
+            "`Env.getInt`: the parse failure is the kernel's own `Err` result",
+        ),
+        (
+            "server.rs",
+            "build_request",
+            "the number parsed is a request's `Content-Length`; the environment read is `IPE_TRUSTED_PROXY`",
+        ),
+        (
+            "regex_kernel.rs",
+            "regex_max_input_bytes",
+            "pending: the regex kernels have no error channel to refuse through",
+        ),
+        (
+            "core.rs",
+            "recursion_limit",
+            "pending: the depth guard has no error channel to refuse through",
+        ),
+        (
+            "web/mod.rs",
+            "web_ttl",
+            "pending: a duration grammar (`30m`, `1h`), not a decimal ceiling",
+        ),
+        (
+            "app_config.rs",
+            "resolve_auth_max_lifetime",
+            "pending: an auth-config ceiling outside this parser's sites",
+        ),
+        (
+            "app_config.rs",
+            "resolve_auth_slide_window",
+            "pending: an auth-config ceiling outside this parser's sites",
+        ),
+        (
+            "app_config.rs",
+            "resolve_revocation_capacity",
+            "pending: an auth-config ceiling outside this parser's sites",
+        ),
+        (
+            "ssrf.rs",
+            "dns_timeout",
+            "pending: a resolver deadline outside this parser's sites",
+        ),
+    ];
+
+    /// The environment reads the scan follows.
+    const ENV_READS: [&str; 3] = [
+        concat!("read_env_var", "("),
+        concat!("read_env_var_os", "("),
+        concat!("std::env::var", "("),
+    ];
+
+    /// The exporter registry reads its names through a method on the variant.
+    const EXPORTER_READ: (&str, [&str; 2]) = (
+        concat!("ExporterEnv", "::"),
+        [concat!(".read", "()"), concat!(".raw", "()")],
+    );
+
+    /// The integer and float types a numeric `str::parse` names.
+    const NUMERIC_TYPES: [&str; 15] = [
+        "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
+        "f32", "f64", "NonZero",
+    ];
+
+    /// Each `fn` item of a source file, as `(name, text up to the next item)`.
+    fn fn_items(text: &str) -> Vec<(&str, &str)> {
+        let mut starts = Vec::new();
+        let mut offset = 0;
+        for line in text.split_inclusive('\n') {
+            let mut head = line.trim_start();
+            while let Some(rest) = ["pub(crate) ", "pub(super) ", "pub ", "const ", "async "]
+                .into_iter()
+                .find_map(|prefix| head.strip_prefix(prefix))
+            {
+                head = rest;
+            }
+            if let Some(after) = head.strip_prefix("fn ") {
+                let len = after
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .unwrap_or(after.len());
+                if len > 0 {
+                    starts.push((after.get(..len).unwrap_or_default(), offset));
+                }
+            }
+            offset += line.len();
+        }
+        let ends = starts.iter().skip(1).map(|&(_, at)| at).chain([text.len()]);
+        starts
+            .iter()
+            .zip(ends)
+            .map(|(&(name, at), end)| (name, text.get(at..end).unwrap_or_default()))
+            .collect()
+    }
+
+    fn reads_env(body: &str) -> bool {
+        let (exporter, methods) = EXPORTER_READ;
+        ENV_READS.iter().any(|read| body.contains(read))
+            || (body.contains(exporter) && methods.iter().any(|m| body.contains(m)))
+    }
+
+    fn parses_number(body: &str) -> bool {
+        body.contains(concat!(".parse", "()"))
+            || NUMERIC_TYPES
+                .iter()
+                .any(|ty| body.contains(&format!("{}{ty}", concat!(".parse", "::<"))))
+    }
+
+    /// Whether `body` calls the free function `name` (not a method of that name).
+    fn calls(body: &str, name: &str) -> bool {
+        body.match_indices(&format!("{name}(")).any(|(at, _)| {
+            body.get(..at)
+                .and_then(|before| before.chars().next_back())
+                .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+        })
+    }
+
+    /// No function reads the environment and parses a number outside
+    /// [`EnvCeiling`] — directly, or through a same-file helper it hands the
+    /// read to. Every hit must be a listed non-ceiling read; a listed function
+    /// that no longer reads a number fails too.
+    #[test]
+    fn no_env_numeric_parse_bypasses_the_ceiling_parser() {
+        let mut seen = Vec::new();
+        let mut bypasses = Vec::new();
+        for (file, text) in runtime_sources() {
+            let items = fn_items(&text);
+            let helpers: Vec<&str> = items
+                .iter()
+                .filter(|(_, body)| parses_number(body))
+                .map(|&(name, _)| name)
+                .collect();
+            for &(name, body) in &items {
+                if !reads_env(body) {
+                    continue;
+                }
+                let helper = helpers
+                    .iter()
+                    .find(|&&helper| helper != name && calls(body, helper));
+                if !parses_number(body) && helper.is_none() {
+                    continue;
+                }
+                match NON_CEILING_READS
+                    .iter()
+                    .find(|(f, n, _)| *f == file && *n == name)
+                {
+                    Some(listed) => seen.push(*listed),
+                    None => bypasses.push(match helper {
+                        Some(helper) => format!("{file}: {name} via {helper}"),
+                        None => format!("{file}: {name}"),
+                    }),
+                }
+            }
+        }
+        assert!(
+            bypasses.is_empty(),
+            "parse these through `system::EnvCeiling`: {bypasses:#?}"
+        );
+        for listed in NON_CEILING_READS {
+            assert!(
+                seen.contains(&listed),
+                "{listed:?} no longer reads a number; drop it from the list"
+            );
+        }
+    }
+
+    #[test]
+    fn the_scan_follows_a_read_into_a_same_file_helper() {
+        let text = concat!(
+            "fn limit() -> usize {\n    helper(crate::system::",
+            "read_env_var",
+            "(\"IPE_X\").ok())\n}\n\nfn helper(raw: Option<String>) -> usize {\n    raw.and_then(|v| v",
+            ".parse",
+            "::<usize>().ok()).unwrap_or(1)\n}\n\nfn other() {\n    x.helper(1);\n}\n",
+        );
+        let items = fn_items(text);
+        let names: Vec<&str> = items.iter().map(|&(name, _)| name).collect();
+        assert_eq!(names, ["limit", "helper", "other"]);
+        let body = |i: usize| items.get(i).map(|&(_, body)| body).unwrap_or_default();
+        assert!(reads_env(body(0)) && !parses_number(body(0)) && calls(body(0), "helper"));
+        assert!(parses_number(body(1)));
+        assert!(
+            !calls(body(2), "helper"),
+            "a method of the same name is not the helper"
+        );
+    }
 }
 
 #[cfg(test)]

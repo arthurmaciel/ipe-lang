@@ -3478,7 +3478,6 @@ dependencies = [
  "ipe-test-temp",
  "notify",
  "sha2 0.10.9",
- "signal-hook",
 ]
 
 [[package]]
