@@ -180,7 +180,7 @@ fn email_endpoint(provider: &str, def: &str) -> String {
 }
 
 /// Email.send : EmailProvider -> EmailMessage -> Task Error String
-pub fn email_send<E: From<String> + Send + 'static>(
+pub fn email_send<E: From<String> + FromLimitExceeded + Send + 'static>(
     provider: EmailProvider,
     msg: EmailMessage,
 ) -> IpeTask<E, String> {
@@ -216,7 +216,7 @@ pub fn email_send<E: From<String> + Send + 'static>(
 
 // ──────────────────── HTTP helper ────────────────────
 
-async fn email_post_json<E: From<String>>(
+async fn email_post_json<E: From<String> + FromLimitExceeded>(
     url: &str,
     headers: &[(&str, String)],
     payload: Vec<u8>,
@@ -272,7 +272,7 @@ const EMAIL_RESPONSE_CAP: usize = 1024 * 1024;
 /// draining the byte stream incrementally. Unlike `Content-Length`, this can't be
 /// defeated by a lying/omitted header or a chunked/compressed body — the resident
 /// buffer is bounded to `cap` regardless. UTF-8 lossy (provider bodies are JSON).
-async fn read_email_body_capped<E: From<String>>(
+async fn read_email_body_capped<E: From<String> + FromLimitExceeded>(
     resp: reqwest::Response,
     cap: usize,
 ) -> Result<String, E> {
@@ -285,7 +285,10 @@ async fn read_email_body_capped<E: From<String>>(
             Err(e) => return Err(format!("email: reading provider response failed: {}", e).into()),
         };
         if buf.len().saturating_add(bytes.len()) > cap {
-            return Err(format!("email: provider response too large (> {} bytes)", cap).into());
+            return Err(LimitRefusal::new(format!(
+                "email: provider response too large (> {cap} bytes)"
+            ))
+            .into_error());
         }
         buf.extend_from_slice(&bytes);
     }
@@ -296,7 +299,10 @@ async fn read_email_body_capped<E: From<String>>(
 
 // ──────────────────── Resend ────────────────────
 
-async fn send_resend<E: From<String>>(api_key: &str, m: &EmailMessage) -> IpeResult<E, String> {
+async fn send_resend<E: From<String> + FromLimitExceeded>(
+    api_key: &str,
+    m: &EmailMessage,
+) -> IpeResult<E, String> {
     if api_key.is_empty() {
         return IpeResult::Err("email.send/Resend: empty API key".to_string().into());
     }
@@ -359,7 +365,10 @@ async fn send_resend<E: From<String>>(api_key: &str, m: &EmailMessage) -> IpeRes
 
 // ──────────────────── SendGrid ────────────────────
 
-async fn send_sendgrid<E: From<String>>(api_key: &str, m: &EmailMessage) -> IpeResult<E, String> {
+async fn send_sendgrid<E: From<String> + FromLimitExceeded>(
+    api_key: &str,
+    m: &EmailMessage,
+) -> IpeResult<E, String> {
     if api_key.is_empty() {
         return IpeResult::Err("email.send/SendGrid: empty API key".to_string().into());
     }
@@ -435,7 +444,10 @@ fn json_obj_set(v: &mut serde_json::Value, key: &str, val: serde_json::Value) {
 
 // ──────────────────── SES v2 (SigV4) ────────────────────
 
-async fn send_ses<E: From<String>>(cfg: &SesConfig, m: &EmailMessage) -> IpeResult<E, String> {
+async fn send_ses<E: From<String> + FromLimitExceeded>(
+    cfg: &SesConfig,
+    m: &EmailMessage,
+) -> IpeResult<E, String> {
     // Reveal the sealed secret access key ONCE, here at the send boundary — it is
     // consumed only by `ses_sign_v4` below (the SigV4 HMAC chain) and is never
     // logged or returned. The empty-key precheck reads the revealed local, not
