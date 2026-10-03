@@ -4,8 +4,9 @@
 //! `USERPROFILE` on Windows) goes through [`home_dir`]. The value is attacker-
 //! reachable environment input that decides where caches, scratch roots, and
 //! toolchain binds live, so it is parsed once here: an unset, empty,
-//! relative, or non-UTF-8 value names no directory. A relative home would
-//! silently resolve against the working directory, redirecting writes to
+//! relative, non-UTF-8, NUL-bearing, or `..`-bearing value names no directory,
+//! and neither does a Windows device, verbatim, or UNC path. A relative home
+//! would silently resolve against the working directory, redirecting writes to
 //! wherever the process happens to run. `ipe_env` refuses every home name, so
 //! this module's raw read is the only way a compiler-side crate reaches the
 //! value.
@@ -21,7 +22,7 @@ mod home_core {
     include!("../../../runtime/rust/src/home_core.rs");
 }
 
-pub use home_core::WINDOWS_HOME_VAR;
+pub use home_core::{HomeDir, HomeRefusal, WINDOWS_HOME_VAR};
 
 /// The invoking user's home directory, when the environment names an absolute one.
 #[must_use]
@@ -32,13 +33,13 @@ pub fn home_dir() -> Option<PathBuf> {
 
 /// Parse a raw home value: `Some` only for a valid `HomeDir`.
 ///
-/// Delegates entirely to the shared [`home_core::HomeDir::parse`] — the UTF-8
-/// decode, the absolute check, and the Windows verbatim/device-prefix refusal
-/// all live there, so this function makes no parsing decision of its own. The
-/// runtime reader (`system::home_dir_from_var`) delegates to the same
-/// constructor; both components thus accept exactly the same values, though
-/// they run in separate processes, so this is agreement on one environment
-/// fact, not a shared-process escape.
+/// Delegates entirely to the shared [`HomeDir::parse`] — the UTF-8 decode and
+/// every refusal [`HomeRefusal`] names live there, so this function makes no
+/// parsing decision of its own. The runtime reader
+/// (`system::home_dir_from_var`) delegates to the same constructor; both
+/// components thus accept exactly the same values, though they run in separate
+/// processes, so this is agreement on one environment fact, not a
+/// shared-process escape.
 #[must_use]
 pub fn home_dir_from(raw: Option<OsString>) -> Option<PathBuf> {
     home_core::HomeDir::parse(raw).map(home_core::HomeDir::into_path)
@@ -99,28 +100,36 @@ pub fn tool_home_from(
 mod tests {
     use super::*;
 
-    // Shared with `ipe_runtime_rust::system`'s `home_dir_tests`: the same
-    // `(raw, expected)` rows drive both crates' home readers.
-    include!("../../../runtime/rust/tests/data/home_cases.rs");
+    /// The shared table, two modules below `home` like the runtime's include.
+    mod shared {
+        use super::super::home_dir_from;
+        use std::ffi::OsString;
+        use std::path::PathBuf;
 
-    #[test]
-    fn every_home_parse_case_matches_the_shared_table() {
-        for (raw, expected) in HOME_PARSE_CASES.iter().chain(HOME_PARSE_PLATFORM_CASES) {
-            assert_eq!(
-                home_dir_from(raw.map(OsString::from)),
-                expected.map(PathBuf::from),
-                "{raw:?}"
-            );
+        // Shared with `ipe_runtime_rust::system`'s `home_dir_tests`: the same
+        // rows drive both crates' home readers and the shared parser.
+        include!("../../../runtime/rust/tests/data/home_cases.rs");
+
+        #[test]
+        fn every_home_parse_case_matches_the_shared_table() {
+            for (raw, expected) in HOME_PARSE_CASES.iter().chain(HOME_PARSE_PLATFORM_CASES) {
+                assert_eq!(
+                    home_dir_from(raw.map(OsString::from)),
+                    expected.map(PathBuf::from),
+                    "{raw:?}"
+                );
+            }
         }
-    }
 
-    /// A non-UTF-8 raw value is refused even when byte-for-byte absolute.
-    #[cfg(unix)]
-    #[test]
-    fn a_non_utf8_home_value_is_refused() {
-        use std::os::unix::ffi::OsStrExt as _;
-        let raw = std::ffi::OsStr::from_bytes(b"/home/\xff").to_os_string();
-        assert_eq!(home_dir_from(Some(raw)), None);
+        /// A non-UTF-8 raw value is refused even when byte-for-byte absolute.
+        #[cfg(unix)]
+        #[test]
+        fn a_non_utf8_home_value_is_refused() {
+            use std::os::unix::ffi::OsStrExt as _;
+            let raw = std::ffi::OsStr::from_bytes(b"/home/\xff").to_os_string();
+            assert_eq!(home_dir_from(Some(raw.clone())), None);
+            assert_eq!(HomeDir::try_parse(Some(raw)), Err(HomeRefusal::NotUtf8));
+        }
     }
 
     /// The shared home variable is `USERPROFILE` on Windows and `HOME` elsewhere.
