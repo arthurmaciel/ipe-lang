@@ -3050,6 +3050,7 @@ dependencies = [
  "signal-hook",
  "sigstore",
  "sigstore_protobuf_specs",
+ "syn 3.0.6",
  "toml",
  "toml_edit 0.25.15+spec-1.1.0",
  "ureq",
