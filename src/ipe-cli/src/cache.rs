@@ -817,7 +817,10 @@ impl CacheRoot {
     /// An entry past [`crate::io_bounded::BUILD_CACHE_ENTRY_CAP`] is skipped, since a read
     /// of it would be a miss anyway.
     fn write(&self, epoch: &str, file_name: &str, bytes: &[u8]) {
-        if !within_cap(bytes, crate::io_bounded::BUILD_CACHE_ENTRY_CAP) {
+        if !within_cap(bytes, crate::io_bounded::BUILD_CACHE_ENTRY_CAP)
+            || !ipe_fs_open::is_one_spelled_name(std::ffi::OsStr::new(epoch))
+            || !ipe_fs_open::is_one_spelled_name(std::ffi::OsStr::new(file_name))
+        {
             return;
         }
         match self {
@@ -850,11 +853,7 @@ fn read_without_links(base: &Path, parts: &[&str], cap: u64) -> Option<Vec<u8>> 
     let mut path = base.to_path_buf();
     let mut seen = None;
     for part in parts {
-        let mut components = Path::new(part).components();
-        if !matches!(
-            (components.next(), components.next()),
-            (Some(std::path::Component::Normal(_)), None)
-        ) {
+        if !ipe_fs_open::is_one_spelled_name(std::ffi::OsStr::new(part)) {
             return None;
         }
         path.push(part);
@@ -2071,6 +2070,34 @@ mod tests {
                 .is_file()
         );
         assert!(tree(&elsewhere).is_empty());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// An in-output epoch or key that is not one spelled name stores nothing.
+    #[test]
+    fn in_output_store_refuses_a_name_that_is_not_one_spelled_name() {
+        let (base, owned, _) = claimed_out_and_elsewhere("spelled-store");
+        let site = in_output_site(&owned);
+        let root = site.root(&owned).expect("root from the claimed dir");
+        store(&root, "ep/och", "key", &sample_project());
+        store(&root, "epoch", "k/ey", &sample_project());
+        assert!(
+            tree(owned.path())
+                .iter()
+                .all(|p| !p.ends_with("key.json") && !p.ends_with("ey.json")),
+            "a multi-level epoch or key writes no entry"
+        );
+        store(&root, "epoch", "key", &sample_project());
+        assert!(
+            owned
+                .path()
+                .join(CACHE_DIR_NAME)
+                .join("salt")
+                .join("epoch")
+                .join("key.json")
+                .is_file(),
+            "one plain epoch and key are stored"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 

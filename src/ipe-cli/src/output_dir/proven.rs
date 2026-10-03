@@ -227,3 +227,33 @@ fn placeable_prefix(prefix: PrefixComponent<'_>) -> bool {
         Prefix::Disk(_) | Prefix::VerbatimDisk(_) | Prefix::UNC(..) | Prefix::VerbatimUNC(..)
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{Cwd, OutputRefusal, prove_parent_steps_from};
+    use crate::CliError;
+
+    /// A requested name holding NUL is unplaceable, never handed to an open.
+    #[test]
+    fn a_name_holding_nul_is_unplaceable() {
+        let cwd = Cwd::assumed(ipe_test_temp::temp_root());
+        for raw in ["out\0", "a/out\0dir", "\0"] {
+            let result = prove_parent_steps_from(Path::new(raw), &cwd);
+            assert!(
+                matches!(
+                    result,
+                    Err(CliError::OutputRefused(OutputRefusal::Unplaceable(_)))
+                ),
+                "--out {raw:?} must be unplaceable, got {result:?}"
+            );
+        }
+        let kept = prove_parent_steps_from(Path::new("a/out"), &cwd).expect("a plain name");
+        assert_eq!(
+            kept.as_path(),
+            ipe_test_temp::temp_root().join("a").join("out"),
+            "a plain relative name is proven onto the working directory"
+        );
+    }
+}
