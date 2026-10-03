@@ -1142,9 +1142,7 @@ pub fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
 pub fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<PathBuf, CliError> {
     if let Some(program) = parsed.default_program() {
         // The build's own module path for the entry, never the raw `entry`
-        // string: an entry the build refuses is refused here, and an entry
-        // spelled without (or with another) extension names the same `.ipe`
-        // file the build compiles.
+        // string: an entry the build refuses is refused here.
         let module = parsed.resolved_entry()?;
         let rel = format!("{}.ipe", module.join("/"));
         let contained =

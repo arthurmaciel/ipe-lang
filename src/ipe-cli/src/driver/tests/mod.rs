@@ -2548,7 +2548,7 @@ fn analysis_root_refuses_an_entry_module_file_linked_outside_the_source_root() {
     // refused by the containment gate, not read.
     let outside = ipe_test_temp::temp_root().join("ipe_analysis_root_link_target.ipe");
     fs::write(&outside, "module Main exposing (main)\n\nmain = 1\n").expect("outside file");
-    let proj = declared_entry_project("ipe_analysis_root_link", "Main", &[]);
+    let proj = declared_entry_project("ipe_analysis_root_link", "Main.ipe", &[]);
     let manifest = project::parse_manifest(&proj.join("package.ipe")).expect("parses");
     let link = proj.join("src").join("Main.ipe");
     let _ = fs::remove_file(&link);
@@ -3100,11 +3100,39 @@ fn declared_entry_project(name: &str, entry: &str, extra: &[(&str, &str)]) -> Pa
 }
 
 /// The analysis root is the file of the module the build compiles, not the raw
-/// `entry` text: an entry spelled without `.ipe`, or with another extension
-/// naming a decoy file, still roots at `src/Main.ipe` — the file whose `main`
-/// the audit's disclosure and the delivery shape are derived from.
+/// `entry` text: a nested entry roots at the `.ipe` file of its module path.
 #[test]
 fn analysis_root_is_the_file_of_the_builds_entry_module() {
+    let tmp = declared_entry_project("ipe_analysis_root_nested_entry", "Client/App.ipe", &[]);
+    let client = tmp.join("src").join("Client");
+    fs::create_dir_all(&client).expect("create src/Client/");
+    fs::write(
+        client.join("App.ipe"),
+        "module Client.App exposing (main)\nmain = 1\n",
+    )
+    .expect("src/Client/App.ipe");
+    let manifest = project::parse_manifest(&tmp.join("package.ipe")).expect("parses");
+    let built = manifest.resolved_entry();
+    let root = analysis_root_of(&manifest);
+    let expected = resolved(&client.join("App.ipe"));
+    let _ = fs::remove_dir_all(&tmp);
+    assert_eq!(
+        built.ok(),
+        Some(vec!["Client".to_owned(), "App".to_owned()]),
+        "the build compiles module `Client.App`"
+    );
+    assert_eq!(
+        root.ok(),
+        Some(expected.as_path().to_path_buf()),
+        "the analysis root must be the build's `src/Client/App.ipe`"
+    );
+}
+
+/// An entry spelled without `.ipe`, or with another extension naming a decoy
+/// file, is refused by the build and by the analysis root alike, never
+/// analysed as the decoy it spells.
+#[test]
+fn analysis_root_refuses_an_entry_without_the_ipe_extension() {
     for (name, entry) in [
         ("ipe_analysis_root_entry_without_extension", "Main"),
         ("ipe_analysis_root_entry_other_extension", "Main.txt"),
@@ -3117,17 +3145,11 @@ fn analysis_root_is_the_file_of_the_builds_entry_module() {
         let manifest = project::parse_manifest(&tmp.join("package.ipe")).expect("parses");
         let built = manifest.resolved_entry();
         let root = analysis_root_of(&manifest);
-        let expected = resolved(&tmp.join("src").join("Main.ipe"));
         let _ = fs::remove_dir_all(&tmp);
-        assert_eq!(
-            built.ok(),
-            Some(vec!["Main".to_owned()]),
-            "the build compiles module `Main` for entry {entry:?}"
-        );
-        assert_eq!(
-            root.ok(),
-            Some(expected.as_path().to_path_buf()),
-            "entry {entry:?} must root analysis at the build's `src/Main.ipe`"
+        assert!(built.is_err(), "the build refuses entry {entry:?}");
+        assert!(
+            matches!(&root, Err(CliError::Usage(_))),
+            "the analysis root must refuse entry {entry:?}: {root:?}"
         );
     }
 }

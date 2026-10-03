@@ -41,6 +41,11 @@ const ARGS_OS_OWNERS: &[(&str, usize, &str)] = &[
         1,
         "forwards the arguments as `OsString` to the real binary without decoding them",
     ),
+    (
+        "src/runtime/rust/tests/spawn_fd_floor.rs",
+        1,
+        "compares each argument as `OsStr` with the exec-probe marker, never decoding it",
+    ),
 ];
 
 /// Standalone tool and example binaries outside the workspace's host crates
