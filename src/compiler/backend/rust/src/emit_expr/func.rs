@@ -2,9 +2,11 @@ use super::{
     BoundSet, Callee, DResult, Diagnostic, Doc, Expr, Func, GenericScope, IrType, KernelFn,
     RenderConfig, Symbol, callee_name, combine_guards, emit_arm_head, emit_binding_stmts,
     emit_expr_at, emit_init_datum, emit_match_scrutinee, impl_fn_param_indices, indent_of,
-    render_seeded, render_type, tail_arm_prelude_lines,
+    render_type, tail_arm_prelude_lines,
 };
 use crate::EmitCtx;
+use crate::render::{LayoutSpend, render_seeded_spend};
+use core::cell::RefCell;
 use core::fmt::Write as _;
 use ipe_ir::once_closure::{ClosureSite, admitted_once_parts};
 
@@ -1309,14 +1311,12 @@ pub fn emit_caf_get_or_init(
     // line at the call's indent when the receiver's closure body broke — `rustfmt`'s
     // method-chain layout after a multiline receiver.
     let call = Doc::method_chain(receiver, Doc::text(".clone()"));
-    // Seeded at column 4 (fn-body indent) so the fit test measures from the
-    // position where the line starts in the emitted file.
-    Ok(render_seeded(&call, RenderConfig::default(), 4, 4))
+    Ok(render_fn_body(&call))
 }
 
 /// Render a value body expression to the exact bytes a `rustfmt`-formatted
 /// function body carries, laid out by the native [`crate::emit_doc::build_doc`] +
-/// [`crate::render::render_seeded`] path instead of the flat string emitter.
+/// [`render_fn_body`] path instead of the flat string emitter.
 ///
 /// The body opens at column 4 — right after the four-space prefix the caller
 /// writes before `{body}` in `pub fn … {\n    {body}\n}` — and every line it
@@ -1333,7 +1333,48 @@ pub fn emit_body_native(
     generics: GenericScope,
 ) -> DResult<String> {
     let doc = crate::emit_doc::build_doc(ctx, body_expr, 1, 0, generics)?;
-    Ok(render_seeded(&doc, RenderConfig::default(), 4, 4))
+    Ok(render_fn_body(&doc))
+}
+
+thread_local! {
+    /// The layout spend of each function-body render on this thread while a
+    /// [`record_body_spends`] scope collects it.
+    static BODY_SPENDS: RefCell<Option<Vec<LayoutSpend>>> = const { RefCell::new(None) };
+}
+
+/// Lay a function-body `doc` out the way it lands in the emitted file: its first
+/// character at column 4, right after the fn-body indent, and every broken line
+/// nested from that 4-column block indent.
+fn render_fn_body(doc: &Doc) -> String {
+    let (text, spend) = render_seeded_spend(doc, RenderConfig::default(), 4, 4);
+    BODY_SPENDS.with_borrow_mut(|spends| {
+        if let Some(spends) = spends {
+            spends.push(spend);
+        }
+    });
+    text
+}
+
+/// Restores the enclosing [`BODY_SPENDS`] collector when a scope ends.
+struct SpendScope(Option<Vec<LayoutSpend>>);
+
+impl Drop for SpendScope {
+    fn drop(&mut self) {
+        let outer = self.0.take();
+        BODY_SPENDS.with_borrow_mut(|spends| *spends = outer);
+    }
+}
+
+/// Run `f`, also returning the layout spend of every function-body render it did,
+/// in render order.
+pub fn record_body_spends<T>(f: impl FnOnce() -> T) -> (T, Vec<LayoutSpend>) {
+    let scope = SpendScope(BODY_SPENDS.with_borrow_mut(|spends| spends.replace(Vec::new())));
+    let value = f();
+    let spends = BODY_SPENDS
+        .with_borrow_mut(Option::take)
+        .unwrap_or_default();
+    drop(scope);
+    (value, spends)
 }
 
 /// Render a function's generic clause `<T1, T2: <bounds>, ..>` — one entry per

@@ -1,16 +1,15 @@
 //! The layout-budget seam: what the renderer spends laying out each function body.
 //!
-//! Every body is built and rendered through the same calls the emit path makes
-//! for a function body ([`crate::emit_doc::build_doc`] at block indent 1, IR depth
-//! 0, then [`crate::render::render_seeded_spend`] at column 4, indent 4), so the
-//! spend reported is the spend a real build pays.
+//! Every function is emitted through [`crate::emit_expr::emit_func`], the call a
+//! build makes, while [`crate::emit_expr::record_body_spends`] collects the spend
+//! of each body render it does, so the spend reported is the spend a real build
+//! pays. A body the build emits without the renderer (a tail loop) reports none.
 
 use ipe_diagnostics::DResult;
-use ipe_intern::{Interner, Symbol};
+use ipe_intern::Interner;
 
 use crate::EmitCtx;
-use crate::emit_types::GenericScope;
-use crate::render::{RenderConfig, render_seeded_spend};
+use crate::emit_expr::{emit_func, record_body_spends};
 
 pub use crate::render::LAYOUT_FUEL;
 
@@ -25,11 +24,12 @@ pub struct BodyLayoutBudget {
     pub exhausted: bool,
 }
 
-/// The layout spend of every function body in `program`, in module then function order.
+/// The layout spend of every function-body render in `program`, in module then
+/// function then render order.
 ///
 /// # Errors
-/// Propagates any [`ipe_diagnostics::Diagnostic`] from [`EmitCtx::build`] or the
-/// body builders.
+/// Propagates any [`ipe_diagnostics::Diagnostic`] from [`EmitCtx::build`] or
+/// [`emit_func`].
 pub fn body_layout_budgets(
     interner: &Interner,
     program: &ipe_ir::Program,
@@ -54,15 +54,13 @@ pub fn body_layout_budgets(
     for module in &program.modules {
         for func in &module.funcs {
             let func_name = ctx.func_name(func.id)?.to_owned();
-            let scope_syms: Vec<Symbol> = func.type_params.iter().map(|(s, _)| *s).collect();
-            let generics = GenericScope::new(&scope_syms);
-            let doc = crate::emit_doc::build_doc(&ctx, &func.body, 1, 0, generics)?;
-            let (_, spend) = render_seeded_spend(&doc, RenderConfig::default(), 4, 4);
-            budgets.push(BodyLayoutBudget {
-                func: func_name,
+            let (emitted, spends) = record_body_spends(|| emit_func(&ctx, func));
+            emitted?;
+            budgets.extend(spends.into_iter().map(|spend| BodyLayoutBudget {
+                func: func_name.clone(),
                 spent: spend.spent,
                 exhausted: spend.exhausted,
-            });
+            }));
         }
     }
     Ok(budgets)
