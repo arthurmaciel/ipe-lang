@@ -26,23 +26,26 @@ type Token
     | Plain String
 
 
+-- The highlighting language of a file, from the language ipe-index stores
+-- in `files.lang`: one arm per stored value, plus one for text outside that
+-- vocabulary. A language this tokenizer has no rules for is `Unknown`.
 langFor : String -> Lang
-langFor kind =
-    case kind of
-        "rust" ->
+langFor stored =
+    case stored of
+        "rs" ->
             Rust
-
-        "shell" ->
-            Shell
 
         "sh" ->
             Shell
 
-        "bash" ->
-            Shell
-
         "ipe" ->
             Ipe
+
+        "ts" ->
+            Unknown
+
+        "other" ->
+            Unknown
 
         _ ->
             Unknown
@@ -138,16 +141,16 @@ scan lang chars acc =
                         in
                         scan lang rest3 (Comment (String.fromList ('/' :: '/' :: consumed)) :: acc)
 
-                    '*' :: _ ->
+                    '*' :: rest2 ->
                         let
-                            ( consumed, rest2, closed ) =
-                                takeBlock rest
+                            ( consumed, rest3, closed ) =
+                                takeBlock rest2
                         in
                         if closed then
-                            scan lang rest2 (Comment (String.fromList ('/' :: consumed)) :: acc)
+                            scan lang rest3 (Comment (String.fromList ('/' :: '*' :: consumed)) :: acc)
 
                         else
-                            scan lang [] (Plain (String.fromList ('/' :: consumed)) :: acc)
+                            scan lang [] (Plain (String.fromList ('/' :: '*' :: consumed)) :: acc)
 
                     _ ->
                         scan lang rest (Plain "/" :: acc)
@@ -207,7 +210,8 @@ stringGo chars acc closed =
                 stringGo rest (c :: acc) closed
 
 
--- Consumes a /* ... */ block comment; unclosed comments return closed = False.
+-- Consumes a block comment's body after its opening `/*`, through the
+-- closing `*/`; unclosed comments return closed = False.
 takeBlock : List Char -> ( List Char, List Char, Bool )
 takeBlock chars =
     blockGo chars []
@@ -220,7 +224,7 @@ blockGo chars acc =
             ( List.reverse acc, [], False )
 
         '*' :: '/' :: rest ->
-            ( List.reverse ('*' :: '/' :: acc), rest, True )
+            ( List.reverse ('/' :: '*' :: acc), rest, True )
 
         c :: rest ->
             blockGo rest (c :: acc)
