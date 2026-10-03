@@ -1245,6 +1245,44 @@ package.ipe: program entry {entry} names no module
 
 package.ipe: name `{name}` cannot be a macOS bundle directory — a bundle root must be one directory name that reads back as itself, and this name holds a path separator, a `..` traversal, an absolute path, a NUL byte, or a form the host file system would rewrite (on Windows: a trailing `.` or space, a control character, one of `:*?"<>|`, or a device name such as `NUL`). Choose a plain name without `/`, `\`, `..`, or control characters.
 
+# Mobile shell bundles
+
+## mobile-bundle-no-index
+
+no index.html in the emitted wasm bundle at {dir} — expected a `--target wasm` SPA (index.html + boot script + pkg/*.wasm)
+
+## mobile-bundle-unplaceable
+
+cannot bundle {path} from the emitted wasm bundle: {reason}
+
+## mobile-bundle-too-deep
+
+the emitted wasm bundle nests directories deeper than {limit} levels at {path}
+
+## mobile-bundle-too-many
+
+the emitted wasm bundle holds more than {limit} entries
+
+## mobile-bundle-replaced
+
+the emitted wasm bundle at {path} was replaced after it was collected — build and package again
+
+## mobile-bundle-io
+
+reading {path}: {detail}
+
+## mobile-asset-not-utf8
+
+its name is not valid UTF-8, which a shell asset path cannot carry
+
+## mobile-asset-bad-name
+
+its name is not one plain entry name
+
+## mobile-asset-kind
+
+it is {kind}; only regular files and directories are bundled
+
 # ipe doc
 
 ## doc-generate-only-flag

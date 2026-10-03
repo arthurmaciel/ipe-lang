@@ -821,7 +821,11 @@ mod tests {
                 CanonicalPath::resolve(&bin).expect("canonical bin"),
                 CanonicalPath::resolve(&cargo_home).expect("canonical cargo home"),
             ],
-            homes: HomeMasks::resolve(Some(&user_home), Some(&cargo_home)).expect("homes"),
+            homes: HomeMasks::resolve(
+                Ok(&crate::home::test_home(&user_home)),
+                Some(&crate::home::test_tool_home(&cargo_home)),
+            )
+            .expect("homes"),
             ..spec()
         };
         let argv = rendered_argv(&jail);

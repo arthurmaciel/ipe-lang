@@ -729,7 +729,7 @@ mod real_jail {
     fn dirs_cache_root() -> PathBuf {
         ipe_env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)
-            .or_else(|| ipe_sandbox::home::home_dir().map(|h| h.join(".cache")))
+            .or_else(|| ipe_sandbox::home::home_dir().ok().map(|h| h.join(".cache")))
             .expect("HOME or XDG_CACHE_HOME set")
     }
 
