@@ -1159,6 +1159,24 @@ messages! {
     manifest_not_package_ipe(path, hint) = "manifest-not-package-ipe";
     /// A package name is not a single path component for a bundle.
     bundle_name_not_a_component(name) = "bundle-name-not-a-component";
+    /// The emitted wasm bundle has no top-level `index.html`.
+    mobile_bundle_no_index(dir) = "mobile-bundle-no-index";
+    /// An entry of the emitted wasm bundle a mobile shell cannot place.
+    mobile_bundle_unplaceable(path, reason) = "mobile-bundle-unplaceable";
+    /// The emitted wasm bundle nests directories past the walk's depth ceiling.
+    mobile_bundle_too_deep(limit, path) = "mobile-bundle-too-deep";
+    /// The emitted wasm bundle holds more entries than the walk's ceiling.
+    mobile_bundle_too_many(limit) = "mobile-bundle-too-many";
+    /// The emitted wasm bundle was replaced between its collection and its copy.
+    mobile_bundle_replaced(path) = "mobile-bundle-replaced";
+    /// A filesystem failure while walking the emitted wasm bundle.
+    mobile_bundle_io(path, detail) = "mobile-bundle-io";
+    /// A bundle entry's name is not UTF-8.
+    mobile_asset_not_utf8 = "mobile-asset-not-utf8";
+    /// A bundle entry's name is not one plain entry name.
+    mobile_asset_bad_name = "mobile-asset-bad-name";
+    /// A bundle entry is neither a regular file nor a directory.
+    mobile_asset_kind(kind) = "mobile-asset-kind";
     /// A generate-only flag was given to an `ipe doc` subcommand.
     doc_generate_only_flag(sub, flag) = "doc-generate-only-flag";
     /// `--port` was given to an `ipe doc` subcommand other than `serve`.

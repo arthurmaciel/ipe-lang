@@ -32,6 +32,7 @@ use ipe_ir::Capability;
 
 use crate::CliError;
 use crate::output_dir::OwnedDir;
+use crate::text;
 
 use super::permissions::{self, Platform};
 
@@ -333,7 +334,7 @@ impl SpaRoot {
     /// [`BundleError::Replaced`] when `www/` is gone or now names another
     /// object; [`BundleError::Io`] when it cannot be opened or identified.
     pub fn verify_unreplaced(&self) -> Result<(), BundleError> {
-        match HeldDir::open_root(&self.path).and_then(|dir| dir.id()) {
+        match open_www(&self.path).and_then(|dir| dir.id()) {
             Ok(id) if id == self.id => Ok(()),
             Ok(_) | Err(OpenRefusal::Absent | OpenRefusal::Link | OpenRefusal::NotRegular(_)) => {
                 Err(BundleError::Replaced {
@@ -390,18 +391,17 @@ impl SpaBundle {
 
     /// [`SpaBundle::from_www_dir`] under the ceilings `limits`.
     fn from_www_dir_with(www_dir: &Path, limits: AssetLimits) -> Result<Self, BundleError> {
-        let io = |refusal: OpenRefusal| BundleError::Io {
-            path: www_dir.to_path_buf(),
-            source: refusal.into_io(),
-        };
-        let root = HeldDir::open_root(www_dir).map_err(io)?;
-        let id = root.id().map_err(io)?;
         let mut walk = AssetWalk {
             root: www_dir,
             limits,
             visited: 0,
             assets: Vec::new(),
         };
+        let root =
+            open_www(www_dir).map_err(|refusal| walk.refused(www_dir.to_path_buf(), refusal))?;
+        let id = root
+            .id()
+            .map_err(|refusal| walk.refused(www_dir.to_path_buf(), refusal))?;
         walk.descend(&root, &mut Vec::new(), 0)?;
         let mut assets = walk.assets;
         assets.sort_by(|a, b| a.path.cmp(&b.path));
@@ -424,6 +424,23 @@ impl SpaBundle {
     pub fn assets(&self) -> &[AssetFile] {
         &self.assets
     }
+}
+
+/// Open the emitted `www/` directory, its own entry held without following a link.
+///
+/// Only the levels above `www/` are followed, so a link standing at `www/`
+/// itself is refused rather than walked or copied through.
+///
+/// # Errors
+/// [`OpenRefusal::BadName`] when `www_dir` ends in no plain entry name;
+/// [`OpenRefusal::Link`] when `www/` is a link; the refusal of any other
+/// level that cannot be opened.
+fn open_www(www_dir: &Path) -> Result<HeldDir, OpenRefusal> {
+    let (Some(parent), Some(name)) = (www_dir.parent(), www_dir.file_name()) else {
+        return Err(OpenRefusal::BadName);
+    };
+    let name = EntryName::new(name).ok_or(OpenRefusal::BadName)?;
+    HeldDir::open_root(parent)?.child_dir(&name)
 }
 
 /// `root` with `names` appended, one component per name.
@@ -454,7 +471,7 @@ impl AssetWalk<'_> {
         depth: usize,
     ) -> Result<(), BundleError> {
         let listing = dir
-            .entries(EntryCap::from_nonzero(self.limits.entries))
+            .entries(self.listing_cap())
             .map_err(|refusal| self.refused(joined(self.root, prefix), refusal))?;
         for (name, kind) in listing {
             self.visited = self.visited.saturating_add(1);
@@ -513,6 +530,18 @@ impl AssetWalk<'_> {
         Ok(())
     }
 
+    /// The most names the next directory listing may hold: what is left of the
+    /// walk's entry budget.
+    ///
+    /// Every listing on the open path is held while the walk descends, so a cap
+    /// of the whole budget per listing would let the nested listings together
+    /// hold depth times the budget. A spent budget still lists one name, which
+    /// the visit then refuses.
+    fn listing_cap(&self) -> EntryCap {
+        let left = self.limits.entries.get().saturating_sub(self.visited);
+        EntryCap::new(left).unwrap_or(EntryCap::from_nonzero(NonZeroU32::MIN))
+    }
+
     /// The bundle error for `refusal` met at `path`.
     ///
     /// An entry that turned into a link or another kind between its listing
@@ -561,15 +590,24 @@ pub enum AssetRefusal {
 impl std::fmt::Display for AssetRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotUtf8 => {
-                f.write_str("its name is not valid UTF-8, which a shell asset path cannot carry")
-            }
-            Self::BadName => f.write_str("its name is not one plain entry name"),
-            Self::Kind(kind) => write!(
-                f,
-                "it is {kind}; only regular files and directories are bundled"
-            ),
+            Self::NotUtf8 => f.write_str(text::mobile_asset_not_utf8()),
+            Self::BadName => f.write_str(text::mobile_asset_bad_name()),
+            Self::Kind(kind) => f.write_str(&text::mobile_asset_kind(kind)),
         }
+    }
+}
+
+/// A path shown in a bundle message: escaped, so a control character, a
+/// direction override or a byte that is not UTF-8 is spelled out, never shown raw
+/// or replaced.
+struct EscapedPath<'path>(&'path Path);
+
+impl std::fmt::Display for EscapedPath<'_> {
+    // The escaped `Debug` form is the point: `display()` shows control and
+    // direction characters raw and replaces a byte that is not UTF-8.
+    #[allow(clippy::unnecessary_debug_formatting)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
     }
 }
 
@@ -617,31 +655,19 @@ pub enum BundleError {
 
 impl std::fmt::Display for BundleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoIndexHtml { dir } => write!(
-                f,
-                "no index.html in the emitted wasm bundle at {} — expected a `--target wasm` \
-                 SPA (index.html + boot script + pkg/*.wasm)",
-                dir.display()
-            ),
-            Self::UnplaceableAsset { path, reason } => write!(
-                f,
-                "cannot bundle {path:?} from the emitted wasm bundle: {reason}"
-            ),
-            Self::TooDeep { path, limit } => write!(
-                f,
-                "the emitted wasm bundle nests directories deeper than {limit} levels at {path:?}"
-            ),
-            Self::TooManyAssets { limit } => {
-                write!(f, "the emitted wasm bundle holds more than {limit} entries")
+        let message = match self {
+            Self::NoIndexHtml { dir } => text::mobile_bundle_no_index(&EscapedPath(dir)),
+            Self::UnplaceableAsset { path, reason } => {
+                text::mobile_bundle_unplaceable(&EscapedPath(path), reason)
             }
-            Self::Replaced { path } => write!(
-                f,
-                "the emitted wasm bundle at {path:?} was replaced after it was collected — \
-                 build and package again"
-            ),
-            Self::Io { path, source } => write!(f, "reading {}: {}", path.display(), source),
-        }
+            Self::TooDeep { path, limit } => {
+                text::mobile_bundle_too_deep(limit, &EscapedPath(path))
+            }
+            Self::TooManyAssets { limit } => text::mobile_bundle_too_many(limit),
+            Self::Replaced { path } => text::mobile_bundle_replaced(&EscapedPath(path)),
+            Self::Io { path, source } => text::mobile_bundle_io(&EscapedPath(path), source),
+        };
+        f.write_str(&message)
     }
 }
 
@@ -1458,7 +1484,7 @@ mod tests {
         let (_base, www) = www_with("fifo", &[]);
         rustix::fs::mknodat(
             rustix::fs::CWD,
-            &www.join("pipe"),
+            www.join("pipe"),
             rustix::fs::FileType::Fifo,
             rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
             0,
@@ -1535,6 +1561,103 @@ mod tests {
         assert!(
             !base.join("dist").join(&shell.root_name).exists(),
             "nothing is laid down from a replaced www/"
+        );
+    }
+
+    #[test]
+    fn each_listing_is_capped_at_the_entry_budget_left() {
+        let walk = |visited: u32| AssetWalk {
+            root: Path::new("www"),
+            limits: AssetLimits {
+                depth: MAX_ASSET_DEPTH,
+                entries: NonZeroU32::new(4).expect("a non-zero ceiling"),
+            },
+            visited,
+            assets: Vec::new(),
+        };
+        assert_eq!(walk(0).listing_cap().get(), 4);
+        assert_eq!(
+            walk(3).listing_cap().get(),
+            1,
+            "a nested listing holds only what the walk may still visit"
+        );
+        assert_eq!(
+            walk(4).listing_cap().get(),
+            1,
+            "a spent budget lists one name, which the visit refuses"
+        );
+    }
+
+    #[test]
+    fn bundle_messages_come_from_the_catalog_with_escaped_paths() {
+        let limit = NonZeroU32::new(3).expect("a non-zero ceiling");
+        assert_eq!(
+            BundleError::TooManyAssets { limit }.to_string(),
+            text::mobile_bundle_too_many(&limit).as_str()
+        );
+        let hostile = PathBuf::from("www/a\u{1b}[31m\u{202e}b\nc.js");
+        let shown = BundleError::UnplaceableAsset {
+            path: hostile,
+            reason: AssetRefusal::Kind(FileKind::Fifo),
+        }
+        .to_string();
+        assert!(
+            shown.contains(r"\u{1b}[31m\u{202e}b\nc.js"),
+            "every control and direction character is spelled out: {shown}"
+        );
+        assert!(
+            shown.contains(text::mobile_asset_kind(&FileKind::Fifo).as_str()),
+            "{shown}"
+        );
+        assert!(
+            !shown.contains(['\u{1b}', '\u{202e}', '\n']),
+            "nothing reaches the terminal raw: {shown}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_path_is_shown_escaped_not_replaced() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = Path::new(std::ffi::OsStr::from_bytes(b"www/\xff.js")).to_path_buf();
+        let shown = BundleError::Replaced { path }.to_string();
+        assert!(shown.contains(r"\xFF.js"), "{shown}");
+        assert!(!shown.contains('\u{fffd}'), "{shown}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_www_is_refused_not_followed() {
+        let (base, real) = www_with("linked-www", &["boot.js"]);
+        let link = base.join("www-link");
+        std::os::unix::fs::symlink(&real, &link).expect("plant www link");
+        let err = SpaBundle::from_www_dir(&link).expect_err("a linked www/ is refused");
+        assert!(
+            matches!(
+                &err,
+                BundleError::UnplaceableAsset {
+                    reason: AssetRefusal::Kind(FileKind::Symlink),
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn www_swapped_for_a_link_to_itself_is_replaced() {
+        let (base, www) = www_with("www-self-link", &["boot.js"]);
+        let spa = SpaBundle::from_www_dir(&www).expect("collect");
+        let moved = base.join("www-collected");
+        std::fs::rename(&www, &moved).expect("move www away");
+        std::os::unix::fs::symlink(&moved, &www).expect("link www to the collected dir");
+        assert!(
+            matches!(
+                spa.spa.verify_unreplaced(),
+                Err(BundleError::Replaced { .. })
+            ),
+            "a link at www/ is not the directory collected, even when it reaches it"
         );
     }
 
