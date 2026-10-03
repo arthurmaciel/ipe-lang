@@ -221,8 +221,8 @@ pub const MAX_ASSET_DEPTH: NonZeroUsize = NonZeroUsize::MIN.saturating_add(31);
 
 /// How many entries, files and directories alike, the asset walk visits in all.
 ///
-/// The same ceiling caps each single directory listing, so no listing holds
-/// more names than the whole bundle may.
+/// Each listing is charged to this budget in full the moment it is read, so
+/// the listings held along the open path never hold more names than it.
 pub const MAX_ASSETS: NonZeroU32 = NonZeroU32::MIN.saturating_add(65_535);
 
 /// The ceilings one asset walk runs under.
@@ -473,13 +473,8 @@ impl AssetWalk<'_> {
         let listing = dir
             .entries(self.listing_cap())
             .map_err(|refusal| self.refused(joined(self.root, prefix), refusal))?;
+        self.charge(listing.len())?;
         for (name, kind) in listing {
-            self.visited = self.visited.saturating_add(1);
-            if self.visited > self.limits.entries.get() {
-                return Err(BundleError::TooManyAssets {
-                    limit: self.limits.entries,
-                });
-            }
             let shown = joined(self.root, prefix).join(name.as_os_str());
             if name.as_os_str().to_str().is_none() {
                 return Err(BundleError::UnplaceableAsset {
@@ -530,13 +525,25 @@ impl AssetWalk<'_> {
         Ok(())
     }
 
-    /// The most names the next directory listing may hold: what is left of the
-    /// walk's entry budget.
+    /// Charge a listing of `listed` names to the entry budget before any of it
+    /// is visited, refusing once the budget is exceeded.
     ///
-    /// Every listing on the open path is held while the walk descends, so a cap
-    /// of the whole budget per listing would let the nested listings together
-    /// hold depth times the budget. A spent budget still lists one name, which
-    /// the visit then refuses.
+    /// Every listing on the open path is held while the walk descends; charging
+    /// each in full on read keeps their names together within the budget.
+    fn charge(&mut self, listed: usize) -> Result<(), BundleError> {
+        let listed = u32::try_from(listed).unwrap_or(u32::MAX);
+        self.visited = self.visited.saturating_add(listed);
+        if self.visited > self.limits.entries.get() {
+            return Err(BundleError::TooManyAssets {
+                limit: self.limits.entries,
+            });
+        }
+        Ok(())
+    }
+
+    /// The most names the next directory listing may hold: what is left of the
+    /// walk's entry budget. A spent budget still lists one name, which the
+    /// charge then refuses.
     fn listing_cap(&self) -> EntryCap {
         let left = self.limits.entries.get().saturating_sub(self.visited);
         EntryCap::new(left).unwrap_or(EntryCap::from_nonzero(NonZeroU32::MIN))
@@ -1537,6 +1544,23 @@ mod tests {
             .expect_err("one entry past the ceiling is refused");
         assert!(
             matches!(&err, BundleError::TooManyAssets { limit } if limit.get() == 3),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_listing_is_charged_in_full_before_any_of_it_is_entered() {
+        // `www/` lists three names, so with four entries in all the first
+        // directory entered may list only one: its two names are refused
+        // before its `g/` is ever reached.
+        let (_base, www) = www_with("charged", &["a/f", "a/g/x", "b/f", "b/g/x"]);
+        let limits = AssetLimits {
+            depth: NonZeroUsize::MIN,
+            entries: NonZeroU32::new(4).expect("a non-zero ceiling"),
+        };
+        let err = SpaBundle::from_www_dir_with(&www, limits).expect_err("over budget");
+        assert!(
+            matches!(&err, BundleError::TooManyAssets { limit } if limit.get() == 4),
             "{err}"
         );
     }
