@@ -158,10 +158,13 @@ fn reconcile(prefix: &str, mismatches: &[Mismatch], ledger: &BTreeSet<&str>) -> 
     unlisted.chain(healed).collect()
 }
 
-/// A fresh scratch directory for one corpus.
+/// A fresh scratch directory for one corpus, outside every checkout so no
+/// enclosing manifest roots a block's imports.
 fn scratch(corpus: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("explain_examples_{corpus}_{}", std::process::id()));
+    let dir = ipe_test_temp::temp_root().join(format!(
+        "ipe_explain_examples_{corpus}_{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     dir
 }
