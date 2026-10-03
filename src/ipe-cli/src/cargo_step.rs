@@ -1115,11 +1115,31 @@ mod tests {
                 || rustix::process::test_kill_process_group(pid) != gone
         }
 
-        /// A stub cargo that records its pid in `base/pid`, then sleeps far past any test wall.
+        /// Whether the process whose pid is written to `file` is gone within a few seconds.
+        ///
+        /// A killed process outside the caller's reach is reaped by its new
+        /// parent, so its pid lingers briefly as a zombie.
+        fn gone_soon(file: &Path) -> bool {
+            let waited = std::time::Instant::now();
+            while alive(file) {
+                if waited.elapsed() > Duration::from_secs(10) {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            true
+        }
+
+        /// A stub cargo that starts a background `sleep` (its pid in `base/grandchild`),
+        /// records its own pid in `base/pid`, then sleeps far past any test wall.
         fn sleeping_stub(base: &Path) -> CargoBin {
             stub(
                 base,
-                &format!("echo $$ > '{}'\nexec sleep 30", base.join("pid").display()),
+                &format!(
+                    "sleep 30 &\necho $! > '{}'\necho $$ > '{}'\nexec sleep 30",
+                    base.join("grandchild").display(),
+                    base.join("pid").display()
+                ),
             )
         }
 
@@ -1149,8 +1169,12 @@ mod tests {
                 "the refusal lands at the wall, not at the child's exit"
             );
             assert!(
-                !alive(&base.join("pid")),
+                gone_soon(&base.join("pid")),
                 "the refused cargo is killed and reaped"
+            );
+            assert!(
+                gone_soon(&base.join("grandchild")),
+                "a process the refused cargo started is killed with its group"
             );
             let _ = std::fs::remove_dir_all(&base);
         }
@@ -1234,8 +1258,12 @@ mod tests {
                 "the refusal lands at the wall, not at the child's exit"
             );
             assert!(
-                !alive(&base.join("pid")),
+                gone_soon(&base.join("pid")),
                 "the refused cargo is killed and reaped"
+            );
+            assert!(
+                gone_soon(&base.join("grandchild")),
+                "a process the refused cargo started is killed with its group"
             );
             let _ = std::fs::remove_dir_all(&base);
         }
