@@ -1275,6 +1275,7 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_TEST_BOOL_F",
     "IPE_TEST_BOOL_T",
     "IPE_TEST_BOOL_UNSET",
+    "IPE_TEST_CEILING", // runtime env-ceiling contract tests: a fixed name, never read in production
     "IPE_TEST_GETENV_PRESENT",
     "IPE_TEST_GETENV_UNSET_XYZ_",
     "IPE_TEST_GETENV_UNSET_XYZ_42", // variant with numeric suffix in proptest
