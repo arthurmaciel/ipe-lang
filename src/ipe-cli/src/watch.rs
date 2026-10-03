@@ -3300,6 +3300,7 @@ fn spawn_cargo_build(
         let mut cargo = shared.lock().unwrap_or_else(PoisonError::into_inner);
         let _ = cargo.child.kill();
         let _ = cargo.child.wait();
+        drop(cargo);
         return Err(refused);
     }
 

@@ -637,6 +637,7 @@ where
 const CAPTURE_THREAD: &str = "ipe-capture";
 
 /// The name of the pty master reader thread.
+#[cfg(unix)]
 const PTY_READ_THREAD: &str = "ipe-pty-read";
 
 /// Spawn `cmd args` with NO shell (direct argv), capturing combined

@@ -983,6 +983,7 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
 // ─── Ipe.Terminal — line-oriented TEA loop ─────────────────────────────────────
 
 /// The name of the `console_app` stdin reader thread.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 const STDIN_READER_THREAD: &str = "ipe-stdin-reader";
 
 /// Cli.tea { init, update, view, subscriptions } : Task Error ().

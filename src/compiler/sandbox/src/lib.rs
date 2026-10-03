@@ -1131,6 +1131,10 @@ mod tests {
         .expect("lower this process's own thread budget");
 
         let outcome = drain_and_reap(child, 1024, std::ffi::OsStr::new("sleep"));
+        // Lift the starved budget before any assertion, so a test runner that
+        // shares this process keeps its own threads.
+        let restored = rustix::process::setrlimit(rustix::process::Resource::Nproc, original);
+        assert!(restored.is_ok(), "restore the thread budget: {restored:?}");
         assert!(
             matches!(outcome, Err(SandboxDefect::DrainThread(_))),
             "a starved thread budget must surface as DrainThread: {outcome:?}"

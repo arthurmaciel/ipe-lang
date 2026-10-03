@@ -96,6 +96,33 @@ where
     std::thread::Builder::new().name(name.to_owned()).spawn(f)
 }
 
+/// Starts an OS thread named `name` with a `stack_size`-byte stack, or
+/// returns the OS refusal.
+///
+/// # Errors
+///
+/// The OS refused the thread.
+pub fn spawn_sized<F, T>(
+    name: &'static str,
+    stack_size: usize,
+    f: F,
+) -> std::io::Result<JoinHandle<T>>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    if refusal_hook::refuses(name) {
+        return Err(std::io::Error::other(format!(
+            "thread `{name}` refused by the test hook"
+        )));
+    }
+    std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(stack_size)
+        .spawn(f)
+}
+
 /// Why blocking work produced no value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockingFailure {
@@ -241,7 +268,7 @@ pub mod refusal_hook {
 
     /// Whether a start of a thread named `name` is refused on this thread.
     pub fn refuses(name: &str) -> bool {
-        REFUSED.with_borrow(|names| names.iter().any(|refused| *refused == name))
+        REFUSED.with_borrow(|names| names.contains(&name))
     }
 
     /// Lifts the refusal of one name when dropped.
