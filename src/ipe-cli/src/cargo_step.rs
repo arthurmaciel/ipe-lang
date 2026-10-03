@@ -245,7 +245,7 @@ impl CargoBuild<'_> {
             lock_dependencies(&cmd, dir, self.output.verbosity())?;
         }
         cmd.arg("--locked");
-        let drained = run_to_exit(&mut cmd, ARTIFACT_STREAM_CAP).map_err(io_err)?;
+        let drained = run_to_exit(cmd, ARTIFACT_STREAM_CAP).map_err(io_err)?;
         let status = drained.waited;
         if !status.success() {
             return Err(CliError::EmittedBuildFailed {
@@ -347,12 +347,12 @@ impl WatchBuild<'_> {
         cmd
     }
 
-    /// Spawn the rebuild, its pipes taken for [`CargoPipes::drain_while`].
+    /// Spawn the rebuild through the hardened spawner, its pipes taken for [`CargoPipes::drain_while`].
     ///
     /// # Errors
     /// The spawn error when cargo cannot be started.
     pub fn spawn(&self) -> std::io::Result<(Child, CargoPipes)> {
-        let mut child = self.command().spawn()?;
+        let mut child = ipe_runtime_rust::system::spawn_hardened(self.command())?;
         let pipes = CargoPipes::take(&mut child, ARTIFACT_STREAM_CAP);
         Ok((child, pipes))
     }
@@ -399,8 +399,12 @@ fn build_command(
 
 /// Spawn `cmd`, drain its pipes while waiting on it, and return its exit
 /// status with both drains; the child is reaped before this returns.
-fn run_to_exit(cmd: &mut Command, stdout_cap: usize) -> std::io::Result<Drained<ExitStatus>> {
-    let mut child = cmd.spawn()?;
+///
+/// The child starts through the runtime's hardened spawner, so a build script
+/// inherits no descriptor of the CLI besides stdio and dies with it. No wall
+/// holds the build: its duration is the user's own (DECISION-PENDING D1).
+fn run_to_exit(cmd: Command, stdout_cap: usize) -> std::io::Result<Drained<ExitStatus>> {
+    let mut child = ipe_runtime_rust::system::spawn_hardened(cmd)?;
     let pipes = CargoPipes::take(&mut child, stdout_cap);
     let Drained {
         waited,

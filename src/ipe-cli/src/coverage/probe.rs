@@ -485,22 +485,25 @@ pub fn build_and_run(source: &str, snippet: &Path) -> StageOutcome {
         cmd.env("CARGO_TARGET_DIR", target);
     }
 
-    let output = match cmd.output() {
-        Ok(o) => o,
+    let captured = match crate::remote_ingest::run_local(
+        cmd,
+        crate::remote_ingest::SELF_RUN_LIMITS,
+        crate::remote_ingest::LocalSource::SelfRun,
+    ) {
+        Ok(captured) => captured,
         Err(e) => {
             return StageOutcome::Failed {
                 code: None,
-                message: format!("ipe run failed to spawn: {e}"),
+                message: format!("ipe run did not finish: {e}"),
             };
         }
     };
-    if output.status.success() {
+    if captured.status.success() {
         StageOutcome::Ok
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         StageOutcome::Failed {
             code: None,
-            message: format!("ipe run exited non-zero: {stderr}"),
+            message: format!("ipe run exited non-zero: {}", captured.stderr.to_terminal()),
         }
     }
 }
