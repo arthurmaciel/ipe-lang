@@ -262,7 +262,9 @@ unitPageLoadIn base =
                                             == "Lib.answer"
                                             && shownTextOf loaded.view
                                             == Just viewA
-                                            && List.isEmpty loaded.links
+                                            && List.isEmpty loaded.links.links
+                                            && loaded.links.hidden
+                                            == Links.NoneHidden
                                         )
 
                                 Nothing ->

@@ -11,7 +11,7 @@ import Ipe.Time.Timestamp exposing (Timestamp)
 import Lib.Db as LibDb exposing (HistoryCursor(..))
 import Lib.Format as Format
 -- `Index.Unit` names `Highlight.Lang` and `Index.UnitView` names
--- `Links.Link`, and an imported alias resolves its qualified names in this
+-- `Links.LinkSet`, and an imported alias resolves its qualified names in this
 -- module.
 import Lib.Highlight as Highlight
 import Lib.Index as Index exposing (SourceView(..), StaleReason(..))

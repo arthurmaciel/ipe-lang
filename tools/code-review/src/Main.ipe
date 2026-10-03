@@ -815,15 +815,25 @@ unitPageCard loaded =
         ]
 
 
-referencesRow : List Links.Link -> Ui.Element Msg
-referencesRow links =
-    if List.isEmpty links then
-        Ui.none
+-- A page's links, then the note for the links it holds back.
+referencesRow : Links.LinkSet -> Ui.Element Msg
+referencesRow set =
+    case List.map linkEl set.links ++ hiddenNoteEl set.hidden of
+        [] ->
+            Ui.none
 
-    else
-        Ui.wrappedRow
-            [ Ui.spacing 6, Ui.width Ui.fill ]
-            (List.map linkEl links)
+        items ->
+            Ui.wrappedRow [ Ui.spacing 6, Ui.width Ui.fill ] items
+
+
+hiddenNoteEl : Links.Hidden -> List (Ui.Element Msg)
+hiddenNoteEl hidden =
+    case Links.hiddenNote hidden of
+        Just note ->
+            [ safeText note ]
+
+        Nothing ->
+            []
 
 
 -- | Render a link from a fail-closed `LinkTarget` result and a label. On an

@@ -1,4 +1,4 @@
-module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), DecidedPair, PendingRow, ProgressRow, ShownSource, SourceView(..), StaleReason(..), Unit, UnitView, attest, attestedHash, attestedUid, countPending, dbBytes, decidedPairDecoder, decidedPairKey, drainDecided, drainUnit, loadPendingPage, loadProgress, loadView, nameFor, pageSize, probe, readConnection, rebuildReviewed, reverify, shortHash, shownHash, shownText, storedHash, viewText)
+module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), DecidedPair, PendingRow, ProgressRow, ShownSource, SourceView(..), StaleReason(..), Unit, UnitView, attest, attestedHash, attestedUid, candidateQuery, countPending, dbBytes, decidedPairDecoder, decidedPairKey, drainDecided, drainUnit, loadPendingPage, loadProgress, loadView, nameFor, pageSize, placeholders, probe, readConnection, rebuildReviewed, reverify, shortHash, shownHash, shownText, storedHash, viewText)
 
 import Ipe.ByteSize as ByteSize exposing (ByteSize)
 import Ipe.Crypto as Crypto
@@ -52,7 +52,7 @@ type alias Unit =
 type alias UnitView =
     { unit : Unit
     , view : SourceView
-    , links : List Links.Link
+    , links : Links.LinkSet
     }
 
 
@@ -93,26 +93,98 @@ loadView conn roots uid =
 
 
 -- Jump links come only from a shown view; a withheld view links nothing and
--- reads no names. The unit's own stored qualified name never links.
-linksOf : Db.Db -> RowUnit -> SourceView -> Task.Task Error (List Links.Link)
+-- reads no names. A shown view costs two indexed queries, each bounded by a
+-- ceiling: the unit's callgraph edges, then the qualified names its
+-- references spell under ipe-index's callee rule. The unit never links to
+-- itself.
+linksOf : Db.Db -> RowUnit -> SourceView -> Task.Task Error Links.LinkSet
 linksOf conn row view =
     case view of
         Shown shown ->
-            Task.map (\qs -> Links.resolve row.qualified qs (shownText shown)) (qualifiedUids conn)
+            let
+                lang =
+                    langOf row.lang
+
+                source =
+                    shownText shown
+
+                wanted =
+                    Links.candidates lang { kind = row.kind, name = row.name, qualified = row.qualified } (Links.references lang source)
+            in
+            do
+                edges <- edgeLinks conn row.uid
+                resolved <- candidateRows conn row wanted.names
+                Task.succeed
+                    (Links.assemble
+                        { edges = edgeReach edges, candidates = wanted.reach }
+                        (List.map (\( uid, qualified ) -> Links.internal qualified uid) edges)
+                        (Links.resolveCandidates wanted.lookups resolved)
+                        (Links.sourceUrls source)
+                    )
 
         Stale _ ->
-            Task.succeed []
+            Task.succeed Links.noLinks
 
         Unreadable _ ->
-            Task.succeed []
+            Task.succeed Links.noLinks
 
 
--- Every unit's (qualified, uid) pair. The link resolver matches
--- identifier references in a unit's source against these names to build
--- internal jump links; only the names are needed, so no file reads happen.
-qualifiedUids : Db.Db -> Task.Task Error (List ( String, String ))
-qualifiedUids conn =
-    Db.queryDecode conn "SELECT qualified, uid FROM units" [] qualifiedDecoder
+-- The callgraph edges ipe-index resolved out of `uid`, one past the link
+-- ceiling, so a full read shows that more edges may exist.
+edgeLinks : Db.Db -> String -> Task.Task Error (List ( String, String ))
+edgeLinks conn uid =
+    Db.queryDecode conn edgeSql [ SqlString uid, SqlString uid, SqlInt (Links.linkCeiling + 1) ] edgeDecoder
+
+
+edgeSql : String
+edgeSql =
+    "SELECT c.callee_uid, u.qualified FROM callgraph c JOIN units u ON u.uid = c.callee_uid WHERE c.caller_uid = ? AND c.callee_uid != ? ORDER BY u.qualified, u.uid LIMIT ?"
+
+
+edgeReach : List a -> Links.Reach
+edgeReach edges =
+    if List.length edges > Links.linkCeiling then
+        Links.Capped
+
+    else
+        Links.Complete
+
+
+edgeDecoder : Db.Decode.Decoder ( String, String )
+edgeDecoder =
+    Db.Decode.succeed (\callee qualified -> ( callee, qualified ))
+        |> Db.Decode.required "callee_uid" (Db.Decode.string "callee_uid")
+        |> Db.Decode.required "qualified" (Db.Decode.string "qualified")
+
+
+-- The `(qualified, uid)` row of each candidate name some unit other than
+-- `row` holds; no names read nothing.
+candidateRows : Db.Db -> RowUnit -> List String -> Task.Task Error (List ( String, String ))
+candidateRows conn row names =
+    if List.isEmpty names then
+        Task.succeed []
+
+    else
+        case candidateQuery row.path row.uid names of
+            ( sql, params ) ->
+                Db.queryDecode conn sql params qualifiedDecoder
+
+
+-- One statement for every candidate name, on `i_units_qual`: at most one row
+-- per name, the unit in `path` first, then the lowest uid — ipe-index's own
+-- `uid_for_qualified` tie-break. Every name is bound; only placeholders enter
+-- the SQL text.
+candidateQuery : String -> String -> List String -> ( String, List SqlValue )
+candidateQuery path uid names =
+    ( "SELECT qualified, uid FROM (SELECT qualified, uid, ROW_NUMBER() OVER (PARTITION BY qualified ORDER BY (path = ?) DESC, uid) AS rn FROM units WHERE qualified IN (" ++ placeholders (List.length names) ++ ") AND uid != ?) WHERE rn = 1"
+    , List.concat [ [ SqlString path ], List.map SqlString names, [ SqlString uid ] ]
+    )
+
+
+-- `n` comma-separated `?` placeholders.
+placeholders : Int -> String
+placeholders n =
+    String.join ", " (List.repeat n "?")
 
 
 qualifiedDecoder : Db.Decode.Decoder ( String, String )
