@@ -52,7 +52,12 @@ fn gzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
     e.finish().map_err(|err| err.to_string())
 }
 
-fn gunzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
+fn gunzip_bytes(data: &[u8]) -> Result<Vec<u8>, KernelFailure> {
+    gunzip_capped(data, decompress_max_bytes()?)
+}
+
+/// Inflates every gzip member of `data`, refusing output past `max` bytes.
+fn gunzip_capped(data: &[u8], max: u64) -> Result<Vec<u8>, KernelFailure> {
     // AUD-09: `GzDecoder` only decodes the FIRST gzip member and silently
     // ignores any trailing concatenated members —  `gzip.Reader` (via
     // `multistream(true)`, the default) decodes ALL concatenated members.
@@ -60,7 +65,6 @@ fn gunzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
     // identically either way, so this is a pure completeness fix, not a
     // behavior change for the common case.
     use flate2::read::MultiGzDecoder;
-    let max = decompress_max_bytes()?;
     let d = MultiGzDecoder::new(data);
     // Read up to max+1 bytes; if we fill the buffer exactly at max+1 the
     // input would expand beyond the cap.
@@ -68,11 +72,16 @@ fn gunzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
     d.take(max.saturating_add(1))
         .read_to_end(&mut out)
         .map_err(|e| e.to_string())?;
+    refuse_past_cap(out, max)
+}
+
+/// Passes `out` through when it fits `max` bytes; otherwise the ceiling refusal.
+fn refuse_past_cap(out: Vec<u8>, max: u64) -> Result<Vec<u8>, KernelFailure> {
     if out.len() as u64 > max {
-        return Err(format!(
-            "decompressed output exceeds {} bytes (IPE_DECOMPRESS_MAX_BYTES)",
-            max
-        ));
+        return Err(LimitRefusal::new(format!(
+            "decompressed output exceeds {max} bytes (IPE_DECOMPRESS_MAX_BYTES)"
+        ))
+        .into());
     }
     Ok(out)
 }
@@ -103,11 +112,13 @@ pub fn compression_gzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> IpeT
 }
 
 /// Compression.gunzip : Bytes -> Task Error Bytes
-pub fn compression_gunzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> IpeTask<E, Vec<u8>> {
+pub fn compression_gunzip<E: From<String> + FromLimitExceeded + Send + 'static>(
+    data: Vec<u8>,
+) -> IpeTask<E, Vec<u8>> {
     Box::pin(async move {
         match tokio::task::spawn_blocking(move || gunzip_bytes(&data)).await {
             Ok(Ok(b)) => ok_res(b),
-            Ok(Err(e)) => IpeResult::Err(format!("Compression.gunzip: {}", e).into()),
+            Ok(Err(e)) => IpeResult::Err(e.context("Compression.gunzip").into_error()),
             Err(_) => IpeResult::Err(
                 "Compression.gunzip: decompression task panicked"
                     .to_string()
@@ -135,13 +146,13 @@ pub fn compression_zstd_compress<E: From<String> + Send + 'static>(
 }
 
 /// Compression.zstdDecompress : Bytes -> Task Error Bytes
-pub fn compression_zstd_decompress<E: From<String> + Send + 'static>(
+pub fn compression_zstd_decompress<E: From<String> + FromLimitExceeded + Send + 'static>(
     data: Vec<u8>,
 ) -> IpeTask<E, Vec<u8>> {
     Box::pin(async move {
         match tokio::task::spawn_blocking(move || zstd_decompress_capped(&data)).await {
             Ok(Ok(b)) => ok_res(b),
-            Ok(Err(e)) => IpeResult::Err(format!("Compression.zstdDecompress: {}", e).into()),
+            Ok(Err(e)) => IpeResult::Err(e.context("Compression.zstdDecompress").into_error()),
             Err(_) => IpeResult::Err(
                 "Compression.zstdDecompress: decompression task panicked"
                     .to_string()
@@ -151,21 +162,19 @@ pub fn compression_zstd_decompress<E: From<String> + Send + 'static>(
     })
 }
 
-fn zstd_decompress_capped(data: &[u8]) -> Result<Vec<u8>, String> {
+fn zstd_decompress_capped(data: &[u8]) -> Result<Vec<u8>, KernelFailure> {
+    zstd_decompress_within(data, decompress_max_bytes()?)
+}
+
+/// Decodes a zstd frame, refusing output past `max` bytes.
+fn zstd_decompress_within(data: &[u8], max: u64) -> Result<Vec<u8>, KernelFailure> {
     use zstd::stream::read::Decoder as ZstdDecoder;
-    let max = decompress_max_bytes()?;
     let d = ZstdDecoder::new(data).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     d.take(max.saturating_add(1))
         .read_to_end(&mut out)
         .map_err(|e| e.to_string())?;
-    if out.len() as u64 > max {
-        return Err(format!(
-            "decompressed output exceeds {} bytes (IPE_DECOMPRESS_MAX_BYTES)",
-            max
-        ));
-    }
-    Ok(out)
+    refuse_past_cap(out, max)
 }
 
 #[cfg(test)]
@@ -235,6 +244,20 @@ mod tests {
         assert!(matches!(bad, IpeResult::Err(_)));
     }
 
+    /// One byte past a 16-byte cap is a `LimitExceeded` refusal, message unchanged.
+    fn assert_bomb_refused(result: &Result<Vec<u8>, KernelFailure>) {
+        let expected =
+            LimitRefusal::new("decompressed output exceeds 16 bytes (IPE_DECOMPRESS_MAX_BYTES)");
+        assert_eq!(result, &Err(KernelFailure::LimitExceeded(expected.clone())));
+        let sunk: IpeError = KernelFailure::LimitExceeded(expected)
+            .context("Compression.gunzip")
+            .into_error();
+        assert_eq!(
+            sunk.to_ipe_string(),
+            "LimitExceeded: Compression.gunzip: decompressed output exceeds 16 bytes (IPE_DECOMPRESS_MAX_BYTES)"
+        );
+    }
+
     /// Verify that gunzip rejects a payload that would expand beyond the cap.
     /// We set IPE_DECOMPRESS_MAX_BYTES to a small value (16 bytes) so the test
     /// doesn't need to produce a real multi-GiB bomb.
@@ -248,29 +271,10 @@ mod tests {
             _ => panic!("gzip failed"),
         };
 
-        // Override the cap to 16 bytes for this test.
-        // SAFETY: tests sharing the OnceLock see whatever value was set first,
-        // so we use a separate env-var read path below. Because OnceLock caches
-        // the value, we test the helper directly instead.
-        let max: u64 = 16;
-        // comp is already Vec<u8> — no conversion needed.
-        let result = {
-            use flate2::read::GzDecoder;
-            use std::io::Read;
-            let d = GzDecoder::new(&comp[..]);
-            let mut out = Vec::new();
-            let _ = d.take(max.saturating_add(1)).read_to_end(&mut out);
-            if out.len() as u64 > max {
-                Err(format!(
-                    "decompressed output exceeds {} bytes (IPE_DECOMPRESS_MAX_BYTES)",
-                    max
-                ))
-            } else {
-                Ok(out)
-            }
-        };
-        assert!(result.is_err(), "expected bomb-detection error, got Ok");
-        assert!(result.unwrap_err().contains("exceeds"));
+        // The cap is a parameter of the helper: the env ceiling is read once
+        // per process, so the test passes a 16-byte cap directly.
+        assert_bomb_refused(&gunzip_capped(&comp, 16));
+        assert_eq!(gunzip_capped(&comp, 34), Ok(plain.to_vec()));
     }
 
     /// Verify that zstd rejects a payload that would expand beyond the cap.
@@ -284,25 +288,8 @@ mod tests {
             _ => panic!("zstd compress failed"),
         };
 
-        let max: u64 = 16;
-        // comp is already Vec<u8> — no conversion needed.
-        let result = {
-            use std::io::Read;
-            use zstd::stream::read::Decoder as ZstdDecoder;
-            let d = ZstdDecoder::new(&comp[..]).expect("zstd decoder");
-            let mut out = Vec::new();
-            let _ = d.take(max.saturating_add(1)).read_to_end(&mut out);
-            if out.len() as u64 > max {
-                Err(format!(
-                    "decompressed output exceeds {} bytes (IPE_DECOMPRESS_MAX_BYTES)",
-                    max
-                ))
-            } else {
-                Ok(out)
-            }
-        };
-        assert!(result.is_err(), "expected bomb-detection error, got Ok");
-        assert!(result.unwrap_err().contains("exceeds"));
+        assert_bomb_refused(&zstd_decompress_within(&comp, 16));
+        assert_eq!(zstd_decompress_within(&comp, 34), Ok(plain.to_vec()));
     }
 
     /// Reactor-starvation guard: on a SINGLE-WORKER (current_thread) runtime, a
