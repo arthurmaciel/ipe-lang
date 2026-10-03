@@ -19,6 +19,7 @@ pub mod module_classify;
 pub mod ref_index;
 pub mod rename;
 mod resolve;
+mod scope;
 pub mod shape_runtime;
 pub mod shape_source;
 pub mod sig_delta;
