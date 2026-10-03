@@ -1,4 +1,4 @@
-module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), DecidedPair, PendingRow, ProgressRow, ShownSource, SourceView(..), StaleReason(..), Unit, attest, attestedHash, attestedUid, countPending, dbBytes, decidedPairDecoder, decidedPairKey, drainDecided, drainUnit, loadPendingPage, loadProgress, loadUnitByUid, nameFor, pageSize, probe, qualifiedUids, readConnection, rebuildReviewed, reverify, shortHash, shownHash, shownText, storedHash, viewText)
+module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), DecidedPair, PendingRow, ProgressRow, ShownSource, SourceView(..), StaleReason(..), Unit, UnitView, attest, attestedHash, attestedUid, countPending, dbBytes, decidedPairDecoder, decidedPairKey, drainDecided, drainUnit, loadPendingPage, loadProgress, loadView, nameFor, pageSize, probe, readConnection, rebuildReviewed, reverify, shortHash, shownHash, shownText, storedHash, viewText)
 
 import Ipe.ByteSize as ByteSize exposing (ByteSize)
 import Ipe.Crypto as Crypto
@@ -14,17 +14,19 @@ import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Task as Task
 import Lib.Highlight as Highlight
+import Lib.Links as Links
 import Lib.RepoPath as RepoPath exposing (RootMap)
 import Lib.SafeText as SafeText exposing (SafeText)
 import Lib.Settings as Settings exposing (IndexSettings)
 
 
--- One queued ipe-index unit plus its verified source view. Every text column
--- a page shows (`path`, the `tag:relative` form ipe-index stores; `name`;
--- `qualified`; `kind`; `facing`; `purpose`) is `SafeText`, rendered once
--- here, so no index text can reach a page raw; `lang` is `kind` parsed for
--- highlighting. `attested` is the stored body hash, parsed once; `view` is
--- the unit's lines from disk, shown only when they re-hash to `attested`.
+-- One ipe-index unit's metadata, never its source: a queue page lists these
+-- without reading a file. Every text column a page shows (`path`, the
+-- `tag:relative` form ipe-index stores; `name`; `qualified`; `kind`;
+-- `facing`; `purpose`) is `SafeText`, rendered once here, so no index text
+-- can reach a page raw; `lang` is the language ipe-index stores for the
+-- unit's file, parsed for highlighting. `attested` is the stored body hash,
+-- parsed once.
 type alias Unit =
     { uid : String
     , change : String
@@ -41,7 +43,16 @@ type alias Unit =
     , purpose : Maybe SafeText
     , attested : AttestedHash
     , updatedSha : String
+    }
+
+
+-- One unit with what a page shows of its source: the unit's lines from disk,
+-- shown only when they re-hash to `unit.attested`, and the links resolved
+-- from a shown view. `loadView` is the one source read that builds it.
+type alias UnitView =
+    { unit : Unit
     , view : SourceView
+    , links : List Links.Link
     }
 
 
@@ -52,22 +63,48 @@ type alias Unit =
 -- real change state.
 unitByUidSql : String
 unitByUidSql =
-    "SELECT u.uid, 'new' AS change, NULL AS old_hash, NULL AS new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha FROM units u WHERE u.uid = ?"
+    "SELECT u.uid, 'new' AS change, NULL AS old_hash, NULL AS new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha, f.lang FROM units u" ++ unitFiles ++ " WHERE u.uid = ?"
 
 
--- One unit by uid (decided or not) read on `conn`, with its source view
--- verified against its tag's root in `roots`; Nothing when no such unit
--- exists.
-loadUnitByUid : RootMap -> Db.Db -> String -> Task.Task Error (Maybe Unit)
-loadUnitByUid roots conn uid =
+-- The unit's file row, for the language ipe-index stored for it: a primary
+-- key lookup per unit, and a unit with no file row reads a NULL language.
+unitFiles : String
+unitFiles =
+    " LEFT JOIN files f ON f.path = u.path"
+
+
+-- The one source read: one unit by uid (decided or not) read on `conn`, its
+-- one file read and verified against its tag's root in `roots`, and its
+-- links resolved from the view when it is shown. Nothing when no such unit
+-- exists. The unit page and the selected queue card both load through it.
+loadView : Db.Db -> RootMap -> String -> Task.Task Error (Maybe UnitView)
+loadView conn roots uid =
     do
         rows <- Db.queryDecode conn unitByUidSql [ SqlString uid ] rowDecoder
         case List.head rows of
             Just row ->
-                Task.map (\view -> Just (withView view row)) (viewOf roots row)
+                do
+                    view <- viewOf roots row
+                    links <- linksOf conn row view
+                    Task.succeed (Just { unit = withRow row, view = view, links = links })
 
             Nothing ->
                 Task.succeed Nothing
+
+
+-- Jump links come only from a shown view; a withheld view links nothing and
+-- reads no names. The unit's own stored qualified name never links.
+linksOf : Db.Db -> RowUnit -> SourceView -> Task.Task Error (List Links.Link)
+linksOf conn row view =
+    case view of
+        Shown shown ->
+            Task.map (\qs -> Links.resolve row.qualified qs (shownText shown)) (qualifiedUids conn)
+
+        Stale _ ->
+            Task.succeed []
+
+        Unreadable _ ->
+            Task.succeed []
 
 
 -- Every unit's (qualified, uid) pair. The link resolver matches
@@ -104,6 +141,7 @@ type alias RowUnit =
     , purpose : Maybe String
     , bodyHash : String
     , updatedSha : String
+    , lang : Maybe String
     }
 
 
@@ -128,6 +166,7 @@ type alias RowB =
     , purpose : Maybe String
     , bodyHash : String
     , updatedSha : String
+    , lang : Maybe String
     }
 
 
@@ -143,8 +182,8 @@ makeRowA uid change oldHash newHash path name qualified =
     }
 
 
-makeRowB : String -> Int -> Int -> String -> Maybe String -> String -> String -> RowB
-makeRowB kind lineStart lineEnd facing purpose bodyHash updatedSha =
+makeRowB : String -> Int -> Int -> String -> Maybe String -> String -> String -> Maybe String -> RowB
+makeRowB kind lineStart lineEnd facing purpose bodyHash updatedSha lang =
     { kind = kind
     , lineStart = lineStart
     , lineEnd = lineEnd
@@ -152,6 +191,7 @@ makeRowB kind lineStart lineEnd facing purpose bodyHash updatedSha =
     , purpose = purpose
     , bodyHash = bodyHash
     , updatedSha = updatedSha
+    , lang = lang
     }
 
 
@@ -171,6 +211,7 @@ mergeRows a b =
     , purpose = b.purpose
     , bodyHash = b.bodyHash
     , updatedSha = b.updatedSha
+    , lang = b.lang
     }
 
 
@@ -203,13 +244,15 @@ partBDecoder =
         |> Db.Decode.required "purpose" (Db.Decode.nullable (Db.Decode.string "purpose"))
         |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
         |> Db.Decode.required "updated_sha" (Db.Decode.string "updated_sha")
+        |> Db.Decode.required "lang" (Db.Decode.nullable (Db.Decode.string "lang"))
 
 
 -- The startup check of `IPE_INDEX_DB`: the index is opened read-only and
 -- every column a queue page and the progress count read is selected, so a
 -- missing file, a file that is not an ipe-index database, or one missing a
--- table or column (an index built before the `reviewed` table) stops the
--- server before it listens, naming the variable and the file.
+-- table or column (an index built before the `reviewed` table, or with no
+-- `files` table to read a language from) stops the server before it
+-- listens, naming the variable and the file.
 probe : IndexSettings -> Task.Task Error ()
 probe settings =
     (do
@@ -292,9 +335,9 @@ readConnection settings =
 
 
 -- The most queue rows one page load reads. An index can hold tens of
--- thousands of queued units, and each loaded unit costs a source-file read
--- plus two review-db lookups, so a load is bounded by this constant rather
--- than by the queue's size.
+-- thousands of queued units, and each loaded unit costs two review-db
+-- lookups, so a load is bounded by this constant rather than by the queue's
+-- size. A page load reads no source file.
 pageSize : Int
 pageSize =
     200
@@ -321,7 +364,7 @@ type alias PendingRow =
 -- counts exactly the rows a page can return.
 pendingFrom : String
 pendingFrom =
-    " FROM change_queue q JOIN units u ON u.uid = q.uid WHERE " ++ pendingChange
+    " FROM change_queue q JOIN units u ON u.uid = q.uid" ++ unitFiles ++ " WHERE " ++ pendingChange
 
 
 -- The queue rows still to review; `deleted` rows are never listed.
@@ -332,7 +375,7 @@ pendingChange =
 
 pendingColumns : String
 pendingColumns =
-    "SELECT q.uid, q.change, q.old_hash, q.new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha, q.enqueued_at"
+    "SELECT q.uid, q.change, q.old_hash, q.new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha, f.lang, q.enqueued_at"
 
 
 pendingOrder : String
@@ -368,20 +411,17 @@ enqueuedAtDecoder =
 
 
 -- One page of queue units (new + modified) at `cursor` read on `conn`, at
--- most `pageSize` rows, each with its source view verified against its tag's
--- root in `roots`. A unit whose file is missing, refused or drifted carries
--- that state; only a failed query fails the page.
-loadPendingPage : RootMap -> Db.Db -> Cursor -> Task.Task Error (List PendingRow)
-loadPendingPage roots conn cursor =
+-- most `pageSize` rows of metadata. No source file is read: a unit's file is
+-- read only by `loadView`, so a unit whose file is missing still lists, and
+-- only a failed query fails the page.
+loadPendingPage : Db.Db -> Cursor -> Task.Task Error (List PendingRow)
+loadPendingPage conn cursor =
     let
         ( sql, params ) =
             pendingPageQuery cursor
     in
-    do
-        rows <- Db.queryDecode conn sql params pendingRowDecoder
-        rows
-            |> List.map (\( row, at ) -> Task.map (\view -> { unit = withView view row, enqueuedAt = at }) (viewOf roots row))
-            |> Task.sequence
+    Db.queryDecode conn sql params pendingRowDecoder
+        |> Task.map (List.map (\( row, at ) -> { unit = withRow row, enqueuedAt = at }))
 
 
 countDecoder : Db.Decode.Decoder Int
@@ -600,10 +640,10 @@ sourceCeiling =
     ByteSize.mib 16
 
 
--- The single decode point from a raw row: the stored hash is parsed here,
--- and every displayed text column is rendered into `SafeText`.
-withView : SourceView -> RowUnit -> Unit
-withView view row =
+-- The single decode point from a raw row: the stored hash and language are
+-- parsed here, and every displayed text column is rendered into `SafeText`.
+withRow : RowUnit -> Unit
+withRow row =
     { uid = row.uid
     , change = row.change
     , oldHash = row.oldHash
@@ -612,15 +652,26 @@ withView view row =
     , name = SafeText.renderForeign row.name
     , qualified = SafeText.renderForeign row.qualified
     , kind = SafeText.renderForeign row.kind
-    , lang = Highlight.langFor row.kind
+    , lang = langOf row.lang
     , lineStart = row.lineStart
     , lineEnd = row.lineEnd
     , facing = SafeText.renderForeign row.facing
     , purpose = Maybe.map SafeText.renderForeign row.purpose
     , attested = parseAttested row.bodyHash
     , updatedSha = row.updatedSha
-    , view = view
     }
+
+
+-- A stored file language parsed for highlighting; a unit with no file row
+-- reads as `Unknown`, shown as escaped plain text.
+langOf : Maybe String -> Highlight.Lang
+langOf stored =
+    case stored of
+        Just lang ->
+            Highlight.langFor lang
+
+        Nothing ->
+            Highlight.Unknown
 
 
 -- A stored `body_hash`, parsed once: an attestation this app can re-prove,

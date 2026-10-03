@@ -26,7 +26,7 @@ import Lib.Highlight as Highlight exposing (Lang(..), Token(..))
 import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
-import Lib.Queue as Queue exposing (HistoryState(..), QueueState(..), UnitPageState(..))
+import Lib.Queue as Queue exposing (HistoryState(..), QueueState(..), SelectedView(..), UnitPageState(..))
 import Lib.RepoPath as RepoPath exposing (PathError(..), Root, RootMap)
 import Lib.SafeText as SafeText
 import Lib.Settings as Settings
@@ -59,6 +59,9 @@ import TestSupport exposing
     , loadFirstPage
     , indexConn
     , loadUnitNow
+    , decideNow
+    , shownOf
+    , PageEntry
     , checkUnits
     , listSecond
     , isUnitA
@@ -111,13 +114,13 @@ decideAfter name prepare mutate decision =
 
 
 
--- True when deciding `found` fails with a conflict; False when it succeeds,
--- fails otherwise, or the unit was not loaded.
-decideOutcome : Db -> Maybe Index.Unit -> Decision -> Task.Task Error Bool
+-- True when deciding `found`'s shown source fails with a conflict; False
+-- when it succeeds, fails otherwise, or the unit was not loaded shown.
+decideOutcome : Db -> Maybe PageEntry -> Decision -> Task.Task Error Bool
 decideOutcome db found decision =
-    case found of
-        Just unit ->
-            Queue.decide db unit decision
+    case Maybe.andThen (\entry -> shownOf entry.view) found of
+        Just shown ->
+            Queue.decide db shown decision
                 |> Task.map (\_ -> False)
                 |> Task.onError (\e -> Task.succeed (Error.kind e == Error.kind (Error.conflict "")))
 
@@ -156,9 +159,9 @@ decideRecordsShownHash =
         r <- loadFirstPage
         db <- migratedReviewAt at.reviewDb
         recorded <-
-            case List.find (\u -> u.uid == "u-a") r.units of
-                Just unit ->
-                    Queue.decide db unit Approved
+            case Maybe.andThen (\entry -> shownOf entry.view) (List.find (\u -> u.uid == "u-a") r.units) of
+                Just shown ->
+                    Queue.decide db shown Approved
                         |> Task.map (\( a, n ) -> n == 1 && Index.attestedUid a == "u-a" && Index.attestedHash a == Index.attest viewA)
 
                 Nothing ->
@@ -210,13 +213,168 @@ deleteUnitA at =
 
 
 
--- R7: a unit loaded stale is refused by `decide` itself, for a refusal as
--- well as an approval.
+-- R7: a unit loaded stale has no source a decision can be made on, for a
+-- refusal as well as an approval: the selected view yields none, so
+-- `Queue.decide` is never reached and nothing is written. Red if a stale
+-- view yields a decidable source.
 staleRefuseAlsoRefused : Task.Task Error Bool
 staleRefuseAlsoRefused =
-    refuse "x"
-        |> Task.andThen (decideAfter "ipe-index-decide-stale" driftLib noChange)
-        |> Task.map (\o -> o.conflict && o.rows == 0)
+    do
+        at <- freshScratch "ipe-index-decide-stale"
+        removeFileIfAny at.indexDb
+        seedIndex at.indexDb at.repo
+        driftLib at
+        found <- loadUnitNow "u-a"
+        cleanupIndex at.indexDb at.repo
+        Task.succeed
+            (case found of
+                Just loaded ->
+                    viewTag loaded.view
+                        == "drifted"
+                        && isNothing (Queue.decidableSource "u-a" (ViewShown loaded))
+
+                Nothing ->
+                    False
+            )
+
+
+
+-- Only the selected unit's own shown view is decidable: the same verified
+-- view selected under another uid, or still loading, yields no source. Red
+-- if `decidableSource` ignores the uid or the load state.
+onlySelectedShownDecidable : Task.Task Error Bool
+onlySelectedShownDecidable =
+    do
+        at <- freshScratch "ipe-index-decide-selected"
+        removeFileIfAny at.indexDb
+        seedIndex at.indexDb at.repo
+        found <- loadUnitNow "u-a"
+        cleanupIndex at.indexDb at.repo
+        Task.succeed
+            (case found of
+                Just loaded ->
+                    not (isNothing (Queue.decidableSource "u-a" (ViewShown loaded)))
+                        && isNothing (Queue.decidableSource "u-b" (ViewShown loaded))
+                        && isNothing (Queue.decidableSource "u-a" (ViewLoading { uid = "u-a", wanted = Nothing }))
+                        && isNothing (Queue.decidableSource "u-a" NoneSelected)
+
+                Nothing ->
+                    False
+            )
+
+
+
+isNothing : Maybe a -> Bool
+isNothing m =
+    case m of
+        Just _ ->
+            False
+
+        Nothing ->
+            True
+
+
+
+-- ── one source read in flight ───────────────────────────────────────────
+--
+-- A selection made while a read is in flight starts no second read; it is
+-- only recorded, and the latest one is read once the in-flight read returns.
+-- Red if `selectView` starts a read during a read, or if `viewArrived`
+-- settles an outdated read instead of reading the wanted unit.
+selectionsDuringReadCoalesce : Bool
+selectionsDuringReadCoalesce =
+    let
+        ( afterB, readB ) =
+            Queue.selectView "b" (ViewLoading { uid = "a", wanted = Nothing })
+
+        ( afterC, readC ) =
+            Queue.selectView "c" afterB
+
+        ( arrived, next ) =
+            Queue.viewArrived "a" (Ok Nothing) afterC
+    in
+    readB
+        == Nothing
+        && readC
+        == Nothing
+        && selectedTag afterC
+        == "loading a wanting c"
+        && next
+        == Just "c"
+        && selectedTag arrived
+        == "loading c"
+
+
+
+-- A response for any uid but the in-flight one changes nothing and starts no
+-- read; the in-flight unit selected again records nothing to read after it.
+-- Red if a late response for an earlier selection settles the view.
+outdatedResponseDropped : Bool
+outdatedResponseDropped =
+    let
+        loading =
+            ViewLoading { uid = "b", wanted = Nothing }
+
+        ( afterLate, lateNext ) =
+            Queue.viewArrived "a" (Ok Nothing) loading
+
+        ( reselected, reselectNext ) =
+            Queue.selectView "b" (ViewLoading { uid = "b", wanted = Just "c" })
+
+        ( settled, settledNext ) =
+            Queue.viewArrived "b" (Ok Nothing) loading
+
+        ( fresh, freshNext ) =
+            Queue.selectView "a" NoneSelected
+
+        ( cleared, clearedNext ) =
+            Queue.reloadView "a" (Queue.clearView loading)
+    in
+    selectedTag afterLate
+        == "loading b"
+        && lateNext
+        == Nothing
+        && selectedTag reselected
+        == "loading b"
+        && reselectNext
+        == Nothing
+        && selectedTag settled
+        == "missing b"
+        && settledNext
+        == Nothing
+        && selectedTag fresh
+        == "loading a"
+        && freshNext
+        == Just "a"
+        && selectedTag cleared
+        == "loading b wanting a"
+        && clearedNext
+        == Nothing
+
+
+
+selectedTag : Queue.SelectedView -> String
+selectedTag state =
+    case state of
+        NoneSelected ->
+            "none"
+
+        ViewLoading loading ->
+            case loading.wanted of
+                Just w ->
+                    "loading " ++ loading.uid ++ " wanting " ++ w
+
+                Nothing ->
+                    "loading " ++ loading.uid
+
+        ViewShown loaded ->
+            "shown " ++ loaded.unit.uid
+
+        ViewMissing uid ->
+            "missing " ++ uid
+
+        ViewFailed uid _ ->
+            "failed " ++ uid
 
 
 
@@ -560,7 +718,7 @@ isNotFound state =
         UnitLoading ->
             False
 
-        UnitLoaded _ _ ->
+        UnitLoaded _ ->
             False
 
         UnitFailed _ ->
@@ -606,14 +764,14 @@ drainAfter name mutate =
 
 
 
-decideUnit : Db -> Maybe Index.Unit -> Task.Task Error ( Index.Attested, Int )
+decideUnit : Db -> Maybe PageEntry -> Task.Task Error ( Index.Attested, Int )
 decideUnit db found =
-    case found of
-        Just unit ->
-            Queue.decide db unit Approved
+    case Maybe.andThen (\entry -> shownOf entry.view) found of
+        Just shown ->
+            Queue.decide db shown Approved
 
         Nothing ->
-            Task.fail (Error.conflict "fixture unit not loaded")
+            Task.fail (Error.conflict "fixture unit not loaded shown")
 
 
 
@@ -894,7 +1052,6 @@ sampleQueuedUnit =
         , purpose = Nothing
         , attested = Index.UnknownScheme "hash-sample"
         , updatedSha = "sha-sample"
-        , view = Stale UnverifiableHash
         }
     , changed = Nothing
     }
@@ -1019,8 +1176,8 @@ progressStableAcrossDrain =
         before <- Queue.loadPage Index.Start
         decided <-
             case List.find (\q -> q.unit.uid == "u-a") before.units of
-                Just q ->
-                    Queue.decide db q.unit Approved
+                Just _ ->
+                    decideNow db "u-a" Approved
                         |> Task.andThen (\( attested, _ ) -> Index.drainUnit attested)
                         |> Task.map (\_ -> True)
 
@@ -1071,8 +1228,8 @@ decideAndDrainA at =
 decideA : Db -> Queue.QueuePage -> Task.Task Error Index.Attested
 decideA db page =
     case List.find (\q -> q.unit.uid == "u-a") page.units of
-        Just q ->
-            Queue.decide db q.unit Approved |> Task.map (\( attested, _ ) -> attested)
+        Just _ ->
+            decideNow db "u-a" Approved |> Task.map (\( attested, _ ) -> attested)
 
         Nothing ->
             Task.fail (Error.conflict "fixture unit u-a not queued")
@@ -1204,14 +1361,7 @@ secondDecisionOfPairCountsOnce =
     do
         at <- freshScratch "ipe-index-progress-twice"
         d <- decideAndDrainA at
-        found <- loadUnitNow "u-a"
-        again <-
-            case found of
-                Just unit ->
-                    Queue.decide d.db unit Approved |> Task.map (\( attested, _ ) -> attested)
-
-                Nothing ->
-                    Task.fail (Error.conflict "fixture unit u-a not indexed")
+        again <- decideNow d.db "u-a" Approved |> Task.map (\( attested, _ ) -> attested)
         drainedAgain <- Index.drainUnit again
         redrained <- Index.drainUnit d.attested
         now <- currentProgressOf
@@ -1494,6 +1644,9 @@ checks =
         , check "a decision after a re-index is refused" approveRefusedAfterReindex
         , check "a decision on a unit gone from the index is refused" approveRefusedAfterUnitDeleted
         , check "a stale unit cannot be refused either" staleRefuseAlsoRefused
+        , check "only the selected unit's shown view is decidable" onlySelectedShownDecidable
+        , Task.succeed ( "a selection during a source read starts no second read", selectionsDuringReadCoalesce )
+        , Task.succeed ( "a source read's outdated response is dropped", outdatedResponseDropped )
         , Task.succeed ( "queue state texts distinguish loading/empty/failed/loaded", queueStateTextsDistinct )
         , check "progress counts decided pairs over decided-or-queued units" progressCountsDecidedPairs
         , check "progress total holds while the queue drains" progressStableAcrossDrain

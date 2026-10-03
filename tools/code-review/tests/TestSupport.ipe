@@ -11,7 +11,10 @@ module TestSupport exposing
     , viewB
     , viewTag
     , shownTextOf
+    , shownOf
+    , langName
     , unitViewTag
+    , PageEntry
     , execIndex
     , execIndexUnchecked
     , Scratch
@@ -28,6 +31,7 @@ module TestSupport exposing
     , loadFirstPage
     , indexConn
     , loadUnitNow
+    , decideNow
     , checkUnits
     , listSecond
     , isUnitA
@@ -212,7 +216,39 @@ shownTextOf view =
 
 
 
-unitViewTag : String -> List Index.Unit -> String
+shownOf : Index.SourceView -> Maybe Index.ShownSource
+shownOf view =
+    case view of
+        Shown shown ->
+            Just shown
+
+        Stale _ ->
+            Nothing
+
+        Unreadable _ ->
+            Nothing
+
+
+
+-- The ipe-index vectors' name for a highlight language.
+langName : Highlight.Lang -> String
+langName lang =
+    case lang of
+        Rust ->
+            "Rust"
+
+        Shell ->
+            "Shell"
+
+        Ipe ->
+            "Ipe"
+
+        Unknown ->
+            "Unknown"
+
+
+
+unitViewTag : String -> List PageEntry -> String
 unitViewTag uid units =
     case List.find (\u -> u.uid == uid) units of
         Just u ->
@@ -446,16 +482,42 @@ setIndexEnv indexDb repo =
 
 
 
--- The first queue page's units with the whole queue's count, both read on
--- one index connection.
-loadFirstPage : Task.Task Error { units : List Index.Unit, total : Int }
+-- One first-page unit with the view `Index.loadView` reads for it.
+type alias PageEntry =
+    { uid : String
+    , unit : Index.Unit
+    , view : Index.SourceView
+    }
+
+
+
+-- The first queue page's units, each with its view read afterwards the one
+-- way the app reads a selected unit's source, and the whole queue's count,
+-- all on one index connection.
+loadFirstPage : Task.Task Error { units : List PageEntry, total : Int }
 loadFirstPage =
     do
         settings <- Settings.indexSettings
         conn <- Index.readConnection settings
-        rows <- Index.loadPendingPage settings.roots conn Index.Start
+        rows <- Index.loadPendingPage conn Index.Start
+        entries <- Task.sequence (List.map (\r -> pageEntry conn settings.roots r.unit.uid) rows)
         total <- Index.countPending conn
-        Task.succeed { units = List.map (\r -> r.unit) rows, total = total }
+        Task.succeed { units = entries, total = total }
+
+
+
+pageEntry : Db -> RootMap -> String -> Task.Task Error PageEntry
+pageEntry conn roots uid =
+    Index.loadView conn roots uid
+        |> Task.andThen
+            (\found ->
+                case found of
+                    Just loaded ->
+                        Task.succeed { uid = uid, unit = loaded.unit, view = loaded.view }
+
+                    Nothing ->
+                        Task.fail (Error.conflict ("queued unit " ++ uid ++ " has no view"))
+            )
 
 
 
@@ -466,17 +528,35 @@ indexConn =
 
 
 
--- The unit `uid` loaded from the index the current environment names.
-loadUnitNow : String -> Task.Task Error (Maybe Index.Unit)
+-- The view of unit `uid` loaded from the index the current environment names.
+loadUnitNow : String -> Task.Task Error (Maybe Index.UnitView)
 loadUnitNow uid =
     do
         settings <- Settings.indexSettings
         conn <- Index.readConnection settings
-        Index.loadUnitByUid settings.roots conn uid
+        Index.loadView conn settings.roots uid
 
 
 
-checkUnits : Int -> List Index.Unit -> Bool
+-- A decision on unit `uid` made the one way the app makes it: through
+-- `Queue.decide` on the unit's loaded, shown source. A unit not shown fails
+-- the run.
+decideNow : Db -> String -> LibDb.Decision -> Task.Task Error ( Index.Attested, Int )
+decideNow db uid decision =
+    loadUnitNow uid
+        |> Task.andThen
+            (\found ->
+                case Maybe.andThen (\loaded -> shownOf loaded.view) found of
+                    Just shown ->
+                        Queue.decide db shown decision
+
+                    Nothing ->
+                        Task.fail (Error.conflict ("unit " ++ uid ++ " is not shown"))
+            )
+
+
+
+checkUnits : Int -> List PageEntry -> Bool
 checkUnits total units =
     if total /= 2 || List.length units /= 2 then
         False
@@ -507,8 +587,12 @@ listSecond items =
 
 
 
-isUnitA : Index.Unit -> Bool
-isUnitA u =
+isUnitA : PageEntry -> Bool
+isUnitA entry =
+    let
+        u =
+            entry.unit
+    in
     u.uid
         == "u-a"
         && u.change
@@ -537,13 +621,17 @@ isUnitA u =
         == Index.attest viewA
         && u.updatedSha
         == "shaA"
-        && shownTextOf u.view
+        && shownTextOf entry.view
         == Just viewA
 
 
 
-isUnitB : Index.Unit -> Bool
-isUnitB u =
+isUnitB : PageEntry -> Bool
+isUnitB entry =
+    let
+        u =
+            entry.unit
+    in
     u.uid
         == "u-b"
         && u.change
@@ -558,7 +646,7 @@ isUnitB u =
         == "user"
         && Maybe.map SafeText.toString u.purpose
         == Nothing
-        && shownTextOf u.view
+        && shownTextOf entry.view
         == Just viewB
 
 
@@ -688,11 +776,11 @@ attestedIn at uid =
 
 
 
-reverifyShown : String -> Maybe Index.Unit -> Task.Task Error Index.Attested
+reverifyShown : String -> Maybe Index.UnitView -> Task.Task Error Index.Attested
 reverifyShown uid found =
     case found of
-        Just unit ->
-            case unit.view of
+        Just loaded ->
+            case loaded.view of
                 Shown shown ->
                     Index.reverify shown
 

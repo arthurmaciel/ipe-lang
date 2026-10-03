@@ -319,7 +319,7 @@ indexTextRendered =
         r <- loadFirstPage
         cleanupIndex at.indexDb at.repo
         Task.succeed
-            (case List.find (\u -> u.uid == "u-a") r.units of
+            (case Maybe.map (\e -> e.unit) (List.find (\e -> e.uid == "u-a") r.units) of
                 Just u ->
                     List.all safeShown [ u.name, u.qualified, u.kind, u.facing ]
                         && (Maybe.map safeShown u.purpose == Just True)

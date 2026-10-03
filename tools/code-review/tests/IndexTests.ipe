@@ -74,6 +74,7 @@ import TestSupport exposing
     , openReadOnlyAt
     , vectorsPath
     , ipeIndexTestFile
+    , langName
     , repoFile
     , probeMessage
     , probeNames
@@ -222,8 +223,9 @@ oversizedSourceRefusedIn base =
 
 
 
--- The unit page's data path: a uid that exists loads with source and qualified
--- name; a bogus uid loads Nothing; the qualified-name table lists every unit.
+-- The unit page's data path: a uid that exists loads with its source and
+-- qualified name, and links nothing its source does not name; a bogus uid
+-- loads Nothing.
 unitPageLoad : Task.Task Error Bool
 unitPageLoad =
     freshDir "ipe-index-b9-unit" |> Task.andThen unitPageLoadIn
@@ -254,19 +256,14 @@ unitPageLoadIn base =
                     |> Task.andThen
                         (\mb ->
                             case mb of
-                                Just unit ->
-                                    indexConn
-                                        |> Task.andThen Index.qualifiedUids
-                                        |> Task.map
-                                            (\qs ->
-                                                SafeText.toString unit.qualified
-                                                    == "Lib.answer"
-                                                    && shownTextOf unit.view
-                                                    == Just viewA
-                                                    && List.length qs
-                                                    == 3
-                                                    && List.member ( "Lib.answer", "u-a" ) qs
-                                            )
+                                Just loaded ->
+                                    Task.succeed
+                                        (SafeText.toString loaded.unit.qualified
+                                            == "Lib.answer"
+                                            && shownTextOf loaded.view
+                                            == Just viewA
+                                            && List.isEmpty loaded.links
+                                        )
 
                                 Nothing ->
                                     Task.succeed False
@@ -373,6 +370,76 @@ vectorHolds v =
             False
 
 
+-- ── metadata-only queue page ───────────────────────────────────────────
+--
+-- A queue page carries no source (`Index.Unit` has no view to hold one):
+-- with both queued units' files gone the page still loads both units, and a
+-- unit's own view load is where its unreadable file is reported. Red if a
+-- page load fails or drops a unit over a missing file.
+pageReadsNoSource : Task.Task Error Bool
+pageReadsNoSource =
+    do
+        at <- freshScratch "ipe-index-page-no-source"
+        removeFileIfAny at.indexDb
+        seedIndex at.indexDb at.repo
+        removeFileIfAny (at.repo ++ "/src/Lib.rs")
+        removeFileIfAny (at.repo ++ "/src/Main.ipe")
+        conn <- indexConn
+        rows <- Index.loadPendingPage conn Index.Start
+        settings <- Settings.indexSettings
+        found <- Index.loadView conn settings.roots "u-b"
+        cleanupIndex at.indexDb at.repo
+        Task.succeed
+            (List.map (\r -> r.unit.uid) rows
+                == [ "u-a", "u-b" ]
+                && String.startsWith "unreadable: " (loadedViewTag found)
+            )
+
+
+
+loadedViewTag : Maybe Index.UnitView -> String
+loadedViewTag found =
+    case found of
+        Just loaded ->
+            viewTag loaded.view
+
+        Nothing ->
+            "absent"
+
+
+
+-- A unit's highlighting language is its file's language as ipe-index
+-- indexed it in `files.lang`; a unit whose file has no `files` row is
+-- `Unknown`. Red if the language is taken from anywhere but `files.lang`.
+langFromFilesTable : Task.Task Error Bool
+langFromFilesTable =
+    do
+        at <- freshScratch "ipe-index-files-lang"
+        removeFileIfAny at.indexDb
+        seedIndex at.indexDb at.repo
+        execIndex at.indexDb "INSERT INTO files (path, lang) VALUES (?, ?)" [ SqlString "ipe:src/Lib.rs", SqlString "rs" ]
+        conn <- indexConn
+        rows <- Index.loadPendingPage conn Index.Start
+        cleanupIndex at.indexDb at.repo
+        Task.succeed (List.map (\r -> r.unit.uid ++ "=" ++ langName r.unit.lang) rows == [ "u-a=Rust", "u-b=Unknown" ])
+
+
+
+-- An index with no `files` table stops startup naming `IPE_INDEX_DB`. Red if
+-- the probe stops reading the language join a queue page reads.
+probeRefusesIndexWithoutFiles : Task.Task Error Bool
+probeRefusesIndexWithoutFiles =
+    do
+        at <- freshScratch "ipe-index-probe-files"
+        removeFileIfAny at.indexDb
+        seedIndex at.indexDb at.repo
+        execIndex at.indexDb "DROP TABLE files" []
+        message <- probeMessage (Settings.indexSettings |> Task.andThen Index.probe)
+        cleanupIndex at.indexDb at.repo
+        Task.succeed (probeNames "IPE_INDEX_DB" at.indexDb message)
+
+
+
 checks : Task.Task Error (List ( String, Bool ))
 checks =
     Task.sequence
@@ -384,4 +451,7 @@ checks =
         , check "source file past the read ceiling refused" oversizedSourceRefused
         , check "view and attestation match the shared ipe-index vectors" viewHashVectors
         , check "unit page loads by uid, names resolve" unitPageLoad
+        , check "a queue page reads no source file; only a unit's view load does" pageReadsNoSource
+        , check "a unit's language comes from its file's indexed language" langFromFilesTable
+        , check "an index without a files table fails the probe" probeRefusesIndexWithoutFiles
         ]

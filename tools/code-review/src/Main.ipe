@@ -25,7 +25,7 @@ import Lib.Highlight as Highlight exposing (Token(..))
 import Lib.Index as Index exposing (SourceView(..), StaleReason(..))
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
-import Lib.Queue as Queue exposing (HistoryState(..), QueueState(..), UnitPageState(..))
+import Lib.Queue as Queue exposing (HistoryState(..), QueueState(..), SelectedView(..), UnitPageState(..))
 import Lib.SafeText as SafeText exposing (SafeText)
 import Lib.Settings as Settings
 
@@ -52,6 +52,7 @@ type alias Model =
     , unitPage : Queue.UnitPageState
     , unitLoad : Queue.LoadTicket
     , selected : Int
+    , selectedView : Queue.SelectedView
     }
 
 
@@ -73,6 +74,7 @@ init _req =
       , unitPage = UnitLoading
       , unitLoad = Queue.firstTicket
       , selected = 0
+      , selectedView = NoneSelected
       }
     , Cmd.none
     )
@@ -175,7 +177,8 @@ type Msg
     | ShowHistory
     | HistoryPageLoaded Queue.LoadTicket (Result Error Queue.HistoryPage)
     | HistoryNext LibDb.HistoryCursor
-    | UnitViewLoaded Queue.LoadTicket (Result Error (Maybe ( Index.Unit, List Links.Link )))
+    | UnitViewLoaded Queue.LoadTicket (Result Error (Maybe Index.UnitView))
+    | SelectedViewLoaded String (Result Error (Maybe Index.UnitView))
     | KeyDown String
     | SelectUnit Int
 
@@ -189,7 +192,7 @@ update msg model =
                     loaded =
                         { model | queueState = Queue.stateFromResult result, refusingUid = Nothing }
                 in
-                ( { loaded | selected = clampIndex model.selected (List.length (queueList loaded)) }, Cmd.none )
+                viewAfterLoad { loaded | selected = clampIndex model.selected (List.length (queueList loaded)) }
 
             else
                 ( model, Cmd.none )
@@ -250,11 +253,64 @@ update msg model =
             else
                 ( model, Cmd.none )
 
+        SelectedViewLoaded uid result ->
+            viewStep (Queue.viewArrived uid result model.selectedView) model
+
         KeyDown key ->
             keyActionMsg (Keys.keyAction (model.refusingUid /= Nothing) (List.length (queueList model)) model.selected key) model
 
         SelectUnit i ->
-            ( { model | selected = clampIndex i (List.length (queueList model)) }, Cmd.none )
+            selectAt i model
+
+
+-- The selected card's view after a queue load: on the queue page the
+-- selected unit is read afresh, since the load may follow a decision or a
+-- reindex; anywhere else no card is shown, so no source is read.
+viewAfterLoad : Model -> ( Model, Cmd Msg )
+viewAfterLoad model =
+    case ( model.page, selectedUid model ) of
+        ( QueuePage, Just uid ) ->
+            viewStep (Queue.reloadView uid model.selectedView) model
+
+        ( QueuePage, Nothing ) ->
+            ( { model | selectedView = Queue.clearView model.selectedView }, Cmd.none )
+
+        ( HistoryPage, _ ) ->
+            ( { model | selectedView = Queue.clearView model.selectedView }, Cmd.none )
+
+        ( UnitPage _, _ ) ->
+            ( { model | selectedView = Queue.clearView model.selectedView }, Cmd.none )
+
+
+-- The queue card at `i` selected, reading its view when it is not shown.
+selectAt : Int -> Model -> ( Model, Cmd Msg )
+selectAt i model =
+    let
+        moved =
+            { model | selected = clampIndex i (List.length (queueList model)) }
+    in
+    case selectedUid moved of
+        Just uid ->
+            viewStep (Queue.selectView uid moved.selectedView) moved
+
+        Nothing ->
+            ( moved, Cmd.none )
+
+
+-- A selected-view transition, with the one read it starts, if any.
+viewStep : ( Queue.SelectedView, Maybe String ) -> Model -> ( Model, Cmd Msg )
+viewStep ( state, next ) model =
+    ( { model | selectedView = state }, loadViewCmd next )
+
+
+loadViewCmd : Maybe String -> Cmd Msg
+loadViewCmd next =
+    case next of
+        Just uid ->
+            Cmd.perform (Queue.loadUnitView uid) (SelectedViewLoaded uid)
+
+        Nothing ->
+            Cmd.none
 
 
 -- Every KeyAction dispatches the same Msg the matching button sends —
@@ -279,7 +335,7 @@ keyActionMsg action model =
                     ( model, Cmd.none )
 
         Select i ->
-            ( { model | selected = i }, Cmd.none )
+            selectAt i model
 
         ConfirmRefuse ->
             case model.refusingUid of
@@ -339,21 +395,26 @@ clampIndex i len =
     max 0 (min i (len - 1))
 
 
--- Every decision, from a button or a key, goes through `Queue.decide`, which
--- re-proves the shown source before writing.
+-- Every decision, from a button or a key, goes through `Queue.decide` on the
+-- selected unit's shown source, which it re-proves before writing.
 saveDecision : Model -> String -> LibDb.Decision -> Cmd Msg
 saveDecision model uid decision =
-    Cmd.perform
-        (do
-            db <- LibDb.open
-            case List.find (\q -> q.unit.uid == uid) (queueList model) of
-                Just q ->
-                    Queue.decide db q.unit decision
+    Cmd.perform (decisionTask model uid decision) (DecisionSaved uid)
+
+
+decisionTask : Model -> String -> LibDb.Decision -> Task.Task Error ( Index.Attested, Int )
+decisionTask model uid decision =
+    case List.find (\q -> q.unit.uid == uid) (queueList model) of
+        Just _ ->
+            case Queue.decidableSource uid model.selectedView of
+                Just shown ->
+                    LibDb.open |> Task.andThen (\db -> Queue.decide db shown decision)
 
                 Nothing ->
-                    Task.fail (Error.conflict "unit is no longer in the queue")
-        )
-        (DecisionSaved uid)
+                    Task.fail (Error.conflict "this unit's source is not shown, so it cannot be decided")
+
+        Nothing ->
+            Task.fail (Error.conflict "unit is no longer in the queue")
 
 
 -- The drain loop: the decision is already saved (DecisionSaved Ok), so the
@@ -699,10 +760,10 @@ nameOf row =
 unitPageBody : Model -> Ui.Element Msg
 unitPageBody model =
     case model.unitPage of
-        UnitLoaded unit links ->
+        UnitLoaded loaded ->
             Ui.column
                 [ Ui.width Ui.fill, Ui.spacing 16, Ui.scrollbars ]
-                [ unitPageCard links unit ]
+                [ unitPageCard loaded ]
 
         UnitLoading ->
             unitPageStatus model.unitPage
@@ -724,8 +785,12 @@ unitPageStatus state =
             Ui.none
 
 
-unitPageCard : List Links.Link -> Index.Unit -> Ui.Element Msg
-unitPageCard links unit =
+unitPageCard : Index.UnitView -> Ui.Element Msg
+unitPageCard loaded =
+    let
+        unit =
+            loaded.unit
+    in
     Ui.column
         [ Ui.width Ui.fill
         , Ui.padding 16
@@ -745,8 +810,8 @@ unitPageCard links unit =
         , Ui.el
             [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
             (safeText (unitLocation unit))
-        , referencesRow links
-        , sourceBlock unit
+        , referencesRow loaded.links
+        , sourceBlock loaded
         ]
 
 
@@ -827,6 +892,9 @@ unitCard model selected q =
     let
         unit =
             q.unit
+
+        loaded =
+            Queue.selectedViewOf unit.uid model.selectedView
     in
     Ui.column
         [ Ui.width Ui.fill
@@ -854,14 +922,38 @@ unitCard model selected q =
             , chip unit.facing
             , chip unit.kind
             , Ui.el [ Ui.width Ui.fill ] Ui.none
-            , decisionButtons model unit
+            , case loaded of
+                Just v ->
+                    decisionButtons model v
+
+                Nothing ->
+                    Ui.none
             ]
         , Ui.el
             [ Font.size 12, Font.family Font.monospace, Font.color (Ui.rgb 150 150 165) ]
             (safeText (SafeText.concat [ unitLocation unit, maybePurpose unit ]))
         , changedLine q
-        , sourceBlock unit
+        , case loaded of
+            Just v ->
+                Ui.column
+                    [ Ui.width Ui.fill, Ui.spacing 10 ]
+                    [ referencesRow v.links, sourceBlock v ]
+
+            Nothing ->
+                selectedViewStatus unit.uid model.selectedView
         ]
+
+
+-- The line in place of the selected card's source while its view is not
+-- loaded.
+selectedViewStatus : String -> Queue.SelectedView -> Ui.Element Msg
+selectedViewStatus uid state =
+    case Queue.selectedViewStatusText uid state of
+        Just text ->
+            Ui.el [ Font.size 12, Font.color (Ui.rgb 150 150 165) ] (Ui.text text)
+
+        Nothing ->
+            Ui.none
 
 
 -- `path · lines a-b`, from the unit's rendered path.
@@ -966,14 +1058,14 @@ chipColored label bg =
 
 -- Approve and Refuse exist only for a verified view; any other view shows why
 -- it cannot be decided instead.
-decisionButtons : Model -> Index.Unit -> Ui.Element Msg
-decisionButtons model unit =
-    case Queue.sourceStatusText unit.view of
+decisionButtons : Model -> Index.UnitView -> Ui.Element Msg
+decisionButtons model loaded =
+    case Queue.sourceStatusText loaded.view of
         Just why ->
             Ui.el [ Font.size 12, Font.color (Ui.rgb 220 170 90) ] (Ui.text why)
 
         Nothing ->
-            verifiedDecisionButtons model unit
+            verifiedDecisionButtons model loaded.unit
 
 
 verifiedDecisionButtons : Model -> Index.Unit -> Ui.Element Msg
@@ -1045,8 +1137,8 @@ refusePanel model uid =
         ]
 
 
-sourceBlock : Index.Unit -> Ui.Element Msg
-sourceBlock unit =
+sourceBlock : Index.UnitView -> Ui.Element Msg
+sourceBlock loaded =
     Ui.el
         [ Ui.width Ui.fill
         , Ui.height (Ui.px 240)
@@ -1058,15 +1150,15 @@ sourceBlock unit =
         ]
         (Ui.column
             [ Ui.width Ui.fill, Ui.spacing 2 ]
-            (case unit.view of
+            (case loaded.view of
                 Shown shown ->
-                    List.map (numberedLine unit.lang) (Format.numberedLines unit.lineStart (Index.shownText shown))
+                    List.map (numberedLine loaded.unit.lang) (Format.numberedLines loaded.unit.lineStart (Index.shownText shown))
 
                 Stale _ ->
-                    withheldSource unit.view
+                    withheldSource loaded.view
 
                 Unreadable _ ->
-                    withheldSource unit.view
+                    withheldSource loaded.view
             )
         )
 

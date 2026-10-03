@@ -72,6 +72,7 @@ import TestSupport exposing
     , openReadOnlyAt
     , vectorsPath
     , ipeIndexTestFile
+    , langName
     , repoFile
     , probeMessage
     , probeNames
@@ -253,6 +254,82 @@ isUnknown lang =
 
 
 
+-- The language every stored `files.lang` value highlights as agrees with
+-- ipe-index's language vectors, row by row. Red if the vectors file is
+-- absent or empty, or if `langFor` maps a stored value differently.
+type alias LangVector =
+    { stored : String
+    , highlight : String
+    }
+
+
+
+langVectorsHold : Task.Task Error Bool
+langVectorsHold =
+    do
+        cwd <- System.cwd ()
+        path <- Task.fromResult (Path.fromString (ipeIndexTestFile cwd "lang_vectors.json"))
+        text <- File.readFileLimit path (ByteSize.kib 16)
+        vectors <- Task.fromResult (Decode.decodeString (Decode.list langVectorDecoder) text)
+        Task.succeed (not (List.isEmpty vectors) && List.all (\v -> langName (Highlight.langFor v.stored) == v.highlight) vectors)
+
+
+
+langVectorDecoder : Decode.Decoder LangVector
+langVectorDecoder =
+    Decode.map2
+        (\stored highlight -> { stored = stored, highlight = highlight })
+        (Decode.field "stored" Decode.string)
+        (Decode.field "highlight" Decode.string)
+
+
+
+-- A token's raw text, unrendered.
+rawText : Token -> String
+rawText tok =
+    case tok of
+        Keyword t ->
+            t
+
+        Str t ->
+            t
+
+        Comment t ->
+            t
+
+        Num t ->
+            t
+
+        Ident t ->
+            t
+
+        Plain t ->
+            t
+
+
+
+-- Tokenizing loses and reorders nothing: the tokens' texts, in order, are
+-- the source. Red if a closed block comment is rebuilt reversed, or if
+-- `/*/` is taken for a closed comment.
+reassembles : Lang -> String -> Bool
+reassembles lang src =
+    String.concat (List.map rawText (Highlight.tokenize lang src)) == src
+
+
+
+-- A one-mebibyte single-line source, the largest a shown unit's line can
+-- reach in practice, tokenizes whole. Red if a tokenizer step recurses per
+-- character outside tail position.
+largeLineTokenizes : Bool
+largeLineTokenizes =
+    let
+        src =
+            String.repeat 131072 "a1 \"s\" "
+    in
+    String.length src == 1048576 && reassembles Highlight.Rust src
+
+
+
 -- The keyboard shortcuts drive exactly the messages the buttons send: a/r
 -- act on the selected unit, j/k/g/1-5 move the selection, Enter/Escape
 -- confirm/cancel an open refuse panel, and every key is ignored while the
@@ -327,4 +404,14 @@ checks =
                 == "0%"
             )
         , Task.succeed ( "keyboard shortcuts map to the button msgs", testKeys )
+        , check "highlight languages match the shared ipe-index language vectors" langVectorsHold
+        , Task.succeed
+            ( "highlight tokens reassemble the source"
+            , reassembles Highlight.Rust "/* a */ x"
+                && reassembles Highlight.Rust "/*/ y"
+                && reassembles Highlight.Rust "a /* b */ c /* d"
+                && List.any (isComment "/* a */") (Highlight.tokenize Highlight.Rust "/* a */ x")
+                && List.any (isPlain "/*/ y") (Highlight.tokenize Highlight.Rust "/*/ y")
+            )
+        , Task.succeed ( "a one-mebibyte single-line source tokenizes", largeLineTokenizes )
         ]
