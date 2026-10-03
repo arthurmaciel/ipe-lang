@@ -344,9 +344,13 @@ decide db shown decision =
 -- read), the loaded view, no unit with the read's uid, or a failed read. At
 -- most one read is in flight: a selection made during a read only records
 -- `wanted`, and a response for any uid but the in-flight one is dropped.
+-- `fresh` is False once the queue page reloaded or cleared during the read,
+-- so its result predates the page and never settles the view: the in-flight
+-- unit selected again is read afresh, and with nothing wanted the result is
+-- dropped.
 type SelectedView
     = NoneSelected
-    | ViewLoading { uid : String, wanted : Maybe String }
+    | ViewLoading { uid : String, wanted : Maybe String, fresh : Bool }
     | ViewShown Index.UnitView
     | ViewMissing String
     | ViewFailed String Error
@@ -358,7 +362,7 @@ selectView : String -> SelectedView -> ( SelectedView, Maybe String )
 selectView uid state =
     case state of
         ViewLoading loading ->
-            ( ViewLoading { uid = loading.uid, wanted = wantedAfter loading.uid uid }, Nothing )
+            ( ViewLoading { uid = loading.uid, wanted = wantedAfter loading.uid loading.fresh uid, fresh = loading.fresh }, Nothing )
 
         ViewShown shown ->
             if shown.unit.uid == uid then
@@ -384,7 +388,7 @@ reloadView : String -> SelectedView -> ( SelectedView, Maybe String )
 reloadView uid state =
     case state of
         ViewLoading loading ->
-            ( ViewLoading { uid = loading.uid, wanted = Just uid }, Nothing )
+            ( ViewLoading { uid = loading.uid, wanted = Just uid, fresh = False }, Nothing )
 
         ViewShown _ ->
             startView uid
@@ -400,12 +404,13 @@ reloadView uid state =
 
 
 -- No unit to select. A read in flight stays recorded, with nothing wanted
--- after it, so no second read can start beside it.
+-- after it, so no second read can start beside it, and its result is
+-- dropped when it returns.
 clearView : SelectedView -> SelectedView
 clearView state =
     case state of
         ViewLoading loading ->
-            ViewLoading { uid = loading.uid, wanted = Nothing }
+            ViewLoading { uid = loading.uid, wanted = Nothing, fresh = False }
 
         ViewShown _ ->
             NoneSelected
@@ -436,7 +441,11 @@ viewArrived uid result state =
                         startView next
 
                     Nothing ->
-                        ( settledView uid result, Nothing )
+                        if loading.fresh then
+                            ( settledView uid result, Nothing )
+
+                        else
+                            ( NoneSelected, Nothing )
 
         ViewShown _ ->
             ( state, Nothing )
@@ -453,14 +462,15 @@ viewArrived uid result state =
 
 startView : String -> ( SelectedView, Maybe String )
 startView uid =
-    ( ViewLoading { uid = uid, wanted = Nothing }, Just uid )
+    ( ViewLoading { uid = uid, wanted = Nothing, fresh = True }, Just uid )
 
 
--- The unit wanted after the in-flight read of `inFlight`: nothing when the
--- in-flight unit itself is selected again.
-wantedAfter : String -> String -> Maybe String
-wantedAfter inFlight uid =
-    if inFlight == uid then
+-- The unit wanted after the in-flight read of `inFlight` when `uid` is
+-- selected: nothing when the in-flight unit is selected again and its read
+-- is fresh; a read that predates the page reads that unit again.
+wantedAfter : String -> Bool -> String -> Maybe String
+wantedAfter inFlight fresh uid =
+    if inFlight == uid && fresh then
         Nothing
 
     else

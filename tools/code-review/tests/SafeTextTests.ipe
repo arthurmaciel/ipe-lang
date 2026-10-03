@@ -302,13 +302,6 @@ rlo =
 
 
 
--- The unit of the first-page entry `uid`, typed at the binding so a field
--- read on it never waits on inference order.
-unitNamed : String -> List PageEntry -> Maybe Index.Unit
-unitNamed uid entries =
-    Maybe.map (\e -> e.unit) (List.find (\e -> e.uid == uid) entries)
-
-
 indexTextRendered : Task.Task Error Bool
 indexTextRendered =
     do
@@ -327,16 +320,22 @@ indexTextRendered =
         r <- loadFirstPage
         cleanupIndex at.indexDb at.repo
         Task.succeed
-            (case unitNamed "u-a" r.units of
-                Just u ->
-                    List.all safeShown [ u.name, u.qualified, u.kind, u.facing ]
-                        && (Maybe.map safeShown u.purpose == Just True)
-                        && SafeText.toString u.qualified
-                        == "Lib.\\u{202e}answer"
+            (case List.find (\e -> e.uid == "u-a") r.units of
+                Just entry ->
+                    indexUnitRendered entry.unit
 
                 Nothing ->
                     False
             )
+
+
+
+indexUnitRendered : Index.Unit -> Bool
+indexUnitRendered u =
+    List.all safeShown [ u.name, u.qualified, u.kind, u.facing ]
+        && (Maybe.map safeShown u.purpose == Just True)
+        && SafeText.toString u.qualified
+        == "Lib.\\u{202e}answer"
 
 
 
