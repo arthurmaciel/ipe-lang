@@ -5832,7 +5832,8 @@ mod canonical_redirect_handler_tests {
 #[cfg(all(test, feature = "server"))]
 mod base_path_tests {
     use super::{
-        client_js_path, cookie_name_for, cookie_path_for, normalise_base_path, render_page_full,
+        client_js_path, cookie_name_for, cookie_name_with, cookie_path_for, csrf,
+        normalise_base_path, render_page_full,
     };
 
     #[test]

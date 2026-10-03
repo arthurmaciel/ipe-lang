@@ -448,6 +448,20 @@ pub fn dev_surface_from_env() -> Option<DevSurface> {
     dev_intent_from_env().and_then(|intent| dev_surface(intent, ProcessScope::current()))
 }
 
+/// A [`DevIntent`] for a unit test of a pure `*_with` gate.
+#[cfg(test)]
+pub(crate) const fn test_dev_intent() -> DevIntent {
+    DevIntent(())
+}
+
+/// A [`DevSurface`] for a unit test of a pure `*_with` gate.
+#[cfg(test)]
+pub(crate) const fn test_dev_surface() -> DevSurface {
+    DevSurface {
+        _intent: DevIntent(()),
+    }
+}
+
 /// Whether the process posture is production, for closing-direction reads only.
 ///
 /// A dev-only relaxation never negates this: it takes a [`DevIntent`] or

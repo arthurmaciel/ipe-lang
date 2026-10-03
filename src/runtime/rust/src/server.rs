@@ -1870,7 +1870,7 @@ fn ws_cross_origin(req: &ServerRequest) -> bool {
 const fn ws_origin_decision(
     patterns_empty: bool,
     dev: Option<&crate::telemetry::DevSurface>,
-) -> Option<(u16, &'static str)> {
+) -> Option<(i64, &'static str)> {
     if patterns_empty && dev.is_none() {
         Some((403, "websocket: origin allowlist required in production"))
     } else {
@@ -4034,7 +4034,7 @@ mod tests {
         let csrf = csrf_set_cookie_value(&tok, false);
         let name = csrf_cookie_name();
         let resp = server_with_cookie(
-            CookieSpec {
+            ServerCookie {
                 name: "sid".to_owned(),
                 value: "v".to_owned(),
             },
