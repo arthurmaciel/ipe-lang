@@ -960,7 +960,7 @@ impl<'a> Printer<'a> {
         out.push_str(&header);
         out.push('\n');
 
-        self.import_block(&mut out, imports, &owned_from);
+        self.import_block(&mut out, imports, owned_from);
 
         // Declarations in source order, each preceded by two blank lines
         // (elm-format's top-level spacing). Unions / aliases / values /
