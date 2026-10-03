@@ -20,6 +20,7 @@
 //! `explain_examples/known_rot.txt` lists the `page:line` blocks still failing:
 //! a listed block must still mismatch, so the ledger can only shrink.
 
+#[path = "explain_examples/fence.rs"]
 mod fence;
 
 use std::collections::BTreeSet;
