@@ -26,7 +26,7 @@
 //! `network` capability and any SSRF-style host policy. `Dsn` is the syntactic
 //! parse boundary; connecting is a distinct, separately-reviewed act.
 
-use super::IpeResult;
+use super::{FromLimitExceeded, IpeResult};
 use crate::encoding::{UrlGrammar, decode_component};
 use crate::secret::{Secret, secret_from_string};
 use crate::ssrf::{ConfiguredHost, DriverParityQuery, UnambiguousUrl};
@@ -321,6 +321,23 @@ enum DsnReject {
 }
 
 impl DsnReject {
+    /// Whether this rejection is the whole-DSN length ceiling.
+    const fn is_ceiling(self) -> bool {
+        match self {
+            Self::TooLong => true,
+            Self::Unparseable
+            | Self::UnknownDriver
+            | Self::MissingHost
+            | Self::InvalidPort
+            | Self::TlsDisabled
+            | Self::UnknownSslMode
+            | Self::ConflictingParameter
+            | Self::InvalidComponent
+            | Self::AmbiguousUserinfo
+            | Self::PasswordWithoutUser => false,
+        }
+    }
+
     /// The value-free message. Every arm is a fixed, credential-free string; the
     /// input is never interpolated, so the rejection cannot leak a pasted secret.
     fn message(self) -> &'static str {
@@ -344,8 +361,13 @@ impl DsnReject {
     }
 }
 
-fn reject<E: From<String>>(r: DsnReject) -> IpeResult<E, Dsn> {
-    IpeResult::Err(r.message().to_owned().into())
+fn reject<E: From<String> + FromLimitExceeded>(r: DsnReject) -> IpeResult<E, Dsn> {
+    let message = r.message().to_owned();
+    IpeResult::Err(if r.is_ceiling() {
+        E::from_limit_exceeded(message)
+    } else {
+        message.into()
+    })
 }
 
 /// A generous-but-bounded length cap for any single DSN component (host, user,
@@ -446,7 +468,7 @@ fn tls_from_query(url: &UnambiguousUrl) -> Result<TlsMode, DsnReject> {
 /// [`MAX_COMPONENT_LEN`] bytes, and a DSN over [`MAX_DSN_LEN`] bytes are
 /// refused.
 #[must_use]
-pub fn dsn_parse<E: From<String>>(s: String) -> IpeResult<E, Dsn> {
+pub fn dsn_parse<E: From<String> + FromLimitExceeded>(s: String) -> IpeResult<E, Dsn> {
     if s.len() > MAX_DSN_LEN {
         return reject(DsnReject::TooLong);
     }
@@ -556,7 +578,7 @@ pub fn dsn_parse<E: From<String>>(s: String) -> IpeResult<E, Dsn> {
 /// is a rejection rather than a panic.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
-pub fn dsn_build<E: From<String>>(
+pub fn dsn_build<E: From<String> + FromLimitExceeded>(
     driver_tag: i64,
     host: String,
     port: i64,
@@ -1045,6 +1067,17 @@ mod tests {
             IpeResult::Ok(_)
         ));
         assert!(parse_err(&format!("{at_cap}a")).contains("exceeds the length limit"));
+        assert!(matches!(
+            dsn_parse::<super::super::IpeError>(at_cap.clone()),
+            IpeResult::Ok(_)
+        ));
+        assert!(matches!(
+            dsn_parse::<super::super::IpeError>(format!("{at_cap}a")),
+            IpeResult::Err(ref e)
+                if *e == super::super::IpeError::limit_exceeded(
+                    "Ipe.Db.Dsn: DSN exceeds the length limit"
+                )
+        ));
         let long_password = format!(
             "postgres://reader:{}@db.example/app",
             "p".repeat(MAX_COMPONENT_LEN + 1)
