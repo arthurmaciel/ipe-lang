@@ -867,16 +867,53 @@ pub fn checked_sbpl(
     mounts: &JailMounts,
 ) -> Result<String, crate::JailPathError> {
     mounts.refuse_fixed_exposing(&MACOS_READ_ROOTS)?;
+    let carve: Vec<&Path> = mounts
+        .writable_tree()
+        .carve()
+        .paths()
+        .map(crate::CanonicalPath::as_path)
+        .collect();
     Ok(sbpl_from_profile(
         profile,
         mounts.scoped_tmp().as_path(),
         mounts.working_tree().as_path(),
+        &carve,
     ))
+}
+
+/// The Seatbelt regex matching a path with a [`crate::VcsKind::ALL`] entry name
+/// as any component, letters matched case-insensitively.
+///
+/// Generated from the SSOT, so a new kind is denied without a second list.
+#[cfg(any(target_os = "macos", test))]
+#[must_use]
+fn vcs_name_regex() -> String {
+    let names: Vec<String> = crate::VcsKind::ALL
+        .iter()
+        .map(|kind| {
+            kind.entry_name()
+                .chars()
+                .map(|ch| match ch {
+                    '.' => String::from("\\."),
+                    ch if ch.is_ascii_alphabetic() => {
+                        format!("[{}{}]", ch.to_ascii_uppercase(), ch.to_ascii_lowercase())
+                    }
+                    ch => ch.to_string(),
+                })
+                .collect()
+        })
+        .collect();
+    format!("/({})(/|$)", names.join("|"))
 }
 
 #[cfg(any(target_os = "macos", test))]
 #[must_use]
-fn sbpl_from_profile(profile: &SandboxProfile, scoped_tmp: &Path, working_tree: &Path) -> String {
+fn sbpl_from_profile(
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    working_tree: &Path,
+    carve: &[&Path],
+) -> String {
     use std::fmt::Write as _;
 
     // SBPL string literals are double-quoted; a path with an embedded `"` or `\`
@@ -1012,11 +1049,25 @@ fn sbpl_from_profile(profile: &SandboxProfile, scoped_tmp: &Path, working_tree: 
         "(allow file-write* (subpath {}))",
         quote(&macos_resolved_subpath(scoped_tmp))
     );
+    // The working tree's version-control metadata stays read-only under its
+    // write allow: a later rule wins, so each carved path is denied after the
+    // allow, and so is any VCS entry name at any depth of the tree, matched
+    // case-insensitively as the default APFS volume resolves it. The name rule
+    // also covers metadata the child creates after the jail starts.
     if matches!(profile.filesystem, FilesystemScope::WorkingTreeReadWrite) {
+        let tree = quote(&macos_resolved_subpath(working_tree));
+        let _ = writeln!(s, "(allow file-write* (subpath {tree}))");
+        for path in carve {
+            let _ = writeln!(
+                s,
+                "(deny file-write* (subpath {}))",
+                quote(&macos_resolved_subpath(path))
+            );
+        }
         let _ = writeln!(
             s,
-            "(allow file-write* (subpath {}))",
-            quote(&macos_resolved_subpath(working_tree))
+            "(deny file-write* (require-all (subpath {tree}) (regex #\"{}\")))",
+            vcs_name_regex()
         );
     }
     s.push('\n');
@@ -1321,9 +1372,42 @@ pub(crate) fn freebsd_mount_ops(
                         source: safe.0,
                     }
                 }
+                MountStep::Bind(Bind::WorkingTree(tree)) => {
+                    let path = freebsd_working_tree_plan(tree).map_err(RunJailDefect::Path)?;
+                    let safe = SafeMountPath::new(path.as_path())?;
+                    FreebsdMountOp::ReadWriteBind {
+                        target: under_root(root, &safe),
+                        source: safe.0,
+                    }
+                }
             })
         })
         .collect()
+}
+
+/// The path the FreeBSD jail binds read-write for `tree`, which it grants only
+/// when the tree holds no version-control metadata.
+///
+/// A `mount_nullfs -o ro` of a carve path names it by path at mount time, so a
+/// swap between the carve and the mount would bind a different directory; the
+/// arm refuses until it mounts the carve through a held handle.
+///
+/// # Errors
+/// [`crate::JailPathError::VcsMetadataUncarvable`] naming the first carved path
+/// when the carve is not empty.
+#[cfg(any(target_os = "freebsd", test))]
+pub(crate) fn freebsd_working_tree_plan(
+    tree: &crate::WritableTree,
+) -> Result<&crate::CanonicalPath, crate::JailPathError> {
+    tree.carve()
+        .paths()
+        .next()
+        .map_or(Ok(tree.tree()), |first| {
+            Err(crate::JailPathError::VcsMetadataUncarvable {
+                arm: crate::JailArm::Freebsd,
+                path: first.as_path().to_path_buf(),
+            })
+        })
 }
 
 /// Apply `ops` in order through `mount`, stopping at the first failure.
@@ -2617,7 +2701,7 @@ mod tests {
     #[test]
     fn sbpl_denies_network_when_the_network_axis_is_withheld() {
         let p = scoped(false, FilesystemScope::Isolated);
-        let sbpl = sbpl_from_profile(&p, Path::new("/tmp/scratch"), Path::new("/work/tree"));
+        let sbpl = sbpl_from_profile(&p, Path::new("/tmp/scratch"), Path::new("/work/tree"), &[]);
         assert!(sbpl.starts_with("(version 1)"), "{sbpl}");
         assert!(sbpl.contains("(allow default)"), "{sbpl}");
         // Every network-denial rule is present when the axis is withheld.
@@ -2634,7 +2718,7 @@ mod tests {
     #[test]
     fn sbpl_allows_network_when_the_network_axis_is_granted() {
         let p = scoped(true, FilesystemScope::Isolated);
-        let sbpl = sbpl_from_profile(&p, Path::new("/tmp/scratch"), Path::new("/work/tree"));
+        let sbpl = sbpl_from_profile(&p, Path::new("/tmp/scratch"), Path::new("/work/tree"), &[]);
         // A granted network axis emits NO network denial, so the allow-default
         // base leaves the network reachable.
         assert!(
@@ -2649,7 +2733,7 @@ mod tests {
         // A non-firmlink scratch prefix, so this structural assertion is about the
         // deny+re-allow shape, not the macOS symlink resolution (which its own
         // tests cover); such a path is rendered unchanged.
-        let sbpl = sbpl_from_profile(&p, Path::new("/work/scratch"), Path::new("/work/tree"));
+        let sbpl = sbpl_from_profile(&p, Path::new("/work/scratch"), Path::new("/work/tree"), &[]);
         // A blanket write denial, then the scratch re-allowed — an out-of-scratch
         // write is denied so the filesystem axis is observable.
         assert!(sbpl.contains("(deny file-write*)"), "{sbpl}");
@@ -2677,7 +2761,7 @@ mod tests {
         // real deny is proven by the `macos-run-jail` E2E on a macOS runner).
         let scratch = Path::new("/private/var/folders/ab/xxxx/T/ipe-run-scratch");
         let p = scoped(false, FilesystemScope::Isolated);
-        let sbpl = sbpl_from_profile(&p, scratch, Path::new("/work/tree"));
+        let sbpl = sbpl_from_profile(&p, scratch, Path::new("/work/tree"), &[]);
         assert!(
             sbpl.contains(
                 "(allow file-write* (subpath \"/private/var/folders/ab/xxxx/T/ipe-run-scratch\"))"
@@ -2710,7 +2794,7 @@ mod tests {
         // proves the same allow via `canonicalize` on the macos-run-jail E2E.
         let unresolved = Path::new("/var/folders/ab/xxxx/T/ipe-run-scratch");
         let p = scoped(false, FilesystemScope::Isolated);
-        let sbpl = sbpl_from_profile(&p, unresolved, Path::new("/work/tree"));
+        let sbpl = sbpl_from_profile(&p, unresolved, Path::new("/work/tree"), &[]);
         assert!(
             sbpl.contains(
                 "(allow file-write* (subpath \"/private/var/folders/ab/xxxx/T/ipe-run-scratch\"))"
@@ -2745,7 +2829,7 @@ mod tests {
         // tree — never the user's home. Home stays denied even when network is
         // granted.
         let p = scoped(true, FilesystemScope::Isolated);
-        let sbpl = sbpl_from_profile(&p, Path::new("/work/scratch"), Path::new("/work/tree"));
+        let sbpl = sbpl_from_profile(&p, Path::new("/work/scratch"), Path::new("/work/tree"), &[]);
         assert!(
             sbpl.contains("(deny file-read*)"),
             "reads must be denied by default: {sbpl}"
@@ -2790,6 +2874,7 @@ mod tests {
             &isolated,
             Path::new("/work/scratch"),
             Path::new("/work/tree"),
+            &[],
         );
         assert!(
             sbpl_iso.contains("(allow file-read* (subpath \"/work/tree\"))"),
@@ -2837,7 +2922,7 @@ mod tests {
     #[test]
     fn sbpl_grants_the_working_tree_write_when_filesystem_is_granted() {
         let p = scoped(false, FilesystemScope::WorkingTreeReadWrite);
-        let sbpl = sbpl_from_profile(&p, Path::new("/work/scratch"), Path::new("/work/tree"));
+        let sbpl = sbpl_from_profile(&p, Path::new("/work/scratch"), Path::new("/work/tree"), &[]);
         // The blanket deny stays (so a path outside BOTH scratch and tree is
         // still denied), and the working tree is re-allowed.
         assert!(sbpl.contains("(deny file-write*)"), "{sbpl}");
@@ -2848,13 +2933,109 @@ mod tests {
     }
 
     #[test]
+    fn sbpl_denies_vcs_writes_at_any_depth_case_insensitively() {
+        let p = scoped(false, FilesystemScope::WorkingTreeReadWrite);
+        let carve = [Path::new("/work/tree/.git"), Path::new("/work/scratch/gd")];
+        let sbpl = sbpl_from_profile(
+            &p,
+            Path::new("/work/scratch"),
+            Path::new("/work/tree"),
+            &carve,
+        );
+        let at = |rule: &str| sbpl.find(rule);
+        let names = format!(
+            "(deny file-write* (require-all (subpath \"/work/tree\") (regex #\"{}\")))",
+            vcs_name_regex()
+        );
+        let found = (
+            at("(allow file-write* (subpath \"/work/scratch\"))"),
+            at("(allow file-write* (subpath \"/work/tree\"))"),
+            at("(deny file-write* (subpath \"/work/tree/.git\"))"),
+            at("(deny file-write* (subpath \"/work/scratch/gd\"))"),
+            at(&names),
+        );
+        assert!(
+            matches!(found, (Some(s), Some(a), Some(c), Some(g), Some(n)) if s < a && a < c && c < g && g < n),
+            "each carve and the name rule are denied after both write allows, so they win: {found:?} in {sbpl}"
+        );
+        let isolated = sbpl_from_profile(
+            &scoped(false, FilesystemScope::Isolated),
+            Path::new("/work/scratch"),
+            Path::new("/work/tree"),
+            &carve,
+        );
+        assert!(
+            !isolated.contains("/work/tree/.git") && !isolated.contains(&names),
+            "an ungranted tree is never writable, so it renders no carve: {isolated}"
+        );
+    }
+
+    #[test]
+    fn sbpl_vcs_regex_matches_the_ssot() {
+        assert_eq!(
+            vcs_name_regex(),
+            r"/(\.[Gg][Ii][Tt]|\.[Hh][Gg]|\.[Jj][Jj]|_[Dd][Aa][Rr][Cc][Ss])(/|$)"
+        );
+        let regex = vcs_name_regex();
+        for kind in crate::VcsKind::ALL {
+            let upper = kind.entry_name().to_ascii_uppercase();
+            let letters: String = upper.chars().filter(char::is_ascii_alphabetic).collect();
+            let classes: String = regex
+                .split('|')
+                .find(|alt| {
+                    alt.chars()
+                        .filter(char::is_ascii_uppercase)
+                        .eq(letters.chars())
+                })
+                .unwrap_or_default()
+                .to_owned();
+            assert!(
+                !classes.is_empty(),
+                "{kind} has an alternative in the name rule: {regex}"
+            );
+        }
+        assert_eq!(
+            regex.matches('|').count(),
+            crate::VcsKind::ALL.len(),
+            "one alternative per kind, plus the `(/|$)` tail: {regex}"
+        );
+    }
+
+    #[test]
+    fn sbpl_carve_path_cannot_break_out_of_its_string() {
+        let p = scoped(false, FilesystemScope::WorkingTreeReadWrite);
+        let crafted = Path::new(r#"/work/tree/x") (allow file-write* (subpath "/"#);
+        let sbpl = sbpl_from_profile(
+            &p,
+            Path::new("/work/scratch"),
+            Path::new("/work/tree"),
+            &[crafted],
+        );
+        assert!(
+            sbpl.contains(
+                r#"(deny file-write* (subpath "/work/tree/x\") (allow file-write* (subpath \"/"))"#
+            ),
+            "the carve stays one escaped string: {sbpl}"
+        );
+        assert!(
+            !sbpl.contains(r#"(allow file-write* (subpath "/"))"#),
+            "no rule is injected: {sbpl}"
+        );
+    }
+
+    #[test]
     fn sbpl_escapes_quotes_and_backslashes_in_paths() {
         // A scratch path with an embedded quote/backslash must not break the SBPL
         // grammar — both are escaped so a crafted path cannot inject a rule.
         let p = scoped(false, FilesystemScope::Isolated);
         // A non-firmlink prefix isolates this assertion to the escaping, not the
         // macOS symlink resolution.
-        let sbpl = sbpl_from_profile(&p, Path::new("/work/scr\"atch\\x"), Path::new("/work/tree"));
+        let sbpl = sbpl_from_profile(
+            &p,
+            Path::new("/work/scr\"atch\\x"),
+            Path::new("/work/tree"),
+            &[],
+        );
         assert!(
             sbpl.contains("(allow file-write* (subpath \"/work/scr\\\"atch\\\\x\"))"),
             "the quote and backslash must be escaped: {sbpl}"
@@ -2868,6 +3049,7 @@ mod tests {
             &SandboxProfile::maximally_isolated(),
             Path::new("/s"),
             Path::new("/w"),
+            &[],
         );
         assert!(sbpl.contains("(deny network*)"), "{sbpl}");
         assert!(sbpl.contains("(deny file-write*)"), "{sbpl}");
@@ -2898,6 +3080,7 @@ mod tests {
             &with_subprocess(false),
             Path::new("/tmp/scratch"),
             Path::new("/work/tree"),
+            &[],
         );
         assert!(sbpl.contains("(deny process-fork)"), "{sbpl}");
         assert!(
@@ -2915,6 +3098,7 @@ mod tests {
             &with_subprocess(true),
             Path::new("/tmp/scratch"),
             Path::new("/work/tree"),
+            &[],
         );
         assert!(
             !sbpl.contains("(deny process-exec"),
@@ -2939,6 +3123,7 @@ mod tests {
             &SandboxProfile::maximally_isolated(),
             Path::new("/s"),
             Path::new("/w"),
+            &[],
         );
         assert!(sbpl.contains("(deny network*)"), "network: {sbpl}");
         assert!(sbpl.contains("(deny file-write*)"), "filesystem: {sbpl}");
@@ -2969,7 +3154,7 @@ mod tests {
                 ..SandboxProfile::maximally_isolated()
             },
         ] {
-            let sbpl = sbpl_from_profile(&profile, Path::new("/s"), Path::new("/w"));
+            let sbpl = sbpl_from_profile(&profile, Path::new("/s"), Path::new("/w"), &[]);
             assert!(
                 sbpl.contains("(deny process-info*)"),
                 "process-info* (ptrace-equivalent inspection) must be unconditionally \
@@ -3460,8 +3645,12 @@ mod tests {
     fn sbpl_baseline_denies_mach_lookup_unconditionally() {
         // Network granted — the three baseline denies must still appear.
         let p_net = scoped(true, FilesystemScope::Isolated);
-        let sbpl_net =
-            sbpl_from_profile(&p_net, Path::new("/tmp/scratch"), Path::new("/work/tree"));
+        let sbpl_net = sbpl_from_profile(
+            &p_net,
+            Path::new("/tmp/scratch"),
+            Path::new("/work/tree"),
+            &[],
+        );
         assert!(
             sbpl_net.contains("(deny mach-lookup)"),
             "mach-lookup must be denied even when network is granted: {sbpl_net}"
@@ -3473,6 +3662,7 @@ mod tests {
             &p_no_net,
             Path::new("/tmp/scratch"),
             Path::new("/work/tree"),
+            &[],
         );
         assert!(
             sbpl_no_net.contains("(deny mach-lookup)"),
@@ -3491,6 +3681,7 @@ mod tests {
             &scoped(false, FilesystemScope::Isolated),
             Path::new("/tmp/scratch"),
             Path::new("/work/tree"),
+            &[],
         );
         let deny_at = sbpl
             .find("(deny mach-lookup)")
@@ -3531,6 +3722,7 @@ mod tests {
             &scoped(false, FilesystemScope::Isolated),
             Path::new("/tmp/scratch"),
             Path::new("/work/tree"),
+            &[],
         );
         let deny_at = sbpl
             .find("(deny sysctl-read)")
@@ -3563,8 +3755,12 @@ mod tests {
             scoped(true, FilesystemScope::Isolated),
             scoped(false, FilesystemScope::Isolated),
         ] {
-            let sbpl =
-                sbpl_from_profile(&profile, Path::new("/tmp/scratch"), Path::new("/work/tree"));
+            let sbpl = sbpl_from_profile(
+                &profile,
+                Path::new("/tmp/scratch"),
+                Path::new("/work/tree"),
+                &[],
+            );
             for rule in [
                 "(deny iokit-open)",
                 "(deny iokit-open-user-client)",
@@ -3586,8 +3782,12 @@ mod tests {
             scoped(true, FilesystemScope::Isolated),
             scoped(false, FilesystemScope::Isolated),
         ] {
-            let sbpl =
-                sbpl_from_profile(&profile, Path::new("/tmp/scratch"), Path::new("/work/tree"));
+            let sbpl = sbpl_from_profile(
+                &profile,
+                Path::new("/tmp/scratch"),
+                Path::new("/work/tree"),
+                &[],
+            );
             assert!(
                 sbpl.contains("(deny ipc-posix-shm*)"),
                 "ipc-posix-shm* baseline deny missing: {sbpl}"
@@ -3601,7 +3801,7 @@ mod tests {
     #[test]
     fn sbpl_linux_baseline_parity_table_covered() {
         let p = scoped(false, FilesystemScope::Isolated);
-        let sbpl = sbpl_from_profile(&p, Path::new("/tmp/scratch"), Path::new("/work/tree"));
+        let sbpl = sbpl_from_profile(&p, Path::new("/tmp/scratch"), Path::new("/work/tree"), &[]);
         // (Linux primitive, required macOS SBPL token)
         let parity = [
             ("ptrace / process_vm_*", "(deny process-info*)"),
@@ -3738,6 +3938,45 @@ mod tests {
         assert!(
             ops.iter().all(|op| op.target() != tree),
             "an ungranted working tree is never mounted: {ops:?}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // a fixture the test host cannot create is a broken host, not a case
+    fn freebsd_refuses_a_tree_with_vcs_metadata() {
+        use crate::mounts::{CanonicalPath, HomeMasks, WorkingTree, jail_binds, mount_plan};
+        let fixture = mount_fixture();
+        let git = fixture.tree.join(".git");
+        std::fs::create_dir_all(&git).expect("fixture git dir");
+        let canonical = |path: &Path| CanonicalPath::resolve(path).expect("fixture path resolves");
+        let homes =
+            HomeMasks::resolve(Some(&fixture.user), Some(&fixture.cargo)).expect("fixture homes");
+        let mounts = crate::JailMounts::checked_against(
+            canonical(&fixture.scratch),
+            canonical(&fixture.tree),
+            vec![canonical(&fixture.bin)],
+            homes,
+            &fixture.cargo,
+        )
+        .expect("a tree with a git dir parses");
+        let root = Path::new("/jailroot");
+        let granted = jail_binds(&mounts, WorkingTree::ReadWrite);
+        let rendered = freebsd_mount_ops(root, &mount_plan(mounts.homes(), &granted));
+        assert!(
+            matches!(
+                &rendered,
+                Err(RunJailDefect::Path(crate::JailPathError::VcsMetadataUncarvable {
+                    arm: crate::JailArm::Freebsd,
+                    path,
+                })) if *path == git
+            ),
+            "a writable tree holding metadata is refused: {rendered:?}"
+        );
+        let unbound = jail_binds(&mounts, WorkingTree::Unbound);
+        let isolated = freebsd_mount_ops(root, &mount_plan(mounts.homes(), &unbound));
+        assert!(
+            isolated.is_ok(),
+            "an ungranted tree holding metadata still jails: {isolated:?}"
         );
     }
 
