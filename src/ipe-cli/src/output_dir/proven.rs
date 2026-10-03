@@ -8,7 +8,6 @@
 //! walked on from is a [`Cwd`], which only the process working directory
 //! supplies.
 
-use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf, Prefix, PrefixComponent};
 
 use super::{OutputRefusal, held};
@@ -121,7 +120,7 @@ pub fn prove_parent_steps(raw: &Path) -> Result<ProvenOutPath, CliError> {
 /// directory with no drive, a `.` or `..` inside a verbatim `\\?\` path (a
 /// literal name there, not a step), a prefix that names no place on a disk or
 /// share (`placeable_prefix`), or a component that is not one plain name
-/// opened as spelled (`is_one_name`); [`CliError::Io`] when a level cannot be
+/// opened as spelled (`ipe_fs_open::is_one_spelled_name`); [`CliError::Io`] when a level cannot be
 /// inspected.
 pub fn prove_parent_steps_from(raw: &Path, cwd: &Cwd) -> Result<ProvenOutPath, CliError> {
     let cwd = cwd.as_path();
@@ -163,7 +162,7 @@ fn prove_walk(raw: &Path, base: &Path) -> Result<ProvenOutPath, CliError> {
             Component::RootDir => proven.push(component),
             Component::CurDir => {}
             Component::Normal(name) => {
-                if !is_one_name(name) {
+                if !ipe_fs_open::is_one_spelled_name(name) {
                     return Err(unplaceable(raw));
                 }
                 proven.push(name);
@@ -227,36 +226,4 @@ fn placeable_prefix(prefix: PrefixComponent<'_>) -> bool {
         prefix.kind(),
         Prefix::Disk(_) | Prefix::VerbatimDisk(_) | Prefix::UNC(..) | Prefix::VerbatimUNC(..)
     )
-}
-
-/// Whether `name` reads back as exactly itself, one plain component.
-///
-/// A name that reads as more — a `/` split by a non-verbatim parse, an `a:b`
-/// Windows takes for a drive prefix that would replace the path it is pushed
-/// onto — does not extend that path by one level; a name the platform
-/// rewrites on open ([`opens_as_spelled`]) names some other entry.
-fn is_one_name(name: &OsStr) -> bool {
-    let mut parts = Path::new(name).components();
-    let single = match (parts.next(), parts.next()) {
-        (Some(Component::Normal(only)), None) => only == name,
-        _ => false,
-    };
-    single && opens_as_spelled(name)
-}
-
-/// Whether Windows opens `name` as the entry it spells.
-///
-/// A name that is not valid Unicode cannot be checked, so it is refused. An
-/// 8.3 short alias (`PROGRA~1`) passes: it names an entry of the same
-/// directory, and every disjointness check is decided on canonical paths.
-#[cfg(windows)]
-fn opens_as_spelled(name: &OsStr) -> bool {
-    name.to_str()
-        .is_some_and(ipe_fs_open::win32_name::opens_as_spelled)
-}
-
-/// Whether the platform opens `name` as the entry it spells: always, off Windows.
-#[cfg(not(windows))]
-const fn opens_as_spelled(_name: &OsStr) -> bool {
-    true
 }

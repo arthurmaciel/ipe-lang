@@ -1038,15 +1038,6 @@ fn create_salt(dir: &OwnerDir, name: &EntryName) -> Option<String> {
     }
 }
 
-/// Whether `part` is one plain path component, never a separator, `..` or `.`.
-fn is_plain_name(part: &str) -> bool {
-    let mut components = Path::new(part).components();
-    matches!(
-        (components.next(), components.next()),
-        (Some(std::path::Component::Normal(name)), None) if name == std::ffi::OsStr::new(part)
-    )
-}
-
 /// Write `bytes` to `<cache_root>/<epoch>/<file_name>` through held directory handles.
 ///
 /// Best-effort: every failure is swallowed. `cache_root` is opened without
@@ -1056,8 +1047,12 @@ fn is_plain_name(part: &str) -> bool {
 /// an exclusively created, process-unique temp file renamed over the name.
 fn write_entry(cache_root: &Path, epoch: &str, file_name: &str, bytes: &[u8]) {
     use crate::output_dir::held::{HeldDir, level_held};
+    use ipe_fs_open::is_one_spelled_name;
+    use std::ffi::OsStr;
     use std::io::Write as _;
-    if !is_plain_name(epoch) || !is_plain_name(file_name) || fs::create_dir_all(cache_root).is_err()
+    if !is_one_spelled_name(OsStr::new(epoch))
+        || !is_one_spelled_name(OsStr::new(file_name))
+        || fs::create_dir_all(cache_root).is_err()
     {
         return;
     }
@@ -2871,6 +2866,22 @@ mod tests {
         write_entry(&root, "../escape", "k.json", b"x");
         write_entry(&root, "e1", "../k.json", b"x");
         write_entry(&root, ".", "k.json", b"x");
+        write_entry(&root, "", "k.json", b"x");
+        write_entry(&root, "e1", "", b"x");
+        write_entry(&root, "e\0", "k.json", b"x");
+        write_entry(&root, "e1", "k\0.json", b"x");
+        #[cfg(windows)]
+        for (epoch, file_name) in [
+            ("e1.", "k.json"),
+            ("e1 ", "k.json"),
+            ("NUL", "k.json"),
+            ("e1", "k.json."),
+            ("e1", "k.json "),
+            ("e1", "con.json"),
+            ("e1", "k.json:stream"),
+        ] {
+            write_entry(&root, epoch, file_name, b"x");
+        }
         assert!(
             !base.join("escape").exists(),
             "a traversing epoch writes nothing"
@@ -2880,6 +2891,12 @@ mod tests {
             "a traversing file name writes nothing"
         );
         assert!(!root.exists(), "a refused write creates nothing");
+        write_entry(&root, "e1", "k.json", b"x");
+        assert_eq!(
+            fs::read(root.join("e1").join("k.json")).ok().as_deref(),
+            Some(b"x".as_slice()),
+            "one plain epoch and file name are written"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
