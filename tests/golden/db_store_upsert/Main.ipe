@@ -333,7 +333,11 @@ acceptChecks conn fx =
             Store.renameColumn "slug" "handle" (Store.public (StoreU.primaryKey "slug" fx.slugs))
     in
     do
-        say (counted "absent-key" (Store.upsert conn pairs (Dict.fromList [ ( "v", Just "v1" ) ])))
+        say
+            (refused "absent-key"
+                "NULL key in conflict-target column \"k\""
+                (Store.upsert conn pairs (Dict.fromList [ ( "v", Just "v1" ) ]))
+            )
         say (snapshot "pairs" conn pairs [ "k", "v" ])
         say (counted "single-insert" (Store.upsert conn fx.codes { code = "a", label = "one", createdAt = "CLIENT" }))
         say (counted "stamp-sentinel" (Unsafe.unsafeExecRaw conn "UPDATE codes SET created_at = 'sentinel'"))
