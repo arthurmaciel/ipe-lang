@@ -498,6 +498,14 @@ impl From<build_plan::Refusal> for CliError {
     }
 }
 
+impl From<ipe_docs::argv::NonUtf8Argument> for CliError {
+    /// A command-line argument that is not UTF-8 is command-line misuse; the
+    /// refusal names its position, never its bytes.
+    fn from(refused: ipe_docs::argv::NonUtf8Argument) -> Self {
+        Self::Usage(text::Message::relay(&refused))
+    }
+}
+
 impl From<delivery::DeliveryError> for CliError {
     /// A delivery refusal is a pedagogical, user-facing message; it surfaces
     /// through the reader's named-error channel.
