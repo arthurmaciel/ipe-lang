@@ -1261,8 +1261,8 @@ mod tests {
     use crate::project::IpeDep;
     use crate::published_version::PublishedVersion;
     use crate::remote_ingest::{
-        self, ByteBudget, FetchBudget, IngestLimit, IngestRefusal, IngestSource, LocalRefusal,
-        LocalSource, PACKAGE_FILE_MAX_BYTES, PACKAGE_SOURCE, PACKAGE_TREE_MAX_BYTES,
+        self, ByteBudget, ChildStderr, FetchBudget, IngestLimit, IngestRefusal, IngestSource,
+        LocalRefusal, LocalSource, PACKAGE_FILE_MAX_BYTES, PACKAGE_SOURCE, PACKAGE_TREE_MAX_BYTES,
         PACKAGE_TREE_MAX_DEPTH, PACKAGE_TREE_MAX_ENTRIES, REFS_MAX_BYTES, REFS_MAX_COUNT,
         RefsCeiling, RunError, Stream, Transfer, TreeCeiling,
     };

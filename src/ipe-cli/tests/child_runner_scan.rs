@@ -505,7 +505,7 @@ fn text_starts(flat: &str) -> Vec<String> {
         .filter(|needle| flat.contains(needle.as_str()));
     let paths = PATH_STARTS
         .iter()
-        .chain(["Command::new"].iter())
+        .chain(std::iter::once(&"Command::new"))
         .filter(|needle| flat.contains(**needle))
         .map(|needle| (*needle).to_owned());
     methods.chain(paths).collect()
@@ -547,10 +547,10 @@ impl Scanner<'_> {
     /// Records a production call.
     fn call(&mut self, callee: String, args: &Punctuated<Expr, Token![,]>) {
         if !self.test {
-            let (file, caller) = self.here();
+            let (file, enclosing) = self.here();
             self.found.calls.push(Call {
                 file,
-                caller,
+                caller: enclosing,
                 callee,
                 args: path_args(args),
             });
@@ -654,7 +654,7 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
 
     fn visit_impl_item_const(&mut self, node: &'ast ImplItemConst) {
         self.gated(&node.attrs, false, |s| {
-            visit::visit_impl_item_const(s, node)
+            visit::visit_impl_item_const(s, node);
         });
     }
 
@@ -851,11 +851,11 @@ fn scan(sources: &BTreeMap<String, String>, roots: &[&str]) -> Findings {
 }
 
 /// The calls in `file` that `caller` makes to `callee`.
-fn calls_of<'a>(found: &'a Findings, file: &str, caller: &str, callee: &str) -> Vec<&'a Call> {
+fn calls_of<'a>(found: &'a Findings, file: &str, func: &str, target: &str) -> Vec<&'a Call> {
     found
         .calls
         .iter()
-        .filter(|call| call.file == file && call.caller == caller && call.callee == callee)
+        .filter(|call| call.file == file && call.caller == func && call.callee == target)
         .collect()
 }
 
@@ -1195,7 +1195,7 @@ fn the_scan_refuses_each_unlisted_child_start() {
         "fn raw(c: &mut Command) { Command::output(c); }",
         "fn raw(c: Child) { std::process::Child::wait_with_output(c); }",
         "fn raw(c: &mut Command) { <Command as CommandExt>::exec(c); }",
-        "fn raw(c: &mut Command) { let _ = format!(\"{:?}\", c.output()); }",
+        "fn raw(c: &mut Command) { let _ = dbg!(c.output()); }",
         "fn raw(c: &mut Command) { let _ = vec![c.spawn()]; }",
         "fn raw(c: &mut Command) { let _ = vec![c.spawn(); 2]; }",
         "fn raw(c: Command) { ipe_runtime_rust::system::spawn_hardened(c); }",

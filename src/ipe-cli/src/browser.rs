@@ -24,11 +24,11 @@ const LOOPBACK_HOSTS: [&str; 2] = ["127.0.0.1", "localhost"];
 
 /// A URL proven safe to hand to the platform opener for its origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BrowserUrl(String);
+pub struct BrowserUrl(String);
 
 /// Where a [`BrowserUrl`] may point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BrowserOrigin {
+pub enum BrowserOrigin {
     /// `https://github.com`, with no userinfo and no port.
     GitHub,
     /// `http://127.0.0.1:<port>` or `http://localhost:<port>`, the port in `1..=65535`.
@@ -37,7 +37,7 @@ pub(crate) enum BrowserOrigin {
 
 /// Why a raw string is not a [`BrowserUrl`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BrowserUrlRefusal {
+pub enum BrowserUrlRefusal {
     /// The URL does not start with its origin's scheme.
     Scheme,
     /// The URL names a host its origin does not admit.
@@ -140,7 +140,7 @@ impl BrowserUrl {
     ///
     /// # Errors
     /// The [`BrowserUrlRefusal`] naming the first part of `raw` not admitted.
-    pub(crate) fn parse(raw: &str, origin: BrowserOrigin) -> Result<Self, BrowserUrlRefusal> {
+    pub fn parse(raw: &str, origin: BrowserOrigin) -> Result<Self, BrowserUrlRefusal> {
         if raw.is_empty() {
             return Err(BrowserUrlRefusal::Empty);
         }
@@ -186,14 +186,14 @@ impl BrowserUrl {
     }
 
     /// The URL text.
-    pub(crate) const fn as_str(&self) -> &str {
-        &self.0
+    pub const fn as_str(&self) -> &str {
+        self.0.as_str()
     }
 }
 
 /// What starting the platform opener on a URL did.
 #[derive(Debug)]
-pub(crate) enum OpenOutcome {
+pub enum OpenOutcome {
     /// The opener exited successfully, or was still running at the grace and left to run.
     Opened,
     /// The opener exited unsuccessfully.
@@ -258,7 +258,7 @@ const fn opener_argv(platform: Platform, url: &BrowserUrl) -> (&'static str, [&s
 /// Open `url` in the user's browser through the platform opener.
 ///
 /// Every caller prints the URL when the outcome is not [`OpenOutcome::Opened`].
-pub(crate) fn open_url(url: &BrowserUrl) -> OpenOutcome {
+pub fn open_url(url: &BrowserUrl) -> OpenOutcome {
     let (program, args) = opener_argv(Platform::current(), url);
     open_with(OsStr::new(program), &args, OPENER_GRACE)
 }
@@ -413,7 +413,7 @@ mod tests {
             github("https://github.com/login/device&calc"),
             Err(BrowserUrlRefusal::Byte(b'&'))
         );
-        for byte in [b'\'', b'(', b')', b';', b'!', b'$', b'*', b'[', b']'] {
+        for byte in *b"'();!$*[]" {
             let raw = format!("https://github.com/login/device{}x", char::from(byte));
             assert_eq!(github(&raw), Err(BrowserUrlRefusal::Byte(byte)), "{raw}");
         }
