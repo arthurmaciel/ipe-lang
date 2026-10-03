@@ -2478,8 +2478,8 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::WildcardAnyFieldTypeMismatch { .. } => IPE_L0143,
         LowerError::WildcardAnyArgNotRecord { .. } => IPE_L0144,
         LowerError::StoreEqAccessorInvalid(_) => IPE_L0145,
-        LowerError::PointFreeAccessorKernel { .. } => IPE_L0146,
-        LowerError::AccessorKernelOffIntercept { .. } => IPE_L0146,
+        LowerError::PointFreeAccessorKernel { .. }
+        | LowerError::AccessorKernelOffIntercept { .. } => IPE_L0146,
         LowerError::UnsaturatedHandlerKernel { .. } => IPE_L0152,
         LowerError::StoreSelectProjectionInvalid(_) => IPE_L0149,
     })

@@ -157,3 +157,60 @@ fn over_applied_placeholder_is_refused() {
     );
     assert_refused("over_applied_placeholder", &source, "Store.literal");
 }
+
+/// A saturated `Store.sub` inside a plain forwarding function is refused.
+#[test]
+fn sub_in_plain_forwarder_is_refused() {
+    let source = program(
+        "drop : Int -> Int -> Int\ndrop a b =\n    Store.sub a b",
+        "String.fromInt (drop 3 2)",
+    );
+    assert_refused("sub_in_plain_forwarder", &source, "Store.sub");
+}
+
+/// A saturated `Store.mul` at `Float` outside a query is refused.
+#[test]
+fn mul_outside_select_is_refused() {
+    let source = program(
+        "twice : Float\ntwice =\n    Store.mul 2.0 1.5",
+        "String.fromFloat twice",
+    );
+    assert_refused("mul_outside_select", &source, "Store.mul");
+}
+
+/// A saturated `Store.lower` outside a query is refused.
+#[test]
+fn lower_outside_select_is_refused() {
+    let source = program("quiet : String\nquiet =\n    Store.lower \"A\"", "quiet");
+    assert_refused("lower_outside_select", &source, "Store.lower");
+}
+
+/// A parenthesised curried spine `(Store.add a) b` is refused like the flat call.
+#[test]
+fn parenthesised_spine_is_refused() {
+    let source = program(
+        "bump : Int -> Int -> Int\nbump a b =\n    (Store.add a) b",
+        "String.fromInt (bump 1 2)",
+    );
+    assert_refused("parenthesised_spine", &source, "Store.add");
+}
+
+/// A piped saturated call `b |> Store.add a` is refused.
+#[test]
+fn piped_call_is_refused() {
+    let source = program(
+        "bump : Int -> Int -> Int\nbump a b =\n    b |> Store.add a",
+        "String.fromInt (bump 1 2)",
+    );
+    assert_refused("piped_call", &source, "Store.add");
+}
+
+/// A lambda whose body saturates `Store.add` is refused at that body.
+#[test]
+fn lambda_body_is_refused() {
+    let source = program(
+        "bump : Int -> Int -> Int\nbump =\n    \\a b -> Store.add a b",
+        "String.fromInt (bump 1 2)",
+    );
+    assert_refused("lambda_body", &source, "Store.add");
+}

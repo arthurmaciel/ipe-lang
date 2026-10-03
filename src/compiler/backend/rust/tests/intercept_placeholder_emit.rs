@@ -16,7 +16,7 @@ use ipe_ir::{
 const MAIN_ID: FuncId = FuncId::from_raw(0);
 
 /// A kernel call with no pin.
-fn call(kernel: KernelFn, args: Vec<Expr>) -> Expr {
+const fn call(kernel: KernelFn, args: Vec<Expr>) -> Expr {
     Expr::Call {
         callee: Callee::Kernel(kernel),
         args,
