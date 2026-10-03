@@ -29,18 +29,18 @@ impl InfixOp {
     /// The Rust spelling this operator emits literally between its operands.
     pub const fn spelling(self) -> &'static str {
         match self {
-            InfixOp::FloatAdd => "+",
-            InfixOp::FloatSub => "-",
-            InfixOp::FloatMul => "*",
-            InfixOp::Div => "/",
-            InfixOp::Eq => "==",
-            InfixOp::Neq => "!=",
-            InfixOp::Lt => "<",
-            InfixOp::Gt => ">",
-            InfixOp::Le => "<=",
-            InfixOp::Ge => ">=",
-            InfixOp::And => "&&",
-            InfixOp::Or => "||",
+            Self::FloatAdd => "+",
+            Self::FloatSub => "-",
+            Self::FloatMul => "*",
+            Self::Div => "/",
+            Self::Eq => "==",
+            Self::Neq => "!=",
+            Self::Lt => "<",
+            Self::Gt => ">",
+            Self::Le => "<=",
+            Self::Ge => ">=",
+            Self::And => "&&",
+            Self::Or => "||",
         }
     }
 }
