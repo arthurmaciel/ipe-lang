@@ -276,7 +276,7 @@ impl FfiPrepError {
             Self::ReservedModuleExists => {
                 text::msg::ffi_reserved_module_exists(&ipe_canon::asserted::ASSERTED_MODULE)
             }
-            Self::AssertedRefused(diag) => text::Message::relay(diag.as_ref()),
+            Self::AssertedRefused(diag) => text::Message::relay(&**diag),
             Self::AssertedShimSeal(refusal) | Self::CatalogSeal(refusal) => refusal.message(),
             Self::DefineOpaqueCollision { slug, name } => {
                 text::msg::ffi_define_opaque_collision(slug, name)
@@ -5926,6 +5926,212 @@ version = \"1\"
             assert_eq!(refusal.to_string(), want);
             assert_eq!(CliError::from(refusal).to_string(), want);
         }
+    }
+
+    /// The FFI prep entry point every prep refusal leaves through.
+    const FFI_PREP_ENTRY: &str = "prepare_ffi";
+
+    /// Prep functions the reach walk must find from [`FFI_PREP_ENTRY`]: a walk
+    /// that loses one (a rename, a parse that stopped early) goes red instead
+    /// of passing over less code.
+    const FFI_PREP_REACHED: [&str; 11] = [
+        "prepare_ffi",
+        "load_located_catalog",
+        "scan_asserted",
+        "asserted_refused",
+        "inject_interfaces",
+        "assemble_emit",
+        "assemble_wrapper_glue",
+        "append_asserted_shims",
+        "seal_dependency_references",
+        "merge_catalog_deps",
+        "merge_cargo_dep",
+    ];
+
+    /// Whether `attrs` carry `#[cfg(test)]`.
+    fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
+        attrs.iter().any(|attr| {
+            matches!(&attr.meta, syn::Meta::List(list)
+                if list.path.is_ident("cfg") && list.tokens.to_string() == "test")
+        })
+    }
+
+    /// Every production function body under `items`, keyed by its name.
+    ///
+    /// A `#[cfg(test)]` item and everything inside it is left out. Methods and
+    /// trait defaults are keyed by their bare name, so same-named functions
+    /// are all walked.
+    fn production_fn_bodies<'f>(
+        items: &'f [syn::Item],
+        bodies: &mut BTreeMap<String, Vec<&'f syn::Block>>,
+    ) {
+        for item in items {
+            match item {
+                syn::Item::Fn(f) if !is_cfg_test(&f.attrs) => {
+                    bodies
+                        .entry(f.sig.ident.to_string())
+                        .or_default()
+                        .push(&f.block);
+                }
+                syn::Item::Impl(imp) if !is_cfg_test(&imp.attrs) => {
+                    for member in &imp.items {
+                        if let syn::ImplItem::Fn(f) = member
+                            && !is_cfg_test(&f.attrs)
+                        {
+                            bodies
+                                .entry(f.sig.ident.to_string())
+                                .or_default()
+                                .push(&f.block);
+                        }
+                    }
+                }
+                syn::Item::Trait(tr) if !is_cfg_test(&tr.attrs) => {
+                    for member in &tr.items {
+                        if let syn::TraitItem::Fn(f) = member
+                            && let Some(block) = &f.default
+                            && !is_cfg_test(&f.attrs)
+                        {
+                            bodies
+                                .entry(f.sig.ident.to_string())
+                                .or_default()
+                                .push(block);
+                        }
+                    }
+                }
+                syn::Item::Mod(m) if !is_cfg_test(&m.attrs) => {
+                    if let Some((_, inner)) = &m.content {
+                        production_fn_bodies(inner, bodies);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The names one function body mentions, and how many of them are `Usage`.
+    #[derive(Default)]
+    struct Mentions {
+        names: BTreeSet<String>,
+        usage: usize,
+    }
+
+    impl Mentions {
+        fn word(&mut self, word: String) {
+            if word == "Usage" {
+                self.usage += 1;
+            }
+            self.names.insert(word);
+        }
+
+        /// Every identifier of a macro's unparsed tokens; a literal never matches.
+        fn tokens(&mut self, stream: proc_macro2::TokenStream) {
+            for tree in stream {
+                match tree {
+                    proc_macro2::TokenTree::Ident(ident) => self.word(ident.to_string()),
+                    proc_macro2::TokenTree::Group(group) => self.tokens(group.stream()),
+                    proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => {}
+                }
+            }
+        }
+    }
+
+    impl<'ast> syn::visit::Visit<'ast> for Mentions {
+        fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+            self.word(segment.ident.to_string());
+            syn::visit::visit_path_segment(self, segment);
+        }
+
+        fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+            self.word(call.method.to_string());
+            syn::visit::visit_expr_method_call(self, call);
+        }
+
+        fn visit_use_path(&mut self, path: &'ast syn::UsePath) {
+            self.word(path.ident.to_string());
+            syn::visit::visit_use_path(self, path);
+        }
+
+        fn visit_use_name(&mut self, name: &'ast syn::UseName) {
+            self.word(name.ident.to_string());
+        }
+
+        fn visit_use_rename(&mut self, rename: &'ast syn::UseRename) {
+            self.word(rename.ident.to_string());
+            self.word(rename.rename.to_string());
+        }
+
+        fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+            self.tokens(mac.tokens.clone());
+            syn::visit::visit_macro(self, mac);
+        }
+    }
+
+    /// The production functions `src` reaches from [`FFI_PREP_ENTRY`], with
+    /// the count of `Usage` mentions in their bodies; `None` when `src` does
+    /// not parse.
+    ///
+    /// Reach over-approximates: every name a body mentions (a call, a method,
+    /// a function value, a macro token) that names a production function is
+    /// walked, so a refusal built one helper deep is still seen.
+    fn ffi_prep_reach(src: &str) -> Option<(BTreeSet<String>, usize)> {
+        use syn::visit::Visit as _;
+        let file = syn::parse_file(src).ok()?;
+        let mut bodies = BTreeMap::new();
+        production_fn_bodies(&file.items, &mut bodies);
+        let mut reached = BTreeSet::new();
+        let mut usage = 0;
+        let mut pending = vec![FFI_PREP_ENTRY.to_owned()];
+        while let Some(name) = pending.pop() {
+            let Some(blocks) = bodies.get(&name) else {
+                continue;
+            };
+            if !reached.insert(name) {
+                continue;
+            }
+            for block in blocks {
+                let mut mentions = Mentions::default();
+                mentions.visit_block(block);
+                usage += mentions.usage;
+                pending.extend(
+                    mentions
+                        .names
+                        .into_iter()
+                        .filter(|n| bodies.contains_key(n) && !reached.contains(n)),
+                );
+            }
+        }
+        Some((reached, usage))
+    }
+
+    #[test]
+    fn ffi_prep_reach_sees_a_usage_build_one_helper_deep() {
+        let src = "fn prepare_ffi() { helper(); x.map_err(lift); }\n\
+                   fn helper() -> Result<(), CliError> { Err(CliError::Usage(m())) }\n\
+                   fn lift(m: M) -> CliError { wrap!(Usage, \"Usage\") }\n\
+                   fn unrelated() -> CliError { CliError::Usage(x()) }\n\
+                   #[cfg(test)]\n\
+                   fn prepare_ffi() -> CliError { CliError::Usage(t()) }\n";
+        let want = BTreeSet::from(["helper", "lift", "prepare_ffi"].map(str::to_owned));
+        assert_eq!(ffi_prep_reach(src), Some((want, 2)));
+    }
+
+    /// No function FFI prep reaches builds `CliError::Usage`: each prep
+    /// refusal is a typed [`FfiPrepError`] the LSP classifies by variant.
+    #[test]
+    fn ffi_prep_builds_no_usage() {
+        let reach = ffi_prep_reach(include_str!("ffi.rs"));
+        assert!(reach.is_some(), "ffi.rs parses");
+        let (reached, usage) = reach.unwrap_or_default();
+        let lost: Vec<&str> = FFI_PREP_REACHED
+            .into_iter()
+            .filter(|f| !reached.contains(*f))
+            .collect();
+        assert!(lost.is_empty(), "the prep walk lost {lost:?}");
+        assert_eq!(
+            usage, 0,
+            "an FFI prep function builds `CliError::Usage`; type the refusal as an \
+             `FfiPrepError` variant (walked: {reached:?})"
+        );
     }
 
     #[test]
