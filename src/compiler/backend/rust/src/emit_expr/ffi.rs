@@ -112,6 +112,19 @@ pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
         // shadow class for every name at once. The `ipe_main` entry point and
         // FFI wrappers are already crate-root, so this is uniform.
         Callee::Func(id) => Ok(format!("crate::{}", ctx.func_name(*id)?)),
+        // An intercept-only `Store.*` placeholder has no runtime function; its
+        // name is never defined, so naming it would emit Rust `cargo` rejects
+        // (E0425). Lowering refuses every such call (IPE-L0146); reaching here
+        // means that gate was bypassed, a compiler invariant failure.
+        Callee::Kernel(k) if k.is_accessor_intercept_placeholder() => {
+            Err(Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::callee_name",
+                detail: format!(
+                    "intercept-only kernel {k:?} reached emission; it has no runtime \
+                     function and must be rewritten or refused at lowering"
+                ),
+            })
+        }
         Callee::Kernel(k) => Ok(kernel_name(*k).to_owned()),
         // A foreign wrapper lives in the emitted `src/ffi.rs` module. The
         // shared `ffi_path` helper validates the identifier and constructs the

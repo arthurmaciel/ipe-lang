@@ -35,7 +35,7 @@ use crate::diagnostic::{
     ExpectedSet, ExposingDefect, Feature, FfiError, GenericAppEntryReach, HeaderDefect, HelpLine,
     Hint, IfDefect, LetDefect, LowerError, NameError, ParseError, RoutePatternDefect, SandboxError,
     SealRejection, SpanRole, StoreEqAccessorDefect, StoreSelectProjectionDefect, Suggestion,
-    TokenKind, TyDoc, TypeDeclDefect, TypeError, WildcardDependence,
+    TokenKind, TyDoc, TypeDeclDefect, TypeError, WildcardDependence, intercept_context_phrase,
 };
 use crate::span::Span;
 
@@ -815,6 +815,13 @@ fn lower_prose(msg: &LowerError) -> String {
                 format!("`{column}` is not a valid SQL column name.")
             }
         },
+        LowerError::AccessorKernelOffIntercept { kernel, context } => {
+            let phrase = intercept_context_phrase(*context);
+            format!(
+                "`{kernel}` has no runtime function, so it is {phrase} — it cannot be \
+                 called here."
+            )
+        }
         LowerError::PointFreeAccessorKernel { kernel } => {
             format!(
                 "`{kernel}` reads its column from a `.field` accessor, so it must \
@@ -1980,6 +1987,10 @@ fn lower_label(msg: &LowerError) -> String {
             )
         }
         LowerError::StoreEqAccessorInvalid(defect) => store_eq_accessor_label(defect),
+        LowerError::AccessorKernelOffIntercept { kernel, context } => {
+            let phrase = intercept_context_phrase(*context);
+            format!("`{kernel}` is called outside its rewrite here — it is {phrase}")
+        }
         LowerError::PointFreeAccessorKernel { kernel } => {
             format!(
                 "`{kernel}` is partially applied here — apply it directly with its \
