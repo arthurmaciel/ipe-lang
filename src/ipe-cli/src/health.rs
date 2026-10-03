@@ -36,10 +36,17 @@
 //! install runs a fixed `argv`; a package-manager command (which needs
 //! elevation the command deliberately does not take) is shown, never run.
 
+use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use crate::remote_ingest::{
+    InheritedInput, InheritedRole, LINK_PROBE_LIMITS, LocalCeiling, LocalSource, run_inherited,
+    run_local_fed,
+};
+use crate::toolchain::RustcVersion;
 
 use crate::cli_args::OutputFormat;
 use crate::style::TerminalSafe;
@@ -798,32 +805,13 @@ fn link_driver_for_host_triple(host: &str) -> LinkDriver {
     }
 }
 
-/// Parse the `host:` line out of `rustc -vV`'s raw output text.
+/// The running toolchain's host triple from its `rustc -vV` report.
 ///
-/// Pure: no subprocess, no environment lookup — just the line scan. The one
-/// parser both [`host_link_driver`] and [`host_target_triple`] read through,
-/// so "the host triple" has exactly one source wherever `rustc -vV`'s text is
-/// available, instead of two call sites each re-deriving it their own way.
-fn host_triple_from_rustc_vv(text: &str) -> Option<&str> {
-    text.lines().find_map(|l| l.strip_prefix("host: "))
-}
-
-/// Ask the running toolchain for its host triple via `rustc -vV`. `None` when
-/// `rustc` is not on `PATH`, exits non-zero, or its output does not carry a
-/// parseable `host:` line.
+/// `None` when the report is unavailable ([`RustcVersion::active`] refused).
 fn rustc_host_triple() -> Option<String> {
-    let text = rustc_vv_text()?;
-    host_triple_from_rustc_vv(&text).map(str::to_owned)
-}
-
-/// The running toolchain's `rustc -vV` text. `None` when `rustc` is not on
-/// `PATH`, exits non-zero, or prints non-UTF-8.
-fn rustc_vv_text() -> Option<String> {
-    let out = Command::new("rustc").arg("-vV").output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8(out.stdout).ok()
+    RustcVersion::active()
+        .ok()
+        .map(|version| version.host().to_owned())
 }
 
 /// The running toolchain's link driver, derived from its host triple. `None`
@@ -833,14 +821,13 @@ fn host_link_driver() -> Option<LinkDriver> {
     rustc_host_triple().map(|host| link_driver_for_host_triple(&host))
 }
 
-/// The `rustc -vV` release line, used as the cache invalidation key. `None`
-/// when `rustc` is not on PATH or its output cannot be parsed.
+/// The `rustc -vV` release line, such as `release: 1.83.0`, used as the cache invalidation key.
+///
+/// `None` when the report is unavailable ([`RustcVersion::active`] refused).
 fn rustc_version_string() -> Option<String> {
-    let text = rustc_vv_text()?;
-    // The "release:" line uniquely identifies the toolchain version.
-    text.lines()
-        .find(|l| l.starts_with("release:"))
-        .map(str::to_owned)
+    RustcVersion::active()
+        .ok()
+        .map(|version| format!("release: {}", version.release()))
 }
 
 /// Run the actual link probe: feed `fn main(){}` to `rustc` with
@@ -849,6 +836,13 @@ fn rustc_version_string() -> Option<String> {
 /// The artifact lands in a `ScratchDir` that is removed on drop, so no debris
 /// reaches the project tree or the shared target.
 fn run_link_probe(name: &str) -> LinkerProbeResult {
+    run_link_probe_within(OsStr::new("rustc"), name, LINK_PROBE_LIMITS)
+}
+
+/// The link probe of [`run_link_probe`], run by `rustc` (the program) under `ceiling`.
+///
+/// A probe that crosses its ceiling is killed and counts as rejected.
+fn run_link_probe_within(rustc: &OsStr, name: &str, ceiling: LocalCeiling) -> LinkerProbeResult {
     // A ScratchDir gives us an unpredictably-named, exclusively-created, mode-
     // 0700 directory that is removed when the guard drops — no predictable path,
     // no race on the temp name, no leftover artifacts.
@@ -859,28 +853,22 @@ fn run_link_probe(name: &str) -> LinkerProbeResult {
         return LinkerProbeResult::Rejected;
     };
     let out_path = scratch.child(&leaf);
-    let out = Command::new("rustc")
-        .args([
-            "-",
-            "--edition=2021",
-            &format!("-Clink-arg=-fuse-ld={name}"),
-            "-o",
-            &out_path.to_string_lossy(),
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .and_then(|mut child| {
-            if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write as _;
-                let _ = stdin.write_all(b"fn main(){}");
-            }
-            child.wait()
-        });
+    let mut command = Command::new(rustc);
+    command
+        .arg("-")
+        .arg("--edition=2021")
+        .arg(format!("-Clink-arg=-fuse-ld={name}"))
+        .arg("-o")
+        .arg(&out_path);
+    let run = run_local_fed(
+        command,
+        zeroize::Zeroizing::new(b"fn main(){}".to_vec()),
+        ceiling,
+        LocalSource::LinkProbe,
+    );
     // `scratch` drops here, removing the directory and the probe artifact.
-    match out {
-        Ok(status) if status.success() => LinkerProbeResult::Accepted,
+    match run {
+        Ok(captured) if captured.status.success() => LinkerProbeResult::Accepted,
         _ => LinkerProbeResult::Rejected,
     }
 }
@@ -1669,9 +1657,14 @@ fn run_install(argv: &[String]) -> Result<(), CliError> {
     let (program, rest) = argv
         .split_first()
         .ok_or_else(|| CliError::Usage(crate::text::msg::health_install_command_empty()))?;
-    let status = Command::new(program).args(rest).status().map_err(|e| {
-        CliError::Usage(crate::text::msg::health_install_launch_failed(&program, &e))
-    })?;
+    let mut command = Command::new(program);
+    command.args(rest);
+    let status = run_inherited(
+        command,
+        InheritedRole::InteractiveInstall,
+        InheritedInput::Terminal,
+    )
+    .map_err(|e| CliError::Usage(crate::text::msg::health_install_launch_failed(&program, &e)))?;
     if status.success() {
         Ok(())
     } else {
@@ -2228,20 +2221,42 @@ mod tests {
         ));
     }
 
+    /// A link probe still running at its wall is killed and rejected.
+    ///
+    /// The stub would exit 0 after 30 seconds, so without the wall the probe
+    /// would be accepted.
+    #[cfg(unix)]
     #[test]
-    fn host_triple_parser_reads_msvc_line_and_refuses_missing() {
-        let vv = "rustc 1.80.0 (abcdef 2024-01-01)\n\
-                  binary: rustc\n\
-                  host: x86_64-pc-windows-msvc\n\
-                  release: 1.80.0\n";
-        assert_eq!(
-            host_triple_from_rustc_vv(vv),
-            Some("x86_64-pc-windows-msvc")
+    fn a_link_probe_past_its_wall_is_rejected() {
+        use crate::remote_ingest::LocalWall;
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = TempDir::new("link_probe_wall");
+        let stub = dir.path().join("rustc");
+        std::fs::write(&stub, b"#!/bin/sh\nexec sleep 30\n").expect("write stub rustc");
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod stub rustc");
+        let started = std::time::Instant::now();
+        let result = run_link_probe_within(
+            stub.as_os_str(),
+            "lld",
+            LINK_PROBE_LIMITS.with_wall(LocalWall::of_secs::<1>()),
         );
-        // No `host:` line at all — the parser refuses rather than guessing.
-        let no_host = "rustc 1.80.0 (abcdef 2024-01-01)\nrelease: 1.80.0\n";
-        assert_eq!(host_triple_from_rustc_vv(no_host), None);
-        assert_eq!(host_triple_from_rustc_vv(""), None);
+        assert!(matches!(result, LinkerProbeResult::Rejected));
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    /// A link probe whose `rustc` exits 0 is accepted.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_probe_that_exits_zero_is_accepted() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = TempDir::new("link_probe_ok");
+        let stub = dir.path().join("rustc");
+        std::fs::write(&stub, b"#!/bin/sh\ncat >/dev/null\nexit 0\n").expect("write stub rustc");
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod stub rustc");
+        let result = run_link_probe_within(stub.as_os_str(), "lld", LINK_PROBE_LIMITS);
+        assert!(matches!(result, LinkerProbeResult::Accepted));
     }
 
     #[test]

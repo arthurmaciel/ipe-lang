@@ -16,8 +16,15 @@
 //! unreachable.
 
 use std::ffi::OsString;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::process::{Command, ExitStatus};
+use std::sync::OnceLock;
 
+use crate::remote_ingest::{
+    Captured, IngestLimit, LocalRefusal, LocalSource, RUSTC_QUERY_LIMITS, RunError, Stream,
+    run_local,
+};
 use crate::style::TerminalSafe;
 
 /// A `cargo` executable resolved on the `PATH`.
@@ -262,6 +269,210 @@ fn is_executable_file(path: &Path) -> bool {
     path.is_file()
 }
 
+/// The active `rustc`'s `-vV` report, parsed once at the boundary.
+///
+/// Holding one is proof the report has a `rustc ` banner, `key: value` lines,
+/// and exactly one `release` and one `host`. The exact bytes are kept, so a
+/// hash of the report is the hash of what `rustc` printed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RustcVersion {
+    verbatim: Vec<u8>,
+    release: String,
+    host: String,
+}
+
+/// Why `rustc -vV` output is not a version report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RustcVersionRefusal {
+    /// The output is not UTF-8.
+    NotUtf8,
+    /// The output holds a control character other than a line feed.
+    ControlChar,
+    /// The first line does not start with `rustc `.
+    NoBanner,
+    /// A later line is not `key: value` with a key of letters, spaces and `-`.
+    MalformedLine,
+    /// `release` or `host` appears more than once.
+    DuplicateKey,
+    /// No non-empty `release` line.
+    MissingRelease,
+    /// No non-empty `host` line.
+    MissingHost,
+}
+
+/// Why the `rustc -vV` child produced no output to parse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RustcRunFailure {
+    /// `rustc` could not be started (absent from the `PATH`, among others).
+    Spawn(ErrorKind),
+    /// Waiting on `rustc` failed.
+    Wait(ErrorKind),
+    /// A staged path could not be measured.
+    Measure(ErrorKind),
+    /// `rustc` crossed its ceiling and was killed.
+    Exceeded(IngestLimit),
+    /// A process `rustc` started held this pipe open past the grace.
+    PipeHeld(Stream),
+    /// Reading this pipe failed.
+    PipeRead(Stream, ErrorKind),
+}
+
+/// Why the active toolchain's version report is unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RustcQueryRefusal {
+    /// The `rustc -vV` child did not run to an exit within its ceiling.
+    Run(RustcRunFailure),
+    /// `rustc -vV` exited with this unsuccessful status.
+    Exit(ExitStatus),
+    /// `rustc -vV` printed a report that does not parse.
+    Parse(RustcVersionRefusal),
+}
+
+impl std::fmt::Display for RustcVersionRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotUtf8 => "the report is not UTF-8",
+            Self::ControlChar => "the report holds a control character",
+            Self::NoBanner => "the report does not start with `rustc `",
+            Self::MalformedLine => "a report line is not `key: value`",
+            Self::DuplicateKey => "the report names `release` or `host` twice",
+            Self::MissingRelease => "the report has no `release` line",
+            Self::MissingHost => "the report has no `host` line",
+        })
+    }
+}
+
+impl std::fmt::Display for RustcRunFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(kind) => write!(f, "could not start `rustc`: {kind}"),
+            Self::Wait(kind) => write!(f, "could not wait for `rustc`: {kind}"),
+            Self::Measure(kind) => write!(f, "could not measure the `rustc` query: {kind}"),
+            Self::Exceeded(limit) => write!(f, "`rustc` crossed its ceiling of {limit}"),
+            Self::PipeHeld(stream) => write!(f, "a process `rustc` started held its {stream} open"),
+            Self::PipeRead(stream, kind) => {
+                write!(f, "reading the `rustc` {stream} failed: {kind}")
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for RustcQueryRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Run(failure) => failure.fmt(f),
+            Self::Exit(status) => write!(f, "`rustc -vV` exited with {status}"),
+            Self::Parse(refusal) => write!(f, "`rustc -vV` printed no version report: {refusal}"),
+        }
+    }
+}
+
+impl RustcVersion {
+    /// Parse `rustc -vV` stdout into a version report.
+    ///
+    /// # Errors
+    /// A [`RustcVersionRefusal`] naming the first rule the output breaks.
+    pub(crate) fn parse(stdout: &[u8]) -> Result<Self, RustcVersionRefusal> {
+        let text = std::str::from_utf8(stdout).map_err(|_| RustcVersionRefusal::NotUtf8)?;
+        if text.chars().any(|c| c.is_control() && c != '\n') {
+            return Err(RustcVersionRefusal::ControlChar);
+        }
+        let mut lines = text.split('\n');
+        if !lines.next().unwrap_or("").starts_with("rustc ") {
+            return Err(RustcVersionRefusal::NoBanner);
+        }
+        let mut release = None;
+        let mut host = None;
+        for line in lines.filter(|line| !line.is_empty()) {
+            let (key, value) = line
+                .split_once(": ")
+                .ok_or(RustcVersionRefusal::MalformedLine)?;
+            if key.is_empty()
+                || !key
+                    .bytes()
+                    .all(|b| b.is_ascii_alphabetic() || b == b'-' || b == b' ')
+            {
+                return Err(RustcVersionRefusal::MalformedLine);
+            }
+            let slot = match key {
+                "release" => &mut release,
+                "host" => &mut host,
+                _ => continue,
+            };
+            if slot.replace(value.to_owned()).is_some() {
+                return Err(RustcVersionRefusal::DuplicateKey);
+            }
+        }
+        let release = release
+            .filter(|value| !value.is_empty())
+            .ok_or(RustcVersionRefusal::MissingRelease)?;
+        let host = host
+            .filter(|value| !value.is_empty())
+            .ok_or(RustcVersionRefusal::MissingHost)?;
+        Ok(Self {
+            verbatim: stdout.to_vec(),
+            release,
+            host,
+        })
+    }
+
+    /// The report of the `rustc` on the `PATH`, queried once per process under [`RUSTC_QUERY_LIMITS`].
+    ///
+    /// # Errors
+    /// The [`RustcQueryRefusal`] of the one query, returned to every caller.
+    pub(crate) fn active() -> Result<&'static Self, RustcQueryRefusal> {
+        static ACTIVE: OnceLock<Result<RustcVersion, RustcQueryRefusal>> = OnceLock::new();
+        ACTIVE
+            .get_or_init(|| {
+                let mut command = Command::new("rustc");
+                command.arg("-vV");
+                Self::from_run(run_local(
+                    command,
+                    RUSTC_QUERY_LIMITS,
+                    LocalSource::RustcQuery,
+                ))
+            })
+            .as_ref()
+            .map_err(|refusal| *refusal)
+    }
+
+    /// The report a finished `rustc -vV` run carries.
+    fn from_run(run: Result<Captured, RunError<LocalRefusal>>) -> Result<Self, RustcQueryRefusal> {
+        let captured = run.map_err(|error| {
+            RustcQueryRefusal::Run(match error {
+                RunError::Spawn(e) => RustcRunFailure::Spawn(e.kind()),
+                RunError::Wait(e) => RustcRunFailure::Wait(e.kind()),
+                RunError::Measure(_, e) => RustcRunFailure::Measure(e.kind()),
+                RunError::Exceeded(refusal) => RustcRunFailure::Exceeded(refusal.limit),
+                RunError::PipeDrainTimeout(stream) => RustcRunFailure::PipeHeld(stream),
+                RunError::PipeRead(stream, kind) => RustcRunFailure::PipeRead(stream, kind),
+            })
+        })?;
+        if !captured.status.success() {
+            return Err(RustcQueryRefusal::Exit(captured.status));
+        }
+        Self::parse(&captured.stdout).map_err(RustcQueryRefusal::Parse)
+    }
+
+    /// The exact bytes `rustc -vV` printed.
+    #[must_use]
+    pub(crate) fn verbatim(&self) -> &[u8] {
+        &self.verbatim
+    }
+
+    /// The `release` value, such as `1.83.0`.
+    #[must_use]
+    pub(crate) fn release(&self) -> &str {
+        &self.release
+    }
+
+    /// The `host` target triple, such as `x86_64-unknown-linux-gnu`.
+    #[must_use]
+    pub(crate) fn host(&self) -> &str {
+        &self.host
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,6 +546,154 @@ mod tests {
             Resolution::Found(found) => assert_eq!(found, probe.dir().join(CARGO_EXE)),
             Resolution::Missing(d) => panic!("expected a resolved cargo, got {d:?}"),
         }
+    }
+
+    /// Real `rustc 1.83.0 -vV` output on `x86_64-unknown-linux-gnu`.
+    const REAL_VV: &[u8] = b"rustc 1.83.0 (90b35a623 2024-11-26)\n\
+binary: rustc\n\
+commit-hash: 90b35a6239c3d8bdabc530a6a0816f7ff89a0aaf\n\
+commit-date: 2024-11-26\n\
+host: x86_64-unknown-linux-gnu\n\
+release: 1.83.0\n\
+LLVM version: 19.1.1\n";
+
+    #[test]
+    fn rustc_version_parses_the_real_vv_output() {
+        let parsed = RustcVersion::parse(REAL_VV);
+        assert!(
+            matches!(parsed, Ok(ref version) if version.release() == "1.83.0"
+                && version.host() == "x86_64-unknown-linux-gnu"),
+            "{parsed:?}"
+        );
+    }
+
+    #[test]
+    fn the_epoch_hash_input_is_the_verbatim_output() {
+        let parsed = RustcVersion::parse(REAL_VV);
+        assert!(
+            matches!(parsed, Ok(ref version) if version.verbatim() == REAL_VV),
+            "{parsed:?}"
+        );
+    }
+
+    #[test]
+    fn non_utf8_rustc_output_is_refused() {
+        assert_eq!(
+            RustcVersion::parse(b"rustc 1.83.0\nhost: \xff\nrelease: 1.83.0\n"),
+            Err(RustcVersionRefusal::NotUtf8)
+        );
+    }
+
+    #[test]
+    fn rustc_output_without_its_banner_is_refused() {
+        assert_eq!(
+            RustcVersion::parse(b"cargo 1.83.0\nhost: x\nrelease: 1.83.0\n"),
+            Err(RustcVersionRefusal::NoBanner)
+        );
+    }
+
+    #[test]
+    fn rustc_output_without_a_release_is_refused() {
+        assert_eq!(
+            RustcVersion::parse(b"rustc 1.83.0\nhost: x86_64-unknown-linux-gnu\n"),
+            Err(RustcVersionRefusal::MissingRelease)
+        );
+    }
+
+    #[test]
+    fn rustc_output_without_a_host_is_refused() {
+        assert_eq!(
+            RustcVersion::parse(b"rustc 1.83.0\nrelease: 1.83.0\n"),
+            Err(RustcVersionRefusal::MissingHost)
+        );
+    }
+
+    #[test]
+    fn rustc_output_with_a_duplicated_host_is_refused() {
+        assert_eq!(
+            RustcVersion::parse(b"rustc 1.83.0\nhost: a\nhost: b\nrelease: 1.83.0\n"),
+            Err(RustcVersionRefusal::DuplicateKey)
+        );
+    }
+
+    #[test]
+    fn rustc_output_with_an_escape_byte_is_refused() {
+        assert_eq!(
+            RustcVersion::parse(b"rustc 1.83.0\nhost: x\x1b[2J\nrelease: 1.83.0\n"),
+            Err(RustcVersionRefusal::ControlChar)
+        );
+    }
+
+    #[test]
+    fn rustc_output_with_a_line_that_is_not_a_key_value_is_refused() {
+        assert_eq!(
+            RustcVersion::parse(b"rustc 1.83.0\nhost x\nrelease: 1.83.0\n"),
+            Err(RustcVersionRefusal::MalformedLine)
+        );
+    }
+
+    /// A `sh -c` command running `script`.
+    #[cfg(unix)]
+    fn sh(script: &str) -> Command {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(script);
+        command
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rustc_query_past_its_wall_is_refused() {
+        use crate::remote_ingest::LocalWall;
+        let started = std::time::Instant::now();
+        let refused = RustcVersion::from_run(run_local(
+            sh("exec sleep 30"),
+            RUSTC_QUERY_LIMITS.with_wall(LocalWall::of_secs::<1>()),
+            LocalSource::RustcQuery,
+        ));
+        assert!(
+            matches!(
+                refused,
+                Err(RustcQueryRefusal::Run(RustcRunFailure::Exceeded(
+                    IngestLimit::Time(_)
+                )))
+            ),
+            "{refused:?}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_flooding_rustc_is_refused() {
+        use crate::remote_ingest::ByteBudget;
+        let refused = RustcVersion::from_run(run_local(
+            sh("printf 'rustc 1\\nhost: x\\nrelease: 1\\n'; head -c 64 /dev/zero"),
+            RUSTC_QUERY_LIMITS.with_stdout(ByteBudget::for_test(16).expect("a 16-byte budget")),
+            LocalSource::RustcQuery,
+        ));
+        assert!(
+            matches!(
+                refused,
+                Err(RustcQueryRefusal::Run(RustcRunFailure::Exceeded(
+                    IngestLimit::Bytes(16)
+                )))
+            ),
+            "{refused:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_rustc_is_refused_by_its_status() {
+        let refused = RustcVersion::from_run(run_local(
+            sh("printf 'rustc 1\\nhost: x\\nrelease: 1\\n'; exit 1"),
+            RUSTC_QUERY_LIMITS,
+            LocalSource::RustcQuery,
+        ));
+        assert!(
+            matches!(refused, Err(RustcQueryRefusal::Exit(_))),
+            "{refused:?}"
+        );
     }
 
     #[test]

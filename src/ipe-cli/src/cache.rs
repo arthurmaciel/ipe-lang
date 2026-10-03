@@ -685,19 +685,13 @@ fn compiler_revision_hash() -> Option<String> {
     Some(hex::encode(hasher.finalize()))
 }
 
-/// The active `rustc`'s `-vV` output, hashed — the design doc's
-/// `toolchain_fingerprint()`. `None` when `rustc` is not on `PATH` or exits
-/// non-zero.
+/// The active `rustc`'s `-vV` output, hashed: the design doc's `toolchain_fingerprint()`.
+///
+/// `None` when the report is unavailable ([`RustcVersion::active`] refused).
 fn toolchain_fingerprint_hash() -> Option<String> {
-    let output = std::process::Command::new("rustc")
-        .arg("-vV")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
+    let version = crate::toolchain::RustcVersion::active().ok()?;
     let mut hasher = Sha256::new();
-    hasher.update(&output.stdout);
+    hasher.update(version.verbatim());
     Some(hex::encode(hasher.finalize()))
 }
 
