@@ -449,13 +449,13 @@ pub(crate) fn dev_surface_from_env() -> Option<DevSurface> {
 }
 
 /// A [`DevIntent`] for a unit test of a pure `*_with` gate.
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) const fn test_dev_intent() -> DevIntent {
     DevIntent(())
 }
 
 /// A [`DevSurface`] for a unit test of a pure `*_with` gate.
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) const fn test_dev_surface() -> DevSurface {
     DevSurface {
         _intent: DevIntent(()),
