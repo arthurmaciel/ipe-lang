@@ -40,6 +40,8 @@ type Page
 -- decision re-reads that page only. `selectedView` is the session's one
 -- source read: the queue page's selected card and the unit page both show
 -- their source from it, so no page can start a second read beside it.
+-- `decision` is the one decision in flight, so a decision's source re-read
+-- never runs beside another.
 type alias Model =
     { page : Page
     , queueState : Queue.QueueState
@@ -48,6 +50,7 @@ type alias Model =
     , refuseDraft : String
     , refuseError : Maybe Error
     , decisionError : Maybe Error
+    , decision : Queue.DecisionSlot
     , queueLoad : Queue.LoadTicket
     , history : Queue.HistoryState
     , historyLoad : Queue.LoadTicket
@@ -68,6 +71,7 @@ init _req =
       , refuseDraft = ""
       , refuseError = Nothing
       , decisionError = Nothing
+      , decision = Queue.DecisionIdle
       , queueLoad = Queue.firstTicket
       , history = HistoryLoading
       , historyLoad = Queue.firstTicket
@@ -194,7 +198,7 @@ update msg model =
             loadQueue cursor { model | queueState = Loading, selected = 0 }
 
         ApproveUnit uid ->
-            ( model, saveDecision model uid Approved )
+            saveDecision model uid Approved
 
         RefuseStart uid ->
             ( { model | refusingUid = Just uid, refuseDraft = "", refuseError = Nothing }, Cmd.none )
@@ -209,16 +213,20 @@ update msg model =
             submitRefuse model uid
 
         DecisionSaved uid result ->
+            let
+                settled =
+                    { model | decision = Queue.decisionSettled uid model.decision }
+            in
             case result of
                 Ok ( attested, _ ) ->
                     let
                         load =
-                            Queue.nextTicket model.queueLoad
+                            Queue.nextTicket settled.queueLoad
                     in
-                    ( { model | decisionError = Nothing, queueLoad = load }, drainAndReload model attested load )
+                    ( { settled | decisionError = Nothing, queueLoad = load }, drainAndReload settled attested load )
 
                 Err e ->
-                    ( { model | decisionError = Just e }, Cmd.none )
+                    ( { settled | decisionError = Just e }, Cmd.none )
 
         Navigated page ->
             enterPage page model
@@ -324,7 +332,7 @@ keyActionMsg action model =
         ApproveSelected ->
             case selectedUid model of
                 Just uid ->
-                    ( model, saveDecision model uid Approved )
+                    saveDecision model uid Approved
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -364,7 +372,12 @@ submitRefuse model uid =
             ( { model | refuseError = Just e }, Cmd.none )
 
         Ok reason ->
-            ( { model | refusingUid = Nothing, refuseDraft = "" }, saveDecision model uid (Refused reason) )
+            case Queue.startDecision uid model.decision of
+                Just _ ->
+                    saveDecision { model | refusingUid = Nothing, refuseDraft = "" } uid (Refused reason)
+
+                Nothing ->
+                    ( { model | refuseError = Just decisionBusy }, Cmd.none )
 
 
 -- The shown page's units, for selection and decisions; a queue that is not
@@ -400,11 +413,21 @@ clampIndex i len =
 
 -- Every decision, from a button or a key, goes through `Queue.decide` on the
 -- selected unit's shown source, which it re-proves before writing. Only the
--- queue page decides: the unit page is read-only, and its view is never a
--- queue card's.
-saveDecision : Model -> String -> LibDb.Decision -> Cmd Msg
+-- queue page decides: the unit page is read-only. One decision is in flight
+-- at a time; one asked while another is saving starts nothing and says why.
+saveDecision : Model -> String -> LibDb.Decision -> ( Model, Cmd Msg )
 saveDecision model uid decision =
-    Cmd.perform (decisionTask model uid decision) (DecisionSaved uid)
+    case Queue.startDecision uid model.decision of
+        Just saving ->
+            ( { model | decision = saving }, Cmd.perform (decisionTask model uid decision) (DecisionSaved uid) )
+
+        Nothing ->
+            ( { model | decisionError = Just decisionBusy }, Cmd.none )
+
+
+decisionBusy : Error
+decisionBusy =
+    Error.conflict "a decision is still being saved; try again once it settles"
 
 
 decisionTask : Model -> String -> LibDb.Decision -> Task.Task Error ( Index.Attested, Int )
@@ -1183,8 +1206,8 @@ sourceBlock loaded =
         (Ui.column
             [ Ui.width Ui.fill, Ui.spacing 2 ]
             (case loaded.view of
-                Shown _ ->
-                    List.map numberedLine loaded.lines
+                Shown shown ->
+                    List.map numberedLine (Index.shownLines shown)
 
                 Stale _ ->
                     withheldSource loaded.view

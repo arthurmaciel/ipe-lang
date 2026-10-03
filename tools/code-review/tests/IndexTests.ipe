@@ -262,6 +262,7 @@ unitPageLoadIn base =
                                             == "Lib.answer"
                                             && shownTextOf loaded.view
                                             == Just viewA
+                                            && drawsItsShownText loaded
                                             && List.isEmpty loaded.links.links
                                             && loaded.links.hidden
                                             == Links.NoneHidden
@@ -439,6 +440,26 @@ probeRefusesIndexWithoutFiles =
         message <- probeMessage (Settings.indexSettings |> Task.andThen Index.probe)
         cleanupIndex at.indexDb at.repo
         Task.succeed (probeNames "IPE_INDEX_DB" at.indexDb message)
+
+
+
+-- The lines a shown view draws are its own shown text, numbered from the
+-- unit's first line, one per text line: each line's tokens spell that line.
+-- Red if the drawn lines come from anything but the bytes a decision hashes.
+drawsItsShownText : Index.UnitView -> Bool
+drawsItsShownText loaded =
+    case loaded.view of
+        Shown shown ->
+            List.length (Index.shownLines shown)
+                == 4
+                && List.map (\line -> ( line.number, SafeText.toString (SafeText.concat (List.map Highlight.tokenText line.tokens)) )) (Index.shownLines shown)
+                == List.map (\( n, line ) -> ( n, SafeText.toString (SafeText.renderForeign line) )) (Format.numberedLines loaded.unit.lineStart (Index.shownText shown))
+
+        Stale _ ->
+            False
+
+        Unreadable _ ->
+            False
 
 
 

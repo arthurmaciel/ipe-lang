@@ -1,4 +1,4 @@
-module Lib.Queue exposing (HistoryPage, HistoryRow, HistoryState(..), LoadTicket, Progress, QueuePage, QueueState(..), QueuedUnit, ResyncBound, SelectedView(..), UnitPageState(..), clearView, decidableSource, decide, drainThenLoad, firstTicket, historyStateFromResult, historyStatusText, isCurrentLoad, loadHistoryPage, loadPage, nextTicket, loadUnitView, pageHeaderText, queueStatusText, reloadView, resyncBound, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, selectView, selectedViewOf, selectedViewStatusText, sourceStatusText, stateFromResult, unitPageOf, unitPageStatusText, viewArrived)
+module Lib.Queue exposing (DecisionSlot(..), HistoryPage, HistoryRow, HistoryState(..), LoadTicket, Progress, QueuePage, QueueState(..), QueuedUnit, ResyncBound, SelectedView(..), UnitPageState(..), clearView, decidableSource, decide, decisionSettled, drainThenLoad, firstTicket, historyStateFromResult, historyStatusText, isCurrentLoad, loadHistoryPage, loadPage, nextTicket, loadUnitView, pageHeaderText, queueStatusText, reloadView, resyncBound, resyncPageCeiling, resyncReviewed, resyncReviewedWithin, selectView, selectedViewOf, selectedViewStatusText, sourceStatusText, startDecision, stateFromResult, unitPageOf, unitPageStatusText, viewArrived)
 
 import Ipe.Db as Db
 import Ipe.Error as Error
@@ -337,6 +337,43 @@ decide db shown decision =
         attested <- Index.reverify shown
         n <- LibDb.insertDecision db attested decision
         Task.succeed ( attested, n )
+
+
+-- The session's one decision in flight. A decision re-reads its unit's
+-- source (`Index.reverify`, up to the source ceiling), so a decision asked
+-- while another is saving starts nothing: N quick approvals (a held key, a
+-- double click) put one re-read in flight, never N.
+type DecisionSlot
+    = DecisionIdle
+    | DecisionSaving String
+
+
+-- The slot holding a decision on `uid`; Nothing while another decision is
+-- saving, so no second re-read starts beside it.
+startDecision : String -> DecisionSlot -> Maybe DecisionSlot
+startDecision uid slot =
+    case slot of
+        DecisionIdle ->
+            Just (DecisionSaving uid)
+
+        DecisionSaving _ ->
+            Nothing
+
+
+-- The decision on `uid` returned; a result for any other uid leaves the
+-- saving one held.
+decisionSettled : String -> DecisionSlot -> DecisionSlot
+decisionSettled uid slot =
+    case slot of
+        DecisionSaving saving ->
+            if saving == uid then
+                DecisionIdle
+
+            else
+                slot
+
+        DecisionIdle ->
+            DecisionIdle
 
 
 -- The session's one source read and the view it settles: the queue page's

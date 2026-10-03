@@ -1,4 +1,4 @@
-module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), DecidedPair, PendingRow, ProgressRow, ShownSource, SourceView(..), StaleReason(..), Unit, UnitView, attest, attestedHash, attestedUid, candidateQuery, countPending, dbBytes, decidedPairDecoder, decidedPairKey, drainDecided, drainUnit, loadPendingPage, loadProgress, loadView, nameFor, pageSize, placeholders, probe, readConnection, rebuildReviewed, reverify, shortHash, shownHash, shownText, storedHash, viewText)
+module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), DecidedPair, PendingRow, ProgressRow, ShownSource, SourceView(..), StaleReason(..), Unit, UnitView, attest, attestedHash, attestedUid, candidateQuery, countPending, dbBytes, decidedPairDecoder, decidedPairKey, drainDecided, drainUnit, loadPendingPage, loadProgress, loadView, nameFor, pageSize, placeholders, probe, readConnection, rebuildReviewed, reverify, shortHash, shownHash, shownLines, shownText, storedHash, viewText)
 
 import Ipe.ByteSize as ByteSize exposing (ByteSize)
 import Ipe.Crypto as Crypto
@@ -48,14 +48,13 @@ type alias Unit =
 
 
 -- One unit with what a page shows of its source: the unit's lines from disk,
--- shown only when they re-hash to `unit.attested`; the shown lines numbered
--- and tokenized once, so a render never re-tokenizes them (none for a
--- withheld view); and the links resolved from a shown view. `loadView` is
+-- shown only when they re-hash to `unit.attested` (the shown source carries
+-- its own numbered, tokenized lines, so what a page draws is the text a
+-- decision hashes); and the links resolved from a shown view. `loadView` is
 -- the one source read that builds it.
 type alias UnitView =
     { unit : Unit
     , view : SourceView
-    , lines : List Highlight.SourceLine
     , links : Links.LinkSet
     }
 
@@ -90,30 +89,10 @@ loadView conn roots uid =
                 do
                     view <- viewOf roots row
                     links <- linksOf conn row view
-                    Task.succeed (Just (unitViewOf (withRow row) view links))
+                    Task.succeed (Just { unit = withRow row, view = view, links = links })
 
             Nothing ->
                 Task.succeed Nothing
-
-
-unitViewOf : Unit -> SourceView -> Links.LinkSet -> UnitView
-unitViewOf unit view links =
-    { unit = unit, view = view, lines = shownLines unit view, links = links }
-
-
--- A shown view's lines, numbered from the unit's first line and tokenized in
--- the unit's language; a withheld view shows no lines.
-shownLines : Unit -> SourceView -> List Highlight.SourceLine
-shownLines unit view =
-    case view of
-        Shown shown ->
-            List.map (\( n, line ) -> { number = n, tokens = Highlight.tokenize unit.lang line }) (Format.numberedLines unit.lineStart (shownText shown))
-
-        Stale _ ->
-            []
-
-        Unreadable _ ->
-            []
 
 
 -- Jump links come only from a shown view; a withheld view links nothing and
@@ -695,7 +674,7 @@ viewOf roots row =
 
                 Ok path ->
                     File.readFileLimit path sourceCeiling
-                        |> Task.map (\text -> verifyView row.uid stored (viewText row.lineStart row.lineEnd text))
+                        |> Task.map (\text -> verifyView row stored (viewText row.lineStart row.lineEnd text))
                         |> Task.onError (\e -> Task.succeed (Unreadable (readFailure row.path e)))
 
 
@@ -715,15 +694,15 @@ readFailure stored e =
         e
 
 
-verifyView : String -> String -> Result StaleReason String -> SourceView
-verifyView uid stored sliced =
+verifyView : RowUnit -> String -> Result StaleReason String -> SourceView
+verifyView row stored sliced =
     case sliced of
         Err reason ->
             Stale reason
 
         Ok view ->
             if attest view == stored then
-                Shown (ShownSource { uid = uid, text = view, hash = stored })
+                Shown (ShownSource { uid = row.uid, text = view, hash = stored, lines = sourceLines (langOf row.lang) row.lineStart view })
 
             else
                 Stale Drifted
@@ -816,10 +795,24 @@ hashDigits attested =
             other
 
 
--- Source text proved equal to its attestation. Opaque: built only by
--- `viewOf`, so holding one means the bytes were re-hashed.
+-- Source text proved equal to its attestation, with the lines a page draws
+-- of it, numbered from the unit's first line and tokenized once in the
+-- unit's language. Opaque: built only by `viewOf`, so holding one means the
+-- bytes were re-hashed, and its lines are of those bytes and no others.
 type ShownSource
-    = ShownSource { uid : String, text : String, hash : String }
+    = ShownSource { uid : String, text : String, hash : String, lines : List Highlight.SourceLine }
+
+
+sourceLines : Highlight.Lang -> Int -> String -> List Highlight.SourceLine
+sourceLines lang lineStart text =
+    List.map (\( n, line ) -> { number = n, tokens = Highlight.tokenize lang line }) (Format.numberedLines lineStart text)
+
+
+shownLines : ShownSource -> List Highlight.SourceLine
+shownLines shown =
+    case shown of
+        ShownSource s ->
+            s.lines
 
 
 shownText : ShownSource -> String

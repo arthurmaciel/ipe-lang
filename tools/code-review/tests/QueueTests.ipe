@@ -516,6 +516,36 @@ unitPageSettlesOnItsOwnRead =
 
 
 
+-- One decision in flight: a decision asked while one is saving gets no
+-- slot (so no second source re-read starts), whichever unit it is for; a
+-- result for another uid frees nothing, and the saving unit's result frees
+-- the slot for the next. Red if a second decision can start beside one.
+decisionsSingleFlight : Bool
+decisionsSingleFlight =
+    let
+        first =
+            Queue.startDecision "a" Queue.DecisionIdle
+    in
+    case first of
+        Just saving ->
+            Queue.startDecision "a" saving
+                == Nothing
+                && Queue.startDecision "b" saving
+                == Nothing
+                && Queue.decisionSettled "b" saving
+                == saving
+                && Queue.startDecision "b" (Queue.decisionSettled "b" saving)
+                == Nothing
+                && Queue.decisionSettled "a" saving
+                == Queue.DecisionIdle
+                && Queue.startDecision "b" (Queue.decisionSettled "a" saving)
+                == Just (Queue.DecisionSaving "b")
+
+        Nothing ->
+            False
+
+
+
 -- The view a fresh read of `uid` settles with `result`.
 settledFor : String -> Result Error (Maybe Index.UnitView) -> Queue.SelectedView
 settledFor uid result =
@@ -1859,6 +1889,7 @@ checks =
         , Task.succeed ( "unit-page navigations during a source read start no second read", unitEntriesDuringReadCoalesce )
         , Task.succeed ( "a unit-page read in flight blocks a queue-card read", oneReadSlotAcrossPages )
         , Task.succeed ( "a unit page settles only on its own read, a missing unit as not found", unitPageSettlesOnItsOwnRead )
+        , Task.succeed ( "a decision asked while one is saving starts no second source re-read", decisionsSingleFlight )
         , Task.succeed ( "queue state texts distinguish loading/empty/failed/loaded", queueStateTextsDistinct )
         , check "progress counts decided pairs over decided-or-queued units" progressCountsDecidedPairs
         , check "progress total holds while the queue drains" progressStableAcrossDrain
