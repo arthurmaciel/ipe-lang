@@ -25,9 +25,9 @@
 //! `InvalidInput`, so no party reaches a stream it did not open.
 
 use super::*;
-use core::num::NonZeroU128;
 use futures_util::StreamExt;
 use std::collections::HashMap;
+use std::num::NonZeroU128;
 use std::sync::{Mutex, OnceLock};
 
 /// Opaque handle for an in-flight HTTP streaming response.
@@ -78,8 +78,8 @@ impl StreamKey {
     }
 }
 
-impl core::fmt::Debug for IpeStreamId {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl std::fmt::Debug for IpeStreamId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("StreamId(<opaque>)")
     }
 }
@@ -108,7 +108,7 @@ struct StreamIdVisitor;
 impl serde::de::Visitor<'_> for StreamIdVisitor {
     type Value = IpeStreamId;
 
-    fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("a stream id")
     }
 
@@ -204,8 +204,10 @@ enum Subscription<V> {
 enum CloseAct {
     /// A drain owns the response: mark it ended so the drain stops.
     EndInPlace,
-    /// Nothing reads the entry: drop it (and any parked response).
+    /// A parked response nothing reads: drop it and its entry.
     Remove,
+    /// The stream already ended: nothing to release, so the close is refused.
+    Refuse,
 }
 
 /// The one registry of client streams; every state change is one method under one lock.
@@ -280,7 +282,7 @@ impl<V> StreamRegistry<V> {
         let Some(entry) = self.map.get_mut(&key) else {
             return Err(IpeError::invalid_input(UNKNOWN_STREAM.to_owned()));
         };
-        match core::mem::replace(&mut entry.slot, Slot::Draining) {
+        match std::mem::replace(&mut entry.slot, Slot::Draining) {
             Slot::Parked(value) => Ok(value),
             Slot::Draining => Err(IpeError::conflict(STREAM_BUSY.to_owned())),
             Slot::Ended => {
@@ -290,27 +292,32 @@ impl<V> StreamRegistry<V> {
         }
     }
 
-    /// Releases the stream; a handle the registry does not hold leaves it unchanged.
-    fn close(&mut self, key: StreamKey) {
+    /// Releases a live stream. A handle naming no live stream (never opened,
+    /// already closed, ended, or evicted) is a typed refusal that leaves the
+    /// registry unchanged.
+    fn close(&mut self, key: StreamKey) -> Result<(), IpeError> {
         let Some(entry) = self.map.get_mut(&key) else {
-            return;
+            return Err(IpeError::invalid_input(UNKNOWN_STREAM.to_owned()));
         };
         let act = match entry.slot {
             Slot::Draining => CloseAct::EndInPlace,
-            Slot::Parked(_) | Slot::Ended => CloseAct::Remove,
+            Slot::Parked(_) => CloseAct::Remove,
+            Slot::Ended => CloseAct::Refuse,
         };
         match act {
             CloseAct::EndInPlace => entry.slot = Slot::Ended,
             CloseAct::Remove => {
                 self.map.remove(&key);
             }
+            CloseAct::Refuse => return Err(IpeError::invalid_input(UNKNOWN_STREAM.to_owned())),
         }
+        Ok(())
     }
 
     /// Decides one `chunks` subscribe.
     fn subscribe(&mut self, key: StreamKey) -> Subscription<V> {
         if let Some(entry) = self.map.get_mut(&key) {
-            return match core::mem::replace(&mut entry.slot, Slot::Draining) {
+            return match std::mem::replace(&mut entry.slot, Slot::Draining) {
                 Slot::Parked(value) => Subscription::Drain(value),
                 Slot::Draining => Subscription::Active,
                 Slot::Ended => {
@@ -493,15 +500,20 @@ where
 
 /// `Ipe.Http.Stream.close : StreamId -> Task Error ()`
 ///
-/// Idempotent: closing a handle the registry does not hold is `Ok ()` and
-/// changes nothing. A stream being drained ends at its next chunk boundary.
+/// Releases a live stream: a parked response drops at once, a stream being
+/// drained ends at its next chunk boundary. A handle naming no live stream
+/// (never opened, already closed, ended by its drain, or evicted) is
+/// `Err InvalidInput`, so a double close or a forged handle never passes for a
+/// release. A caller wanting idempotence opts in with `Task.onError`.
 pub fn http_stream_close<E: From<String> + From<IpeError> + Send + 'static>(
     sid: IpeStreamId,
 ) -> IpeTask<E, ()> {
     let key = sid.key;
     Box::pin(async move {
-        with_registry(|r| r.close(key));
-        IpeResult::Ok(())
+        match with_registry(|r| r.close(key)) {
+            Ok(()) => IpeResult::Ok(()),
+            Err(e) => IpeResult::Err(E::from(e)),
+        }
     })
 }
 
@@ -546,8 +558,10 @@ where
     IpeSub::Source(Box::new(move |emit| {
         match with_registry(|r| r.subscribe(key)) {
             Subscription::Drain(resp) => {
+                // The lease moves into the task, so a task dropped before its
+                // first poll still ends the slot.
+                let lease = DrainLease { key };
                 tokio::spawn(async move {
-                    let lease = DrainLease { key };
                     let mut stream = resp.bytes_stream();
                     loop {
                         if !lease.still_owned() {
@@ -630,17 +644,59 @@ mod tests {
         assert!(reg.take_for_drain(sid.key).is_ok());
     }
 
+    fn assert_unknown(refused: &Result<(), IpeError>) {
+        assert!(matches!(refused, Err(e) if kind(e) == IpeErrorKind::InvalidInput));
+        assert!(matches!(refused, Err(e) if message(e) == UNKNOWN_STREAM));
+    }
+
     #[test]
-    fn close_unknown_key_is_ok_and_leaves_registry_unchanged() {
+    fn close_unknown_key_refused() {
         let mut reg = StreamRegistry::<()>::new();
         let sid = reg.open((), counting_source()).unwrap();
-        reg.close(key(99));
+        // A forged handle the registry never held.
+        assert_unknown(&reg.close(key(99)));
         assert_eq!(reg.map.len(), 1);
         assert!(slot_of(&reg, key(99)).is_none());
         assert!(matches!(slot_of(&reg, sid.key), Some(Slot::Parked(()))));
-        // Closing the held handle does remove it.
-        reg.close(sid.key);
+        // Happy twin: closing the held handle removes it.
+        assert!(reg.close(sid.key).is_ok());
         assert!(reg.map.is_empty());
+    }
+
+    #[test]
+    fn close_twice_second_refused() {
+        let mut reg = StreamRegistry::<()>::new();
+        let parked = reg.open((), counting_source()).unwrap();
+        assert!(reg.close(parked.key).is_ok());
+        assert_unknown(&reg.close(parked.key));
+        // A draining stream: the first close ends it, the second is refused
+        // and leaves the tombstone in place.
+        let mut reg = StreamRegistry::<()>::new();
+        let draining = reg.open((), counting_source()).unwrap();
+        assert!(reg.take_for_drain(draining.key).is_ok());
+        assert!(reg.close(draining.key).is_ok());
+        assert_unknown(&reg.close(draining.key));
+        assert!(matches!(slot_of(&reg, draining.key), Some(Slot::Ended)));
+    }
+
+    #[test]
+    fn close_after_drain_end_refused() {
+        let mut reg = StreamRegistry::<()>::new();
+        let sid = reg.open((), counting_source()).unwrap();
+        assert!(reg.take_for_drain(sid.key).is_ok());
+        reg.finish_drain(sid.key);
+        assert_unknown(&reg.close(sid.key));
+        assert!(matches!(slot_of(&reg, sid.key), Some(Slot::Ended)));
+    }
+
+    #[test]
+    fn close_evicted_key_refused() {
+        let mut reg = StreamRegistry::<()>::new();
+        let mut source = counting_source();
+        fill(&mut reg, &mut source);
+        assert!(reg.open((), &mut source).is_ok());
+        assert_unknown(&reg.close(key(1)));
+        assert!(reg.close(key(2)).is_ok());
     }
 
     #[test]
@@ -670,7 +726,7 @@ mod tests {
         let sid = reg.open((), counting_source()).unwrap();
         assert!(reg.take_for_drain(sid.key).is_ok());
         assert!(reg.is_draining(sid.key));
-        reg.close(sid.key);
+        assert!(reg.close(sid.key).is_ok());
         assert!(!reg.is_draining(sid.key));
         reg.finish_drain(sid.key);
         assert!(matches!(slot_of(&reg, sid.key), Some(Slot::Ended)));
@@ -759,7 +815,7 @@ mod tests {
         assert_eq!(back, sid);
         let one: IpeStreamId =
             serde_json::from_str("\"00000000000000000000000000000001\"").unwrap();
-        assert_eq!(one.key, key(1));
+        assert!(one.key == key(1));
     }
 
     #[test]
