@@ -4215,7 +4215,7 @@ mod tests {
         let resp = server_with_cookie(
             ServerCookie {
                 name: "sid".to_owned(),
-                value: "v".to_owned(),
+                value: crate::redact::Redacted::new("v".to_owned()),
             },
             server_text("ok".into()),
         );
