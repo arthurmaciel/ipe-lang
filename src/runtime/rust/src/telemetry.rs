@@ -398,7 +398,7 @@ fn release_ignores_dev_marker(env: RawEnv<'_>, ipe_env: RawEnv<'_>, build: Build
 
 /// Proof that this binary has the dev-loop build intent and a dev posture.
 ///
-/// Constructible only through [`dev_intent`]; not `Clone`/`Copy`, so a
+/// Constructible only through `dev_intent`; not `Clone`/`Copy`, so a
 /// consumer borrows it for one decision. Every dev-only relaxation that needs
 /// no listener proof (a token-gated route, a dev-only push, non-`Secure`
 /// cookies, SSRF deny-private off) takes `Option<&DevIntent>`.
@@ -407,7 +407,7 @@ pub struct DevIntent(());
 
 /// Proof of [`DevIntent`] and that every app listener of this process is loopback.
 ///
-/// Constructible only through [`dev_surface`]. Every unauthenticated
+/// Constructible only through `dev_surface`. Every unauthenticated
 /// listener-facing dev surface (console default, token-less ingest, the
 /// console banner, the WebSocket origin waiver) takes `Option<&DevSurface>`.
 /// Never cached: the process scope can widen after it is minted.
@@ -418,7 +418,7 @@ pub struct DevSurface {
 
 /// A [`DevIntent`] when `build` is `Development` and `posture` is `Dev`.
 #[must_use]
-pub const fn dev_intent(build: BuildPosture, posture: Posture) -> Option<DevIntent> {
+pub(crate) const fn dev_intent(build: BuildPosture, posture: Posture) -> Option<DevIntent> {
     match (build, posture) {
         (BuildPosture::Development, Posture::Dev) => Some(DevIntent(())),
         (BuildPosture::Development, Posture::Production) | (BuildPosture::Release, _) => None,
@@ -427,7 +427,7 @@ pub const fn dev_intent(build: BuildPosture, posture: Posture) -> Option<DevInte
 
 /// [`dev_intent`] over the compiled intent and the process posture.
 #[must_use]
-pub fn dev_intent_from_env() -> Option<DevIntent> {
+pub(crate) fn dev_intent_from_env() -> Option<DevIntent> {
     dev_intent(BuildPosture::COMPILED, Posture::from_env())
 }
 
@@ -435,7 +435,7 @@ pub fn dev_intent_from_env() -> Option<DevIntent> {
 ///
 /// An `Unbound` process has no listener to prove loopback, so it gets none.
 #[must_use]
-pub fn dev_surface(intent: DevIntent, scope: ProcessScope) -> Option<DevSurface> {
+pub(crate) fn dev_surface(intent: DevIntent, scope: ProcessScope) -> Option<DevSurface> {
     match scope {
         ProcessScope::Loopback => Some(DevSurface { _intent: intent }),
         ProcessScope::Unbound | ProcessScope::Exposed => None,
@@ -444,7 +444,7 @@ pub fn dev_surface(intent: DevIntent, scope: ProcessScope) -> Option<DevSurface>
 
 /// [`dev_surface`] over [`dev_intent_from_env`] and the recorded process scope.
 #[must_use]
-pub fn dev_surface_from_env() -> Option<DevSurface> {
+pub(crate) fn dev_surface_from_env() -> Option<DevSurface> {
     dev_intent_from_env().and_then(|intent| dev_surface(intent, ProcessScope::current()))
 }
 
@@ -485,9 +485,9 @@ pub enum ConsoleAuthMode {
     Token,
     /// Explicit `app`: the app-supplied `consoleAuth` callback decides.
     App,
-    /// Unset where [`dev_surface`] fails: an admin token is required.
+    /// Unset where `dev_surface` fails: an admin token is required.
     UnsetProd,
-    /// Unset where [`dev_surface`] holds: open.
+    /// Unset where `dev_surface` holds: open.
     DevOpen,
 }
 
@@ -672,7 +672,7 @@ pub fn dev_console_banner(base: &str) -> String {
 
 /// [`dev_console_banner`] under an explicit dev-surface proof: `None` is `""`.
 #[must_use]
-pub fn dev_console_banner_with(base: &str, dev: Option<&DevSurface>) -> String {
+pub(crate) fn dev_console_banner_with(base: &str, dev: Option<&DevSurface>) -> String {
     if !base.is_empty() || dev.is_none() {
         return String::new();
     }
@@ -1891,6 +1891,13 @@ mod tests {
         assert!(j.contains(r#""name":"db.query""#), "{j}");
         assert!(j.contains(r#""durUs":1234"#), "{j}");
         assert!(j.contains(r#""ok":false"#), "{j}");
+    }
+
+    #[test]
+    fn dev_surface_holds_only_on_a_loopback_scope() {
+        assert!(dev_surface(test_dev_intent(), ProcessScope::Loopback).is_some());
+        assert!(dev_surface(test_dev_intent(), ProcessScope::Unbound).is_none());
+        assert!(dev_surface(test_dev_intent(), ProcessScope::Exposed).is_none());
     }
 
     #[test]

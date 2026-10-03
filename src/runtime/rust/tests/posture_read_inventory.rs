@@ -20,7 +20,11 @@
 //! - `Posture` as a path segment, as `Posture::<next>` when a segment follows
 //!   and as bare `Posture` (a type, an import, an alias target) otherwise;
 //! - a `use` of `Posture` renamed or followed by a glob or a group, recorded
-//!   under its own key, so an alias never hides the reads made through it.
+//!   under its own key, so an alias never hides the reads made through it;
+//! - a string literal naming a posture variable ([`POSTURE_VARS`]), in code
+//!   or a macro body, so a raw `ENV` read never stands in for the posture;
+//! - a `.posture` field access, so a resolved posture is never re-read
+//!   through its label or a comparison that names no `Posture` path.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::BTreeMap;
@@ -52,6 +56,13 @@ const POSTURE_FNS: &[&str] = &[
 /// The posture types counted by name wherever they stand, besides `Posture`.
 const POSTURE_TYPES: &[&str] = &["BuildPosture"];
 
+/// The environment variables the posture is parsed from, counted as string
+/// literals.
+const POSTURE_VARS: &[&str] = &["ENV", "IPE_ENV"];
+
+/// The field a resolved posture is carried in, counted as a field access.
+const POSTURE_FIELD: &str = "posture";
+
 /// The posture enum counted as a path segment.
 const POSTURE: &str = "Posture";
 
@@ -66,6 +77,7 @@ const ADMITTED: &[(&str, &str, usize)] = &[
     // `gate_allows`: a production posture needs an admin credential to mount.
     ("web/console.rs", "Posture", 1),
     ("web/console.rs", "Posture::Production", 1),
+    ("web/console.rs", ".posture", 1),
 ];
 
 /// Every posture read in the production syntax of one file, by counted form.
@@ -85,6 +97,13 @@ impl Scan {
         let name = id.unraw().to_string();
         if POSTURE_FNS.contains(&name.as_str()) || POSTURE_TYPES.contains(&name.as_str()) {
             self.record(name);
+        }
+    }
+
+    /// Records a string literal naming a posture variable.
+    fn lit_str(&mut self, value: &str) {
+        if POSTURE_VARS.contains(&value) {
+            self.record(format!("{value:?}"));
         }
     }
 
@@ -109,7 +128,12 @@ impl Scan {
                     }
                 }
                 TokenTree::Ident(id) => self.ident(id),
-                TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+                TokenTree::Literal(lit) => {
+                    if let Ok(text) = syn::parse_str::<syn::LitStr>(&lit.to_string()) {
+                        self.lit_str(&text.value());
+                    }
+                }
+                TokenTree::Punct(_) => {}
             }
         }
     }
@@ -235,6 +259,20 @@ impl<'ast> Visit<'ast> for Scan {
             _ => {}
         }
         visit::visit_use_tree(self, tree);
+    }
+
+    fn visit_lit_str(&mut self, lit: &'ast syn::LitStr) {
+        self.lit_str(&lit.value());
+        visit::visit_lit_str(self, lit);
+    }
+
+    fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
+        if let syn::Member::Named(name) = &field.member
+            && name.unraw() == POSTURE_FIELD
+        {
+            self.record(format!(".{POSTURE_FIELD}"));
+        }
+        visit::visit_expr_field(self, field);
     }
 
     fn visit_macro(&mut self, mac: &'ast Macro) {
@@ -386,10 +424,30 @@ fn the_token_gates_are_not_posture_reads() {
 fn production() -> bool {
     crate::telemetry::dev_intent_from_env().is_some()
         && telemetry::dev_surface_from_env().is_none()
-        && resolved.posture == expected
 }
 ";
     assert_eq!(posture_reads("fixture", src), BTreeMap::new());
+}
+
+// A raw `ENV`/`IPE_ENV` read opens on the environment alone, and a resolved
+// posture re-read through its label names no `Posture` path: both counted,
+// in code and in a macro body.
+#[test]
+fn a_raw_posture_variable_read_and_a_posture_field_read_are_counted() {
+    let src = r#"
+fn open() -> bool {
+    crate::system::read_env_var("ENV").as_deref() == Ok("dev")
+        || std::env::var("IPE_ENV").is_ok()
+        || resolved.posture.label() == "dev"
+        || matches!(std::env::var("ENV").as_deref(), Ok("local"))
+}
+const NAME: &str = "IPE_ENV";
+fn unrelated() -> &'static str { "ENVIRONMENT" }
+"#;
+    assert_eq!(
+        posture_reads("fixture", src),
+        counted(&[("\"ENV\"", 2), ("\"IPE_ENV\"", 2), (".posture", 1)])
+    );
 }
 
 #[test]
