@@ -299,8 +299,8 @@ fn every_ledger_entry_names_a_scanned_corpus() {
 }
 
 /// Judge a synthetic page through the same path the corpora take.
-fn judge_synthetic(test: &str, text: &str, page: Page) -> Vec<Mismatch> {
-    judge_page("synthetic.md", text, page, &scratch(test))
+fn judge_synthetic(test_name: &str, text: &str, page: Page) -> Vec<Mismatch> {
+    judge_page("synthetic.md", text, page, &scratch(test_name))
 }
 
 #[test]
