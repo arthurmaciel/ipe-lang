@@ -14,7 +14,7 @@
 use ipe_intern::Interner;
 
 /// A module header, imports, a union, a record alias, and a `case`.
-const HEADER_SEED: &str = r#"module Seed exposing
+const HEADER_SEED: &str = r"module Seed exposing
     ( Shape(..)
     , area
     , origin
@@ -49,7 +49,7 @@ area shape =
 
         Rect w h ->
             w * h
-"#;
+";
 
 /// Lambdas, `let` with a tuple binder, `if`, `case`, a pipeline, a record,
 /// a list and a tuple.
