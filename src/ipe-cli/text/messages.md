@@ -1227,7 +1227,7 @@ package.ipe: program entry {entry} names no module
 
 ## bundle-name-not-a-component
 
-package.ipe: name `{name}` cannot be a macOS bundle directory — a bundle root must be a single path component, but this name introduces a path separator, a `..` traversal, or an absolute path. Choose a name without `/`, `\`, or `..`.
+package.ipe: name `{name}` cannot be a macOS bundle directory — a bundle root must be one directory name that reads back as itself, and this name holds a path separator, a `..` traversal, an absolute path, a NUL byte, or a form the host file system would rewrite (on Windows: a trailing `.` or space, a `:`, or a device name such as `NUL`). Choose a plain name without `/`, `\`, `..`, or control characters.
 
 # ipe doc
 

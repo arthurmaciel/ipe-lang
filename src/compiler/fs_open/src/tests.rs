@@ -3,7 +3,9 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use super::{ByteCap, EntryCap, EntryName, FileKind, HeldDir, OpenRefusal, RegularFile};
+use super::{
+    ByteCap, EntryCap, EntryName, FileKind, HeldDir, OpenRefusal, RegularFile, is_one_spelled_name,
+};
 
 /// A fresh, empty scratch directory unique to this test and process.
 fn scratch(tag: &str) -> PathBuf {
@@ -299,6 +301,81 @@ fn a_non_unicode_name_is_refused_on_windows() {
     use std::os::windows::ffi::OsStringExt as _;
     let lone_surrogate = std::ffi::OsString::from_wide(&[0xD800, 0x61]);
     assert!(EntryName::new(&lone_surrogate).is_none());
+}
+
+/// Every text that is not one component opening as spelled is refused.
+#[test]
+fn a_smuggled_component_is_not_one_spelled_name() {
+    for refused in [
+        "", ".", "..", "a/b", "a/", "/a", "/", "./a", "a/..", "a\0b", "\0",
+    ] {
+        assert!(
+            !is_one_spelled_name(OsStr::new(refused)),
+            "{refused:?} must not be one spelled name"
+        );
+    }
+    #[cfg(windows)]
+    for refused in [
+        "a\\b",
+        "\\a",
+        "C:",
+        "C:a",
+        "\\\\?\\C:",
+        "\\\\server\\share",
+        "a:stream",
+        "out.",
+        "out ",
+        "...",
+        "NUL",
+        "con.txt",
+        "aux .txt",
+        "COM1",
+        "a*",
+        "a\u{1}b",
+    ] {
+        assert!(
+            !is_one_spelled_name(OsStr::new(refused)),
+            "{refused:?} must not be one spelled name on Windows"
+        );
+    }
+}
+
+/// A name one step past each refused shape is one spelled name.
+#[test]
+fn a_plain_name_is_one_spelled_name() {
+    for kept in [
+        "a",
+        "k.json",
+        ".hidden",
+        "...a",
+        "a b",
+        " lead",
+        "nullable",
+        "COM10",
+        "x.nul",
+        "caf\u{e9}",
+    ] {
+        assert!(
+            is_one_spelled_name(OsStr::new(kept)),
+            "{kept:?} is one spelled name"
+        );
+    }
+    #[cfg(not(windows))]
+    for kept in ["out.", "out ", "NUL", "a:b", "a\\b"] {
+        assert!(
+            is_one_spelled_name(OsStr::new(kept)),
+            "{kept:?} opens as spelled outside Windows"
+        );
+    }
+}
+
+/// A name that is not valid Unicode is not one spelled name on Windows.
+#[cfg(windows)]
+#[test]
+fn a_non_unicode_name_is_not_one_spelled_name_on_windows() {
+    use std::os::windows::ffi::OsStringExt as _;
+    let lone_surrogate = std::ffi::OsString::from_wide(&[0xD800, 0x61]);
+    assert!(!is_one_spelled_name(&lone_surrogate));
 }
 
 #[cfg(unix)]
