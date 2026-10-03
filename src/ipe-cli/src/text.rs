@@ -127,6 +127,7 @@ relayable!(
     crate::ffi::WrapperRefusal,
     crate::ffi::BuildScriptsBanner,
     ipe_watch::ScopeError,
+    ipe_docs::argv::NonUtf8Argument,
     ipe_lint::ConfigError,
     ipe_sandbox::run_jail::RunJailDefect,
     ipe_ffi::diag::Diagnostic,
