@@ -277,7 +277,7 @@ fn an_explicit_record_alias_ctor_and_an_explicit_ctor_are_ambiguous() {
 const ALIAS_A: &str = "module A exposing (Foo)\n\ntype alias Foo = Int\n";
 
 /// Whether `result` is IPE-N0012 at or after the byte offset `at`.
-fn duplicate_type_at_or_after(result: &DResult<Module>, at: u32) -> bool {
+const fn duplicate_type_at_or_after(result: &DResult<Module>, at: u32) -> bool {
     matches!(
         result,
         Err(Diagnostic::Name {
@@ -465,5 +465,94 @@ fn a_local_record_alias_shadows_an_open_ctor_in_a_pattern() {
         ),
         "a pattern `Done` under a local record alias must be IPE-N0003, never the \
          open `Ipe.Task.Done`, got {result:?}"
+    );
+}
+
+/// User modules `A` and `B`, each declaring a `Done` that the ambient
+/// built-in `Done` also spells.
+const STEP_A: &str = "module A exposing (..)\n\ntype Step = Done | More\n";
+const STEP_B: &str = "module B exposing (..)\n\ntype Step = Done | Again\n";
+
+/// An ambiguous open tier never falls through to the ambient tier: a bare
+/// `Done` two open imports bring is IPE-N0024 in an expression and in a
+/// pattern, never the ambient built-in constructor.
+#[test]
+fn an_ambiguous_open_ctor_never_falls_through_to_the_ambient_one() {
+    let expr = format!("{OPEN_A_B}main = Done\n");
+    let pattern = format!(
+        "{OPEN_A_B}f : Int -> Int\nf x =\n    case x of\n        Done ->\n            0\n\n\
+         main = 0\n"
+    );
+    for (position, main) in [("expression", expr), ("pattern", pattern)] {
+        let (result, _) = canonicalise_main(&[user(STEP_A), user(STEP_B)], &main);
+        let found = ambiguous(&result);
+        assert!(
+            found.as_ref().is_some_and(|(span, modules)| {
+                *span == span_of(&main, "Done", 0) && *modules == a_and_b()
+            }),
+            "a bare `Done` in {position} position from two open imports must be IPE-N0024, \
+             never the ambient one, got {result:?}"
+        );
+    }
+}
+
+/// An open alias and an open union of one spelling from two modules are
+/// IPE-N0024 at the bare use, listing both importing modules.
+#[test]
+fn an_open_alias_and_an_open_union_of_one_name_are_ambiguous_at_the_use() {
+    let a = "module A exposing (..)\n\ntype alias Foo = Int\n";
+    let b = "module B exposing (..)\n\ntype Foo = Foo\n";
+    let main = format!("{OPEN_A_B}f : Foo -> Int\nf _ =\n    0\n\nmain = 0\n");
+    let (result, _) = canonicalise_main(&[user(a), user(b)], &main);
+    let found = ambiguous(&result);
+    assert!(
+        found.as_ref().is_some_and(
+            |(span, modules)| span.lo == span_of(&main, "Foo", 0).lo && *modules == a_and_b()
+        ),
+        "a bare `Foo` naming A's alias and B's union must be IPE-N0024, got {result:?}"
+    );
+}
+
+/// A stdlib module whose `max` is the `Math_max` kernel, a definition the
+/// prelude's `max` (`Basics_max`) is not.
+const MAX_STUB: &str = "module Ipe.Mx exposing (max)\n\n\
+                        import Ipe.Ffi.Kernel as Kernel\n\n\
+                        max : Int -> Int -> Int\nmax =\n    Kernel.kernel \"Math_max\"\n";
+
+/// The prelude binds as an open import of `Ipe.Basics`: an open import of
+/// another `max` is IPE-N0024 at a bare use, never the prelude's.
+#[test]
+fn a_prelude_value_and_an_open_import_of_another_definition_are_ambiguous() {
+    let main = "module Main exposing (main)\n\nimport Ipe.Mx exposing (..)\n\nmain = max\n";
+    let (result, _) = canonicalise_main(&[stdlib(MAX_STUB)], main);
+    let found = ambiguous(&result);
+    assert!(
+        found.as_ref().is_some_and(|(span, modules)| {
+            *span == span_of(main, "max", 0)
+                && *modules == vec!["Ipe.Basics".to_owned(), "Ipe.Mx".to_owned()]
+        }),
+        "a bare `max` from the prelude and an open import must be IPE-N0024, got {result:?}"
+    );
+}
+
+/// An explicit import outranks the prelude's open tier.
+#[test]
+fn an_explicit_import_outranks_the_prelude() {
+    let main = "module Main exposing (main)\n\nimport Ipe.Mx exposing (max)\n\nmain = max\n";
+    let (result, interner) = canonicalise_main(&[stdlib(MAX_STUB)], main);
+    let Ok(module) = &result else {
+        assert!(
+            result.is_ok(),
+            "explicit `exposing (max)` must resolve, got {result:?}"
+        );
+        return;
+    };
+    assert!(
+        matches!(
+            body(module, &interner, "main").map(|b| &b.value),
+            Some(Expr_::VarKernel { module: m, name, .. })
+                if interner.resolve(*m) == Some("Math") && interner.resolve(*name) == Some("max")
+        ),
+        "a bare `max` names the explicit import's `Math_max`, got {result:?}"
     );
 }

@@ -1342,37 +1342,34 @@ impl Env {
                     index,
                     arity,
                 };
-                match qualifier {
-                    // A built-in union with a `qualified_home` (e.g. `HttpMethod`
-                    // -> `Http`) is import-scoped: its constructors are reachable
-                    // ONLY as `Http.Post`, never ambient unqualified, so a user's
-                    // own `Post`/`Get`/… constructor is not silently shadowed.
-                    Some(qsym) => {
-                        Rc::make_mut(&mut self.qual_ctors)
-                            .entry(qsym)
-                            .or_default()
-                            .insert(name, ctor_home);
-                    }
+                // A built-in union with a `qualified_home` (e.g. `HttpMethod`
+                // -> `Http`) is import-scoped: its constructors are reachable
+                // ONLY as `Http.Post`, never ambient unqualified, so a user's
+                // own `Post`/`Get`/… constructor is not silently shadowed.
+                if let Some(qsym) = qualifier {
+                    Rc::make_mut(&mut self.qual_ctors)
+                        .entry(qsym)
+                        .or_default()
+                        .insert(name, ctor_home);
+                } else {
                     // A home-less built-in (`Just`/`Nothing`/`Ok`/`Err`/`True`/
                     // `False`) has no user module and binds at the ambient tier.
-                    None => {
-                        let origin = Origin {
-                            identity: Identity::Ctor(CtorIdentity {
-                                home: Vec::new(),
-                                type_name,
-                            }),
-                            target: ExprTarget::Ctor(ctor_home),
-                            importers: BTreeSet::new(),
-                            span: Span::DUMMY,
-                        };
-                        Rc::make_mut(&mut self.module_scope)
-                            .expr
-                            .bind(name, Tier::Ambient, origin)
-                            .map_err(|_| Diagnostic::CompilerBug {
-                                where_: "canon.builtin_ctor_twice",
-                                detail: "a built-in constructor name is installed twice".to_owned(),
-                            })?;
-                    }
+                    let origin = Origin {
+                        identity: Identity::Ctor(CtorIdentity {
+                            home: Vec::new(),
+                            type_name,
+                        }),
+                        target: ExprTarget::Ctor(ctor_home),
+                        importers: BTreeSet::new(),
+                        span: Span::DUMMY,
+                    };
+                    Rc::make_mut(&mut self.module_scope)
+                        .expr
+                        .bind(name, Tier::Ambient, origin)
+                        .map_err(|_| Diagnostic::CompilerBug {
+                            where_: "canon.builtin_ctor_twice",
+                            detail: "a built-in constructor name is installed twice".to_owned(),
+                        })?;
                 }
             }
         }

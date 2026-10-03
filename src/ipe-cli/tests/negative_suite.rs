@@ -949,8 +949,7 @@ fn canon_open_import_sweep_over_the_stdlib_registry_compiles() {
 /// DIFFERENT shape's Tea surface is its own refusal, IPE-N0033, not this
 /// sweep's concern). Mirrors the admission rule
 /// `canon_open_import_sweep_over_the_stdlib_registry_compiles` hand-rolls for
-/// `Shape::Script`, reused below for every OTHER shape with a sole placement
-/// (issue #3333, C4: the per-shape sweep).
+/// `Shape::Script`, reused below for every OTHER shape with a sole placement.
 fn open_import_sweep_block(
     placement: ipe_canon::shape_runtime::Placement,
 ) -> (String, Vec<&'static str>) {
@@ -976,7 +975,7 @@ fn open_import_sweep_block(
     (block, joined)
 }
 
-/// C4 (Tui) — every `COMPILED_STD_MODULES` entry `allowed_in` the Tui
+/// Every `COMPILED_STD_MODULES` entry `allowed_in` the Tui
 /// placement opens cleanly alongside a minimal well-typed Tui `main`. The one
 /// axis that differs from Script is `BrowserHost` (`Allow` for Script,
 /// `Deny` for Tui), so this also pins that no `Ipe.Browser.*` module sneaks
@@ -1028,7 +1027,7 @@ fn canon_open_import_per_shape_sweep_tui_compiles() {
     assert_compiles("canon_open_import_per_shape_sweep_tui", &src);
 }
 
-/// C4 (Cli) — parallel to the Tui sweep above, for the Cli placement. Pins
+/// Parallel to the Tui sweep above, for the Cli placement. Pins
 /// `Ipe.Ui.Cli` (the Cli-only UI helper module) and the same `BrowserHost`
 /// exclusion.
 #[test]
@@ -1075,7 +1074,7 @@ fn canon_open_import_per_shape_sweep_cli_compiles() {
     assert_compiles("canon_open_import_per_shape_sweep_cli", &src);
 }
 
-/// C4 (Worker) — parallel to the Tui/Cli sweeps above, for the view-less
+/// Parallel to the Tui/Cli sweeps above, for the view-less
 /// Worker placement (no `view` field in its `tea` record).
 #[test]
 fn canon_open_import_per_shape_sweep_worker_compiles() {
@@ -1113,8 +1112,8 @@ fn canon_open_import_per_shape_sweep_worker_compiles() {
     assert_compiles("canon_open_import_per_shape_sweep_worker", &src);
 }
 
-/// C4 — staleness guard: the per-shape sweeps cover Script (pre-existing,
-/// above) and Tui/Cli/Worker (added here) — every `Shape` with a sole
+/// Staleness guard: the per-shape sweeps cover Script and Tui/Cli/Worker —
+/// every `Shape` with a sole
 /// `Placement`. `Shape::Web` is deliberately excluded (it admits both
 /// `Served` and `Solo` runtimes, so `sole_for` returns `None`, see
 /// `shape_runtime`'s own `sole_placement_is_none_for_web_some_otherwise`
@@ -1126,25 +1125,18 @@ fn canon_open_import_per_shape_sweep_excludes_web_for_cause() {
     assert!(
         Placement::sole_for(Shape::Web).is_none(),
         "Shape::Web now has a sole placement — add it to the per-shape open-import \
-         sweep (C4) alongside Script/Tui/Cli/Worker instead of leaving it excluded"
+         sweep alongside Script/Tui/Cli/Worker instead of leaving it excluded"
     );
 }
 
-/// C5 — Tui-shape coverage: `Ipe.Ui.Tui` and `Ipe.Ui.Cells` (the latter's own
-/// header calls it a "retained alias" for the former) each declare their OWN
-/// top-level `column` binding under their own module home. Two distinct
-/// homes exposing the same bare name through `exposing (..)` is a genuine
-/// clash by the resolver's structural rule — same (module, name) collision as
-/// the generic `canon_open_imports_bare_*_use_is_ambiguous` pair above — even
-/// though both call the identical kernel primitive (`UiCells_column`).  This
-/// proves the deferred-tier ambiguity check still fires correctly inside a
-/// Tui-shaped program, where the shape's own kernel-qualified `Tui`/`Cmd`/
-/// `Sub` bindings are also in scope. `view` is left without a type signature
-/// so the only bare name from the two opened modules is `column` itself —
-/// `Screen` (also exposed by both) never appears, keeping the ambiguity this
-/// test targets unambiguous in intent.
+/// `Ipe.Ui.Tui` and `Ipe.Ui.Cells` both expose `column` (each defined as the
+/// one kernel `UiCells_column`) and `Screen` (Cells re-exports Tui's). Two
+/// open imports of ONE definition are one origin, never a clash: a bare
+/// `column` and a bare `Screen` in a Tui program resolve without IPE-N0024.
+/// Keying an origin by its importing module instead of its definition makes
+/// this program a false ambiguity.
 #[test]
-fn canon_open_imports_tui_column_use_is_ambiguous() {
+fn canon_open_imports_tui_and_cells_share_column_and_compile() {
     let mut src = HEAD.to_owned();
     src.push_str(
         "\nimport Ipe.Tea.Tui as Tui\n\
@@ -1158,12 +1150,13 @@ fn canon_open_imports_tui_column_use_is_ambiguous() {
          init _unit =\n    ( { count = 0 }, Cmd.none )\n\n\
          update : Msg -> Model -> ( Model, Cmd Msg )\n\
          update _msg model =\n    ( model, Cmd.none )\n\n\
-         view model =\n    column [] []\n\n\
+         view : Model -> Screen Msg\n\
+         view _model =\n    column [] []\n\n\
          subscriptions : Model -> Sub Msg\n\
          subscriptions _model =\n    Sub.none\n\n\
          main =\n    Tui.tea\n        { init = init, update = update, view = view\n        , subscriptions = subscriptions\n        }\n",
     );
-    assert_rejected("canon_open_tui_column_ambiguous", &src, "IPE-N0024");
+    assert_compiles("canon_open_tui_cells_column", &src);
 }
 
 /// The shape app-leaf names (`WebApp` / `TuiApp` / `CliApp`) are

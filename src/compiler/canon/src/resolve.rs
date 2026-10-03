@@ -1233,9 +1233,8 @@ pub fn canonicalise_module_in_project(
     // Qualifier = explicit `as Alias` if present, else last segment of the
     // module path — mirrors `inject_dep_exports`'s `env.qual_vars` logic.
     let mut qualifier_paths: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
-    // AUD-14: track each qualifier's FIRST-seen import span so a genuine clash
-    // (below) can point back to it, mirroring `DuplicateValue`/`DuplicateType`'s
-    // `first` field convention.
+    // Each qualifier's first-seen import span, so a clash (below) points back
+    // to it like `DuplicateValue`/`DuplicateType`'s `first` field.
     let mut qualifier_first_span: BTreeMap<Symbol, Span> = BTreeMap::new();
     for import in &m.imports {
         let dep_path = &import.name.value;
@@ -1246,15 +1245,12 @@ pub fn canonicalise_module_in_project(
         // Qualifiers this import is reachable under (see `import_qualifiers`).
         let reachable_qualifiers = import_qualifiers(import.alias, dep_path, interner)?;
         for qualifier in reachable_qualifiers {
-            // AUD-14: `import App.Utils` + `import Lib.Utils` (both default to the
-            // qualifier `Utils`), or an explicit `as` alias reused across two
-            // distinct dep modules, previously overwrote silently here — every
-            // `Utils.format` call downstream then resolved to whichever import
-            // came LAST in source order, with no diagnostic. Re-importing the
-            // SAME dep module under the same qualifier (a diamond dependency)
-            // stays a no-op, matching the module scope's rule for one definition
-            // bound twice; only a clash between two DIFFERENT dep modules is
-            // rejected.
+            // `import App.Utils` + `import Lib.Utils` (both default to the
+            // qualifier `Utils`), or one `as` alias over two distinct dep
+            // modules, is a clash: a qualified `Utils.format` would otherwise
+            // name whichever import came last. Re-importing the SAME dep module
+            // under the same qualifier (a diamond dependency) is a no-op,
+            // matching the module scope's rule for one definition bound twice.
             if let Some(existing_path) = qualifier_paths.get(&qualifier) {
                 if existing_path != dep_path {
                     let qualifier_s = name_str(interner, qualifier)?;
@@ -5398,6 +5394,44 @@ fn collect_binders_no_dup(
     Ok(())
 }
 
+/// Resolve a constructor pattern's bare name. A pattern reads the expression
+/// namespace's one ladder: a value its first answering tier binds (a record
+/// alias's auto-constructor) shadows any lower-tier constructor, and is no
+/// constructor to match on.
+fn resolve_pattern_ctor<'e>(
+    name: Symbol,
+    span: Span,
+    env: &'e Env,
+    interner: &Interner,
+) -> DResult<&'e CtorHome> {
+    match env.module_scope.expr.resolve(name) {
+        Resolved::Found(
+            Origin {
+                target: ExprTarget::Ctor(ctor),
+                ..
+            },
+            _,
+        ) => Ok(ctor),
+        Resolved::Ambiguous { importers } => {
+            let modules = importer_names(&importers, interner);
+            Err(ambiguous_import(name, span, modules, interner)?)
+        }
+        Resolved::Found(..) | Resolved::Missing => {
+            let ctor_names = env
+                .module_scope
+                .expr
+                .names_where(|target| matches!(target, ExprTarget::Ctor(_)));
+            Err(Diagnostic::Name {
+                span,
+                msg: NameError::ConstructorNotFound {
+                    name: name_str(interner, name)?,
+                    suggestions: suggestions(name, ctor_names, interner),
+                },
+            })
+        }
+    }
+}
+
 /// Canonicalise a pattern. Supports wildcard, var, and constructor patterns.
 fn canonicalise_pattern(
     p: &src::Pattern,
@@ -5411,36 +5445,7 @@ fn canonicalise_pattern(
         src::Pattern_::PUnit => canon::Pattern_::PUnit,
         src::Pattern_::PVar(name) => canon::Pattern_::PVar(*name),
         src::Pattern_::PCtor(name, _, args) => {
-            // A pattern reads the expression namespace's one ladder: a value
-            // its first answering tier binds (a record alias's
-            // auto-constructor) shadows any lower-tier constructor, and is no
-            // constructor to match on.
-            let ctor = match env.module_scope.expr.resolve(*name) {
-                Resolved::Found(
-                    Origin {
-                        target: ExprTarget::Ctor(ctor),
-                        ..
-                    },
-                    _,
-                ) => ctor,
-                Resolved::Ambiguous { importers } => {
-                    let modules = importer_names(&importers, interner);
-                    return Err(ambiguous_import(*name, span, modules, interner)?);
-                }
-                Resolved::Found(..) | Resolved::Missing => {
-                    let ctor_names = env
-                        .module_scope
-                        .expr
-                        .names_where(|target| matches!(target, ExprTarget::Ctor(_)));
-                    return Err(Diagnostic::Name {
-                        span,
-                        msg: NameError::ConstructorNotFound {
-                            name: name_str(interner, *name)?,
-                            suggestions: suggestions(*name, ctor_names, interner),
-                        },
-                    });
-                }
-            };
+            let ctor = resolve_pattern_ctor(*name, span, env, interner)?;
             let home = ctor.home.clone();
             let type_name = ctor.type_name;
             let index = ctor.index;

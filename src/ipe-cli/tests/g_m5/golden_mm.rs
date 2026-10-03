@@ -251,7 +251,7 @@ fn mm_neg_qualref_sig_is_ipe_t0001() {
 }
 
 // ---------------------------------------------------------------------------
-// Open-import clash is reported at the use, not the import (issue #3333).
+// Open-import clash is reported at the use, not the import.
 //
 // `ModA` and `ModB` both declare `type Shape = Circle | …`, each exposed with
 // `exposing (..)` — the open/wildcard tier, which defers a name clash to the
@@ -313,7 +313,7 @@ fn expect_error_at_line(
     );
 }
 
-/// C1 — both `ModA`/`ModB` opened with `exposing (..)`, `Circle`/`Shape` never
+/// Both `ModA`/`ModB` opened with `exposing (..)`, `Circle`/`Shape` never
 /// used bare. An open import's clash is deferred to the use, and there is no
 /// use here, so the program must compile.
 #[test]
@@ -325,7 +325,7 @@ fn mm_open_user_unused_compiles() {
     assert!(res.is_ok(), "build_project failed: {:?}", res.err());
 }
 
-/// C2 — same two open imports, but `Circle` is used bare on line 6 of
+/// The same two open imports, but `Circle` is used bare on line 6 of
 /// `Main.ipe`. The clash must fire there — at the use — not at either import
 /// line (2-3) or at either module's own declaration.
 #[test]
@@ -338,7 +338,7 @@ fn mm_open_user_used_is_ipe_n0024_at_the_use() {
     );
 }
 
-/// C3 — `ModA` exposes `Shape(..)` explicitly, `ModB` opens `exposing (..)`.
+/// `ModA` exposes `Shape(..)` explicitly, `ModB` opens `exposing (..)`.
 /// Explicit beats open on the binding ladder, so the bare `Circle` resolves
 /// to `ModA`'s without ambiguity and the program must compile.
 #[test]
