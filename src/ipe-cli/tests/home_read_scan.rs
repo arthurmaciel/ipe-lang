@@ -1195,7 +1195,7 @@ mod lexical {
         },
         Allowed {
             file: "src/runtime/rust/src/web/push_exporter.rs",
-            func: "read",
+            func: "raw",
             reason: "reads `ExporterEnv::name`, a closed match over fixed `IPE_*` literals",
         },
         Allowed {
