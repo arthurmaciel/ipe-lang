@@ -46,9 +46,11 @@ fn within_five_seconds(
     open: impl FnOnce() -> Result<RegularFile, OpenRefusal> + Send + 'static,
 ) -> Option<Result<u64, OpenRefusal>> {
     let (send, receive) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = send.send(open().map(|file| file.len()));
-    });
+    std::thread::Builder::new()
+        .spawn(move || {
+            let _ = send.send(open().map(|file| file.len()));
+        })
+        .expect("spawn test thread");
     receive.recv_timeout(std::time::Duration::from_secs(5)).ok()
 }
 
