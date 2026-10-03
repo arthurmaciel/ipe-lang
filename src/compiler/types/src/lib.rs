@@ -646,6 +646,12 @@ fn infer_core(
         .map(|w| uf.find(*w))
         .collect::<Result<_, _>>()
         .map_err(|d| (d, Vec::new()))?;
+    // Every pinned variable's deep check reads its nested variables, which a
+    // LATER entry's default may still pin (`{ x = n }` compared before
+    // `n + 1` defaults `n` to `Int`). The checks therefore run after every
+    // default, so the verdict never depends on the order the obligations were
+    // generated in.
+    let mut pinned: Vec<(VarId, TyBounds, Span, &Vec<Symbol>)> = Vec::new();
     for (v, orig_bounds, span, home) in &generated.super_vars {
         let root = lift!(uf.find(*v));
         match lift!(uf.content(root)) {
@@ -735,22 +741,23 @@ fn infer_core(
             // rigid `Super`), but those arms are covered for totality and need no
             // action either.
             Content::Super { .. } | Content::Flex | Content::Rigid => {}
-            // The variable pinned to a concrete type during solving. Verify —
-            // deeply, against the fully-resolved type — that the type really
-            // supports the operation. The unifier's head pin-check already
-            // cleared a function HEAD; this catches a function NESTED inside a
-            // tuple / record / enum under an equality obligation (Rust cannot
-            // compare it), failing closed with IPE-T0014 instead of emitting
-            // code `cargo` rejects.
-            Content::Structure(_) => {
-                let ty = lift!(zonk(&mut uf, budget, root));
-                if !concrete_super_ok(interner, *orig_bounds, &ty, &enum_embeds_fn) {
-                    return Err((
-                        super_unsatisfied(interner, *orig_bounds, &ty, *span),
-                        home.clone(),
-                    ));
-                }
-            }
+            // The variable pinned to a concrete type during solving: checked
+            // below, once every default has been applied.
+            Content::Structure(_) => pinned.push((root, *orig_bounds, *span, home)),
+        }
+    }
+    // Verify — deeply, against the fully-resolved type — that each pinned type
+    // really supports the operation. The unifier's head pin-check already
+    // cleared a function HEAD; this catches a function NESTED inside a tuple /
+    // record / enum under an equality obligation (Rust cannot compare it),
+    // failing closed with IPE-T0014 instead of emitting code `cargo` rejects.
+    for (root, orig_bounds, span, home) in pinned {
+        let ty = lift!(zonk(&mut uf, budget, root));
+        if !concrete_super_ok(interner, orig_bounds, &ty, &enum_embeds_fn) {
+            return Err((
+                super_unsatisfied(interner, orig_bounds, &ty, span),
+                home.clone(),
+            ));
         }
     }
 
@@ -5870,6 +5877,40 @@ mod tests {
         assert!(
             is_type_error(&r, |m| matches!(m, TypeError::InfiniteType { .. })),
             "a super pinned to a structure containing it must be InfiniteType, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn equality_on_a_deferred_record_base_is_order_independent() {
+        // `a` owes equality and settles to `{ x : Int }` only in the deferred
+        // pass; the verdict must not depend on which operand was constrained
+        // first.
+        let fwd = infer_hof("ok a =\n    a.x == 1 && a == a\n");
+        assert!(
+            fwd.is_ok(),
+            "field read before equality must infer: {fwd:?}"
+        );
+        let rev = infer_hof("ok a =\n    a == a && a.x == 1\n");
+        assert!(
+            rev.is_ok(),
+            "equality before field read must infer: {rev:?}"
+        );
+    }
+
+    #[test]
+    fn pinned_super_check_sees_a_later_default() {
+        // `p == p` is constrained before `n + 1` makes `n` numeric: the deep
+        // equality check on `{ x = n }` must read `n` after it defaults to
+        // `Int`, exactly as the reversed spelling does.
+        let rev = infer_hof("ok n =\n    (let p = { x = n } in p == p) && n + 1 > 0\n");
+        assert!(
+            rev.is_ok(),
+            "equality before the numeric use must infer: {rev:?}"
+        );
+        let fwd = infer_hof("ok n =\n    n + 1 > 0 && (let p = { x = n } in p == p)\n");
+        assert!(
+            fwd.is_ok(),
+            "numeric use before equality must infer: {fwd:?}"
         );
     }
 

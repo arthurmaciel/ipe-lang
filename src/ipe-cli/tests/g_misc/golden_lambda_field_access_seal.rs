@@ -129,6 +129,22 @@ main =
     Io.println (Maybe.withDefault "none" h)
 "#;
 
+/// An equality-owing record base compared before its field is read: the deep
+/// equality check must see the field type the later `== 1` defaults to `Int`.
+const EQ_ON_DEFERRED_BASE: &str = r#"module Main exposing (main)
+
+import Ipe.Io as Io
+
+
+sameX a =
+    a == a && a.x == 1
+
+
+main : Task Error ()
+main =
+    Io.println (if sameX { x = 1 } then "same" else "differs")
+"#;
+
 #[test]
 fn find_then_field_builds() {
     assert_accepted_and_builds("find_then_field", FIND_THEN_FIELD);
@@ -152,6 +168,11 @@ fn update_through_map_builds() {
 #[test]
 fn never_settled_builds() {
     assert_accepted_and_builds("never_settled", NEVER_SETTLED);
+}
+
+#[test]
+fn eq_on_deferred_base_builds() {
+    assert_accepted_and_builds("eq_on_deferred_base", EQ_ON_DEFERRED_BASE);
 }
 
 /// `source` must be accepted by `ipe`, and under `IPE_E2E` its crate must `cargo build`.
