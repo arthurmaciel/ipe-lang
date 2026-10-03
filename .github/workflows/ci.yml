@@ -60,13 +60,16 @@ permissions:
 
 concurrency:
   # A pull request run cancels the previous run for the same ref, so devs get
-  # fast feedback without wasting runner minutes. A push run is keyed by its
+  # fast feedback without wasting runner minutes. A merge-group run cancels
+  # too: the queue re-creates a ref only when a PR re-enters it, so a running
+  # run on the same merge-group ref is always stale and would otherwise hold
+  # its runners while the new run waits. A push run is keyed by its
   # commit: GitHub replaces a queued run in a group whenever a newer one joins
   # it (whatever cancel-in-progress says), so a per-ref push group lets a
   # newer main commit discard an older one's run before it starts, leaving
   # that commit's main-required contexts never reported.
   group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 env:
   CARGO_TERM_COLOR: always

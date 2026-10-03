@@ -223,13 +223,20 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       assembled at run time, is not seen, and check 7's head-free exemption
       rests on the same audit); a hostile edit to a workflow is a
       `.github/**` change, which (b) makes code-owned.
-  13. Push concurrency: GitHub keeps at most one queued run per concurrency
-      group and replaces it when a newer run joins, whatever
+  13. Push and merge-group concurrency: GitHub keeps at most one queued run
+      per concurrency group and replaces it when a newer run joins, whatever
       `cancel-in-progress` says, so a group two pushes to one branch share
       lets a newer commit discard an older one's run before it starts.  Every
       push-triggered workflow's workflow- and job-level `group` is evaluated
       for two pushes to the same branch (distinct `github.sha` and
-      `github.run_id`) and must differ.  The evaluator reads string, boolean
+      `github.run_id`) and must differ.  Every merge_group-triggered
+      workflow's sites are evaluated for three merge-group runs (two on one
+      queue ref with distinct `github.sha`/`github.run_id`, one on another
+      ref; `github.head_ref`/`github.base_ref` unresolvable): the two refs'
+      groups must differ, else the queue serializes; and a group the same-ref
+      runs share must carry a `cancel-in-progress` (a YAML boolean or exactly
+      one expression; absent is false) truthy under merge_group, else a
+      re-queued run waits behind its stale one.  The evaluator reads string, boolean
       and null literals and a closed set of `github` properties with `==`,
       `!=`, `&&`, `||` and `!`; any other context, function, number literal
       or mixed-type comparison is refused.  `LATEST_WINS_PUSH_GROUPS` names the workflows whose run acts on the
@@ -1986,7 +1993,7 @@ LATEST_WINS_PUSH_GROUPS = {
     "docs-pages.yml": "deploys the head of main to Pages",
 }
 
-# The `github` properties a concurrency group may read, as two distinct pushes
+# The `github` properties a concurrency key may read, as two distinct pushes
 # to the same branch see them; any other context or property is refused.
 _PUSH_CONTEXTS = tuple(
     {
@@ -2001,6 +2008,28 @@ _PUSH_CONTEXTS = tuple(
         "run_id": run_id,
     }
     for sha, run_id in (("a" * 40, "1"), ("b" * 40, "2"))
+)
+
+# The `github` properties a concurrency key may read, as three merge-group
+# runs see them: M1 and M1' share a queue ref (a re-entered PR's stale run and
+# its replacement), M2 is another PR's entry. `head_ref` and `base_ref` are
+# absent, so a key reading them is refused.
+_MERGE_GROUP_QUEUE_REFS = tuple(f"refs/heads/gh-readonly-queue/main/pr-{n}-{c * 40}" for n, c in ((1, "a"), (2, "c")))
+_MERGE_GROUP_CONTEXTS = tuple(
+    {
+        "event_name": "merge_group",
+        "ref": ref,
+        "ref_name": ref.removeprefix("refs/heads/"),
+        "repository": "o/r",
+        "workflow": "w",
+        "sha": sha,
+        "run_id": run_id,
+    }
+    for ref, sha, run_id in (
+        (_MERGE_GROUP_QUEUE_REFS[0], "a" * 40, "1"),
+        (_MERGE_GROUP_QUEUE_REFS[0], "b" * 40, "2"),
+        (_MERGE_GROUP_QUEUE_REFS[1], "c" * 40, "3"),
+    )
 )
 
 
@@ -2020,9 +2049,9 @@ def _as_text(v: object) -> str:
     return str(v)
 
 
-def _eval_push(e: gha_expr.Expr, ctx: dict[str, str]) -> object:
-    """Evaluate `e` under one push context: literals, the `github` properties
-    of `_PUSH_CONTEXTS`, `==`/`!=` on same-typed operands (strings compared
+def _eval_event(e: gha_expr.Expr, ctx: dict[str, str]) -> object:
+    """Evaluate `e` under one event context: literals, the `github` properties
+    of `ctx`, `==`/`!=` on same-typed operands (strings compared
     without case), `&&`/`||` with the Actions value semantics, and `!`.
     Anything else raises `_Unevaluable`."""
     if isinstance(e, gha_expr.Literal):
@@ -2036,17 +2065,17 @@ def _eval_push(e: gha_expr.Expr, ctx: dict[str, str]) -> object:
             or not isinstance(e.path[0], gha_expr.Prop)
             or e.path[0].name.casefold() not in ctx
         ):
-            raise _Unevaluable("reads a context this check cannot resolve for a push")
+            raise _Unevaluable(f"reads a context this check cannot resolve for a {ctx['event_name']} run")
         return ctx[e.path[0].name.casefold()]
     if isinstance(e, gha_expr.Unary) and e.op == "!":
-        return not _truthy(_eval_push(e.operand, ctx))
+        return not _truthy(_eval_event(e.operand, ctx))
     if isinstance(e, gha_expr.Binary) and e.op in ("&&", "||"):
-        left = _eval_push(e.left, ctx)
+        left = _eval_event(e.left, ctx)
         if _truthy(left) == (e.op == "||"):
             return left
-        return _eval_push(e.right, ctx)
+        return _eval_event(e.right, ctx)
     if isinstance(e, gha_expr.Binary) and e.op in ("==", "!="):
-        left, right = _eval_push(e.left, ctx), _eval_push(e.right, ctx)
+        left, right = _eval_event(e.left, ctx), _eval_event(e.right, ctx)
         if type(left) is not type(right):
             raise _Unevaluable("compares operands of different types")
         if isinstance(left, str) and isinstance(right, str):
@@ -2057,7 +2086,7 @@ def _eval_push(e: gha_expr.Expr, ctx: dict[str, str]) -> object:
     raise _Unevaluable("uses an operator or function this check does not evaluate")
 
 
-def _push_group(text: str, ctx: dict[str, str]) -> str:
+def _event_group(text: str, ctx: dict[str, str]) -> str:
     parsed = gha_expr.parse_template(text)
     if isinstance(parsed, gha_expr.Refusal):
         raise _Unevaluable(parsed.why)
@@ -2065,10 +2094,53 @@ def _push_group(text: str, ctx: dict[str, str]) -> str:
     at = 0
     for e, (start, end) in zip(parsed.exprs, parsed.spans):
         out.append(text[at:start])
-        out.append(_as_text(_eval_push(e, ctx)))
+        out.append(_as_text(_eval_event(e, ctx)))
         at = end
     out.append(text[at:])
     return "".join(out)
+
+
+def _event_cancels(value: object, ctx: dict[str, str]) -> bool:
+    """Whether a `cancel-in-progress` value is truthy under `ctx`: absent is
+    false, a YAML boolean is itself, a string must be exactly one `${{ }}`
+    expression; any other shape raises `_Unevaluable`."""
+    if value is None or isinstance(value, bool):
+        return value is True
+    if not isinstance(value, str):
+        raise _Unevaluable("is neither a boolean nor an expression")
+    parsed = gha_expr.parse_template(value)
+    if isinstance(parsed, gha_expr.Refusal):
+        raise _Unevaluable(parsed.why)
+    if len(parsed.exprs) != 1 or parsed.spans[0] != (0, len(value)):
+        raise _Unevaluable("is not exactly one `${{ }}` expression")
+    return _truthy(_eval_event(parsed.exprs[0], ctx))
+
+
+def _check_merge_group_site(fname: str, where: str, group: str, cancel: object, errors: list[str]) -> None:
+    """Check 13 for one concurrency site of a merge_group-triggered workflow."""
+    try:
+        m1, m1_again, m2 = (_event_group(group, ctx) for ctx in _MERGE_GROUP_CONTEXTS)
+    except _Unevaluable as why:
+        errors.append(f"{fname}: {where} concurrency group {group!r} {why}; check 13 cannot prove merge-group runs never stall")
+        return
+    if m1 == m2:
+        errors.append(
+            f"{fname}: {where} concurrency group {group!r} is the same for merge-group runs of two queue refs — "
+            "the whole merge queue runs one entry at a time; key merge-group groups by `github.ref` or `github.sha`"
+        )
+    if m1 != m1_again:
+        return
+    try:
+        cancels = all(_event_cancels(cancel, ctx) for ctx in _MERGE_GROUP_CONTEXTS[:2])
+    except _Unevaluable as why:
+        errors.append(f"{fname}: {where} `cancel-in-progress` {cancel!r} {why}; check 13 cannot prove merge-group runs never stall")
+        return
+    if not cancels:
+        errors.append(
+            f"{fname}: {where} concurrency group {group!r} is the same for a re-queued merge-group run and its stale run "
+            "and does not cancel in progress on merge_group — the new run waits behind the stale one; "
+            "set `cancel-in-progress` true on merge_group or key the group by `github.sha`"
+        )
 
 
 def check_push_concurrency(errors: list[str], root: str = REPO_ROOT) -> None:
@@ -2086,12 +2158,13 @@ def check_push_concurrency(errors: list[str], root: str = REPO_ROOT) -> None:
             continue
         triggers = _triggers(doc)
         if triggers is None:
-            errors.append(f"{fname}: `on:` has no recognised shape; check 13 cannot tell whether it runs on push")
+            errors.append(f"{fname}: `on:` has no recognised shape; check 13 cannot tell whether it runs on push or merge_group")
             continue
-        if "push" not in triggers:
-            continue
-        seen.add(fname)
-        if fname in LATEST_WINS_PUSH_GROUPS:
+        on_push = "push" in triggers
+        on_merge_group = "merge_group" in triggers
+        if on_push:
+            seen.add(fname)
+        if not on_merge_group and (not on_push or fname in LATEST_WINS_PUSH_GROUPS):
             continue
         jobs = doc.get("jobs")
         sites = [("workflow", doc.get("concurrency"))] + [
@@ -2106,8 +2179,13 @@ def check_push_concurrency(errors: list[str], root: str = REPO_ROOT) -> None:
             if not isinstance(group, str):
                 errors.append(f"{fname}: {where} `concurrency:` has no string `group`")
                 continue
+            if on_merge_group:
+                cancel = conc.get("cancel-in-progress") if isinstance(conc, dict) else None
+                _check_merge_group_site(fname, where, group, cancel, errors)
+            if not on_push or fname in LATEST_WINS_PUSH_GROUPS:
+                continue
             try:
-                a, b = (_push_group(group, ctx) for ctx in _PUSH_CONTEXTS)
+                a, b = (_event_group(group, ctx) for ctx in _PUSH_CONTEXTS)
             except _Unevaluable as why:
                 errors.append(f"{fname}: {where} concurrency group {group!r} {why}; check 13 cannot prove each push commit gets its own group")
                 continue
