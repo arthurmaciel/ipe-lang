@@ -854,8 +854,8 @@ mod tests {
             let identity = BundleIdentity::new(hostile, Some("1.0.0"), None);
             let result = layout(DesktopOs::MacOs, &identity, &accepts(&[]), None);
             assert!(
-                result.is_err(),
-                "a traversing macOS bundle name `{hostile}` must be refused, not joined"
+                matches!(result, Err(crate::CliError::Usage(_))),
+                "a traversing macOS bundle name {hostile:?} must be refused, not joined, got {result:?}"
             );
         }
     }
