@@ -4935,6 +4935,57 @@ fn homed_warning_with_unknown_home_is_refused() {
     );
 }
 
+/// A type-checker error sited at a module with no source file is refused.
+///
+/// The refusal is a compiler bug blamed on the entry; the byte-offset guess,
+/// which would frame the error against whichever def encloses its span, is
+/// never consulted.
+#[test]
+fn sited_error_with_unknown_home_fails_closed() {
+    let main_src = "module Main exposing (main)\n\nmain =\n    1\n";
+    let mut interner = ipe_intern::Interner::new();
+    let Ok(parsed) = ipe_parse::parse_module(main_src, &mut interner) else {
+        return;
+    };
+    let Ok(linked) = ipe_canon::canonicalise(&parsed, &mut interner) else {
+        return;
+    };
+    let (Ok(main), Ok(other)) = (interner.intern("Main"), interner.intern("Other")) else {
+        return;
+    };
+    let Some(other_home) = ipe_types::ModuleHome::new(vec![other]) else {
+        return;
+    };
+    let mut home_to_source = BTreeMap::new();
+    home_to_source.insert(
+        vec![main],
+        (PathBuf::from("src/Main.ipe"), main_src.to_owned()),
+    );
+    let entry = (PathBuf::from("src/Main.ipe"), main_src.to_owned());
+    let lo = main_src
+        .rfind('1')
+        .and_then(|o| u32::try_from(o).ok())
+        .unwrap_or_default();
+    let err = ipe_db::PipelineError::Infer(ipe_types::InferError::sited(
+        redundant_red_branch_at(lo),
+        &other_home,
+    ));
+
+    let framed = attribute_post_link_error(&linked, &home_to_source, &entry, err);
+    assert!(
+        matches!(
+            &framed,
+            CliError::Pipeline { file, diag, .. }
+                if file == &entry.0
+                    && matches!(
+                        diag.as_ref(),
+                        Diagnostic::CompilerBug { where_: "driver.frame_infer_error", .. }
+                    )
+        ),
+        "an unknown sited home must fail closed as a compiler bug, got {framed:?}"
+    );
+}
+
 /// Version `1.0.0` of `audited`, published from a fresh one-file repo under
 /// `root` and pinned to `sha256` (the tree's own hash when `None`), read back
 /// through the index parser.

@@ -82,7 +82,7 @@ fn measure_source_on(
         .ok_or_else(|| "the entry module is absent from the source root".to_owned())?;
     let program = ipe_db::lower_program(&db, root, entry_file)
         .clone()
-        .map_err(|(diag, _)| format!("lower: {diag:?}"))?;
+        .map_err(|refusal| format!("lower: {refusal:?}"))?;
     emit_on(&db.interner().lock(), &program, stack)
 }
 
