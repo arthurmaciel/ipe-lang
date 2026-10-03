@@ -330,7 +330,7 @@ pub(crate) async fn ssrf_apply(
     builder: reqwest::ClientBuilder,
     url: &str,
     redirects: RedirectPolicy,
-) -> Result<reqwest::ClientBuilder, UrlRefusal> {
+) -> Result<(reqwest::ClientBuilder, RedirectBudget), UrlRefusal> {
     ssrf_apply_with(
         builder,
         url,
@@ -351,8 +351,9 @@ pub(crate) async fn ssrf_apply(
 /// only a gated scheme with a host, vets that host once through `gate`, pins
 /// reqwest's lookup of it to the vetted addresses (defeats DNS rebinding),
 /// installs `gate` as the resolver for every other name (redirect hops), and
-/// re-checks each redirect hop's scheme and IP literal. Under
-/// [`DialPolicy::AllowAll`] it installs the caller's plain redirect policy.
+/// re-checks each redirect hop's scheme and IP literal. Under every policy a
+/// followed chain is bounded by the caller's hop maximum, and the returned
+/// [`RedirectBudget`] records whether the chain ran past it.
 ///
 /// # Errors
 ///
@@ -364,7 +365,7 @@ pub(crate) async fn ssrf_apply_with<R: HostResolver + Send + 'static>(
     redirects: RedirectPolicy,
     policy: DialPolicy,
     gate: VettingResolver<R>,
-) -> Result<reqwest::ClientBuilder, UrlRefusal> {
+) -> Result<(reqwest::ClientBuilder, RedirectBudget), UrlRefusal> {
     refuse_misplaced_userinfo(url)?;
     match policy {
         DialPolicy::DenyPrivate => {
@@ -382,34 +383,97 @@ pub(crate) async fn ssrf_apply_with<R: HostResolver + Send + 'static>(
         }
         DialPolicy::AllowAll => {}
     }
-    builder = match redirects {
-        RedirectPolicy::NoRedirects => builder.redirect(reqwest::redirect::Policy::none()),
+    let budget = match redirects {
+        RedirectPolicy::NoRedirects => {
+            builder = builder.redirect(reqwest::redirect::Policy::none());
+            RedirectBudget::new(0)
+        }
         RedirectPolicy::FollowRedirects(max_hops) => {
             // Clamp to 0: a user-supplied negative Int is safe (0 hops
             // followed).  This is the load-bearing `.max(0)` the spec requires.
-            let max = max_hops.max(0) as usize;
-            match policy {
-                DialPolicy::DenyPrivate => {
-                    builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
-                        if attempt.previous().len() >= max {
-                            return attempt
-                                .error(format!("http: too many redirects (max {})", max));
-                        }
-                        // Non-blocking hop guard: scheme + IP-literal range
-                        // check only. A named-host hop is vetted by
-                        // `VettingResolver` at connect; resolving here would
-                        // block inside reqwest's sync redirect closure.
+            let budget = RedirectBudget::new(max_hops.max(0) as usize);
+            let hops = budget.clone();
+            builder = builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                if hops.spent_by(attempt.previous().len()) {
+                    return attempt.error(hops.refusal_message());
+                }
+                match policy {
+                    // Non-blocking hop guard: scheme + IP-literal range check
+                    // only. A named-host hop is vetted by `VettingResolver` at
+                    // connect; resolving here would block inside reqwest's
+                    // sync redirect closure.
+                    DialPolicy::DenyPrivate => {
                         if let Err(refusal) = ssrf_check_url_nonblocking(attempt.url().as_str()) {
                             return attempt.error(format!("http: {refusal}"));
                         }
                         attempt.follow()
-                    }))
+                    }
+                    DialPolicy::AllowAll => attempt.follow(),
                 }
-                DialPolicy::AllowAll => builder.redirect(reqwest::redirect::Policy::limited(max)),
-            }
+            }));
+            budget
         }
     };
-    Ok(builder)
+    Ok((builder, budget))
+}
+
+/// One request's redirect hop maximum, and whether its chain ran past it.
+///
+/// The redirect closure marks the budget spent at the hop past the maximum;
+/// the send-error arm then reports that failure as the `LimitExceeded` refusal
+/// it is, instead of an opaque transport error.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug)]
+pub(crate) struct RedirectBudget {
+    max: usize,
+    spent: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl RedirectBudget {
+    fn new(max: usize) -> Self {
+        Self {
+            max,
+            spent: std::sync::Arc::default(),
+        }
+    }
+
+    /// Whether `visited` URLs (the initial one included) exceed the maximum,
+    /// marking the budget spent when they do.
+    fn spent_by(&self, visited: usize) -> bool {
+        // The first visited URL is the request itself, not a hop.
+        let over = visited > self.max;
+        if over {
+            self.spent.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        over
+    }
+
+    fn refusal_message(&self) -> String {
+        format!("http: too many redirects (max {})", self.max)
+    }
+
+    /// The ceiling refusal, when the redirect chain ran past the maximum.
+    fn refusal(&self) -> Option<LimitRefusal> {
+        self.spent
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .then(|| LimitRefusal::new(self.refusal_message()))
+    }
+}
+
+/// A failed `send` as the Ipê program sees it.
+///
+/// A redirect chain past its hop maximum is a `LimitExceeded` refusal; any
+/// other failure is a redacted transport error.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn send_failure<E: From<String> + FromLimitExceeded>(
+    e: reqwest::Error,
+    budget: &RedirectBudget,
+) -> E {
+    match budget.refusal() {
+        Some(refusal) if e.is_redirect() => refusal.into_error(),
+        _ => redacted_transport_error(e),
+    }
 }
 
 /// A reqwest transport error as the Ipê program sees it, its raw detail logged.
@@ -426,7 +490,7 @@ pub(crate) fn redacted_transport_error<E: From<String>>(e: reqwest::Error) -> E 
 // ---------------------------------------------------------------------------
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn do_request<E: From<String> + Send + 'static>(
+async fn do_request<E: From<String> + FromLimitExceeded + Send + 'static>(
     req: HttpRequest,
 ) -> IpeResult<E, HttpResponse> {
     // This surface (Http.get/post/request) accepts only http/https — ws/wss is
@@ -443,10 +507,11 @@ async fn do_request<E: From<String> + Send + 'static>(
 
     let builder = reqwest::Client::builder();
     let gate = VettingResolver::system();
-    let mut builder = match ssrf_apply_with(builder, &req.url, req.redirects, policy, gate).await {
-        Ok(b) => b,
-        Err(refusal) => return IpeResult::Err(format!("http: {refusal}").into()),
-    };
+    let (mut builder, budget) =
+        match ssrf_apply_with(builder, &req.url, req.redirects, policy, gate).await {
+            Ok(applied) => applied,
+            Err(refusal) => return IpeResult::Err(format!("http: {refusal}").into()),
+        };
 
     // Always install a request deadline. A Ipê-controllable `timeout <= 0`
     // would otherwise leave the request with no deadline (slowloris / hung-
@@ -475,7 +540,7 @@ async fn do_request<E: From<String> + Send + 'static>(
         // A reqwest/hyper error can echo `req.url` (userinfo, a query-string
         // API key) and the resolved address.
         Err(e) => {
-            return IpeResult::Err(redacted_transport_error(e));
+            return IpeResult::Err(send_failure(e, &budget));
         }
     };
     let status = resp.status().as_u16() as i64;
@@ -545,7 +610,7 @@ fn http_body_cap() -> Result<usize, String> {
 /// a bomb is capped at `cap` resident bytes, never unbounded. UTF-8 lossy
 /// (matches `Http.Stream`'s chunk decode).
 #[cfg(not(target_arch = "wasm32"))]
-async fn read_body_capped<E: From<String> + Send + 'static>(
+async fn read_body_capped<E: From<String> + FromLimitExceeded + Send + 'static>(
     resp: reqwest::Response,
 ) -> IpeResult<E, String> {
     use futures_util::StreamExt;
@@ -557,11 +622,11 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
         && len as usize > cap
     {
         return IpeResult::Err(
-                format!(
+                LimitRefusal::new(format!(
                     "http: response body too large ({} > {} bytes; raise IPE_HTTP_MAX_BODY_BYTES or use Http.Stream)",
                     len, cap
-                )
-                .into(),
+                ))
+                .into_error(),
             );
     }
     let mut buf: Vec<u8> = Vec::new();
@@ -574,11 +639,11 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
         };
         if buf.len().saturating_add(bytes.len()) > cap {
             return IpeResult::Err(
-                format!(
+                LimitRefusal::new(format!(
                     "http: response body too large (> {} bytes; raise IPE_HTTP_MAX_BODY_BYTES or use Http.Stream)",
                     cap
-                )
-                .into(),
+                ))
+                .into_error(),
             );
         }
         buf.extend_from_slice(&bytes);
@@ -598,7 +663,7 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
 /// the typed argument is the defence-in-depth guard at the API boundary, not a
 /// replacement for the runtime floor.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn http_get<E: From<String> + Send + 'static>(
+pub fn http_get<E: From<String> + FromLimitExceeded + Send + 'static>(
     url: crate::url::Url,
 ) -> IpeTask<E, HttpResponse> {
     Box::pin(do_request(HttpRequest {
@@ -617,7 +682,7 @@ pub fn http_get<E: From<String> + Send + 'static>(
 /// canonical serialization as the transport target. The runtime SSRF floor is
 /// unchanged.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn http_post<E: From<String> + Send + 'static>(
+pub fn http_post<E: From<String> + FromLimitExceeded + Send + 'static>(
     url: crate::url::Url,
     body: String,
 ) -> IpeTask<E, HttpResponse> {
@@ -633,7 +698,7 @@ pub fn http_post<E: From<String> + Send + 'static>(
 
 /// Http.request : HttpRequest -> Task Error HttpResponse
 #[cfg(not(target_arch = "wasm32"))]
-pub fn http_request<E: From<String> + Send + 'static>(
+pub fn http_request<E: From<String> + FromLimitExceeded + Send + 'static>(
     req: HttpRequest,
 ) -> IpeTask<E, HttpResponse> {
     Box::pin(do_request(req))
@@ -645,7 +710,8 @@ pub fn http_request<E: From<String> + Send + 'static>(
 /// `encoding::decode_form_query` the server uses for request queries: form
 /// grammar, first value wins, at most `encoding::MAX_QUERY_PAIRS` pairs. Any
 /// malformed component refuses the whole query with an `InvalidInput` error
-/// that names the defect's position, never the query text.
+/// that names the defect's position, never the query text; a query past the
+/// pair ceiling is a `LimitExceeded` error.
 ///
 /// # Errors
 ///
@@ -654,9 +720,20 @@ pub fn http_request<E: From<String> + Send + 'static>(
 pub fn http_parse_query(raw: String) -> IpeResult<crate::error::IpeError, HashMap<String, String>> {
     match crate::encoding::decode_form_query(raw.trim_start_matches('?')) {
         Ok(pairs) => IpeResult::Ok(pairs),
-        Err(refusal) => IpeResult::Err(crate::error::IpeError::invalid_input(format!(
-            "parseQuery: {refusal}"
-        ))),
+        Err(refusal) => IpeResult::Err(query_refusal_error(refusal)),
+    }
+}
+
+/// The `Error` a refused query becomes: each refusal names its own kind.
+fn query_refusal_error(refusal: crate::encoding::QueryRefusal) -> crate::error::IpeError {
+    let message = format!("parseQuery: {refusal}");
+    match refusal {
+        crate::encoding::QueryRefusal::Component(_) => {
+            crate::error::IpeError::invalid_input(message)
+        }
+        crate::encoding::QueryRefusal::TooManyPairs { .. } => {
+            crate::error::IpeError::limit_exceeded(message)
+        }
     }
 }
 
@@ -693,7 +770,9 @@ pub fn http_parse_query(raw: String) -> IpeResult<crate::error::IpeError, HashMa
 // and fail cargo. `http_client` is not WASI-viable (reqwest is native-only), so
 // on WASI this whole substitute stays absent and no kernel references it.
 #[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
-async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, HttpResponse> {
+async fn do_fetch<E: From<String> + FromLimitExceeded + 'static>(
+    req: HttpRequest,
+) -> IpeResult<E, HttpResponse> {
     use wasm_bindgen::{JsCast, JsValue};
     use wasm_bindgen_futures::JsFuture;
 
@@ -796,7 +875,7 @@ async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, H
     };
     let body = match read_wasm_body_capped(&resp, cap).await {
         Ok(b) => b,
-        Err(e) => return IpeResult::Err(e.into()),
+        Err(e) => return IpeResult::Err(e.into_error()),
     };
 
     ok_res(HttpResponse {
@@ -813,7 +892,10 @@ async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, H
 /// bounded to `cap` resident bytes by construction, never fully buffered first.
 /// Decodes UTF-8 lossily (parity with the native arm and `Http.Stream`).
 #[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
-async fn read_wasm_body_capped(resp: &web_sys::Response, cap: usize) -> Result<String, String> {
+async fn read_wasm_body_capped(
+    resp: &web_sys::Response,
+    cap: usize,
+) -> Result<String, KernelFailure> {
     use wasm_bindgen::{JsCast, JsValue};
     use wasm_bindgen_futures::JsFuture;
 
@@ -825,13 +907,13 @@ async fn read_wasm_body_capped(resp: &web_sys::Response, cap: usize) -> Result<S
     let reader: web_sys::ReadableStreamDefaultReader = stream
         .get_reader()
         .dyn_into()
-        .map_err(|_| "http: failed reading response body".to_string())?;
+        .map_err(|_| KernelFailure::from("http: failed reading response body".to_string()))?;
 
     let mut buf: Vec<u8> = Vec::new();
     loop {
         let result = JsFuture::from(reader.read())
             .await
-            .map_err(|_| "http: failed reading response body".to_string())?;
+            .map_err(|_| KernelFailure::from("http: failed reading response body".to_string()))?;
         // Each read resolves to `{ done: bool, value: Uint8Array }`.
         let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
             .ok()
@@ -845,9 +927,10 @@ async fn read_wasm_body_capped(resp: &web_sys::Response, cap: usize) -> Result<S
             if buf.len().saturating_add(len) > cap {
                 // Release the underlying connection before bailing.
                 let _ = reader.cancel();
-                return Err(format!(
+                return Err(LimitRefusal::new(format!(
                     "http: response body too large (> {cap} bytes; raise IPE_HTTP_MAX_BODY_BYTES)"
-                ));
+                ))
+                .into());
             }
             let start = buf.len();
             buf.resize(start + len, 0);
@@ -869,7 +952,9 @@ async fn read_wasm_body_capped(resp: &web_sys::Response, cap: usize) -> Result<S
 
 /// Http.get : Url -> Task Error HttpResponse (browser substitute)
 #[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
-pub fn http_get<E: From<String> + 'static>(url: crate::url::Url) -> IpeTask<E, HttpResponse> {
+pub fn http_get<E: From<String> + FromLimitExceeded + 'static>(
+    url: crate::url::Url,
+) -> IpeTask<E, HttpResponse> {
     Box::pin(do_fetch(HttpRequest {
         body: String::new(),
         headers: Vec::new(),
@@ -882,7 +967,7 @@ pub fn http_get<E: From<String> + 'static>(url: crate::url::Url) -> IpeTask<E, H
 
 /// Http.post : Url -> String -> Task Error HttpResponse (browser substitute)
 #[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
-pub fn http_post<E: From<String> + 'static>(
+pub fn http_post<E: From<String> + FromLimitExceeded + 'static>(
     url: crate::url::Url,
     body: String,
 ) -> IpeTask<E, HttpResponse> {
@@ -898,7 +983,9 @@ pub fn http_post<E: From<String> + 'static>(
 
 /// Http.request : HttpRequest -> Task Error HttpResponse (browser substitute)
 #[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
-pub fn http_request<E: From<String> + 'static>(req: HttpRequest) -> IpeTask<E, HttpResponse> {
+pub fn http_request<E: From<String> + FromLimitExceeded + 'static>(
+    req: HttpRequest,
+) -> IpeTask<E, HttpResponse> {
     Box::pin(do_fetch(req))
 }
 
@@ -963,19 +1050,14 @@ mod tests {
 
     #[test]
     fn parse_query_refuses_malformed_queries_whole() {
-        // Prove the refusals: a bad escape, invalid UTF-8 in a key or value, or
-        // too many pairs refuses the whole query as `InvalidInput`, and the
-        // message never echoes the query text.
-        let mut past_cap: Vec<String> = (0..crate::encoding::MAX_QUERY_PAIRS.get())
-            .map(|i| format!("k{i}=v"))
-            .collect();
-        past_cap.push("secret=hunter2".to_string());
+        // Prove the refusals: a bad escape or invalid UTF-8 in a key or value
+        // refuses the whole query as `InvalidInput`, and the message never
+        // echoes the query text.
         for raw in [
             "a=1&b=%zz".to_string(),
             "?a=100%".to_string(),
             "%C3=1".to_string(),
             "a=%C0%AF".to_string(),
-            past_cap.join("&"),
         ] {
             let parsed = http_parse_query(raw.clone());
             assert!(
@@ -991,6 +1073,26 @@ mod tests {
                 "{raw:?}"
             );
         }
+    }
+
+    /// The pair ceiling: `MAX_QUERY_PAIRS` pairs parse, one more is a
+    /// `LimitExceeded` refusal that never echoes the query text.
+    #[test]
+    fn parse_query_past_the_pair_ceiling_is_limit_exceeded() {
+        let cap = crate::encoding::MAX_QUERY_PAIRS.get();
+        let mut pairs: Vec<String> = (0..cap).map(|i| format!("k{i}=v")).collect();
+        let at_cap = http_parse_query(pairs.join("&"));
+        assert!(
+            matches!(&at_cap, IpeResult::Ok(q) if q.len() == cap),
+            "{cap} pairs must parse"
+        );
+        pairs.push("secret=hunter2".to_string());
+        assert_eq!(
+            http_parse_query(pairs.join("&")),
+            IpeResult::Err(crate::error::IpeError::limit_exceeded(format!(
+                "parseQuery: more than {cap} query pairs"
+            )))
+        );
     }
     // SSRF guard unit tests moved to `ssrf.rs` alongside the validators.
 
@@ -1387,6 +1489,83 @@ mod tests {
             assert_eq!(
                 shown,
                 "http: blocked: private host 10.0.0.1 (IPE_HTTP_DENY_PRIVATE)"
+            );
+        }
+
+        /// Serves `/hop/N` on loopback as a redirect to `/hop/N-1`, and
+        /// `/hop/0` as `200 OK`.
+        async fn redirect_ladder() -> SocketAddr {
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind loopback");
+            let addr = listener.local_addr().expect("listener address");
+            tokio::spawn(async move {
+                while let Ok((mut sock, _)) = listener.accept().await {
+                    tokio::spawn(async move {
+                        let mut buf = vec![0u8; 4096];
+                        let n = sock.read(&mut buf).await.unwrap_or(0);
+                        let head = std::str::from_utf8(buf.get(..n).unwrap_or_default())
+                            .unwrap_or_default();
+                        let hops: u32 = head
+                            .split_whitespace()
+                            .nth(1)
+                            .and_then(|path| path.strip_prefix("/hop/"))
+                            .and_then(|left| left.parse().ok())
+                            .unwrap_or(0);
+                        let reply = if hops == 0 {
+                            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                                .to_string()
+                        } else {
+                            format!(
+                                "HTTP/1.1 302 Found\r\nLocation: /hop/{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                                hops.saturating_sub(1)
+                            )
+                        };
+                        let _ = sock.write_all(reply.as_bytes()).await;
+                    });
+                }
+            });
+            addr
+        }
+
+        /// The status a `hops`-long ladder ends on under a `max`-hop budget,
+        /// or the send failure as the Ipê program sees it.
+        async fn climb(addr: SocketAddr, hops: u32, max: i64) -> Result<u16, crate::IpeError> {
+            let url = format!("http://{addr}/hop/{hops}");
+            let (builder, budget) = ssrf_apply_with(
+                reqwest::Client::builder().no_proxy(),
+                &url,
+                RedirectPolicy::FollowRedirects(max),
+                DialPolicy::AllowAll,
+                gate(NoDns),
+            )
+            .await
+            .expect("an AllowAll dial is never refused");
+            let client = builder.build().expect("client builds");
+            match client.get(&url).send().await {
+                Ok(resp) => Ok(resp.status().as_u16()),
+                Err(e) => Err(super::super::send_failure(e, &budget)),
+            }
+        }
+
+        /// `FollowRedirects n` follows exactly `n` hops; the hop past them is a
+        /// `LimitExceeded` refusal, never an opaque transport error.
+        #[tokio::test]
+        async fn redirect_chain_past_its_maximum_is_limit_exceeded() {
+            let addr = redirect_ladder().await;
+            assert_eq!(climb(addr, 3, 3).await, Ok(200));
+            assert_eq!(
+                climb(addr, 4, 3).await,
+                Err(crate::IpeError::limit_exceeded(
+                    "http: too many redirects (max 3)"
+                ))
+            );
+            assert_eq!(
+                climb(addr, 1, 0).await,
+                Err(crate::IpeError::limit_exceeded(
+                    "http: too many redirects (max 0)"
+                ))
             );
         }
     }

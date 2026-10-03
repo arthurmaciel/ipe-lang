@@ -100,7 +100,7 @@ fn next_stream_id() -> i64 {
 ///
 /// No whole-request timeout — streams may run for minutes (LLM completions);
 /// a 30s connect timeout bounds the header stage only.
-pub fn http_stream_open<E: From<String> + Send + 'static>(
+pub fn http_stream_open<E: From<String> + FromLimitExceeded + Send + 'static>(
     req: HttpRequest,
 ) -> IpeTask<E, IpeStreamId> {
     Box::pin(async move {
@@ -109,10 +109,11 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
         // per-redirect re-check via the shared helper, identical to Http.get/post.
         let builder =
             reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(30));
-        let builder = match crate::http_client::ssrf_apply(builder, &req.url, req.redirects).await {
-            Ok(b) => b,
-            Err(refusal) => return IpeResult::Err(format!("http: {refusal}").into()),
-        };
+        let (builder, budget) =
+            match crate::http_client::ssrf_apply(builder, &req.url, req.redirects).await {
+                Ok(applied) => applied,
+                Err(refusal) => return IpeResult::Err(format!("http: {refusal}").into()),
+            };
         let client = match builder.build() {
             Ok(c) => c,
             Err(e) => return IpeResult::Err(format!("http.stream.open: client: {}", e).into()),
@@ -132,8 +133,9 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
             // [B8] The reqwest error `Debug`/`Display` (and `req.url`) can echo the
             // target URL / request headers / bearer / API key. Route through the
             // correlation-id redaction helper: raw detail → server log under a ref
-            // id; Ipê sees only a fixed generic message.
-            Err(e) => return IpeResult::Err(crate::http_client::redacted_transport_error(e)),
+            // id; Ipê sees only a fixed generic message. A redirect chain past
+            // its hop maximum is the `LimitExceeded` refusal instead.
+            Err(e) => return IpeResult::Err(crate::http_client::send_failure(e, &budget)),
         };
         // HTTP error statuses (4xx/5xx) still surface as a stream — the body may
         // carry the error payload the caller wants to read. Mirrors Http.get
