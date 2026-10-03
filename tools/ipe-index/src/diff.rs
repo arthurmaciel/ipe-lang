@@ -7,9 +7,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// The queue-relevant state of one unit.
 ///
 /// `body_hash` is the attested hash a queue row carries and the review app
-/// drains by; `change_key` is what a change is judged on. They differ only for
-/// a `file` unit, whose key covers the lines no other unit of the file covers,
-/// so a change inside a child unit queues the child alone.
+/// drains by; `change_key` is what a change is judged on. A `file` unit
+/// attests the lines no other unit of the file covers, so a change inside a
+/// child unit queues the child alone. The two differ only for a `file` row
+/// written by an index that attested the whole file and kept the residual
+/// beside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnitState {
     pub path: String,
@@ -244,6 +246,20 @@ mod tests {
         );
         let want = Change::Refresh {
             new_hash: "h2".to_string(),
+        };
+        assert_eq!(changes(ops), vec![("u-f".to_string(), want)]);
+    }
+
+    // A file row whose attestation moves from the whole file to its residual,
+    // with the residual unchanged, is re-pointed and never queued for review.
+    #[test]
+    fn a_rekeyed_file_unit_is_a_refresh_not_a_review() {
+        let ops = reconcile(
+            &snap(vec![("u-f", state("p", "whole", "residual"))]),
+            &snap(vec![("u-f", state("p", "residual", "residual"))]),
+        );
+        let want = Change::Refresh {
+            new_hash: "residual".to_string(),
         };
         assert_eq!(changes(ops), vec![("u-f".to_string(), want)]);
     }

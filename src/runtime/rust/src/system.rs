@@ -348,6 +348,18 @@ pub(crate) fn gutter_line(msg: &str, is_terminal: bool) -> String {
     }
 }
 
+/// How long every SQLite connection waits on another connection's lock.
+///
+/// Applied through the connect options, so the driver sets it on each
+/// connection it opens and no pooled connection can carry another value. It
+/// outlasts a full index rebuild holding the write lock; a writer still
+/// waiting past it fails with `SQLITE_BUSY` through its caller's typed error.
+///
+/// It lives here, not in `db`, because `web::hub` and `telemetry_spill` open
+/// SQLite connections in programs whose module set declares no `db`.
+#[cfg(feature = "db")]
+pub(crate) const SQLITE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Format characters that reorder, hide, or break a log line without being control bytes.
 ///
 /// Exactly the Unicode `Cf` (format) category plus the `Zl`/`Zp` line and
@@ -3233,7 +3245,7 @@ mod scrub_log_controls_tests {
     #[test]
     fn is_log_hazard_is_the_terminal_set_for_every_char() {
         for c in (0..=u32::from(char::MAX)).filter_map(char::from_u32) {
-            let terminal = c.is_control() || ipe_diagnostics::terminal::is_denied_format_char(c);
+            let terminal = ipe_diagnostics::terminal::is_display_hazard(c);
             assert_eq!(super::is_log_hazard(c), terminal, "U+{:04X}", u32::from(c));
         }
     }
@@ -4093,12 +4105,20 @@ mod process_run_with_tests {
         assert!(matches!(res, IpeResult::Err(_)));
     }
 
-    /// cwd override is honoured: `pwd` must echo the target directory.
+    /// A cwd override is honoured: the child's own idea of its directory
+    /// must echo the target.
+    ///
+    /// `cmd /C cd` on Windows, never `sh`/`pwd` — Git Bash's `sh` rewrites
+    /// the native path through its own MSYS translation, so its `pwd`
+    /// output would never match the native override we set and check.
     #[test]
     fn cwd_override_is_honoured() {
         let tmp = crate::scratch_core::test_temp_root();
         let tmp_str = tmp.to_string_lossy().into_owned();
+        #[cfg(not(windows))]
         let mut c = cfg("sh", &["-c", "pwd"]);
+        #[cfg(windows)]
+        let mut c = cfg("cmd", &["/C", "cd"]);
         c.cwd = IpeMaybe::Just(tmp_str.clone());
         let res: IpeResult<String, ProcessRunOutput> = block(process_run_with::<String>(c));
         match res {

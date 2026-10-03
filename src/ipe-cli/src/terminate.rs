@@ -143,11 +143,12 @@ fn status_masks(status: &str) -> Option<(u64, u64)> {
 
 /// The most `ps` may print for one process's two masks.
 #[cfg(any(not(target_os = "linux"), test))]
-const PS_STDOUT_MAX_BYTES: u64 = 256;
+const PS_STDOUT_MAX_BYTES: crate::remote_ingest::ByteBudget =
+    crate::remote_ingest::PROBE_STDOUT_MAX_BYTES;
 
 /// The longest `ps` may take to report one process's masks.
 #[cfg(any(not(target_os = "linux"), test))]
-const PS_WALL: std::time::Duration = std::time::Duration::from_secs(5);
+const PS_WALL: crate::remote_ingest::WallBudget = crate::remote_ingest::WallBudget::of_secs::<5>();
 
 /// The ignored and caught masks of process `pid`, as `/bin/ps` reports them.
 ///

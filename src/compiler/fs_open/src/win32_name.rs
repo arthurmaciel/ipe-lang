@@ -1,4 +1,4 @@
-//! The Win32 name rules every output-path check shares.
+//! The Win32 name rules every Windows path check and handle-relative open shares.
 //!
 //! Win32 opens some names as another entry than the one they spell: it strips
 //! a trailing `.` or space, reads a `:` as a stream separator
