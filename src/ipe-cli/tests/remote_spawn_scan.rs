@@ -37,13 +37,14 @@ const COMMAND_ALIAS: &str = "Commandas";
 /// None runs `git`, `curl`, `ssh` or another remote-transfer tool. A literal
 /// names a local tool; a variable names a program the CLI resolved itself (its
 /// own binary, the toolchain's `cargo`, a wasm tool, the FFI inspector payload,
-/// a `doctor` install `argv`, a platform opener). The `sh` site runs the
-/// installer script `remote_ingest` already downloaded within its ceilings. A
-/// mention of `Command::new` that is not called in place is listed under the
-/// empty expression.
+/// a `doctor` install `argv`, a platform opener) or a local tool's name its
+/// caller passes so a test can stub it (`cargo_deny`, `rustup`). The `sh` site
+/// runs the installer script `remote_ingest` already downloaded within its
+/// ceilings. A mention of `Command::new` that is not called in place is listed
+/// under the empty expression.
 const SPAWN_INVENTORY: &[(&str, &str, usize)] = &[
-    ("audit.rs", "\"cargo-deny\"", 2),
-    ("build_plan.rs", "\"rustup\"", 1),
+    ("audit.rs", "cargo_deny", 2),
+    ("build_plan.rs", "rustup", 1),
     ("cache.rs", "\"mkfifo\"", 1),
     ("cache.rs", "\"rustc\"", 1),
     ("cargo_step.rs", "build.get_program()", 1),

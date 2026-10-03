@@ -37,8 +37,7 @@ const SPAWN_CALL: &str = "Command::new";
 /// fixture crate, and the rest are environment-mapping test commands and a doc
 /// comment that never spawn.
 const CARGO_INVENTORY: &[(&str, &str, &str, usize)] = &[
-    ("audit.rs", "\"cargo-deny\"", "", 1),
-    ("audit.rs", "\"cargo-deny\"", "--version", 1),
+    ("audit.rs", "cargo_deny", "", 2),
     ("driver/tests/mod.rs", "\"cargo\"", "build", 1),
     ("toolchain.rs", "\"cargo\"", "", 1),
     ("watch.rs", "OsStr::new(\"cargo\")", "", 3),

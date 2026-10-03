@@ -51,7 +51,8 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
@@ -287,6 +288,39 @@ pub(crate) const LOCK_FETCH_LIMITS: LocalCeiling = LocalCeiling(Limits {
     disk_bytes: 0,
     disk_entries: 0,
     stdout_bytes: 64 * KIB,
+    wall: INDEX_CLONE.wall,
+});
+
+/// The ceilings of `cargo metadata --no-deps`, which reads only the crate's manifests.
+///
+/// Its stdout (the metadata document) is held to 16 MiB and its run to two
+/// minutes, so a held cargo lock or a wedged config read cannot hold the CLI.
+pub(crate) const METADATA_LIMITS: LocalCeiling = LocalCeiling(Limits {
+    disk_bytes: 0,
+    disk_entries: 0,
+    stdout_bytes: 16 * MIB,
+    wall: Duration::from_secs(120),
+});
+
+/// The ceilings of a toolchain query (`cargo-deny --version`, `rustup target list --installed`).
+///
+/// Its stdout (a version line, a target list) is held to 64 KiB and its run
+/// to one minute.
+pub(crate) const TOOL_QUERY_LIMITS: LocalCeiling = LocalCeiling(Limits {
+    disk_bytes: 0,
+    disk_entries: 0,
+    stdout_bytes: 64 * KIB,
+    wall: Duration::from_secs(60),
+});
+
+/// The ceilings of a `cargo-deny check`, which may fetch the advisory database.
+///
+/// Its stdout is held to 1 MiB and its run to ten minutes, the wall of
+/// [`INDEX_CLONE`].
+pub(crate) const SUPPLY_CHAIN_SCAN_LIMITS: LocalCeiling = LocalCeiling(Limits {
+    disk_bytes: 0,
+    disk_entries: 0,
+    stdout_bytes: MIB,
     wall: INDEX_CLONE.wall,
 });
 
@@ -839,6 +873,12 @@ pub enum LocalSource {
     LockResolve,
     /// A networked `cargo generate-lockfile` resolving an emitted crate's graph.
     LockFetch,
+    /// A `cargo metadata --no-deps` reading a crate's target directory.
+    CargoMetadata,
+    /// A toolchain query: a tool's version or its installed targets.
+    ToolQuery,
+    /// A `cargo-deny check` over an emitted crate's dependency graph.
+    SupplyChainScan,
 }
 
 impl std::fmt::Display for LocalSource {
@@ -848,6 +888,9 @@ impl std::fmt::Display for LocalSource {
             Self::GitQuery => "git query",
             Self::LockResolve => "offline cargo lock resolve",
             Self::LockFetch => "cargo lock resolve",
+            Self::CargoMetadata => "cargo metadata query",
+            Self::ToolQuery => "toolchain query",
+            Self::SupplyChainScan => "cargo-deny supply-chain scan",
         })
     }
 }
@@ -1225,6 +1268,9 @@ fn run_core(
         }
         if out_of_time() {
             return Err(RunError::Exceeded(IngestLimit::Time(limits.wall)));
+        }
+        if stdout.as_ref().is_some_and(Capture::overflowed) {
+            return Err(RunError::Exceeded(IngestLimit::Bytes(limits.stdout_bytes)));
         }
         if let Some(path) = watch {
             let usage =
@@ -1984,17 +2030,31 @@ mod relay {
 }
 
 /// A pipe being read on its own thread: the bytes kept, and whether more than `cap` arrived.
-type Capture = mpsc::Receiver<(Vec<u8>, bool)>;
+struct Capture {
+    /// The kept bytes and the overflow flag, sent once the pipe closes.
+    done: mpsc::Receiver<(Vec<u8>, bool)>,
+    /// Raised the moment a byte past `cap` is read, while the pipe is still open.
+    over: Arc<AtomicBool>,
+}
+
+impl Capture {
+    /// Whether a byte past the cap has arrived, so the watcher can kill the child before it exits.
+    fn overflowed(&self) -> bool {
+        self.over.load(Ordering::Acquire)
+    }
+}
 
 /// Read `pipe` on a thread, keeping at most `cap` bytes and draining the rest.
 fn spawn_capture(pipe: impl Read + Send + 'static, cap: u64) -> std::io::Result<Capture> {
-    let (tx, rx) = mpsc::channel();
+    let (tx, done) = mpsc::channel();
+    let over = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&over);
     std::thread::Builder::new()
         .name("ipe-child-capture".to_owned())
         .spawn(move || {
-            let _ = tx.send(capture(pipe, cap));
+            let _ = tx.send(capture(pipe, cap, &flag));
         })?;
-    Ok(rx)
+    Ok(Capture { done, over })
 }
 
 /// Write `bytes` to `pipe` on a thread, then close it.
@@ -2017,13 +2077,25 @@ fn spawn_feed(
 
 /// Keep at most `cap` bytes of `pipe`, then read the rest into a sink.
 ///
-/// The flag reports whether anything past `cap` arrived. The pipe is drained to
-/// its end so the child never blocks on a full pipe.
-fn capture(mut pipe: impl Read, cap: u64) -> (Vec<u8>, bool) {
+/// The returned flag reports whether anything past `cap` arrived; `over` is
+/// raised as soon as the first such byte is read. The pipe is drained to its
+/// end so the child never blocks on a full pipe.
+fn capture(mut pipe: impl Read, cap: u64, over: &AtomicBool) -> (Vec<u8>, bool) {
     let mut kept = Vec::new();
     let _ = (&mut pipe).take(cap).read_to_end(&mut kept);
-    let over = std::io::copy(&mut pipe, &mut std::io::sink()).is_ok_and(|rest| rest > 0);
-    (kept, over)
+    let mut probe = [0u8; 1];
+    let past_cap = loop {
+        match pipe.read(&mut probe) {
+            Ok(n) => break n > 0,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break false,
+        }
+    };
+    if past_cap {
+        over.store(true, Ordering::Release);
+        let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+    }
+    (kept, past_cap)
 }
 
 /// Collect a capture thread's result, giving up after [`PIPE_DRAIN_GRACE`].
@@ -2035,6 +2107,7 @@ fn drain(
         || Ok((Vec::new(), false)),
         |capture| {
             capture
+                .done
                 .recv_timeout(PIPE_DRAIN_GRACE)
                 .map_err(|_| RunError::PipeDrainTimeout(stream))
         },
