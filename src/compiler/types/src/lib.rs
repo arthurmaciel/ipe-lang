@@ -62,7 +62,7 @@ use constrain::{
 use solve::solve_attributed;
 use ty::{Content, FlatType};
 pub use unify::con_heads_compatible;
-use unify::unify;
+use unify::{occurs_guard, super_admits_record, unify};
 use unionfind::{UnionFind, VarId};
 
 /// The result of inference: resolved types for bindings and for every region.
@@ -2303,7 +2303,8 @@ impl ErrorRecordFields {
 /// The 3-way outcome of resolving one [`FieldAccess`]'s base (helper of
 /// [`resolve_deferred`]; built by [`field_access_state`]).
 enum FieldState {
-    /// The base var is still `Flex` — defer to the next fixpoint pass.
+    /// The base is still undecided ([`base_state`]) — defer to the next
+    /// fixpoint pass.
     Deferred,
     /// The base is a record (or a fixed-field builtin Con) and has the
     /// field; the payload is the field's type var.
@@ -2343,13 +2344,64 @@ enum Peek {
 enum RuPeek {
     /// `(field, value_var, field_var-if-present)` per updated field.
     Fields(Vec<(Symbol, VarId, Option<VarId>)>),
-    Flex,
+    /// The base is still undecided ([`base_state`]) — defer to the next pass.
+    Undecided,
     /// The base is a nominal BUILTIN with a fixed READABLE field table
     /// (`PanicInfo` / `TypeInfo` / `ErrorInfo` / `Request`) — field access
     /// works, record UPDATE does not. Reported as the dedicated IPE-T0017
     /// rather than a misleading "no field" IPE-T0012.
     BuiltinCon(Symbol),
     Other,
+}
+
+/// How far unification has decided a deferred obligation's base variable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BaseState {
+    /// An unconstrained variable: a record may still be grown onto it.
+    Flex,
+    /// A non-rigid super variable whose obligations admit a record head: a
+    /// later pass, or [`unify`], may still pin it to a record.
+    PinnableSuper,
+    /// Unification will never make it a record it is not already.
+    Decided,
+}
+
+impl BaseState {
+    /// Whether a later pass could still settle the base to a record.
+    const fn is_undecided(self) -> bool {
+        matches!(self, Self::Flex | Self::PinnableSuper)
+    }
+}
+
+/// Classify a base descriptor, exhaustively over [`Content`].
+///
+/// The one rule every deferred pass (field access, its row tail, record update,
+/// the no-progress settle) asks, so no pass decides against a variable another
+/// pass would still wait on.
+fn base_state(content: &Content) -> BaseState {
+    match content {
+        Content::Flex => BaseState::Flex,
+        Content::Super {
+            rigid: false,
+            bounds,
+        } if super_admits_record(*bounds) => BaseState::PinnableSuper,
+        Content::Super { .. }
+        | Content::Rigid
+        | Content::Structure(
+            FlatType::Fun(_, _)
+            | FlatType::Con { .. }
+            | FlatType::Unit
+            | FlatType::Tuple(_)
+            | FlatType::Record(_, _)
+            | FlatType::EmptyRecord,
+        ) => BaseState::Decided,
+    }
+}
+
+/// Whether the variable `var` is still undecided ([`BaseState::is_undecided`]).
+fn base_is_undecided(uf: &mut UnionFind<Content>, var: VarId) -> DResult<bool> {
+    let root = uf.find(var)?;
+    Ok(base_state(uf.root_content(root)?).is_undecided())
 }
 
 /// Resolve one [`FieldAccess`]'s base to its [`FieldState`].
@@ -2397,22 +2449,40 @@ fn field_access_state(
         {
             Peek::ErrCon(*name)
         }
-        Content::Flex => Peek::Deferred, // not settled yet
-        _ => Peek::Missing,              // rigid / super / non-record structure — error
+        // Undecided (a `Flex`, or a super that may still pin to a record) →
+        // wait; a rigid, a record-refusing super, or a non-record structure →
+        // a genuine "no field".
+        content @ (Content::Flex
+        | Content::Super { .. }
+        | Content::Rigid
+        | Content::Structure(
+            FlatType::Fun(_, _)
+            | FlatType::Con { .. }
+            | FlatType::Unit
+            | FlatType::Tuple(_)
+            | FlatType::EmptyRecord,
+        )) => {
+            if base_state(content).is_undecided() {
+                Peek::Deferred
+            } else {
+                Peek::Missing
+            }
+        }
     };
     Ok(match peek {
         // Present → Found. Missing on an OPEN tail (Flex root) → GrowOpen (the
-        // record is row-polymorphic and absorbs the new field); missing on a
-        // CLOSED tail (`EmptyRecord` / any non-Flex) → Missing (IPE-T0012).
+        // record is row-polymorphic and absorbs the new field); on a tail that
+        // may still pin to a record → Deferred; on a CLOSED or otherwise decided
+        // tail → Missing (IPE-T0012).
         Peek::Record(Some(v), _) => FieldState::Found(v),
         Peek::Record(None, ext) => {
             // Resolve the tail's root (mutable `find`) BEFORE the immutable
             // `root_content` read so the two borrows don't overlap.
             let ext_root = uf.find(ext)?;
-            if matches!(uf.root_content(ext_root)?, Content::Flex) {
-                FieldState::GrowOpen
-            } else {
-                FieldState::Missing
+            match base_state(uf.root_content(ext_root)?) {
+                BaseState::Flex => FieldState::GrowOpen,
+                BaseState::PinnableSuper => FieldState::Deferred,
+                BaseState::Decided => FieldState::Missing,
             }
         }
         Peek::Req => found_or_missing(tables.req.field_var(uf, field)?),
@@ -2475,11 +2545,22 @@ fn resolve_deferred(
                     // field map (the `field_access_state` borrow has ended),
                     // insert, and re-seat with a FRESH open tail.
                     made_progress = true;
-                    let mut fields = match lift!(uf.root_content(root)).clone() {
-                        Content::Structure(FlatType::Record(fs, _)) => fs,
-                        // Unreachable: `GrowOpen` is only produced from a
-                        // `Record` root above; treat any drift as a fresh map.
-                        _ => BTreeMap::new(),
+                    // The record adopts `fa.result` as a field, so the base must
+                    // not occur inside it (`let a = r.a in g r.next`): a cycle is
+                    // an infinite type, never written.
+                    occurs_guard(uf, budget, interner, fa.span, root, fa.result)
+                        .map_err(|d| (d, fa.home.clone()))?;
+                    let Content::Structure(FlatType::Record(mut fields, _)) =
+                        lift!(uf.root_content(root)).clone()
+                    else {
+                        // `GrowOpen` is only produced from a `Record` root.
+                        return Err((
+                            Diagnostic::CompilerBug {
+                                where_: "ipe_types::resolve_deferred",
+                                detail: "a grow-open field access base is not a record".into(),
+                            },
+                            fa.home.clone(),
+                        ));
                     };
                     fields.insert(fa.field, fa.result);
                     let new_ext = lift!(uf.fresh(Content::Flex));
@@ -2512,9 +2593,9 @@ fn resolve_deferred(
 
         if !made_progress {
             // Nothing was discharged this pass — every remaining item's base var
-            // is still `Flex` (no closed record ever pinned it).
+            // is still undecided (no closed record ever pinned it).
             //
-            // A `Flex` base is NOT an error: it is a field access on a parameter
+            // An undecided base is NOT an error: it is a field access on a parameter
             // no call site constrained (an un-called `viewJob job = … job.running`),
             // which the reference infers row-polymorphically — Ipe's `Access`
             // constrain (`Ipe.Type.Constrain.Expression`) unifies the target with
@@ -2525,20 +2606,29 @@ fn resolve_deferred(
             // base (`job.result`, `job.id`) absorb into the open tail via the
             // open-record unify path; the loop makes progress and terminates.
             //
-            // A base that has settled to a NON-record structure (rigid var, a
-            // concrete non-record type) still falls through to IPE-T0012 — those
-            // are genuine "not a record" errors, never reached here because a
-            // settled non-record makes `field_access_state` return `Missing`
-            // during the pass (handled above), not `Deferred`.
-            if let Some(fa) = pending_fa.first() {
-                let root = lift!(uf.find(fa.record));
-                if matches!(lift!(uf.root_content(root)), Content::Flex) {
-                    let mut fields = BTreeMap::new();
-                    fields.insert(fa.field, fa.result);
-                    let ext = lift!(uf.fresh(Content::Flex));
-                    lift!(uf.set_content(root, Content::Structure(FlatType::Record(fields, ext)),));
-                    continue;
+            // The settle goes through `unify`, never a raw write: it checks a
+            // super base's obligations and runs the occurs check, so
+            // `g r = g r.next` is an infinite type, not a cyclic record.
+            //
+            // When no pending base is undecided (each is a record waiting on a
+            // super tail), the first access falls through to IPE-T0012.
+            let mut undecided = None;
+            for fa in &pending_fa {
+                if lift!(base_is_undecided(uf, fa.record)) {
+                    undecided = Some(*fa);
+                    break;
                 }
+            }
+            if let Some(fa) = undecided {
+                let mut fields = BTreeMap::new();
+                fields.insert(fa.field, fa.result);
+                let ext = lift!(uf.fresh(Content::Flex));
+                let rec = lift!(uf.fresh(Content::Structure(FlatType::Record(fields, ext))));
+                unify(uf, budget, interner, fa.span, fa.record, rec)
+                    .map_err(|d| (d, fa.home.clone()))?;
+                continue;
+            }
+            if let Some(fa) = pending_fa.first() {
                 return Err((
                     no_such_field(uf, budget, interner, fa.record, fa.field, fa.span),
                     fa.home.clone(),
@@ -2574,7 +2664,7 @@ enum RuOutcome {
 ///   field's type var (or IPE-T0012 on a missing field);
 /// * a nominal builtin (`PanicInfo`/`TypeInfo`/`ErrorInfo`/`Request`) → the
 ///   dedicated IPE-T0017 (readable fields, no update form);
-/// * `Flex` → defer to the next pass;
+/// * an undecided base ([`base_state`]) → defer to the next pass;
 /// * anything else → IPE-T0012 on the first updated field (degenerate empty
 ///   update on a non-record base is treated as discharged so the loop can't
 ///   stall on it).
@@ -2606,8 +2696,24 @@ fn resolve_one_record_update(
         {
             RuPeek::BuiltinCon(*name)
         }
-        Content::Flex => RuPeek::Flex,
-        _ => RuPeek::Other,
+        // An update never grows a record: an undecided base waits, a decided
+        // non-record base is a genuine "no field".
+        content @ (Content::Flex
+        | Content::Super { .. }
+        | Content::Rigid
+        | Content::Structure(
+            FlatType::Fun(_, _)
+            | FlatType::Con { .. }
+            | FlatType::Unit
+            | FlatType::Tuple(_)
+            | FlatType::EmptyRecord,
+        )) => {
+            if base_state(content).is_undecided() {
+                RuPeek::Undecided
+            } else {
+                RuPeek::Other
+            }
+        }
     };
     match peek {
         RuPeek::Fields(fields) => {
@@ -2626,7 +2732,7 @@ fn resolve_one_record_update(
             }
             Ok(RuOutcome::Discharged)
         }
-        RuPeek::Flex => Ok(RuOutcome::Deferred),
+        RuPeek::Undecided => Ok(RuOutcome::Deferred),
         RuPeek::BuiltinCon(name) => Err((
             lift!(builtin_record_update(interner, name, ru.span)),
             ru.home.clone(),
@@ -5626,6 +5732,144 @@ mod tests {
                 })
             ),
             "a field on a non-record must be NoSuchField, got {r:?}"
+        );
+    }
+
+    /// Module header importing the higher-order kernels the HOF-result tests use.
+    const HOF_HDR: &str =
+        "module Main exposing (ok)\n\nimport Ipe.List as List\nimport Ipe.Maybe as Maybe\n\n";
+
+    /// Infer `body` under [`HOF_HDR`], returning the result.
+    fn infer_hof(body: &str) -> DResult<SolvedTypes> {
+        let (solved, ..) = infer_src(&format!("{HOF_HDR}{body}"));
+        solved
+    }
+
+    /// Whether `r` is a type error satisfying `is_msg`.
+    fn is_type_error(r: &DResult<SolvedTypes>, is_msg: fn(&TypeError) -> bool) -> bool {
+        matches!(r, Err(Diagnostic::Type { msg, .. }) if is_msg(msg))
+    }
+
+    #[test]
+    fn field_access_through_hof_result_resolves() {
+        // `u` is the HOF-result super variable of the inner `Maybe.map`; its
+        // access waits until `e.unit` pins it to `{ name : String }`.
+        let opt = infer_env_ty(
+            &format!(
+                "{HOF_HDR}ok =\n    Maybe.map (\\u -> u.name) (Maybe.map (\\e -> e.unit) \
+                 (Just {{ unit = {{ name = \"x\" }} }}))\n"
+            ),
+            "ok",
+        );
+        assert!(opt.is_some(), "ok must infer");
+        let Some((ty, i)) = opt else { return };
+        assert_eq!(ty_con_name(&ty, &i).as_deref(), Some("Maybe"), "got {ty:?}");
+        let Ty::Con { args, .. } = &ty else { return };
+        assert_eq!(args.len(), 1, "got {ty:?}");
+        let arg = args.first().map(|a| ty_con_name(a, &i));
+        assert_eq!(arg, Some(Some("String".to_owned())), "got {ty:?}");
+    }
+
+    #[test]
+    fn field_access_through_hof_result_is_order_independent() {
+        // The piped and the nested spellings constrain the two callbacks in
+        // opposite orders; both must infer.
+        let piped = infer_hof(
+            "ok =\n    [ { unit = { name = \"x\" } } ]\n        |> List.map (\\e -> e.unit)\n        \
+             |> List.map (\\u -> u.name)\n",
+        );
+        assert!(piped.is_ok(), "piped HOF field chain must infer: {piped:?}");
+        let nested = infer_hof(
+            "ok =\n    List.map (\\u -> u.name) (List.map (\\e -> e.unit) \
+             [ { unit = { name = \"x\" } } ])\n",
+        );
+        assert!(
+            nested.is_ok(),
+            "nested HOF field chain must infer: {nested:?}"
+        );
+    }
+
+    #[test]
+    fn field_access_missing_after_hof_result_is_no_such_field() {
+        // Waiting on the super variable never invents a field: the settled
+        // record is closed and has no `nope`.
+        let r = infer_hof(
+            "ok =\n    Maybe.map (\\u -> u.nope) (Maybe.map (\\e -> e.unit) \
+             (Just { unit = { name = \"x\" } }))\n",
+        );
+        assert!(
+            is_type_error(&r, |m| matches!(m, TypeError::NoSuchField { .. })),
+            "a field the settled record lacks must be NoSuchField, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn field_access_on_hof_result_non_record_is_no_such_field() {
+        // The super variable settles to `Int`, which has no field.
+        let r = infer_hof(
+            "ok =\n    Maybe.map (\\u -> u.name) (Maybe.map (\\e -> e.unit) (Just { unit = 3 }))\n",
+        );
+        assert!(
+            is_type_error(&r, |m| matches!(m, TypeError::NoSuchField { .. })),
+            "a field on a super pinned to Int must be NoSuchField, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn field_access_on_number_super_is_no_such_field() {
+        // A `number` super can never be a record, so the access is decided at
+        // once rather than deferred.
+        let r = infer_hof("ok n =\n    n + n.x\n");
+        assert!(
+            is_type_error(&r, |m| matches!(m, TypeError::NoSuchField { .. })),
+            "a field on a number super must be NoSuchField, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn record_update_through_hof_result_resolves() {
+        // The update's base is the HOF-result super variable of a two-level
+        // `Maybe.map` chain; it waits until the chain settles it.
+        let r = infer_hof(
+            "ok =\n    Maybe.map (\\u -> { u | name = \"y\" }) (Maybe.map (\\e -> e.unit) \
+             (Maybe.map (\\d -> d.inner) (Just { inner = { unit = { name = \"x\" } } })))\n",
+        );
+        assert!(
+            r.is_ok(),
+            "record update through a HOF result must infer: {r:?}"
+        );
+    }
+
+    #[test]
+    fn self_referential_access_is_infinite_type() {
+        // The access's result is its own base: the no-progress settle goes
+        // through `unify`, whose occurs check refuses the cyclic record.
+        let r = infer_hof("ok r =\n    ok r.next\n");
+        assert!(
+            is_type_error(&r, |m| matches!(m, TypeError::InfiniteType { .. })),
+            "a self-referential field access must be InfiniteType, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn self_referential_grow_open_is_infinite_type() {
+        // `r.a` settles `r` to an open record; `r.next` then grows it with a
+        // field whose type is `r` itself — refused before the write.
+        let r = infer_hof("ok r =\n    let a = r.a in ok r.next\n");
+        assert!(
+            is_type_error(&r, |m| matches!(m, TypeError::InfiniteType { .. })),
+            "a self-referential grown field must be InfiniteType, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn super_pinned_to_containing_structure_is_infinite_type() {
+        // The equality super `a` would pin to `List a`: an infinite type, not a
+        // solver spin to the step budget.
+        let r = infer_hof("ok a =\n    a == [ a ]\n");
+        assert!(
+            is_type_error(&r, |m| matches!(m, TypeError::InfiniteType { .. })),
+            "a super pinned to a structure containing it must be InfiniteType, got {r:?}"
         );
     }
 

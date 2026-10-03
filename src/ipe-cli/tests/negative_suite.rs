@@ -2201,6 +2201,68 @@ fn type_record_no_such_field() {
     assert_rejected("type_no_such_field", &src, "IPE-T0012");
 }
 
+/// A field the record settled through a higher-order kernel's callback result
+/// does not have: waiting on the result variable never invents the field.
+#[test]
+fn type_field_missing_after_hof_result() {
+    let src = format!(
+        "{HEAD}import Ipe.Maybe\n\n\
+         main =\n    Maybe.map (\\u -> u.nope) (Maybe.map (\\e -> e.unit) \
+         (Just {{ unit = {{ name = \"x\" }} }}))\n"
+    );
+    assert_rejected("type_field_missing_after_hof_result", &src, "IPE-T0012");
+}
+
+/// A field access whose result is its own base is an infinite type (the
+/// occurs check), never a cyclic record the read-back trips over.
+#[test]
+fn type_self_referential_field_access() {
+    let src = format!("{HEAD}g r =\n    g r.next\n\nmain =\n    0\n");
+    assert_rejected("type_self_referential_field_access", &src, "IPE-T0002");
+}
+
+/// An equality-constrained variable pinned to a list of itself is an infinite
+/// type, never a solver spin to the step budget.
+#[test]
+fn type_super_occurs_check() {
+    let src = format!("{HEAD}f a =\n    a == [ a ]\n\nmain =\n    0\n");
+    assert_rejected("type_super_occurs_check", &src, "IPE-T0002");
+}
+
+/// A field read on a value a lambda returned through `Maybe.map` type-checks
+/// once the record flows in from `List.find`'s argument.
+#[test]
+fn type_field_access_hof_result_compiles() {
+    let src = format!(
+        "{HEAD}\
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.Task as Task
+
+ok : Task Error Bool
+ok =
+    do
+        r <- Task.succeed {{ units = [ {{ uid = \"a\", unit = {{ name = \"x\" }} }} ] }}
+        Task.succeed
+            (case Maybe.map (\\e -> e.unit) (List.find (\\e -> e.uid == \"a\") r.units) of
+                Just u ->
+                    u.name == \"x\"
+
+                Nothing ->
+                    False
+            )
+
+main : Task Error ()
+main =
+    do
+        found <- ok
+        Io.println (if found then \"found\" else \"missing\")
+"
+    );
+    assert_compiles("type_field_access_hof_result", &src);
+}
+
 /// A constructor pattern binding the wrong number of payload fields.
 #[test]
 fn type_ctor_pattern_wrong_arity() {
