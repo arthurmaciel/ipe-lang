@@ -116,10 +116,6 @@ mod registry_phase_c_tests {
             K::TaskDefaultRetryPolicy,
             K::TaskWithMaxAttempts,
             K::TaskWithBaseMs,
-            K::BackoffLinear,
-            K::BackoffLinearWithJitter,
-            K::BackoffExponential,
-            K::BackoffExponentialWithJitter,
             // Io (3)
             K::IoReadLine,
             K::IoWriteStdout,

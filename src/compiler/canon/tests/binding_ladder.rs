@@ -556,3 +556,50 @@ fn an_explicit_import_outranks_the_prelude() {
         "a bare `max` names the explicit import's `Math_max`, got {result:?}"
     );
 }
+
+/// Whether `result` refuses one of two local expression-namespace bindings of
+/// one spelling, the value written at `value` and the constructor at `ctor`:
+/// the diagnostic sits on one of them and its `first` on the other.
+fn local_ctor_value_clash(result: &DResult<Module>, value: Span, ctor: Span) -> bool {
+    let Err(Diagnostic::Name {
+        span,
+        msg: NameError::DuplicateValue { first, .. } | NameError::DuplicateConstructor { first, .. },
+    }) = result
+    else {
+        return false;
+    };
+    let within = |s: &Span, line: Span| (line.lo..line.hi).contains(&s.lo);
+    (within(span, value) && within(first, ctor)) || (within(span, ctor) && within(first, value))
+}
+
+/// Canonicalise `src` alone, as a module of `origin`.
+fn canonicalise_alone(src: &str, origin: ModuleOrigin) -> DResult<Module> {
+    let mut interner = Interner::new();
+    let parsed = ipe_parse::parse_module(src, &mut interner)?;
+    let expected = parsed.name.value.clone();
+    canonicalise_module_with_origin(&parsed, &expected, &Deps::new(), origin, &mut interner)
+        .map(|(module, _)| module)
+}
+
+/// A constructor and a top-level value of one spelling in one module are two
+/// bindings of one expression-namespace name and are refused — whichever is
+/// written first, and in a stdlib module as in a user one.
+#[test]
+fn a_local_ctor_and_a_same_name_local_value_are_a_duplicate() {
+    const TYPE_LINE: &str = "type Strategy = Linear | Exponential\n";
+    const VALUE_LINES: &str = "Linear : Strategy\nLinear = Exponential\n";
+    let ctor_first = format!("module M exposing (main)\n\n{TYPE_LINE}\n{VALUE_LINES}\nmain = 0\n");
+    let value_first = format!("module M exposing (main)\n\n{VALUE_LINES}\n{TYPE_LINE}\nmain = 0\n");
+    for src in [&ctor_first, &value_first] {
+        let value = span_of(src, VALUE_LINES, 0);
+        let ctor = span_of(src, TYPE_LINE, 0);
+        for origin in [ModuleOrigin::User, ModuleOrigin::EmbeddedStdlib] {
+            let result = canonicalise_alone(src, origin);
+            assert!(
+                local_ctor_value_clash(&result, value, ctor),
+                "{origin:?}: ctor `Linear` and value `Linear` in one module must be \
+                 refused, one naming the other; source:\n{src}\ngot {result:?}"
+            );
+        }
+    }
+}
