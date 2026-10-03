@@ -255,7 +255,7 @@ onlySelectedShownDecidable =
                 Just loaded ->
                     not (isNothing (Queue.decidableSource "u-a" (ViewShown loaded)))
                         && isNothing (Queue.decidableSource "u-b" (ViewShown loaded))
-                        && isNothing (Queue.decidableSource "u-a" (ViewLoading { uid = "u-a", wanted = Nothing }))
+                        && isNothing (Queue.decidableSource "u-a" (ViewLoading { uid = "u-a", wanted = Nothing, fresh = True }))
                         && isNothing (Queue.decidableSource "u-a" NoneSelected)
 
                 Nothing ->
@@ -285,7 +285,7 @@ selectionsDuringReadCoalesce : Bool
 selectionsDuringReadCoalesce =
     let
         ( afterB, readB ) =
-            Queue.selectView "b" (ViewLoading { uid = "a", wanted = Nothing })
+            Queue.selectView "b" (ViewLoading { uid = "a", wanted = Nothing, fresh = True })
 
         ( afterC, readC ) =
             Queue.selectView "c" afterB
@@ -313,13 +313,13 @@ outdatedResponseDropped : Bool
 outdatedResponseDropped =
     let
         loading =
-            ViewLoading { uid = "b", wanted = Nothing }
+            ViewLoading { uid = "b", wanted = Nothing, fresh = True }
 
         ( afterLate, lateNext ) =
             Queue.viewArrived "a" (Ok Nothing) loading
 
         ( reselected, reselectNext ) =
-            Queue.selectView "b" (ViewLoading { uid = "b", wanted = Just "c" })
+            Queue.selectView "b" (ViewLoading { uid = "b", wanted = Just "c", fresh = True })
 
         ( settled, settledNext ) =
             Queue.viewArrived "b" (Ok Nothing) loading
@@ -349,6 +349,47 @@ outdatedResponseDropped =
         && selectedTag cleared
         == "loading b wanting a"
         && clearedNext
+        == Nothing
+
+
+
+-- A read that predates a page reload never settles the view: the in-flight
+-- unit selected again after the reload (directly, or after another unit
+-- was wanted) is read afresh once the outdated read returns, and a read in
+-- flight when the page cleared is dropped. Red if re-selecting the
+-- in-flight unit cancels the reload's re-read, or if a cleared read
+-- installs its view.
+outdatedReadNeverSettles : Bool
+outdatedReadNeverSettles =
+    let
+        ( reloaded, reloadNext ) =
+            Queue.reloadView "a" (ViewLoading { uid = "a", wanted = Nothing, fresh = True })
+
+        ( viaB, _ ) =
+            Queue.selectView "b" reloaded
+
+        ( backToA, backNext ) =
+            Queue.selectView "a" viaB
+
+        ( arrived, arrivedNext ) =
+            Queue.viewArrived "a" (Ok Nothing) backToA
+
+        ( dropped, droppedNext ) =
+            Queue.viewArrived "a" (Ok Nothing) (Queue.clearView (ViewLoading { uid = "a", wanted = Nothing, fresh = True }))
+    in
+    reloadNext
+        == Nothing
+        && backNext
+        == Nothing
+        && selectedTag backToA
+        == "loading a wanting a"
+        && arrivedNext
+        == Just "a"
+        && selectedTag arrived
+        == "loading a"
+        && selectedTag dropped
+        == "none"
+        && droppedNext
         == Nothing
 
 
@@ -1647,6 +1688,7 @@ checks =
         , check "only the selected unit's shown view is decidable" onlySelectedShownDecidable
         , Task.succeed ( "a selection during a source read starts no second read", selectionsDuringReadCoalesce )
         , Task.succeed ( "a source read's outdated response is dropped", outdatedResponseDropped )
+        , Task.succeed ( "a source read that predates a page reload never settles the view", outdatedReadNeverSettles )
         , Task.succeed ( "queue state texts distinguish loading/empty/failed/loaded", queueStateTextsDistinct )
         , check "progress counts decided pairs over decided-or-queued units" progressCountsDecidedPairs
         , check "progress total holds while the queue drains" progressStableAcrossDrain
