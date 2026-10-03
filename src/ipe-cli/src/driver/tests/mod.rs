@@ -4651,7 +4651,7 @@ fn homed_warning_with_unknown_home_is_refused() {
 #[test]
 fn sited_error_with_unknown_home_fails_closed() {
     let main_src = "module Main exposing (main)\n\nmain =\n    1\n";
-    let mut interner = Interner::new();
+    let mut interner = ipe_intern::Interner::new();
     let Ok(parsed) = ipe_parse::parse_module(main_src, &mut interner) else {
         return;
     };

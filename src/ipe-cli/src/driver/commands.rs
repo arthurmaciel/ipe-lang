@@ -15,10 +15,9 @@ use crate::contained_path::ResolvedPath;
 use crate::output_dir::{EmitTarget, OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::style::TerminalSafe;
 use crate::{
-    ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, build_plan, cli_args, delivery,
-    explain_page, ffi, fs, help, io_bounded, native_ffi_consent, package_manifest, project,
-    run_sandbox, runtime_embed, screen, style, text, title, toolchain, unsafe_ack, wasi_run, watch,
-    web_consent,
+    ALL_CODES, BTreeMap, Interner, Path, PathBuf, build_plan, cli_args, delivery, explain_page,
+    ffi, fs, help, io_bounded, native_ffi_consent, package_manifest, project, run_sandbox,
+    runtime_embed, screen, style, text, title, toolchain, unsafe_ack, wasi_run, watch, web_consent,
 };
 
 /// A request for help asks for output, not an error: it prints to stdout and
