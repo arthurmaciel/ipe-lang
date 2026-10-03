@@ -63,7 +63,9 @@ concurrency:
   # fast feedback without wasting runner minutes. A merge-group run cancels
   # too: the queue re-creates a ref only when a PR re-enters it, so a running
   # run on the same merge-group ref is always stale and would otherwise hold
-  # its runners while the new run waits. A push run is keyed by its
+  # its runners while the new run waits. A failed merge-group entry is
+  # re-queued, never re-run: a re-run joins its ref's group and cancels the
+  # live run of a re-entered PR. A push run is keyed by its
   # commit: GitHub replaces a queued run in a group whenever a newer one joins
   # it (whatever cancel-in-progress says), so a per-ref push group lets a
   # newer main commit discard an older one's run before it starts, leaving

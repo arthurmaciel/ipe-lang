@@ -344,6 +344,15 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       writes (`GITHUB_ENV`) are not read;
       `src/runtime/rust/tests/wasm_cell_scan.rs` proves the tree declares no
       test outside the claimed cells.
+  21. Every CI-tooling refusal suite runs in a required job: each
+      `.github/ci/test_*.py` is the whole `run:` of a step, exactly
+      `python3 .github/ci/<suite>` (optionally `-v`), in a job reporting a
+      `gate` context of its own producer workflow.  The job carries no
+      `if:` (a skipped required check reads as passing), and neither it
+      nor the step carries `continue-on-error`; the step carries no `if:`
+      and no `working-directory`.  A suite no required job runs is refused,
+      so a refusal test cannot exist yet be advisory.  LIMIT: a suite
+      outside `.github/ci/` is not inventoried.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
 `git ls-files` locally to list tracked paths.
@@ -5315,6 +5324,41 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
     errors.extend(own)
 
 
+
+def check_ci_suites_required(entries: list[dict], errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 21 (see the module docstring)."""
+    gate_producer = {
+        str(e["context"]): str(e["producer"])
+        for e in entries
+        if isinstance(e, dict) and e.get("disposition") == "gate" and e.get("context") and e.get("producer")
+    }
+    suites = sorted(os.path.basename(p) for p in glob.glob(os.path.join(root, "ci", "test_*.py")))
+    run_by: dict[str, list[str]] = {s: [] for s in suites}
+    for wf in _load_workflows(root, errors):
+        for wj in wf.jobs:
+            job = wj.raw
+            context = str(job.get("name", wj.job_id))
+            if gate_producer.get(context) != wf.fname:
+                continue
+            if "if" in job or "continue-on-error" in job:
+                continue
+            for step in job.get("steps") if isinstance(job.get("steps"), list) else []:
+                if not isinstance(step, dict) or not isinstance(step.get("run"), str):
+                    continue
+                if any(k in step for k in ("if", "continue-on-error", "working-directory")):
+                    continue
+                run = shell_lex.trim(step["run"])
+                for suite, sites in run_by.items():
+                    if run in (f"python3 .github/ci/{suite}", f"python3 .github/ci/{suite} -v"):
+                        sites.append(f"{wf.fname}: job {wj.job_id!r}")
+    for suite, sites in run_by.items():
+        if not sites:
+            errors.append(
+                f"check 21: .github/ci/{suite} is run by no required job — add a step whose whole `run:` is "
+                f"`python3 .github/ci/{suite} -v` to an unconditional `gate` job (ci.yml `artifact-guard`)"
+            )
+
+
 def load_manifest() -> dict:
     doc = strict_yaml.safe_load(open(MANIFEST))
     if not isinstance(doc, dict) or "checks" not in doc:
@@ -5461,6 +5505,9 @@ def main() -> int:
 
     # ---- 20. Every non-host test cell is run by the job that claims it ----
     check_test_claims(errors)
+
+    # ---- 21. Every CI-tooling refusal suite runs in a required job ----
+    check_ci_suites_required(entries, errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:

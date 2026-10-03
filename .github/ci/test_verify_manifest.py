@@ -56,6 +56,7 @@ check_drift_sees_untracked = verify_manifest.check_drift_sees_untracked
 check_dependabot_pr_budget = verify_manifest.check_dependabot_pr_budget
 check_workspace_inheritance = verify_manifest.check_workspace_inheritance
 check_test_claims = verify_manifest.check_test_claims
+check_ci_suites_required = verify_manifest.check_ci_suites_required
 
 with open(os.path.join(HERE, "github-env-allowlist.txt")) as _f:
     VALID_ENV_ALLOWLIST = _f.read()
@@ -6109,6 +6110,83 @@ class TestTestClaims(unittest.TestCase):
     def test_bad_claims_table_refused(self) -> None:
         self.files[".github/ci/test-claims.yml"] = "cells: []\n"
         self.assertRefused(_TC_OK, "non-empty `cells`")
+
+
+_SUITE_WF = """\
+name: w
+on:
+  pull_request:
+jobs:
+  guard:
+JOB_KEYS    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
+      - name: suite
+STEP_KEYS        run: RUN
+"""
+
+_SUITE_GATE = [{"context": "guard", "disposition": "gate", "producer": "w.yml"}]
+
+
+class TestCiSuitesRequired(unittest.TestCase):
+    """Check 21: every `.github/ci/test_*.py` runs in an unconditional required job."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = self._tmp.name
+        _write(os.path.join(self.root, "ci", "test_a.py"), "")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(
+        self,
+        run: str = "python3 .github/ci/test_a.py -v",
+        job_keys: str = "",
+        step_keys: str = "",
+        entries: list[dict] | None = None,
+    ) -> list[str]:
+        wf = _SUITE_WF.replace("JOB_KEYS", job_keys).replace("STEP_KEYS", step_keys).replace("RUN", run)
+        _write(os.path.join(self.root, "workflows", "w.yml"), wf)
+        errors: list[str] = []
+        check_ci_suites_required(_SUITE_GATE if entries is None else entries, errors, root=self.root)
+        return errors
+
+    def assertRefused(self, errors: list[str]) -> None:
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("test_a.py is run by no required job", errors[0])
+
+    def test_suite_in_unconditional_gate_job_passes(self) -> None:
+        self.assertEqual(self.errors(), [])
+        self.assertEqual(self.errors(run="python3 .github/ci/test_a.py"), [])
+
+    def test_suite_run_by_no_job_refused(self) -> None:
+        self.assertRefused(self.errors(run="python3 .github/ci/other.py -v"))
+
+    def test_suite_in_non_gate_job_refused(self) -> None:
+        self.assertRefused(self.errors(entries=[{**_SUITE_GATE[0], "disposition": "informational"}]))
+
+    def test_suite_in_other_producers_job_refused(self) -> None:
+        self.assertRefused(self.errors(entries=[{**_SUITE_GATE[0], "producer": "ci.yml"}]))
+
+    def test_conditional_job_refused(self) -> None:
+        self.assertRefused(self.errors(job_keys="    if: github.event_name == 'push'\n"))
+        self.assertRefused(self.errors(job_keys="    continue-on-error: true\n"))
+
+    def test_masked_or_skippable_step_refused(self) -> None:
+        self.assertRefused(self.errors(step_keys="        if: false\n"))
+        self.assertRefused(self.errors(step_keys="        continue-on-error: true\n"))
+        self.assertRefused(self.errors(step_keys="        working-directory: sub\n"))
+
+    def test_run_not_exactly_the_suite_refused(self) -> None:
+        self.assertRefused(self.errors(run="python3 .github/ci/test_a.py -v || true"))
+        self.assertRefused(self.errors(run="python3 .github/ci/test_a.py -k one"))
+        self.assertRefused(self.errors(run="python3 .github/ci/test_a.pyx"))
+
+    def test_live_tree_runs_every_suite(self) -> None:
+        errors: list[str] = []
+        check_ci_suites_required(verify_manifest.load_manifest()["checks"], errors)
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":
