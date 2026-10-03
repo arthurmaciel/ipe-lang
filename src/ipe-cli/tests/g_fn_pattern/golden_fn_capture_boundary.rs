@@ -23,6 +23,7 @@ const ACCEPTED: &str = r#"module Main exposing (main)
 
 import Ipe.Error as Error exposing (Error)
 import Ipe.Io as Io
+import Ipe.List as List
 import Ipe.String
 import Ipe.Task as Task
 
@@ -116,6 +117,54 @@ twiceBind prepare =
         Io.println r
 
 
+useOnce : (String -> Task Error ()) -> Task Error ()
+useOnce h =
+    h "use"
+
+
+effectLambda : (String -> Task Error ()) -> Task Error ()
+effectLambda f =
+    do
+        Task.andThen (\y -> f y) (Task.succeed "e")
+        f "rest"
+
+
+effectMoves : (String -> Task Error ()) -> Task Error ()
+effectMoves f =
+    do
+        Io.println "m"
+        useOnce f
+        f "rest"
+
+
+moveThenCall : (String -> Task Error ()) -> Task Error ()
+moveThenCall f =
+    Task.map2 (\_ _ -> ()) (useOnce f) (f "second")
+
+
+aliasParam : (String -> Task Error ()) -> Task Error ()
+aliasParam f =
+    let
+        g =
+            f
+    in
+    do
+        at <- Task.succeed "ax"
+        Io.println "a"
+        g at
+        r <- Task.succeed "ar"
+        Io.println r
+
+
+aliasNested : (String -> Task Error ()) -> List String -> Task Error ()
+aliasNested f xs =
+    let
+        g =
+            f
+    in
+    Task.map (\_ -> ()) (Task.sequence (List.map (\x -> Task.andThen (\y -> g y) (Task.succeed x)) xs))
+
+
 runAll : Task Error () -> Task Error ()
 runAll t =
     do
@@ -137,10 +186,15 @@ main =
         twice step
         twiceBind step
         runAll (Io.println "top-c")
+        effectLambda step
+        effectMoves step
+        moveThenCall step
+        aliasParam step
+        aliasNested step [ "n1", "n2" ]
 "#;
 
 /// The lines [`ACCEPTED`] prints, in order.
-const ACCEPTED_STDOUT: &str = "n\nn\nn\nr\n1\nm\nm-b\nm\nr\nlet\nk-b\nk\nalias\nx\ng\nr\na\nx\na\nx\nr\ntop-a\ntop-b\ntop-c\n";
+const ACCEPTED_STDOUT: &str = "n\nn\nn\nr\n1\nm\nm-b\nm\nr\nlet\nk-b\nk\nalias\nx\ng\nr\na\nx\na\nx\nr\ntop-a\ntop-b\ntop-c\ne\nrest\nm\nuse\nrest\nuse\nsecond\na\nax\nar\nn1\nn2\n";
 
 /// A destructure-bound function called in a continuation inside the bind's lambda.
 const DESTRUCTURED: &str = r#"module Main exposing (main)

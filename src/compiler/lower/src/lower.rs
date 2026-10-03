@@ -5787,8 +5787,13 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
                     .sum::<usize>()
         }
         Expr::Ctor { args, .. } => args.iter().map(|a| count_fn_value_uses(sym, a)).sum(),
+        // The continuation is the body of the `move |_|` closure the backend
+        // hands to `task_and_then` (`ipe_ir::once_closure::boundary_kind`): a
+        // read there, a borrowing call included, moves `sym` into that closure
+        // once, and the moves inside it count on their own.
         Expr::TaskSeq { effect, rest } => {
-            count_fn_value_uses(sym, effect) + count_fn_value_uses(sym, rest)
+            count_fn_value_uses(sym, effect)
+                + count_fn_value_uses(sym, rest).max(usize::from(lambda_body_refs_sym(sym, rest)))
         }
         Expr::TailLoop { params, body } => {
             if params.iter().any(|(s, _)| *s == sym) {
@@ -5983,9 +5988,18 @@ fn fn_value_move_walk(
                 fn_value_move_walk(sym, e, state, payloads);
             }
         }
+        // The continuation is the body of the `move |_|` closure the backend
+        // hands to `task_and_then` (`ipe_ir::once_closure::boundary_kind`):
+        // building it is one consuming read of `sym`, after the effect. Inside
+        // it the closure owns `sym`, so its own reads start unmoved.
         Expr::TaskSeq { effect, rest } => {
             fn_value_move_walk(sym, effect, state, payloads);
-            fn_value_move_walk(sym, rest, state, payloads);
+            if lambda_body_refs_sym(sym, rest) {
+                state.read(true);
+                let mut inner = FnValueMoveState::default();
+                fn_value_move_walk(sym, rest, &mut inner, payloads);
+                state.hazard |= inner.hazard;
+            }
         }
         Expr::TailLoop { params, body } => {
             if !params.iter().any(|(s, _)| *s == sym) {
@@ -18976,6 +18990,7 @@ impl<'a> Lowerer<'a> {
             if flags.move_in_recallable
                 || flags.any_past
                 || count_fn_value_uses(sym, &body) > 1
+                || fn_value_use_after_consume(sym, &body, &self.enum_payloads)
                 || flows_into_sync_kernel_call(sym, &body)
             {
                 let shimmed = shim_fn_value_reads(
@@ -29837,16 +29852,17 @@ impl<'a> Lowerer<'a> {
                 // field access, …): mint the `Arc` carrier by eta-expanding
                 // the value into a `SharedLambda` that moves the underlying
                 // value in once and forwards per call. A nesting trigger
-                // (`needs_shared_capture`) mints it the same way: its reads
-                // inside closures become `.clone()`s, which a `Box` value has
-                // no `Clone` for. An alias `Var` under a nesting or sync-kernel
-                // trigger alone keeps the value untouched — it propagates the
-                // promoted root's `Arc` type through Rust inference (see
-                // `flows_into_sync_kernel_call`'s alias-chain doc), and that
-                // behaviour is byte-pinned.
+                // (`needs_shared_capture`) mints it the same way, an alias
+                // `Var` included: its reads inside closures become
+                // `.clone()`s, and nothing promotes the alias root for them, so
+                // a `Box` root would leave them without `Clone`. An alias under
+                // the sync-kernel trigger alone keeps the value untouched — it
+                // propagates the promoted root's `Arc` type through Rust
+                // inference (see `flows_into_sync_kernel_call`'s alias-chain
+                // doc, which promotes the root too), and that behaviour is
+                // byte-pinned.
                 other => {
-                    let mints = new_trigger || (needs_shared_val && !matches!(other, Expr::Var(_)));
-                    value = if mints {
+                    value = if new_trigger || needs_shared_val {
                         eta_shared_rebind(other, &ps, &r, self.eta_slice())?
                     } else {
                         other
@@ -32936,6 +32952,59 @@ mod tests {
             vec![user_call(vec![Expr::Var(w)]), user_call(vec![read_tag()])],
         );
         assert!(nonclone_read_after_move(env, w, &wrap_task, &unordered));
+    }
+
+    /// A run-statement continuation is the body of the `move |_|` closure
+    /// `task_and_then` receives, so any read of a function value there,
+    /// a borrowing direct call included, moves the value into it.
+    #[test]
+    fn taskseq_continuation_read_moves_the_fn_value() {
+        use ipe_ir::{CallPin, Callee, Expr, FuncId, OnFormKind};
+
+        use super::{count_fn_value_uses, fn_value_use_after_consume};
+
+        let mut interner = Interner::new();
+        let f = interner.intern("f").expect("intern");
+        let payloads = ipe_ir::EnumPayloadTable::new();
+        let pass = || Expr::Call {
+            callee: Callee::Func(FuncId::from_raw(0)),
+            args: vec![Expr::Var(f)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let call_f = || Expr::Apply {
+            func: Box::new(Expr::Var(f)),
+            args: vec![Expr::Int(1)],
+        };
+        let seq = |effect: Expr, rest: Expr| Expr::TaskSeq {
+            effect: Box::new(effect),
+            rest: Box::new(rest),
+        };
+
+        // `do { use f ; f 1 }`: the effect moves `f`, the continuation closure
+        // captures it again.
+        let moved_then_called = seq(pass(), call_f());
+        assert_eq!(count_fn_value_uses(f, &moved_then_called), 2);
+        assert!(fn_value_use_after_consume(f, &moved_then_called, &payloads));
+
+        // `do { f 1 ; f 1 }`: the effect borrows; the one capture is sound.
+        let called_twice = seq(call_f(), call_f());
+        assert_eq!(count_fn_value_uses(f, &called_twice), 1);
+        assert!(!fn_value_use_after_consume(f, &called_twice, &payloads));
+
+        // `do { f 1 ; use f }`: inside the continuation the closure owns `f`.
+        let called_then_moved = seq(call_f(), pass());
+        assert_eq!(count_fn_value_uses(f, &called_then_moved), 1);
+        assert!(!fn_value_use_after_consume(
+            f,
+            &called_then_moved,
+            &payloads
+        ));
+
+        // A continuation that never reads `f` captures nothing.
+        let unrelated = seq(pass(), Expr::Unit);
+        assert_eq!(count_fn_value_uses(f, &unrelated), 1);
+        assert!(!fn_value_use_after_consume(f, &unrelated, &payloads));
     }
 
     /// A sequenced task whose capture-clone rewrite would clone a non-Clone

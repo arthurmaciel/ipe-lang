@@ -1668,12 +1668,12 @@ mod tests {
     }
 
     fn walk_body(walk: &CaptureWalk, body: Expr, scope: CaptureScope) -> DResult<Expr> {
-        let noncl: BTreeSet<Symbol> = [PREPARE].into_iter().collect();
+        let noncl: BTreeSet<Symbol> = std::iter::once(PREPARE).collect();
         rewrite_captured_clones(&BTreeSet::new(), &noncl, walk, body, scope)
     }
 
     fn refusing_walk() -> CaptureWalk {
-        CaptureWalk::refusing_at(CLOSURE, [(PREPARE, CAPTURE)].into_iter().collect())
+        CaptureWalk::refusing_at(CLOSURE, std::iter::once((PREPARE, CAPTURE)).collect())
     }
 
     const IN_LAMBDA: CaptureScope = CaptureScope::Top.enter(ClosureKind::Recallable);
