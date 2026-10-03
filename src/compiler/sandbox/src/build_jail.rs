@@ -3196,8 +3196,7 @@ mod tests {
             Some("/home/u\0x"),
         ] {
             let refusal = crate::home::HomeDir::try_parse(raw.map(OsString::from))
-                .err()
-                .expect("the raw value is refused");
+                .expect_err("the raw value is refused");
             let got = freebsd_jail_cache_root(Err(refusal));
             assert!(
                 matches!(&got, Err(RunJailDefect::MountFailed { detail, .. })

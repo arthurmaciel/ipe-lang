@@ -15,9 +15,10 @@
 //! the runtime only honours on the driver's loud trust warning.
 #![allow(clippy::module_name_repetitions)]
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitCode};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -78,10 +79,18 @@ impl Outcome {
     }
 }
 
-fn main() {
+fn main() -> ExitCode {
     // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — playground binary `main`
     // process-boundary entry: argv in, JSON out, no other surface.
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Ok(args) = std::env::args_os()
+        .skip(1)
+        .map(std::ffi::OsString::into_string)
+        .collect::<Result<Vec<String>, _>>()
+    else {
+        eprintln!("jail-runner: every argument must be valid UTF-8");
+        usage();
+        return ExitCode::from(2);
+    };
     let rest = args.get(1..).unwrap_or_default();
     let code = match args.first().map(String::as_str) {
         Some("run") => cmd_run(rest),
@@ -95,7 +104,7 @@ fn main() {
             2
         }
     };
-    std::process::exit(code);
+    ExitCode::from(code)
 }
 
 fn usage() {
@@ -115,7 +124,7 @@ fn usage() {
     );
 }
 
-fn cmd_run(args: &[String]) -> i32 {
+fn cmd_run(args: &[String]) -> u8 {
     let parsed = match parse_run_args(args) {
         Ok(parsed) => parsed,
         Err(message) => {
@@ -126,9 +135,9 @@ fn cmd_run(args: &[String]) -> i32 {
     };
     start_watchdog(parsed.wall_secs, &parsed.project_dir);
     let outcome = run_project(&parsed.project_dir, &parsed.warm_dir);
-    print_json(&outcome);
+    let printed = emit_outcome(&outcome);
     cleanup_project(&parsed.project_dir);
-    0
+    printed
 }
 
 struct RunArgs {
@@ -183,7 +192,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
     })
 }
 
-fn cmd_prewarm(args: &[String]) -> i32 {
+fn cmd_prewarm(args: &[String]) -> u8 {
     let mut warm_dir: Option<PathBuf> = None;
     let mut index = 0;
     while index < args.len() {
@@ -219,17 +228,22 @@ fn cmd_prewarm(args: &[String]) -> i32 {
         }
     };
     let outcome = prewarm(&warm_dir);
-    print_json(&outcome);
-    0
+    emit_outcome(&outcome)
 }
 
 /// Harness-level wall-clock: after `wall_secs` the watchdog prints a timeout
 /// JSON document and exits hard. The jail wrapper runs with
 /// `--die-with-parent`, so the whole bwrap tree dies with the harness.
+///
+/// When the run's own outcome has already claimed stdout, the watchdog does
+/// nothing: the run is past its jailed phases and `main` is about to exit.
 fn start_watchdog(wall_secs: u64, project_dir: &Path) {
     let project_dir = project_dir.to_path_buf();
     thread::spawn(move || {
         thread::sleep(Duration::from_secs(wall_secs));
+        if !OUTCOME_CLAIM.claim() {
+            return;
+        }
         let outcome = Outcome {
             ok: false,
             unsandboxed: false,
@@ -238,7 +252,7 @@ fn start_watchdog(wall_secs: u64, project_dir: &Path) {
             exit: None,
             error: Some(format!("timed out after {wall_secs}s (harness wall-clock)")),
         };
-        print_json(&outcome);
+        let _printed = write_claimed_outcome(&outcome);
         // Best-effort: remove the staged project (compiled artifacts can be
         // large). Children may still hold cwd entries; leftover files in that
         // race are bounded by the wall budget and harmless.
@@ -608,32 +622,124 @@ fn prewarm(warm_dir: &Path) -> Outcome {
     }
 }
 
+/// The last `max_bytes` of `text` at most, cut forward to a char boundary.
 fn tail(text: &str, max_bytes: usize) -> String {
     if text.len() <= max_bytes {
         return text.to_owned();
     }
-    let mut result = text.to_owned();
-    result.drain(..result.len() - max_bytes);
-    format!("…{result}")
+    let cut = text.len().saturating_sub(max_bytes);
+    let kept = (cut..=text.len())
+        .find_map(|start| text.get(start..))
+        .unwrap_or_default();
+    format!("…{kept}")
 }
 
-fn print_json(outcome: &Outcome) {
-    match serde_json::to_string(outcome) {
-        Ok(json) => println!("{json}"),
+/// Which writer owns stdout: the run's own outcome or the watchdog's timeout.
+///
+/// Exactly one document reaches stdout per process, whichever side claims
+/// first, so the server never reads two outcomes or one cut short by the
+/// other's exit.
+struct OutcomeClaim(AtomicBool);
+
+impl OutcomeClaim {
+    const fn new() -> Self {
+        Self(AtomicBool::new(false))
+    }
+
+    /// Whether this caller is the first, and so the one that writes.
+    fn claim(&self) -> bool {
+        !self.0.swap(true, Ordering::SeqCst)
+    }
+}
+
+static OUTCOME_CLAIM: OutcomeClaim = OutcomeClaim::new();
+
+/// Print the run's outcome, returning the process exit code: `0` once the
+/// document is written, `1` when it could not be.
+///
+/// When the watchdog has claimed stdout first, this thread waits for the
+/// watchdog's exit rather than return and end the process mid-document.
+fn emit_outcome(outcome: &Outcome) -> u8 {
+    if !OUTCOME_CLAIM.claim() {
+        loop {
+            thread::park();
+        }
+    }
+    write_claimed_outcome(outcome)
+}
+
+/// Write `outcome` to stdout; the caller holds [`OUTCOME_CLAIM`].
+fn write_claimed_outcome(outcome: &Outcome) -> u8 {
+    match write_outcome(&mut std::io::stdout().lock(), outcome) {
+        Ok(()) => 0,
         Err(error) => {
-            // JSON cannot fail here (all fields are simple), but never exit 0
-            // with a partial document: print the error on stderr and exit 1.
-            eprintln!("[jail-runner] fatal: failed to serialize outcome: {error}");
-            std::process::exit(1);
+            // Never exit 0 without a whole document on stdout.
+            eprintln!("[jail-runner] fatal: failed to write the outcome: {error}");
+            1
         }
     }
 }
 
+/// `outcome` as one JSON line on `out`, flushed.
+///
+/// # Errors
+/// The serialization or I/O error, e.g. a closed stdout pipe.
+fn write_outcome(out: &mut impl Write, outcome: &Outcome) -> std::io::Result<()> {
+    serde_json::to_writer(&mut *out, outcome)?;
+    out.write_all(b"\n")?;
+    out.flush()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_WARM_DIR, WarmDirError, resolve_warm_dir_from};
+    use super::{
+        DEFAULT_WARM_DIR, Outcome, OutcomeClaim, WarmDirError, resolve_warm_dir_from, tail,
+        write_outcome,
+    };
     use std::ffi::OsString;
     use std::path::PathBuf;
+
+    /// A cut inside a multi-byte char moves forward to the next boundary
+    /// instead of splitting the char.
+    #[test]
+    fn tail_cuts_on_a_char_boundary() {
+        assert_eq!(tail("abc", 3), "abc");
+        assert_eq!(tail("aé", 1), "…");
+        assert_eq!(tail("aéb", 2), "…b");
+        assert_eq!(tail("aéb", 3), "…éb");
+        assert_eq!(tail("ab", 0), "…");
+    }
+
+    /// A stdout that refuses the write is an error, never a panic.
+    #[test]
+    fn a_closed_stdout_is_a_write_error() {
+        struct Closed;
+        impl std::io::Write for Closed {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let outcome = Outcome::failure("x");
+        assert!(write_outcome(&mut Closed, &outcome).is_err());
+        let mut out = Vec::new();
+        assert!(write_outcome(&mut out, &outcome).is_ok());
+        let body = out.strip_suffix(b"\n");
+        assert!(
+            body.is_some_and(|body| !body.contains(&b'\n')),
+            "one newline-terminated line: {out:?}"
+        );
+    }
+
+    /// Only the first claimant writes the outcome.
+    #[test]
+    fn the_outcome_is_claimed_once() {
+        let claim = OutcomeClaim::new();
+        assert!(claim.claim());
+        assert!(!claim.claim());
+    }
 
     /// The home the parser makes of the raw value `raw`, when it accepts one.
     fn parsed(raw: &str) -> Option<ipe_sandbox::home::HomeDir> {

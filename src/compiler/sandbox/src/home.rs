@@ -38,17 +38,49 @@ pub fn home_dir() -> Result<HomeDir, HomeRefusal> {
     HomeDir::try_parse(raw_home())
 }
 
-/// The platform home variable's text, set and non-empty, accepted or refused.
+/// The platform home variable's value, accepted or refused, held only to be
+/// erased from text.
 ///
-/// For redaction only: a transcript must carry neither a trusted home nor a
-/// refused one, so the redactor needs the raw value [`home_dir`] refuses to
-/// hand out as a path. It is text, never a [`Path`], so no consumer can build
-/// a location from a value the parser distrusts.
-#[must_use]
-pub fn home_text_to_redact() -> Option<String> {
-    raw_home()
-        .filter(|raw| !raw.is_empty())
-        .map(|raw| raw.to_string_lossy().into_owned())
+/// A transcript must carry neither a trusted home nor a refused one, so the
+/// redactor holds the raw value [`home_dir`] refuses to hand out as a path.
+/// Redaction is its whole surface: no `AsRef<Path>`, `Into<PathBuf>`, `Deref`,
+/// `Display` or `Debug` hands the value back, so no caller can build a
+/// location from a value the parser distrusts.
+pub struct HomeRedactor(String);
+
+impl HomeRedactor {
+    /// The current home value; `None` when it marks no path prefix (see
+    /// [`redaction_text`]).
+    #[must_use]
+    pub fn current() -> Option<Self> {
+        redaction_text(raw_home()).map(Self)
+    }
+
+    /// `input` with every occurrence of the home value replaced by
+    /// `placeholder`.
+    #[must_use]
+    pub fn redact(&self, input: &str, placeholder: &str) -> String {
+        input.replace(self.0.as_str(), placeholder)
+    }
+
+    /// The value's length in bytes, to order it among other redactions
+    /// longest-first.
+    #[must_use]
+    pub const fn byte_len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// The redactable text of a raw home value: an absolute path below a
+/// filesystem root, rendered lossily.
+///
+/// The redactor replaces every occurrence of the text, so a value that is not
+/// a path prefix would rewrite unrelated output: a relative value (`u`) every
+/// matching word, a bare root (`/`) every separator.
+fn redaction_text(raw: Option<OsString>) -> Option<String> {
+    let text = raw?.to_string_lossy().into_owned();
+    let path = Path::new(&text);
+    (path.is_absolute() && path.parent().is_some()).then_some(text)
 }
 
 /// The platform home variable's raw value.
@@ -243,6 +275,41 @@ mod tests {
             );
         }
         assert_eq!(tool_home_from("CARGO_HOME", None, None, ".cargo"), Ok(None));
+    }
+
+    /// A refused home is redacted when it marks a path prefix; a value that
+    /// marks none (relative, bare root, empty, unset) is never redaction text.
+    #[cfg(unix)]
+    #[test]
+    fn redaction_text_is_an_absolute_path_below_the_root() {
+        use std::os::unix::ffi::OsStrExt as _;
+        for (raw, expected) in [
+            (Some("/home/u"), Some("/home/u")),
+            (Some("/home/u/../v"), Some("/home/u/../v")),
+            (Some("/"), None),
+            (Some("//"), None),
+            (Some(""), None),
+            (Some("u"), None),
+            (Some("home/u"), None),
+            (None, None),
+        ] {
+            assert_eq!(
+                redaction_text(raw.map(OsString::from)),
+                expected.map(str::to_owned),
+                "{raw:?}"
+            );
+        }
+        let non_utf8 = std::ffi::OsStr::from_bytes(b"/home/\xff").to_os_string();
+        assert_eq!(
+            redaction_text(Some(non_utf8)),
+            Some("/home/\u{fffd}".to_owned())
+        );
+        let refused = HomeRedactor("/home/u/../v".to_owned());
+        assert_eq!(
+            refused.redact("at /home/u/../v/src and /home/u", "<TMP>"),
+            "at <TMP>/src and /home/u"
+        );
+        assert_eq!(refused.byte_len(), "/home/u/../v".len());
     }
 
     #[test]
