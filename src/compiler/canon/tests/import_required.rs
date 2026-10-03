@@ -170,7 +170,7 @@ fn imported_qualifier_still_suggested() {
 }
 
 /// The applicable edit and names of an unknown-module diagnostic.
-fn unknown_module_candidates(diag: &Diagnostic) -> Option<&ipe_diagnostics::Candidates> {
+const fn unknown_module_candidates(diag: &Diagnostic) -> Option<&ipe_diagnostics::Candidates> {
     match diag {
         Diagnostic::Name {
             msg: NameError::UnknownModule { suggestions, .. },
