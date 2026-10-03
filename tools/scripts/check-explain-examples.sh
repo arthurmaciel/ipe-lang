@@ -67,8 +67,20 @@ echo "    ipe binary:     $IPE_BIN"
 echo
 
 # Temporary directory for generated snippet files; cleaned on exit.
+# It is one project root: a `package.ipe` written once, and each snippet as its
+# `src/Main.ipe`, so `ipe type-check` takes the root and never a loose file.
 TMPWORK="$(mktemp -d)"
 trap 'rm -rf "$TMPWORK"' EXIT
+mkdir -p "$TMPWORK/src"
+cat > "$TMPWORK/package.ipe" <<'MANIFEST'
+module Package exposing (package)
+
+
+package =
+    { name = "explain-example"
+    , version = "0.0.0"
+    }
+MANIFEST
 
 total=0
 ok=0
@@ -136,7 +148,7 @@ for md_file in "$CONSTRUCTS_DIR"/*.md "$TOPICS_DIR"/*.md; do
         fi
 
         # ── Build the snippet file ────────────────────────────────────
-        snippet_file="$TMPWORK/Main.ipe"
+        snippet_file="$TMPWORK/src/Main.ipe"
         if printf '%s' "$code" | head -1 | grep -q '^module '; then
             # Already has a module header — use as-is.
             printf '%s\n' "$code" > "$snippet_file"
@@ -154,7 +166,7 @@ for md_file in "$CONSTRUCTS_DIR"/*.md "$TOPICS_DIR"/*.md; do
 
         # ── Run ipe type-check ────────────────────────────────────────
         check_out="$TMPWORK/check.out"
-        if timeout 15 "$IPE_BIN" type-check "$snippet_file" > "$check_out" 2>&1; then
+        if timeout 15 "$IPE_BIN" type-check "$TMPWORK" > "$check_out" 2>&1; then
             compiled=1
         else
             compiled=0

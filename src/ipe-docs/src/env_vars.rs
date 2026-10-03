@@ -1260,6 +1260,8 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_E2E_BUILD_TIMEOUT_SECS", // golden E2E harness: emitted-crate build fail-fast cap
     "IPE_E2E_SECRET",          // macOS jail e2e test sentinel
     "IPE_E2E_STATIC",          // CI gate for static-binary e2e tests
+    "IPE_FUZZ_ITERS",          // fuzz template harness: random-run iteration count
+    "IPE_FUZZ_SEED",           // fuzz template harness: random-run seed
     "IPE_HOST_ENV_TEST_UNSET_7F3A9C21D84E", // sandbox host_env test: a name no host sets
     "IPE_HTTP_TEST_URL",
     "IPE_JUNCTION_AT",  // Windows junction test helper: PowerShell script input
@@ -1270,6 +1272,8 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_PDEATH_PROBE", // parent-death spawner test: selects the re-executed probe mode
     "IPE_RUN_WITH_TEST_VAR",
     "IPE_SECRET_E2E",                   // Windows jail e2e test sentinel
+    "IPE_SMOKE_ASKPASS_USER", // registry smoke: git askpass helper's internal user-name channel
+    "IPE_SMOKE_TOKEN", // registry smoke script input (its publish token), not a runtime variable
     "IPE_TEMP_ROOT_ENV_TEST_NEIGHBOUR", // temp-root refusal test: a key that only contains a temp-root name
     "IPE_TEST_BOOL_BAD",
     "IPE_TEST_BOOL_F",
