@@ -1873,7 +1873,7 @@ mod tests {
         );
         assert!(!present(&out, OWNERSHIP_MARKER), "no marker is written");
 
-        std::fs::write(out.join(CLAIM_FILE), [b'u']).expect("one foreign byte");
+        std::fs::write(out.join(CLAIM_FILE), b"u").expect("one foreign byte");
         let claimed = dir.claim();
         assert!(not_ipe_owned(&claimed), "a foreign byte, got {claimed:?}");
         assert_eq!(

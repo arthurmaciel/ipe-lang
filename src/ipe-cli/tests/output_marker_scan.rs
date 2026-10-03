@@ -259,14 +259,57 @@ fn scan(src: &str) -> Result<Found, String> {
     Ok(found)
 }
 
+/// Whether the module file `parent` (relative to `root`) declares `mod tests;` as test-only.
+///
+/// An absent or unparsable parent declares nothing, so the file it would exempt is scanned.
+fn declares_test_module(root: &Path, parent: &str) -> bool {
+    let Ok(src) = std::fs::read_to_string(root.join(parent)) else {
+        return false;
+    };
+    let Ok(file) = syn::parse_file(&src) else {
+        return false;
+    };
+    file.items.iter().any(|item| {
+        matches!(item, syn::Item::Mod(module)
+            if module.ident == "tests" && module.content.is_none() && is_test_only(&module.attrs))
+    })
+}
+
+/// Whether the file at `parts` lies in a `tests` module its parent declares under a test-only `cfg`.
+///
+/// The exemption is proved by the declaration, never by the file name alone:
+/// a `tests.rs` or `tests/` whose parent compiles it in a non-test build is scanned.
+fn in_test_module(root: &Path, parts: &[String]) -> bool {
+    let Some(at) = parts
+        .iter()
+        .position(|part| part == "tests" || part == "tests.rs")
+    else {
+        return false;
+    };
+    let Some(prefix) = parts.get(..at) else {
+        return false;
+    };
+    if prefix.is_empty() {
+        return ["lib.rs", "main.rs"]
+            .iter()
+            .any(|parent| declares_test_module(root, parent));
+    }
+    let dir = prefix.join("/");
+    [format!("{dir}.rs"), format!("{dir}/mod.rs")]
+        .iter()
+        .any(|parent| declares_test_module(root, parent))
+}
+
 /// Every `.rs` file under `root` that a non-test build compiles, relative to `root` with `/` separators.
-fn production_files(root: &Path) -> Vec<(String, PathBuf)> {
+///
+/// # Errors
+/// When a source directory cannot be listed.
+fn production_files(root: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
     let mut found = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
-        let entries = std::fs::read_dir(&dir).expect("list a source directory");
-        for entry in entries {
-            let path = entry.expect("read a source directory entry").path();
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
             if path.is_dir() {
                 pending.push(path);
             } else if path.extension().is_some_and(|e| e == "rs")
@@ -276,23 +319,20 @@ fn production_files(root: &Path) -> Vec<(String, PathBuf)> {
                     .components()
                     .map(|c| c.as_os_str().to_string_lossy().into_owned())
                     .collect();
-                let test_only = parts.iter().any(|part| {
-                    part == "tests" || part == "tests.rs" || part.ends_with("_tests.rs")
-                });
-                if !test_only {
+                if !in_test_module(root, &parts) {
                     found.push((parts.join("/"), path));
                 }
             }
         }
     }
     found.sort();
-    found
+    Ok(found)
 }
 
 #[test]
 fn marker_and_claim_file_names_stay_in_the_claim_protocol() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let files = production_files(&root);
+    let files = production_files(&root).expect("list the production sources");
     assert!(
         files.iter().any(|(rel, _)| rel == PROTOCOL_FILE),
         "the protocol file `{PROTOCOL_FILE}` is scanned from `{}`",
