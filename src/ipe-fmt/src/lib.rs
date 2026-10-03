@@ -617,6 +617,12 @@ struct Printer<'a> {
     /// trial render (to measure a layout) never consumes a comment its final
     /// render then lacks.
     claimed: Cell<Option<(usize, usize)>>,
+    /// The body offset of the lambda whose parameter comments the node being
+    /// printed has already claimed.
+    ///
+    /// Set and restored around each render, like `claimed`, so the outermost
+    /// claim of a lambda takes those comments once.
+    lambda_head: Cell<Option<usize>>,
 }
 
 impl<'a> Printer<'a> {
@@ -627,6 +633,7 @@ impl<'a> Printer<'a> {
             code: trivia.code.as_slice(),
             src,
             claimed: Cell::new(None),
+            lambda_head: Cell::new(None),
         }
     }
 
@@ -795,6 +802,27 @@ impl<'a> Printer<'a> {
         self.claimed.set(Some((lo, run_end)));
         let rendered = render();
         self.claimed.set(outer);
+        (comments, rendered)
+    }
+
+    /// [`Self::claim`] for the expression `e`, which also owns the comments
+    /// among a lambda's parameters.
+    ///
+    /// Those print above the lambda, with the comments at its first token: a
+    /// second pass reads them there as the lambda's leading comments, so the
+    /// layout is a fixed point. The outermost claim of a lambda takes them.
+    fn claim_expr<T>(&self, e: &Expr, render: impl FnOnce() -> T) -> (Comments<'a>, T) {
+        let outer = self.lambda_head.get();
+        let head = lambda_head(e).filter(|&(_, hi)| outer != Some(hi));
+        if let Some((_, hi)) = head {
+            self.lambda_head.set(Some(hi));
+        }
+        let (mut comments, rendered) = self.claim(e.span.lo as usize, Self::closer_of(e), render);
+        self.lambda_head.set(outer);
+        if let Some((lo, hi)) = head {
+            comments.extend(self.anchored_in(lo, hi));
+            comments.sort_by_key(|c| c.start);
+        }
         (comments, rendered)
     }
 
@@ -1656,9 +1684,7 @@ impl<'a> Printer<'a> {
     fn expr(&self, e: &Expr, indent: usize) -> String {
         #[cfg(test)]
         count_render_call();
-        let (comments, body) = self.claim(e.span.lo as usize, Self::closer_of(e), || {
-            self.expr_shape(e, indent)
-        });
+        let (comments, body) = self.claim_expr(e, || self.expr_shape(e, indent));
         Self::with_comments(comments, &body, indent)
     }
 
@@ -1893,9 +1919,7 @@ impl<'a> Printer<'a> {
     fn expr_atom(&self, e: &Expr, indent: usize) -> String {
         #[cfg(test)]
         count_render_call();
-        let (comments, body) = self.claim(e.span.lo as usize, Self::closer_of(e), || {
-            self.atom_shape(e, indent)
-        });
+        let (comments, body) = self.claim_expr(e, || self.atom_shape(e, indent));
         Self::with_comments(comments, &body, indent)
     }
 
@@ -2063,7 +2087,7 @@ impl<'a> Printer<'a> {
             })
             .collect();
         let right_operand = |operand: &Expr, is_last: bool, at: usize| {
-            self.claim(operand.span.lo as usize, Self::closer_of(operand), || {
+            self.claim_expr(operand, || {
                 if is_last {
                     self.binop_last_operand(operand, at)
                 } else {
@@ -2159,13 +2183,9 @@ impl<'a> Printer<'a> {
         span: ipe_diagnostics::Span,
     ) -> String {
         let ps: Vec<String> = params.iter().map(|p| self.pattern_atom(&p.value)).collect();
-        // A comment among the parameters prints above the lambda. The run
-        // starts at the first parameter: the `\`, and a `(` group around the
-        // lambda, are the lambda's first tokens, whose comments its `claim`
-        // already owns.
-        let params_lo = params.first().map_or(body.span.lo, |p| p.span.lo);
-        let inside = self.anchored_in(params_lo as usize, body.span.lo as usize);
-        let head = Self::with_comments(inside, &format!("\\{} ->", ps.join(" ")), indent);
+        // A comment among the parameters prints above the lambda, through
+        // its `claim_expr`.
+        let head = format!("\\{} ->", ps.join(" "));
         // A block-form body (`let` / `case` / `if`) always drops to the next
         // line, indented one level: an inline `-> let …` would place the `let`
         // keyword mid-line, breaking its layout-sensitive block on re-parse.
@@ -2355,11 +2375,7 @@ impl<'a> Printer<'a> {
     fn elements(&self, elems: &[Expr], indent: usize) -> Vec<Item<'a>> {
         elems
             .iter()
-            .map(|e| {
-                self.claim(e.span.lo as usize, Self::closer_of(e), || {
-                    self.expr(e, indent)
-                })
-            })
+            .map(|e| self.claim_expr(e, || self.expr(e, indent)))
             .collect()
     }
 
@@ -2606,6 +2622,15 @@ fn unplaced<'c>(owned: &'c [Comment], rendered: &str) -> Vec<&'c Comment> {
         }
     }
     missing
+}
+
+/// The byte range of a lambda's parameters, from the first one to its body.
+fn lambda_head(e: &Expr) -> Option<(usize, usize)> {
+    let Expr_::Lambda(params, body) = &e.value else {
+        return None;
+    };
+    let lo = params.first().map_or(body.span.lo, |p| p.span.lo);
+    Some((lo as usize, body.span.lo as usize))
 }
 
 /// Push each comment on a fresh line at `pad`.
