@@ -1819,7 +1819,7 @@ pub fn compile_prepared(
     // this demand — the query takes its own lock internally.
     let types = ipe_db::typecheck(db, source_root, entry_file)
         .clone()
-        .map_err(|err| frame_infer_error(&home_to_source, &entry, err))?;
+        .map_err(|err| attribute_post_link_error(linked, &home_to_source, &entry, err.into()))?;
     // Print non-fatal warnings (e.g. IPE-T0011 RedundantCaseBranch) to stderr,
     // each framed against its home module's file. These are Severity::Warning:
     // the build continues and exit code stays 0.

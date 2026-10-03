@@ -540,9 +540,9 @@ fn extract_from_db(
 
 /// Why a module has no typed interface: a red program or an open one.
 ///
-/// `linked_program` is demanded first so a parse or resolve error surfaces as
-/// itself, never as the unsited refusal `typecheck` wraps a link error in. A
-/// red module yields its typed diagnostic (fail closed on a package that does
+/// `linked_program` is demanded first so a parse or resolve error anywhere in
+/// the program refuses the package even when this module's own scoped solve
+/// stands. A red module yields its typed diagnostic (fail closed on a package that does
 /// not typecheck); a green-but-open module reports the open-interface refusal.
 fn closed_interface_refusal(
     db: &ipe_db::IpeDatabase,

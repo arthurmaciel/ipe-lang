@@ -107,15 +107,11 @@ pub fn collect(
         return flatten(by_module);
     }
 
-    // The link error is demanded first so it surfaces as itself, never as the
-    // unsited refusal `typecheck` wraps it in.
-    if let Err(diag) = ipe_db::linked_program(db, root, entry) {
-        push(&mut by_module, &entry_module, diag.clone());
-        return flatten(by_module);
-    }
-
     match ipe_db::typecheck(db, root, entry) {
-        Err(err) => {
+        Err(ipe_db::TypecheckError::Link(diag)) => {
+            push(&mut by_module, &entry_module, diag.clone());
+        }
+        Err(ipe_db::TypecheckError::Infer(err)) => {
             let (owner, diag) = attribute_infer(db, &by_module, err, &entry_module);
             push(&mut by_module, &owner, diag);
         }

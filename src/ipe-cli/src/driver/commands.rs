@@ -3750,14 +3750,12 @@ fn typecheck_graph(graph: &SourceGraph, blame_path: &Path) -> Result<(), CliErro
         // path runs (`gate_decoder_pipelines`) over the linked module, so
         // `ipe type-check` rejects the hand-nested decoder footgun for the
         // earliest possible feedback rather than deferring it to `ipe build`.
-        // `linked_program` is demanded first so a link error surfaces as
-        // itself, never as the unsited refusal `typecheck` wraps it in.
         let linked = ipe_db::linked_program(db, root, file)
             .clone()
             .map_err(|d| ipe_db::PipelineError::Lower(d, Vec::new()))?;
         ipe_db::typecheck(db, root, file)
             .clone()
-            .map_err(ipe_db::PipelineError::Infer)?;
+            .map_err(ipe_db::PipelineError::from)?;
         gate_decoder_pipelines(&linked.module)
     })
 }

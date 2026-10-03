@@ -540,20 +540,14 @@ fn a_prelude_value_and_an_open_import_of_another_definition_are_ambiguous() {
 fn an_explicit_import_outranks_the_prelude() {
     let main = "module Main exposing (main)\n\nimport Ipe.Mx exposing (max)\n\nmain = max\n";
     let (result, interner) = canonicalise_main(&[stdlib(MAX_STUB)], main);
-    let Ok(module) = &result else {
-        assert!(
-            result.is_ok(),
-            "explicit `exposing (max)` must resolve, got {result:?}"
-        );
-        return;
-    };
     assert!(
-        matches!(
+        result.as_ref().is_ok_and(|module| matches!(
             body(module, &interner, "main").map(|b| &b.value),
             Some(Expr_::VarKernel { module: m, name, .. })
                 if interner.resolve(*m) == Some("Math") && interner.resolve(*name) == Some("max")
-        ),
-        "a bare `max` names the explicit import's `Math_max`, got {result:?}"
+        )),
+        "explicit `exposing (max)` must resolve and a bare `max` name the explicit \
+         import's `Math_max`, got {result:?}"
     );
 }
 
