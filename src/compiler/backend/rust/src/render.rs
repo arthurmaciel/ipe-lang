@@ -132,13 +132,58 @@ fn render_bounded(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) -> St
 
 /// Lay `doc` out within `fuel`, falling back to its [`Doc::plain_layout`].
 fn render_within(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, fuel: usize) -> String {
+    render_within_spend(doc, cfg, indent, col, fuel).0
+}
+
+/// What one bounded render spent of its layout fuel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayoutSpend {
+    /// The fuel the layout search spent, the whole fuel when it ran out.
+    pub spent: usize,
+    /// Whether the search ran out and the render returned its plain layout.
+    pub exhausted: bool,
+}
+
+/// [`render_seeded`], also reporting what its layout search spent of [`LAYOUT_FUEL`].
+pub fn render_seeded_spend(
+    doc: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+) -> (String, LayoutSpend) {
+    render_within_spend(doc, cfg, indent, col, LAYOUT_FUEL)
+}
+
+/// [`render_within`], also reporting what its layout search spent of `fuel`.
+///
+/// A scope without its memo reads as exhausted, so the render falls back to its
+/// plain layout and the report never claims a search that did not run.
+fn render_within_spend(
+    doc: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    fuel: usize,
+) -> (String, LayoutSpend) {
     let _scope = MemoScope::install(doc, fuel);
     let mut out = String::new();
     render_at(doc, cfg, indent, col, false, &mut out);
-    if fuel_exhausted() {
-        return doc.plain_layout();
+    let spend = MEMO.with_borrow(|m| {
+        m.as_ref().map_or(
+            LayoutSpend {
+                spent: fuel,
+                exhausted: true,
+            },
+            |m| LayoutSpend {
+                spent: fuel.saturating_sub(m.fuel),
+                exhausted: m.exhausted,
+            },
+        )
+    });
+    if spend.exhausted {
+        return (doc.plain_layout(), spend);
     }
-    out
+    (out, spend)
 }
 
 /// The work one render may do before it falls back to its plain layout.
@@ -150,7 +195,7 @@ fn render_within(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, fuel: 
 /// each; the fuel bounds the probes that remain — non-flat layouts whose answer
 /// depends on the column and indent a node lands at — and a document that
 /// exhausts it gets its plain layout instead.
-const LAYOUT_FUEL: usize = 1 << 26;
+pub const LAYOUT_FUEL: usize = 1 << 26;
 
 /// The byte ceiling on the layouts one render keeps memoized, each entry charged
 /// [`memo_entry_bytes`]. Past it the memo stops growing and later nodes render
