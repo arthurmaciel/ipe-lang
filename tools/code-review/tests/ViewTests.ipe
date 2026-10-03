@@ -319,14 +319,26 @@ reassembles lang src =
 
 -- A one-mebibyte single-line source, the largest a shown unit's line can
 -- reach in practice, tokenizes whole. Red if a tokenizer step recurses per
--- character outside tail position.
+-- character outside tail position, or copies the unread input or the tokens
+-- so far per character (quadratic: the run never ends).
 largeLineTokenizes : Bool
 largeLineTokenizes =
     let
         src =
-            String.repeat 131072 "a1 \"s\" "
+            String.repeat 131072 "a1 \"s\"; "
     in
     String.length src == 1048576 && reassembles Highlight.Rust src
+
+
+-- A one-mebibyte block comment is one Comment token. Red if the tokenizer
+-- copies the open token's text per character (quadratic in one long token).
+largeTokenTokenizes : Bool
+largeTokenTokenizes =
+    let
+        src =
+            "/*" ++ String.repeat 1048572 "x" ++ "*/"
+    in
+    String.length src == 1048576 && Highlight.tokenize Highlight.Rust src == [ Comment src ]
 
 
 
@@ -414,4 +426,18 @@ checks =
                 && List.any (isPlain "/*/ y") (Highlight.tokenize Highlight.Rust "/*/ y")
             )
         , Task.succeed ( "a one-mebibyte single-line source tokenizes", largeLineTokenizes )
+        , Task.succeed ( "a one-mebibyte block comment is one token", largeTokenTokenizes )
+        , Task.succeed
+            ( "an escaped quote stays inside its string literal"
+            , Highlight.tokenize Highlight.Rust "\"a\\\"b\" c"
+                == [ Str "\"a\\\"b\"", Plain " ", Ident "c" ]
+                && Highlight.tokenize Highlight.Rust "\"ab\\"
+                == [ Plain "\"ab\\" ]
+                && Highlight.tokenize Highlight.Rust "x // c\ny"
+                == [ Ident "x", Plain " ", Comment "// c", Plain "\n", Ident "y" ]
+                && Highlight.tokenize Highlight.Rust "a/b**/"
+                == [ Ident "a", Plain "/", Ident "b", Plain "*", Plain "*", Plain "/" ]
+                && Highlight.tokenize Highlight.Rust "/**/1.5_"
+                == [ Comment "/**/", Num "1.5_" ]
+            )
         ]

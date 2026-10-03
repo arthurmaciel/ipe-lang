@@ -1079,9 +1079,6 @@ sampleQueuedUnit : Queue.QueuedUnit
 sampleQueuedUnit =
     { unit =
         { uid = "u-sample"
-        , change = "new"
-        , oldHash = Nothing
-        , newHash = Nothing
         , path = SafeText.renderForeign "ipe:src/Main.ipe"
         , kind = SafeText.renderForeign "module"
         , lang = Highlight.Ipe
@@ -1094,6 +1091,7 @@ sampleQueuedUnit =
         , attested = Index.UnknownScheme "hash-sample"
         , updatedSha = "sha-sample"
         }
+    , queued = { change = "new", oldHash = Nothing, newHash = Nothing }
     , changed = Nothing
     }
 

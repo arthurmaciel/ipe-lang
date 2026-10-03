@@ -25,6 +25,7 @@ import Lib.Settings as Settings
 -- edited the code after the review, so the unit must be reviewed again.
 type alias QueuedUnit =
     { unit : Index.Unit
+    , queued : Index.QueuedChange
     , changed : Maybe LibDb.ReviewRow
     }
 
@@ -709,7 +710,7 @@ loadPage cursor =
         rows <- Index.loadPendingPage conn cursor
         total <- Index.countPending conn
         bytes <- Index.dbBytes conn
-        units <- classify db (List.map (\r -> r.unit) rows)
+        units <- classify db rows
         Task.succeed
             { units = units
             , total = total
@@ -741,16 +742,20 @@ nextCursor rows =
             |> Maybe.map (\r -> Index.After { enqueuedAt = r.enqueuedAt, uid = r.unit.uid })
 
 
-classify : Db.Db -> List Index.Unit -> Task.Task Error (List QueuedUnit)
-classify db units =
-    units
+classify : Db.Db -> List Index.PendingRow -> Task.Task Error (List QueuedUnit)
+classify db rows =
+    rows
         |> List.map (classifyUnit db)
         |> Task.sequence
         |> Task.map prioritize
 
 
-classifyUnit : Db.Db -> Index.Unit -> Task.Task Error (Maybe QueuedUnit)
-classifyUnit db unit =
+classifyUnit : Db.Db -> Index.PendingRow -> Task.Task Error (Maybe QueuedUnit)
+classifyUnit db row =
+    let
+        unit =
+            row.unit
+    in
     do
         decided <- LibDb.findDecision db unit.uid (Index.storedHash unit.attested)
         case decided of
@@ -760,7 +765,7 @@ classifyUnit db unit =
             Nothing ->
                 do
                     old <- LibDb.findLatestForUid db unit.uid
-                    Task.succeed (Just { unit = unit, changed = old })
+                    Task.succeed (Just { unit = unit, queued = row.queued, changed = old })
 
 
 prioritize : List (Maybe QueuedUnit) -> List QueuedUnit

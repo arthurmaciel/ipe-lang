@@ -482,10 +482,12 @@ setIndexEnv indexDb repo =
 
 
 
--- One first-page unit with the view `Index.loadView` reads for it.
+-- One first-page unit with its queue row's change and the view
+-- `Index.loadView` reads for it.
 type alias PageEntry =
     { uid : String
     , unit : Index.Unit
+    , queued : Index.QueuedChange
     , view : Index.SourceView
     }
 
@@ -500,20 +502,26 @@ loadFirstPage =
         settings <- Settings.indexSettings
         conn <- Index.readConnection settings
         rows <- Index.loadPendingPage conn Index.Start
-        entries <- Task.sequence (List.map (\r -> pageEntry conn settings.roots r.unit.uid) rows)
+        entries <- Task.sequence (List.map (pageEntry conn settings.roots) rows)
         total <- Index.countPending conn
         Task.succeed { units = entries, total = total }
 
 
 
-pageEntry : Db -> RootMap -> String -> Task.Task Error PageEntry
-pageEntry conn roots uid =
+-- The queued change comes from the page's queue row, the one place it
+-- exists; the unit and its view from `loadView`, as the selected card reads them.
+pageEntry : Db -> RootMap -> Index.PendingRow -> Task.Task Error PageEntry
+pageEntry conn roots row =
+    let
+        uid =
+            row.unit.uid
+    in
     Index.loadView conn roots uid
         |> Task.andThen
             (\found ->
                 case found of
                     Just loaded ->
-                        Task.succeed { uid = uid, unit = loaded.unit, view = loaded.view }
+                        Task.succeed { uid = uid, unit = loaded.unit, queued = row.queued, view = loaded.view }
 
                     Nothing ->
                         Task.fail (Error.conflict ("queued unit " ++ uid ++ " has no view"))
@@ -595,11 +603,11 @@ isUnitA entry =
     in
     u.uid
         == "u-a"
-        && u.change
+        && entry.queued.change
         == "new"
-        && u.oldHash
+        && entry.queued.oldHash
         == Nothing
-        && u.newHash
+        && entry.queued.newHash
         == Nothing
         && SafeText.toString u.path
         == "ipe:src/Lib.rs"
@@ -634,9 +642,9 @@ isUnitB entry =
     in
     u.uid
         == "u-b"
-        && u.change
+        && entry.queued.change
         == "modified"
-        && u.newHash
+        && entry.queued.newHash
         == Just (Index.attest viewB)
         && SafeText.toString u.path
         == "ipe:src/Main.ipe"

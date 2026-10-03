@@ -1,4 +1,4 @@
-module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), DecidedPair, PendingRow, ProgressRow, ShownSource, SourceView(..), StaleReason(..), Unit, UnitView, attest, attestedHash, attestedUid, candidateQuery, countPending, dbBytes, decidedPairDecoder, decidedPairKey, drainDecided, drainUnit, loadPendingPage, loadProgress, loadView, nameFor, pageSize, placeholders, probe, readConnection, rebuildReviewed, reverify, shortHash, shownHash, shownText, storedHash, viewText)
+module Lib.Index exposing (Attested, AttestedHash(..), Cursor(..), DecidedPair, PendingRow, ProgressRow, QueuedChange, ShownSource, SourceView(..), StaleReason(..), Unit, UnitView, attest, attestedHash, attestedUid, candidateQuery, countPending, dbBytes, decidedPairDecoder, decidedPairKey, drainDecided, drainUnit, loadPendingPage, loadProgress, loadView, nameFor, pageSize, placeholders, probe, readConnection, rebuildReviewed, reverify, shortHash, shownHash, shownText, storedHash, viewText)
 
 import Ipe.ByteSize as ByteSize exposing (ByteSize)
 import Ipe.Crypto as Crypto
@@ -29,9 +29,6 @@ import Lib.Settings as Settings exposing (IndexSettings)
 -- parsed once.
 type alias Unit =
     { uid : String
-    , change : String
-    , oldHash : Maybe String
-    , newHash : Maybe String
     , path : SafeText
     , name : SafeText
     , qualified : SafeText
@@ -58,12 +55,11 @@ type alias UnitView =
 
 -- The unit columns as they come off the DB, before the source is attached.
 -- The unit page queries units directly, not via change_queue: a decided
--- unit has no queue row, but its page must still render. change/old_hash/
--- new_hash are literals then, since the queue row is the only source of a
--- real change state.
+-- unit has no queue row, but its page must still render, so it reads no
+-- queued change.
 unitByUidSql : String
 unitByUidSql =
-    "SELECT u.uid, 'new' AS change, NULL AS old_hash, NULL AS new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha, f.lang FROM units u" ++ unitFiles ++ " WHERE u.uid = ?"
+    "SELECT u.uid, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha, f.lang FROM units u" ++ unitFiles ++ " WHERE u.uid = ?"
 
 
 -- The unit's file row, for the language ipe-index stored for it: a primary
@@ -194,15 +190,8 @@ qualifiedDecoder =
         |> Db.Decode.required "uid" (Db.Decode.string "uid")
 
 
--- A unit row before the source is attached. The unit page queries units
--- directly, not via change_queue: a decided unit has no queue row, but its
--- page must still render. change/old_hash/new_hash are literals then, since
--- the queue row is the only source of a real change state.
 type alias RowUnit =
     { uid : String
-    , change : String
-    , oldHash : Maybe String
-    , newHash : Maybe String
     , path : String
     , name : String
     , qualified : String
@@ -221,9 +210,6 @@ type alias RowUnit =
 -- (`Db.Decode.succeed` lifts at most 10 parameters — IPE-L0121), then merged.
 type alias RowA =
     { uid : String
-    , change : String
-    , oldHash : Maybe String
-    , newHash : Maybe String
     , path : String
     , name : String
     , qualified : String
@@ -242,12 +228,9 @@ type alias RowB =
     }
 
 
-makeRowA : String -> String -> Maybe String -> Maybe String -> String -> String -> String -> RowA
-makeRowA uid change oldHash newHash path name qualified =
+makeRowA : String -> String -> String -> String -> RowA
+makeRowA uid path name qualified =
     { uid = uid
-    , change = change
-    , oldHash = oldHash
-    , newHash = newHash
     , path = path
     , name = name
     , qualified = qualified
@@ -270,9 +253,6 @@ makeRowB kind lineStart lineEnd facing purpose bodyHash updatedSha lang =
 mergeRows : RowA -> RowB -> RowUnit
 mergeRows a b =
     { uid = a.uid
-    , change = a.change
-    , oldHash = a.oldHash
-    , newHash = a.newHash
     , path = a.path
     , name = a.name
     , qualified = a.qualified
@@ -298,9 +278,6 @@ partADecoder : Db.Decode.Decoder RowA
 partADecoder =
     Db.Decode.succeed makeRowA
         |> Db.Decode.required "uid" (Db.Decode.string "uid")
-        |> Db.Decode.required "change" (Db.Decode.string "change")
-        |> Db.Decode.required "old_hash" (Db.Decode.nullable (Db.Decode.string "old_hash"))
-        |> Db.Decode.required "new_hash" (Db.Decode.nullable (Db.Decode.string "new_hash"))
         |> Db.Decode.required "path" (Db.Decode.string "path")
         |> Db.Decode.required "name" (Db.Decode.string "name")
         |> Db.Decode.required "qualified" (Db.Decode.string "qualified")
@@ -428,7 +405,17 @@ type Cursor
 -- build the cursor for the following page.
 type alias PendingRow =
     { unit : Unit
+    , queued : QueuedChange
     , enqueuedAt : Int
+    }
+
+
+-- A unit's `change_queue` row: only a queued unit has one, so a unit read
+-- from `units` alone (the unit page) carries none.
+type alias QueuedChange =
+    { change : String
+    , oldHash : Maybe String
+    , newHash : Maybe String
     }
 
 
@@ -469,16 +456,19 @@ pendingPageQuery cursor =
             )
 
 
-pendingRowDecoder : Db.Decode.Decoder ( RowUnit, Int )
+pendingRowDecoder : Db.Decode.Decoder ( RowUnit, QueuedChange, Int )
 pendingRowDecoder =
     Db.Decode.andThen
-        (\row -> Db.Decode.map (\at -> ( row, at )) enqueuedAtDecoder)
+        (\row -> Db.Decode.map (\( queued, at ) -> ( row, queued, at )) queueColumnsDecoder)
         rowDecoder
 
 
-enqueuedAtDecoder : Db.Decode.Decoder Int
-enqueuedAtDecoder =
-    Db.Decode.succeed (\n -> n)
+queueColumnsDecoder : Db.Decode.Decoder ( QueuedChange, Int )
+queueColumnsDecoder =
+    Db.Decode.succeed (\change oldHash newHash at -> ( { change = change, oldHash = oldHash, newHash = newHash }, at ))
+        |> Db.Decode.required "change" (Db.Decode.string "change")
+        |> Db.Decode.required "old_hash" (Db.Decode.nullable (Db.Decode.string "old_hash"))
+        |> Db.Decode.required "new_hash" (Db.Decode.nullable (Db.Decode.string "new_hash"))
         |> Db.Decode.required "enqueued_at" (Db.Decode.int "enqueued_at")
 
 
@@ -493,7 +483,7 @@ loadPendingPage conn cursor =
             pendingPageQuery cursor
     in
     Db.queryDecode conn sql params pendingRowDecoder
-        |> Task.map (List.map (\( row, at ) -> { unit = withRow row, enqueuedAt = at }))
+        |> Task.map (List.map (\( row, queued, at ) -> { unit = withRow row, queued = queued, enqueuedAt = at }))
 
 
 countDecoder : Db.Decode.Decoder Int
@@ -717,9 +707,6 @@ sourceCeiling =
 withRow : RowUnit -> Unit
 withRow row =
     { uid = row.uid
-    , change = row.change
-    , oldHash = row.oldHash
-    , newHash = row.newHash
     , path = SafeText.renderForeign row.path
     , name = SafeText.renderForeign row.name
     , qualified = SafeText.renderForeign row.qualified

@@ -663,7 +663,7 @@ railItem model i q =
             [ Ui.el
                 [ Font.size 12, Font.bold, Font.color (Ui.rgb 220 220 230) ]
                 (safeText q.unit.qualified)
-            , changeBadge q.unit.change
+            , changeBadge q.queued.change
             ]
         }
 
@@ -927,7 +927,7 @@ unitCard model selected q =
         [ Ui.row
             [ Ui.width Ui.fill, Ui.spacing 10, Ui.centerY ]
             [ Ui.el [ Font.size 14, Font.bold, Font.color (Ui.rgb 235 235 240) ] (safeText unit.qualified)
-            , changeBadge unit.change
+            , changeBadge q.queued.change
             , changedChip q
             , chip unit.facing
             , chip unit.kind
