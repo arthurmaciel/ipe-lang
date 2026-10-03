@@ -355,6 +355,8 @@ pub enum CliError {
     ///
     /// A process the child started still held it; that process was stopped.
     ChildPipeHeld(remote_ingest::Stream),
+    /// Reading a child's output pipe failed, so its output was not used.
+    ChildPipeUnread(remote_ingest::Stream, std::io::ErrorKind),
     /// A signal ended a remote transfer before it finished.
     ///
     /// Nothing it staged reached the lock, the manifest or the package cache.
@@ -625,6 +627,7 @@ impl CliError {
             Self::RemoteIngestExceeded(_) => "remote-ingest-exceeded",
             Self::LocalLimitExceeded(_) => "local-limit-exceeded",
             Self::ChildPipeHeld(_) => "child-pipe-held",
+            Self::ChildPipeUnread(..) => "child-pipe-unread",
             Self::Interrupted => "interrupted",
             Self::SourceRefused { .. } => "source-refused",
             Self::PathEscape { .. } => "path-escape",
@@ -705,6 +708,7 @@ impl CliError {
             | Self::RemoteIngestExceeded(_)
             | Self::LocalLimitExceeded(_)
             | Self::ChildPipeHeld(_)
+            | Self::ChildPipeUnread(..)
             | Self::Interrupted
             | Self::SourceRefused { .. }
             | Self::PathEscape { .. }
@@ -941,6 +945,9 @@ impl std::fmt::Display for CliError {
             Self::RemoteIngestExceeded(refusal) => refusal.fmt(f),
             Self::LocalLimitExceeded(refusal) => refusal.fmt(f),
             Self::ChildPipeHeld(stream) => f.write_str(&text::cli_child_pipe_held(stream)),
+            Self::ChildPipeUnread(stream, kind) => {
+                f.write_str(&text::cli_child_pipe_unread(stream, kind))
+            }
             Self::Interrupted => f.write_str(text::cli_transfer_interrupted()),
             Self::SourceRefused { path, reason } => {
                 let path = path.display();
