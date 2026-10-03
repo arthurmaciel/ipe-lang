@@ -5,14 +5,14 @@
 //! these pub fields and the Ipê-built `defaultRequest` record constructs this
 //! struct directly. Field names match the Ipê records verbatim.
 //!
-//! ## SSRF protection (default-ON in production)
+//! ## SSRF protection (default-ON)
 //!
 //! The guard blocks requests whose resolved host is loopback, RFC-1918 private,
 //! link-local, unique-local (ULA), unspecified, or v4-mapped-private. It is
-//! ON by default in production (`ENV`/`IPE_ENV` not in {unset, dev, development,
-//! local}) and OFF in dev so development against `localhost` keeps working
-//! unchanged. `IPE_HTTP_DENY_PRIVATE=1`/`on`/`true` forces it ON; setting it to
-//! any other value (`0`/`off`/`false`) is the explicit production opt-out. See
+//! ON by default, and on every release build; only a dev-intent binary with no
+//! exposed listener defaults it OFF, so development against `localhost` keeps
+//! working. `IPE_HTTP_DENY_PRIVATE=0`/`off`/`false` is the explicit opt-out;
+//! `1`/`on`/`true` and every unrecognised value keep it ON. See
 //! `ssrf::ssrf_deny_private_enabled`.
 //!
 //! When ON every name goes through the one SSRF gate
