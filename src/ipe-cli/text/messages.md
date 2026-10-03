@@ -1209,9 +1209,25 @@ package.ipe declares `{delivery}`, but `main` is a `{shape}` app. The web hosts 
 
 package.ipe: `{name}` is already a git/path escape dependency — `ipe add` records only an index requirement and never rewrites an author-written `depGit`/`depGitRev`/`depPath` entry. Edit the escape by hand, or remove it first.
 
-## manifest-entry-invalid
+## manifest-entry-empty-segment
 
-package.ipe: program entry {entry} is not a valid entry file
+package.ipe: program entry {entry} has an empty path segment (a leading, trailing, or doubled `/`). Write the entry relative to `src/`, with segments joined by a single `/`, e.g. `Cli/Main.ipe`.
+
+## manifest-entry-dot-segment
+
+package.ipe: program entry {entry} has a `.` or `..` path segment. An entry names a module file under `src/` directly, e.g. `Cli/Main.ipe`.
+
+## manifest-entry-backslash
+
+package.ipe: program entry {entry} contains a backslash. Separate path segments with `/` on every platform, e.g. `Cli/Main.ipe`.
+
+## manifest-entry-drive-prefix
+
+package.ipe: program entry {entry} starts with a drive prefix. An entry is relative to `src/`, e.g. `Cli/Main.ipe`.
+
+## manifest-entry-extension
+
+package.ipe: program entry {entry} does not end in `.ipe`. An entry names an Ipê source file, e.g. `Cli/Main.ipe`.
 
 ## manifest-entry-segment-invalid
 

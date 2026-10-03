@@ -211,20 +211,6 @@ mod real_jail {
     /// serialize the jailed runs so parallel `--test-threads` cannot race.
     static JAIL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn fixture_path() -> PathBuf {
-        let base = super::support::manifest_dir().join("../../tests/fixtures/admission");
-        // The wrapper is platform-native: `.ps1` on Windows (the jail runs it via
-        // `powershell.exe -File`, no shell), `.sh` elsewhere.
-        #[cfg(target_os = "windows")]
-        {
-            base.join("untrusted-build.ps1")
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            base.join("untrusted-build.sh")
-        }
-    }
-
     /// Probe the host for the jail primitive, returning the [`RunJailTools`] the
     /// jail is built from (bwrap+prlimit on Linux; sandbox-exec on macOS, whose
     /// fields the jail ignores). `None` when the primitive is absent.
@@ -388,11 +374,10 @@ mod real_jail {
         fn new(tag: &str) -> Self {
             let scoped_tmp = fresh_scratch(&format!("{tag}-scratch"));
             let working_tree = fresh_scratch(&format!("{tag}-worktree"));
-            let wrapper = TrustedWrapper::read(&fixture_path()).expect("read the probe fixture");
             Self {
                 scoped_tmp,
                 working_tree,
-                wrapper,
+                wrapper: TrustedWrapper::embedded(),
             }
         }
 
@@ -636,12 +621,12 @@ mod real_jail {
         // Skip (not fail) if this environment cannot compile the crate under the
         // jail (no toolchain reachable inside bwrap): a BuildFailed here is an
         // environment gap, never a false pass. A real clean IS the certification.
-        match verdict {
-            Ok(()) => { /* the first genuine certification */ }
-            Err(r) if r.message.contains("failed to build") => {
-                eprintln!("audit_native e2e: skipping — cargo unavailable inside jail: {r}");
-            }
-            Err(r) => panic!("a confined clean build must certify, got: {r}"),
+        if let Err(r) = verdict {
+            assert!(
+                r.message.contains("failed to build"),
+                "a confined clean build must certify, got: {r}"
+            );
+            eprintln!("audit_native e2e: skipping — cargo unavailable inside jail: {r}");
         }
     }
 
@@ -937,23 +922,24 @@ mod real_jail {
             has_rust_deps: true,
             root: &pkg,
             emitted_dir: &out,
-            probe_fixture: super::support::manifest_dir()
-                .join("../../tests/fixtures/admission/untrusted-build.sh"),
         });
         assert_probe_crate_compiles(&out, &base.join("probe-target"));
 
         match verdict {
-            Ok(Tier2Outcome::Certified { platform }) => {
+            Ok(outcome) => {
                 assert_eq!(
-                    platform, CERTIFIED_PLATFORM,
-                    "certify names this host's wired jail"
+                    outcome,
+                    Tier2Outcome::Certified {
+                        platform: CERTIFIED_PLATFORM
+                    },
+                    "a native-bearing package certifies on this host's wired jail, \
+                     never skips Tier-2"
                 );
                 eprintln!(
-                    "audit_native e2e: native package CERTIFIED on {platform} \
+                    "audit_native e2e: native package CERTIFIED on {CERTIFIED_PLATFORM} \
                      (reachable native certification)"
                 );
             }
-            Ok(other) => panic!("a native-bearing package must not skip Tier-2: {other:?}"),
             Err(e) => {
                 let msg = e.to_string();
                 // The probe crate compiled outside the jail (asserted above), so a
@@ -1008,8 +994,6 @@ mod real_jail {
             has_rust_deps: true,
             root: &pkg,
             emitted_dir: &out,
-            probe_fixture: super::support::manifest_dir()
-                .join("../../tests/fixtures/admission/untrusted-build.sh"),
         });
 
         // POSITIVE CONTROL: `native_tier2` above emitted the probe crate + generated
