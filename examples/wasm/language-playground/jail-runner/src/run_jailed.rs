@@ -34,10 +34,10 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use ipe_sandbox::home::ToolHome;
 use ipe_sandbox::{
     CanonicalPath, Capabilities, HomeMasks, JailPathError, JailSpec, NetworkPolicy, ResourceLimits,
-    SandboxDefect, home::ToolHome, missing_caps, probe, run_in_bwrap_jail,
-    run_in_bwrap_jail_deny_subprocess,
+    SandboxDefect, missing_caps, probe, run_in_bwrap_jail, run_in_bwrap_jail_deny_subprocess,
 };
 
 /// Resource caps for one playground build+run.

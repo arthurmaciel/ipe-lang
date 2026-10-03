@@ -110,10 +110,12 @@ const JAIL_ENV_FN: &str = "granted_env";
 const RAW_PASSTHROUGH_PATHS: &[&str] = &["host_env::granted", "host_env::{", "host_env::*"];
 
 /// The files that may name the shared home-name constants: their one source
-/// (`home_core`), the two home accessors, and the two hosts of the shared
-/// scratch core's Windows scratch-root check.
+/// (`home_core`), the two home accessors, the agreement table both accessors'
+/// tests `include!`, and the two hosts of the shared scratch core's Windows
+/// scratch-root check.
 const HOME_VAR_FILES: &[&str] = &[
     "src/runtime/rust/src/home_core.rs",
+    "src/runtime/rust/tests/data/home_cases.rs",
     "src/compiler/sandbox/src/home.rs",
     "src/runtime/rust/src/system.rs",
     "src/compiler/sandbox/src/scratch.rs",

@@ -283,9 +283,11 @@ mod tests {
         let text = "````ipe\n{-| doc\n\n    ```ipe\n    greet \"w\"\n    ```\n-}\ngreet : String -> String\ngreet n = n\n````\n";
         let items = scan(text, Page::Doc);
         assert_eq!(items.len(), 1, "{items:?}");
-        let Some(Ok(block)) = items.first() else {
-            return;
-        };
+        let block = items
+            .first()
+            .expect("one block")
+            .as_ref()
+            .expect("a checked block");
         assert_eq!(block.kind, Kind::Check);
         assert!(block.body.contains("    ```ipe"), "{}", block.body);
         assert!(block.body.ends_with("greet n = n"), "{}", block.body);
