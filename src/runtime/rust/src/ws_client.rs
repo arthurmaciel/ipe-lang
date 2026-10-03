@@ -855,6 +855,20 @@ where
 mod tests {
     use super::*;
 
+    #[test]
+    fn cfg_debug_prints_neither_url_nor_headers() {
+        let cfg = WsClientCfg {
+            url: "wss://live.example/socket?token=URLT0K".to_owned(),
+            headers: vec![("Authorization".to_owned(), "Bearer H34D3R".to_owned())],
+            timeout: 10,
+            pingInterval: 5,
+        };
+        let shown = format!("{cfg:?}");
+        assert!(!shown.contains("URLT0K"), "{shown}");
+        assert!(!shown.contains("H34D3R"), "{shown}");
+        assert!(shown.contains("pingInterval: 5"), "{shown}");
+    }
+
     /// Every connect failure shows the URL only as scheme, host, and port,
     /// withholds a host read from ambiguous userinfo, and never shows the
     /// address an IP-literal host re-encodes to.

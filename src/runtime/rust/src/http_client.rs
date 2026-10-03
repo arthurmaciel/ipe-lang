@@ -917,6 +917,28 @@ pub fn http_request<E: From<String> + 'static>(req: HttpRequest) -> IpeTask<E, H
 mod tests {
     use super::*;
 
+    #[test]
+    fn request_and_response_debug_print_no_credential() {
+        let req = HttpRequest {
+            body: "password=B0DYPW".to_owned(),
+            headers: vec![("Authorization".to_owned(), "Bearer H34D3R".to_owned())],
+            method: HttpMethod::Post,
+            redirects: RedirectPolicy::NoRedirects,
+            timeout: 30,
+            url: "https://api.example/v1?key=URLK3Y".to_owned(),
+        };
+        let res = HttpResponse {
+            status: 200,
+            body: "{\"token\":\"R3SB0DY\"}".to_owned(),
+            headers: HashMap::from([("set-cookie".to_owned(), "sid=S3TC00K".to_owned())]),
+        };
+        let shown = format!("{req:?} {res:?}");
+        for planted in ["B0DYPW", "H34D3R", "URLK3Y", "R3SB0DY", "S3TC00K"] {
+            assert!(!shown.contains(planted), "{planted} leaked: {shown}");
+        }
+        assert!(shown.contains("status: 200"), "{shown}");
+    }
+
     /// Wiring seal: the response-header collection loop must route
     /// every key through `http_header::canonical_header` (reqwest's
     /// `HeaderName::as_str()` is always lower-case;  `net/http.Header` is

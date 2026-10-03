@@ -43,3 +43,26 @@ impl WebReq {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_req_debug_prints_only_the_method() {
+        let one = |v: &str| IpeDict::from([("k".to_owned(), v.to_owned())]);
+        let req = WebReq {
+            path: "/reset/P4THT0K".to_owned(),
+            query: "token=QT0K3N".to_owned(),
+            method: "GET".to_owned(),
+            params: one("PR4M"),
+            headers: one("Bearer H34D3R"),
+            cookies: one("C00K13"),
+        };
+        let shown = format!("{req:?}");
+        for planted in ["P4THT0K", "QT0K3N", "PR4M", "H34D3R", "C00K13"] {
+            assert!(!shown.contains(planted), "{planted} leaked: {shown}");
+        }
+        assert!(shown.contains("\"GET\""), "{shown}");
+    }
+}
