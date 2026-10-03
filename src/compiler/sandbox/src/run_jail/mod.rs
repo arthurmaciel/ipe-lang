@@ -1904,7 +1904,7 @@ mod tests {
         );
         let isolated = argv_for(FilesystemScope::Isolated);
         assert!(
-            !isolated.iter().any(|arg| *arg == git),
+            !isolated.contains(&git),
             "an ungranted tree renders no carve: {isolated:?}"
         );
     }

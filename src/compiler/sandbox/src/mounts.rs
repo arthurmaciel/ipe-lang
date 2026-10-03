@@ -450,7 +450,8 @@ pub fn mount_plan<'a>(homes: &HomeMasks, binds: &[Bind<'a>]) -> Vec<MountStep<'a
 }
 
 /// `plan` with each working-tree carve of `binds` bound read-only right after
-/// the last writable step that contains it.
+/// the last writable step that contains it or lies inside it, so no writable
+/// bind, not even one nested in a carved path, lands after its carve.
 fn with_carves<'a>(plan: Vec<MountStep<'a>>, binds: &[Bind<'a>]) -> Vec<MountStep<'a>> {
     let carves: Vec<&'a CanonicalPath> = binds
         .iter()
@@ -468,7 +469,9 @@ fn with_carves<'a>(plan: Vec<MountStep<'a>>, binds: &[Bind<'a>]) -> Vec<MountSte
         .map(|carve| {
             plan.iter().rposition(|step| {
                 matches!(step, MountStep::Bind(bind)
-                    if bind.is_writable() && carve.as_path().starts_with(bind.path().as_path()))
+                    if bind.is_writable()
+                        && (carve.as_path().starts_with(bind.path().as_path())
+                            || bind.path().as_path().starts_with(carve.as_path())))
             })
         })
         .collect();
@@ -1137,5 +1140,28 @@ mod tests {
             }
             assert_eq!(bind_after_covered_mask(&argv), None, "{layout}: {argv:?}");
         }
+    }
+
+    #[test]
+    fn a_writable_bind_nested_in_a_carve_never_lands_after_it() {
+        let tree = WritableTree::assumed(
+            CanonicalPath::assumed("/srv/tree"),
+            vec![CanonicalPath::assumed("/srv/tree/.git")],
+        );
+        let nested = CanonicalPath::assumed("/srv/tree/.git/scratch");
+        let argv = rendered(
+            &HomeMasks::unmasked(),
+            &[Bind::WorkingTree(&tree), Bind::ReadWrite(&nested)],
+        );
+        assert_eq!(
+            effective_mode(&argv, Path::new("/srv/tree/.git/scratch/hooks")),
+            Mode::ReadOnly,
+            "a writable bind inside a carve is covered by the carve: {argv:?}"
+        );
+        assert_eq!(
+            effective_mode(&argv, Path::new("/srv/tree/.git/config")),
+            Mode::ReadOnly,
+            "{argv:?}"
+        );
     }
 }

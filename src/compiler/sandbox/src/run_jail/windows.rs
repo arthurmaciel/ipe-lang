@@ -422,15 +422,15 @@ pub const WORKING_TREE_GRANT_MASK: u32 = 0x0012_019F;
 pub fn windows_working_tree_plan(
     tree: &crate::WritableTree,
 ) -> Result<&crate::CanonicalPath, crate::JailPathError> {
-    tree.carve()
-        .paths()
-        .next()
-        .map_or(Ok(tree.tree()), |first| {
+    tree.carve().paths().next().map_or_else(
+        || Ok(tree.tree()),
+        |first| {
             Err(crate::JailPathError::VcsMetadataUncarvable {
                 arm: crate::JailArm::Windows,
                 path: first.as_path().to_path_buf(),
             })
-        })
+        },
+    )
 }
 
 /// The Windows run-jail launcher: assembles the Job Object + AppContainer token +

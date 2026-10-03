@@ -138,25 +138,21 @@ struct Identity {
 }
 
 impl Identity {
+    /// The kind of `meta`, and its `(dev, ino)` on unix; no portable node
+    /// identity exists off unix, so the kind alone is compared there.
     fn of(meta: &std::fs::Metadata) -> Self {
+        #[cfg(unix)]
+        let node = {
+            use std::os::unix::fs::MetadataExt as _;
+            Some((meta.dev(), meta.ino()))
+        };
+        #[cfg(not(unix))]
+        let node = None;
         Self {
             dir: meta.is_dir(),
-            node: node(meta),
+            node,
         }
     }
-}
-
-/// The `(dev, ino)` of `meta`.
-#[cfg(unix)]
-fn node(meta: &std::fs::Metadata) -> Option<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt as _;
-    Some((meta.dev(), meta.ino()))
-}
-
-/// No portable node identity off unix: the kind alone is compared there.
-#[cfg(not(unix))]
-const fn node(_meta: &std::fs::Metadata) -> Option<(u64, u64)> {
-    None
 }
 
 /// One path a writable tree's grant must leave read-only.
@@ -189,7 +185,7 @@ impl VcsCarve {
 
     /// Whether the tree holds no version-control metadata.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
@@ -323,8 +319,15 @@ impl<'g> Carver<'g> {
         };
         match (kind, shape) {
             (_, Shape::Other) | (VcsKind::Mercurial, Shape::File) => Err(unexpected()),
-            (VcsKind::Git | VcsKind::Darcs, Shape::Dir)
-            | (VcsKind::Jujutsu | VcsKind::Darcs, Shape::File) => self.add_entry(&entry, &meta),
+            (VcsKind::Darcs, Shape::Dir) | (VcsKind::Jujutsu | VcsKind::Darcs, Shape::File) => {
+                self.add_entry(&entry, &meta)
+            }
+            (VcsKind::Git, Shape::Dir) => {
+                // Git reads `commondir` in every gitdir, the root `.git` dir
+                // included, and takes config and hooks from the dir it names.
+                self.add_entry(&entry, &meta)?;
+                self.inner_pointer(kind, &entry.join("commondir"), false)
+            }
             (VcsKind::Git, Shape::File) => {
                 self.add_entry(&entry, &meta)?;
                 let text = read_pointer(kind, &entry, &meta)?;
@@ -459,7 +462,7 @@ fn classify(
 
 /// Whether an `lstat` error proves nothing is at the path: it is missing, or
 /// its parent is no directory.
-fn is_absent(kind: std::io::ErrorKind) -> bool {
+const fn is_absent(kind: std::io::ErrorKind) -> bool {
     matches!(
         kind,
         std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
@@ -680,6 +683,27 @@ mod tests {
         );
         let tree = parse(&fixture).expect("the chain parses");
         assert_eq!(carved(&tree), vec![fixture.tree.join(".git"), common]);
+    }
+
+    #[test]
+    fn a_commondir_in_the_root_git_dir_is_followed() {
+        let fixture = fixture("dir-commondir");
+        let git = fixture.tree.join(".git");
+        let common = fixture.tree.join("shared.git");
+        make_dir(&git);
+        make_dir(&common);
+        write(&git.join("commondir"), "../shared.git\n");
+        let tree = parse(&fixture).expect("the root gitdir parses");
+        assert_eq!(carved(&tree), vec![git.clone(), common]);
+        write(&git.join("commondir"), "../missing\n");
+        assert!(matches!(
+            parse(&fixture),
+            Err(JailPathError::VcsPointerUnreadable {
+                kind: VcsKind::Git,
+                reason: PointerFault::Unresolvable(_),
+                ..
+            })
+        ));
     }
 
     #[test]

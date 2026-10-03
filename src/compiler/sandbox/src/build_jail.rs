@@ -1399,15 +1399,15 @@ pub(crate) fn freebsd_mount_ops(
 pub(crate) fn freebsd_working_tree_plan(
     tree: &crate::WritableTree,
 ) -> Result<&crate::CanonicalPath, crate::JailPathError> {
-    tree.carve()
-        .paths()
-        .next()
-        .map_or(Ok(tree.tree()), |first| {
+    tree.carve().paths().next().map_or_else(
+        || Ok(tree.tree()),
+        |first| {
             Err(crate::JailPathError::VcsMetadataUncarvable {
                 arm: crate::JailArm::Freebsd,
                 path: first.as_path().to_path_buf(),
             })
-        })
+        },
+    )
 }
 
 /// Apply `ops` in order through `mount`, stopping at the first failure.
@@ -2955,7 +2955,11 @@ mod tests {
             at(&names),
         );
         assert!(
-            matches!(found, (Some(s), Some(a), Some(c), Some(g), Some(n)) if s < a && a < c && c < g && g < n),
+            matches!(
+                found,
+                (Some(scratch), Some(tree), Some(git), Some(gd), Some(name))
+                    if scratch < tree && tree < git && git < gd && gd < name
+            ),
             "each carve and the name rule are denied after both write allows, so they win: {found:?} in {sbpl}"
         );
         let isolated = sbpl_from_profile(
