@@ -3,10 +3,11 @@ use super::{
     RuntimeContext, apply_fixes_cmd, attribute_canon_errors, attribute_post_link_error,
     bluegreen_enabled, build_loose_file_into, build_project_into, bundle_delivery,
     collect_entry_and_siblings, collect_manifest_rooted_entry, collect_test_sources,
-    create_source_root, emit_machine_error, emit_permissions, find_manifest_for_ipe_file,
-    gate_decoder_pipelines, home_to_source_map, io_err, render_capabilities,
-    resolve_analysis_entry, resolve_analysis_target, resolve_vendored_runtime_dir, run_version,
-    runtime_dep_from_env, single_file_cargo_name_from_env,
+    compile_prepared, create_source_root, emit_machine_error, emit_permissions,
+    find_manifest_for_ipe_file, gate_decoder_pipelines, home_to_source_map, io_err,
+    render_capabilities, resolve_analysis_entry, resolve_analysis_target,
+    resolve_vendored_runtime_dir, run_version, runtime_dep_from_env,
+    single_file_cargo_name_from_env,
 };
 use crate::cargo_step::{
     CargoBuild, CargoCrate, CargoOutput, CargoProfile, CargoTarget, EmbeddedApp, Verbosity,
@@ -3750,6 +3751,46 @@ fn typecheck_graph(graph: &SourceGraph, blame_path: &Path) -> Result<(), CliErro
             .map_err(|d| (d, Vec::new()))?;
         gate_decoder_pipelines(&linked.module)
     })
+}
+
+/// Judge one loose `.ipe` entry through the whole build front end, short of cargo.
+///
+/// The entry's source graph is built as [`build_source_graph`] builds it, then
+/// run through [`compile_prepared`], the same canonicalise, link, target-gate,
+/// type-check, decoder-direction-gate, lower and emit pipeline `ipe build`
+/// runs, under a native development configuration. A refusal from any stage,
+/// lowering and emit included, surfaces as the first diagnostic, so a caller
+/// comparing its code sees the stage that actually refused the program. No
+/// project is written and cargo never runs.
+///
+/// # Errors
+/// [`CliError::Pipeline`] carrying the first compiler diagnostic;
+/// [`CliError::Io`] when a source file cannot be read.
+pub fn front_check_entry(entry: &Path) -> Result<(), CliError> {
+    let graph = build_source_graph(entry)?;
+    let config = ipe_db::BuildConfig::new(
+        &graph.db,
+        ipe_backend_rust::DbDriver::default(),
+        None,
+        ipe_ir::Target::Native,
+        Vec::new(),
+        false,
+        ipe_backend_rust::BuildIntent::Development,
+        None,
+        false,
+        String::new(),
+        false,
+        false,
+    );
+    compile_prepared(
+        &graph.db,
+        graph.source_root,
+        &graph.sources,
+        &graph.entry_module_path,
+        entry,
+        config,
+    )?;
+    Ok(())
 }
 
 /// Type-check the entry an [`AnalysisTarget`] names, dispatching to the `src`-
