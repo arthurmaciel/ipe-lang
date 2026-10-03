@@ -3547,7 +3547,11 @@ fn resolve_own_aliases(
             &mut budget,
             0,
         )?;
-        refuse_unbound_alias_body_vars(&body, &param_slots, &free_vars, &ctx, &mut budget)?;
+        // The check walks the finished body, which the canonicalisation above
+        // already bounded by the node ceiling, so it gets a ceiling of its own
+        // rather than halving the one the body may use.
+        let mut check_budget = TYPE_EXPANSION_NODE_LIMIT;
+        refuse_unbound_alias_body_vars(&body, &param_slots, &free_vars, &ctx, &mut check_budget)?;
         resolved.insert(
             decl.name.value,
             crate::ExportedAlias {
@@ -3568,7 +3572,7 @@ fn resolve_own_aliases(
 /// the body leaves free (quantified at a use site), or the `any` wildcard. A
 /// body holding any other variable would carry a name no use site binds, so it
 /// fails closed here, at the declaration. The walk uses an explicit stack and
-/// spends from the alias's own node budget.
+/// spends one node of `budget` per body node.
 ///
 /// # Errors
 /// [`Diagnostic::CompilerBug`] on a variable outside that set;
@@ -7804,6 +7808,12 @@ fn canonicalise_type(
                                 depth.saturating_add(1),
                             );
                             visited.pop();
+                            // With no parameters there is nothing to substitute:
+                            // the renamed body is the expansion, and walking it
+                            // again would charge its nodes to the ceiling twice.
+                            if alias_params.is_empty() {
+                                return slotted;
+                            }
                             let args: BTreeMap<Symbol, canon::Type> = alias_params
                                 .iter()
                                 .map(|&(_, slot)| slot)

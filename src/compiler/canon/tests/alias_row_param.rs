@@ -320,3 +320,36 @@ fn row_param_expansion_charges_ceiling() {
         "copied imported row arguments must spend the node ceiling, got {imported_result:?}"
     );
 }
+
+/// `Big`, a parameterless alias expanding to a 61 111-node tuple: more than
+/// half the node ceiling, so charging any of its nodes twice exceeds it.
+const HALF_CEILING_ALIASES: &str = "\
+    type alias A0 = ( Int, Int, Int, Int, Int, Int, Int, Int, Int, Int )\n\n\
+    type alias A1 = ( A0, A0, A0, A0, A0, A0, A0, A0, A0, A0 )\n\n\
+    type alias A2 = ( A1, A1, A1, A1, A1, A1, A1, A1, A1, A1 )\n\n\
+    type alias A3 = ( A2, A2, A2, A2, A2, A2, A2, A2, A2, A2 )\n\n\
+    type alias Big = ( A3, A3, A3, A3, A3 )\n";
+
+#[test]
+fn alias_declaration_check_does_not_halve_ceiling() {
+    let src = format!("module Lib.Use exposing (..)\n\n{HALF_CEILING_ALIASES}");
+    let (result, _) = canonicalise_chain(&[&src]);
+    assert!(
+        result.is_ok(),
+        "a body within the node ceiling must be accepted at its declaration, got {result:?}"
+    );
+}
+
+#[test]
+fn parameterless_local_alias_charges_body_once() {
+    let src = format!(
+        "module Lib.Use exposing (..)\n\n{HALF_CEILING_ALIASES}\n\
+         f : Big -> Int\n\
+         f x = 1\n"
+    );
+    let (result, _) = canonicalise_chain(&[&src]);
+    assert!(
+        result.is_ok(),
+        "a parameterless alias within the node ceiling must expand at its use site, got {result:?}"
+    );
+}
