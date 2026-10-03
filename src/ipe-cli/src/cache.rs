@@ -315,8 +315,9 @@ impl TreeDigest {
 /// Feed the deterministic byte stream [`hash_tree`] hashes into a fresh
 /// [`Sha256`] under `ceiling` and return the UN-finalized hasher.
 ///
-/// The root is held once; every entry below it is reached through held
-/// directory handles, never by re-resolving a path.
+/// The root is held once; every entry below it is reached from that handle,
+/// one entry name per level, each level opened without following a link, so
+/// no lookup leaves the tree or passes through a link.
 ///
 /// # Errors
 /// As [`hash_tree`].
@@ -466,7 +467,13 @@ fn hash_one_file(
     let mut reader = file.into_reader(one_past);
     let mut total: u64 = 0;
     loop {
-        let n = reader.read(buf).map_err(|e| tree_io(shown, e))?;
+        let n = match reader.read(buf) {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::FileTooLarge => {
+                return Err(size_changed(shown, rel, declared_len));
+            }
+            Err(e) => return Err(tree_io(shown, e)),
+        };
         if n == 0 {
             break;
         }
@@ -484,18 +491,20 @@ fn hash_one_file(
     }
 
     if total != declared_len {
-        return Err(tree_io(
-            shown,
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "file `{rel}` changed size during hashing (declared {declared_len} bytes, \
-                     read {total})"
-                ),
-            ),
-        ));
+        return Err(size_changed(shown, rel, declared_len));
     }
     Ok(declared_len)
+}
+
+/// The refusal of the file `rel` at `shown`, whose content stopped matching the `declared` length its proof saw.
+fn size_changed(shown: &Path, rel: &str, declared: u64) -> TreeHashError {
+    tree_io(
+        shown,
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("file `{rel}` changed size during hashing (declared {declared} bytes)"),
+        ),
+    )
 }
 
 /// One depth-first walk of a held tree, collecting every regular file it lists.
@@ -884,14 +893,9 @@ impl CacheSite {
     fn read(&self, epoch: &str, file_name: &str) -> Option<Vec<u8>> {
         match self {
             Self::InOutput { out_dir, salt } => {
-                let meta = fs::symlink_metadata(out_dir).ok()?;
-                let owned =
-                    meta.is_dir() && crate::output_dir::has_marker(out_dir).unwrap_or(false);
-                if !owned {
-                    return None;
-                }
-                read_without_links(
-                    out_dir,
+                let marked = crate::output_dir::held::HeldDir::open(out_dir).ok()??;
+                read_in_marked(
+                    &marked,
                     &[CACHE_DIR_NAME, salt.as_str(), epoch, file_name],
                     crate::io_bounded::BUILD_CACHE_ENTRY_CAP,
                 )
@@ -943,17 +947,39 @@ fn within_cap(bytes: &[u8], cap: u64) -> bool {
 /// one handle, so a link swapped in at any level is a miss. At most `cap + 1`
 /// bytes are read, and a file past `cap` is a miss.
 fn read_without_links(base: &Path, parts: &[&str], cap: u64) -> Option<Vec<u8>> {
+    read_below(&HeldDir::open_root(base).ok()?, parts, cap)
+}
+
+/// Read `<parts...>` below the output dir `marked` holds, when that held dir carries the ownership marker.
+///
+/// The marker is read through `marked`'s own handle, and the levels below
+/// are opened from a handle proven to be the same directory object as
+/// `marked` (equal identity while both are open), so an output dir swapped
+/// for a link or for another directory after it was held is a miss: the
+/// entry read sits in the directory whose marker was checked.
+fn read_in_marked(
+    marked: &crate::output_dir::held::HeldDir,
+    parts: &[&str],
+    cap: u64,
+) -> Option<Vec<u8>> {
+    if !marked.has_marker().ok()? {
+        return None;
+    }
+    let dir = HeldDir::open_root(marked.path()).ok()?;
+    if dir.id().ok()? != marked.id().ok()? {
+        return None;
+    }
+    read_below(&dir, parts, cap)
+}
+
+/// Read `<parts...>` below the held `dir`, each part one plain name, no level a link, at most `cap` bytes.
+fn read_below(dir: &HeldDir, parts: &[&str], cap: u64) -> Option<Vec<u8>> {
     let names = parts
         .iter()
         .map(|part| EntryName::new(std::ffi::OsStr::new(part)))
         .collect::<Option<Vec<_>>>()?;
     let cap = ByteCap::new(cap)?;
-    HeldDir::open_root(base)
-        .ok()?
-        .open_rel(&names)
-        .ok()?
-        .read_bytes(cap)
-        .ok()
+    dir.open_rel(&names).ok()?.read_bytes(cap).ok()
 }
 
 /// The cache site for a build writing to `out_dir`.
@@ -2973,6 +2999,114 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         assert_eq!(read.as_deref(), Some(&b"cached"[..]));
         assert_eq!(past_cap, None, "an entry one byte past its cap is a miss");
+    }
+
+    /// The file `name` of the held `base`, proven regular, with the length its proof saw.
+    fn proven_file(base: &Path, name: &str) -> RegularFile {
+        HeldDir::open_root(base)
+            .expect("hold the base")
+            .open_regular(&EntryName::new(std::ffi::OsStr::new(name)).expect("plain name"))
+            .expect("open the regular file")
+    }
+
+    /// A file whose content stops matching the length its proof saw, by one
+    /// byte more, by more than the read window holds, or by one byte less, is
+    /// refused with the one size-change refusal, never hashed.
+    #[test]
+    fn a_file_that_changes_size_after_its_proof_is_refused() {
+        use std::io::Write as _;
+        let base = ipe_test_temp::temp_root().join(format!(
+            "ipe-cache-test-size-change-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create base");
+        let path = base.join("File.ipe");
+        let grow_by = |extra: usize| {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .and_then(|mut file| file.write_all(&vec![b'b'; extra]))
+                .expect("grow the file");
+        };
+        let mut outcomes = Vec::new();
+        for change in ["grow by one", "grow past the window", "shrink by one"] {
+            std::fs::write(&path, b"module A\n").expect("write the file");
+            let file = proven_file(&base, "File.ipe");
+            match change {
+                "grow by one" => grow_by(1),
+                "grow past the window" => grow_by(TREE_HASH_CHUNK_BYTES.saturating_mul(2)),
+                _ => std::fs::write(&path, b"module \n").expect("shrink the file"),
+            }
+            let mut buf = vec![0u8; TREE_HASH_CHUNK_BYTES];
+            let result = hash_one_file(
+                &mut Sha256::new(),
+                file,
+                "File.ipe",
+                &path,
+                &mut buf,
+                0,
+                PACKAGE_SOURCE.tree(),
+            );
+            outcomes.push((change, result));
+        }
+        let _ = std::fs::remove_dir_all(&base);
+        for (change, result) in outcomes {
+            let size_change = matches!(
+                &result,
+                Err(TreeHashError::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::InvalidInput
+                        && source.to_string().contains("changed size during hashing")
+            );
+            assert!(
+                size_change,
+                "{change}: must be refused as a size change, got: {:?}",
+                result.map(|_| ())
+            );
+        }
+    }
+
+    /// The in-output cache reads only below the directory whose marker it
+    /// checked: an output dir swapped, after it was held, for a link to (or
+    /// a rename of) another marked dir holding the same entry is a miss.
+    #[test]
+    #[cfg(unix)]
+    fn an_in_output_read_misses_when_the_held_output_dir_is_swapped() {
+        let (base, owned, _elsewhere) = claimed_out_and_elsewhere("marked-swap");
+        let other = OwnedDir::claim(&base.join("other")).expect("claim the other dir");
+        let parts = [CACHE_DIR_NAME, "salt", "epoch", "entry"];
+        let plant = |dir: &Path, bytes: &[u8]| {
+            let level = dir.join(CACHE_DIR_NAME).join("salt").join("epoch");
+            fs::create_dir_all(&level).expect("create entry levels");
+            fs::write(level.join("entry"), bytes).expect("write entry");
+        };
+        plant(owned.path(), b"own");
+        plant(other.path(), b"other");
+        let out = owned.path().to_path_buf();
+        let aside = base.join("aside");
+
+        let marked = crate::output_dir::held::HeldDir::open(&out)
+            .expect("hold out")
+            .expect("out exists");
+        let unswapped = read_in_marked(&marked, &parts, 64);
+        fs::rename(&out, &aside).expect("move the held out dir aside");
+        std::os::unix::fs::symlink(other.path(), &out).expect("plant a link at out");
+        let through_link = read_in_marked(&marked, &parts, 64);
+        fs::remove_file(&out).expect("remove the link");
+        fs::rename(other.path(), &out).expect("rename the other dir onto out");
+        let through_rename = read_in_marked(&marked, &parts, 64);
+        let _ = fs::remove_dir_all(&base);
+
+        assert_eq!(unswapped.as_deref(), Some(&b"own"[..]));
+        assert_eq!(
+            through_link, None,
+            "an output dir swapped for a link after it was held must be a miss"
+        );
+        assert_eq!(
+            through_rename, None,
+            "an output dir replaced by another marked dir after it was held must be a miss"
+        );
     }
 
     /// A symlink standing at any level below the base, the entry included, is a miss.
