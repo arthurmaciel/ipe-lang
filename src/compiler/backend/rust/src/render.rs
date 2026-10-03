@@ -198,7 +198,8 @@ fn render_within_spend(
 fn render_root(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) -> Buf {
     let mut out = Buf::new();
     render_at(doc, cfg, indent, col, false, &mut out);
-    if !spend(out.len()) {
+    let returned = out.len();
+    if !spend_held(&out, returned) {
         abandon(&mut out);
     }
     out
@@ -220,6 +221,12 @@ pub const LAYOUT_FUEL: usize = 1 << 26;
 /// uncached: output is unchanged, only the reuse is capped, so a pathological
 /// document cannot grow the memo without bound.
 const MEMO_BYTE_CEILING: usize = 64 << 20;
+
+/// The byte ceiling on what one render's buffer holds, charged
+/// [`Buf::held_bytes`] at every spend. Past it the render is abandoned like one
+/// out of fuel, so a document that is cheap to lay out but wide cannot grow the
+/// buffer without bound: it gets its plain layout instead.
+const BUF_BYTE_CEILING: usize = 256 << 20;
 
 /// What one memoized layout occupies: the bytes and piece slots it holds of its
 /// own (see [`Frozen::own_bytes`]) plus the key and the hash-table slot, so a
@@ -291,6 +298,9 @@ struct Memo {
     chain_receivers: HashMap<usize, bool>,
     /// [`LAYOUT_FUEL`] left to spend; once spent the render is abandoned.
     fuel: usize,
+    /// The ceiling on a buffer's [`Buf::held_bytes`], [`BUF_BYTE_CEILING`] for
+    /// every production render; past it the render is abandoned.
+    buf_ceiling: usize,
     exhausted: bool,
 }
 
@@ -438,6 +448,7 @@ impl MemoScope {
             delimited_exprs: HashMap::new(),
             chain_receivers: HashMap::new(),
             fuel,
+            buf_ceiling: BUF_BYTE_CEILING,
             exhausted: false,
         };
         Self(MEMO.replace(Some(memo)))
@@ -1234,13 +1245,27 @@ fn abandon(out: &mut Buf) {
 /// Spend one step for a node about to render on `out`, with the work `out` has
 /// done since it was last spent; `false` once the fuel is spent.
 fn spend_step(out: &mut Buf) -> bool {
-    spend(out.take_work().saturating_add(1))
+    let cost = out.take_work().saturating_add(1);
+    spend_held(out, cost)
 }
 
 /// Spend the work `out` has done since it was last spent; `false` once the fuel
 /// is spent.
 fn spend_work(out: &mut Buf) -> bool {
-    spend(out.take_work())
+    let cost = out.take_work();
+    spend_held(out, cost)
+}
+
+/// [`spend`] `cost`, abandoning the render once `out` holds more than the
+/// buffer ceiling; `false` once either is spent.
+fn spend_held(out: &Buf, cost: usize) -> bool {
+    let held = out.held_bytes();
+    MEMO.with_borrow_mut(|m| {
+        m.as_mut().is_none_or(|m| {
+            m.exhausted = m.exhausted || held > m.buf_ceiling;
+            true
+        })
+    }) && spend(cost)
 }
 
 /// Spend `cost` of the render's [`LAYOUT_FUEL`]; `false` once it is spent, from
@@ -5488,6 +5513,36 @@ mod p0_tests {
         assert!(!is_block_like(&block));
         assert!(!is_glue_shape(&call));
         assert!(!has_hard_break(&hard));
+    }
+
+    /// The refusal: a render whose buffer holds more than its ceiling is
+    /// abandoned like one out of fuel, keeping nothing, while the same document
+    /// under the production ceiling lays out in full.
+    #[test]
+    fn buffer_past_its_ceiling_is_abandoned() {
+        let wide = || {
+            let items = (0..64).map(|i| Doc::owned(format!("item_{i}"))).collect();
+            Doc::call_args(Doc::text("vec!["), items, Doc::text("]"), true)
+        };
+        let doc = wide();
+        let _scope = MemoScope::install(&doc, LAYOUT_FUEL);
+        let out = render_root(&doc, RenderConfig::default(), 0, 0);
+        assert!(!fuel_exhausted(), "the production ceiling admits it");
+        let held = out.held_bytes();
+        assert!(held > 0 && held <= BUF_BYTE_CEILING);
+        let doc = wide();
+        let _scope = MemoScope::install(&doc, LAYOUT_FUEL);
+        MEMO.with_borrow_mut(|m| {
+            if let Some(m) = m.as_mut() {
+                m.buf_ceiling = held / 2;
+            }
+        });
+        let out = render_root(&doc, RenderConfig::default(), 0, 0);
+        assert!(
+            fuel_exhausted(),
+            "a buffer past its ceiling must abandon the render"
+        );
+        assert!(out.is_empty(), "an abandoned render keeps nothing");
     }
 
     /// Whitespace-free bytes of `s`: the token stream, spacing aside.

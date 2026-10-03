@@ -4,10 +4,12 @@
 //!
 //! The buffer keeps, per top-level piece, its measure and a Fenwick tree over the
 //! measures, so the measure of any suffix is a logarithmic fold and the measure of
-//! the whole buffer is kept as it grows. Every run of `' '` is a [`Piece::Spaces`]
-//! of its own, so no other piece begins or ends with a space: the trailing-space
-//! run a break trims, and the offsets a render marks before and after it, fall on
-//! piece boundaries. An offset inside a piece is still served, by splitting it.
+//! the whole buffer is kept as it grows. Every run of `' '` an appended text
+//! begins or ends with is a [`Piece::Spaces`] of its own, so no other piece begins
+//! or ends with a space: the trailing-space run a break trims, and the offsets a
+//! render marks before and after it, fall on piece boundaries. The spaces inside a
+//! text stay in its one piece, so a text costs a bounded number of pieces however
+//! many spaces it holds. An offset inside a piece is still served, by splitting it.
 
 use std::cell::OnceCell;
 use std::rc::Rc;
@@ -21,7 +23,7 @@ enum Piece {
     Spaces(usize),
     /// One byte of an ASCII character other than `' '`.
     Ascii(u8),
-    /// A segment holding no `' '`.
+    /// A segment neither beginning nor ending with `' '`.
     Leaf(Rc<str>),
     /// A kept layout, shared by every buffer that appends it.
     Node(Rc<Node>),
@@ -32,8 +34,27 @@ struct Node {
     pieces: Vec<Piece>,
     len: usize,
     shape: Shape,
+    /// The bytes it holds (see [`Node::held_of`]).
+    held: usize,
     /// The first line through its newline, built once when first asked for.
     first_line: OnceCell<(Piece, Shape)>,
+}
+
+impl Node {
+    /// What a node of `pieces` holds: its own record, a slot per piece, the text
+    /// of each leaf and what each nested node holds, counted once per parent.
+    fn held_of(pieces: &[Piece]) -> usize {
+        pieces
+            .iter()
+            .map(|piece| {
+                size_of::<Piece>().saturating_add(match piece {
+                    Piece::Leaf(text) => text.len(),
+                    Piece::Node(node) => node.held,
+                    Piece::Spaces(_) | Piece::Ascii(_) => 0,
+                })
+            })
+            .fold(size_of::<Self>(), usize::saturating_add)
+    }
 }
 
 impl Piece {
@@ -44,6 +65,21 @@ impl Piece {
             Self::Leaf(text) => text.len(),
             Self::Node(node) => node.len,
         }
+    }
+
+    /// What the piece costs a buffer holding it at the top level: its slot, its
+    /// end and its three measures, plus the text of a leaf or what a kept layout
+    /// holds. A shared kept layout is charged at every place it is appended, which
+    /// over-counts, never under-counts.
+    fn held_bytes(&self) -> usize {
+        let slot = size_of::<Self>()
+            .saturating_add(size_of::<usize>())
+            .saturating_add(size_of::<Shape>().saturating_mul(3));
+        slot.saturating_add(match self {
+            Self::Leaf(text) => text.len(),
+            Self::Node(node) => node.held,
+            Self::Spaces(_) | Self::Ascii(_) => 0,
+        })
     }
 
     /// The measure of the piece, reading the text of a leaf.
@@ -131,11 +167,13 @@ impl Piece {
             shape = shape.then(&line.1);
             len = len.saturating_add(line.0.len());
             pieces.push(line.0);
+            let held = Node::held_of(&pieces);
             let built = (
                 Self::Node(Rc::new(Node {
                     pieces,
                     len,
                     shape,
+                    held,
                     first_line: OnceCell::new(),
                 })),
                 shape,
@@ -144,6 +182,15 @@ impl Piece {
         }
         line
     }
+}
+
+/// Whether a text's leading spaces join a run of spaces the buffer ends with.
+#[derive(Clone, Copy)]
+enum Join {
+    /// They join it, keeping one piece per run.
+    Spaces,
+    /// They start a piece of their own, so the offset between stays a boundary.
+    Apart,
 }
 
 /// The lowest set bit of `i`, the span a Fenwick entry at `i` covers.
@@ -164,6 +211,8 @@ pub(super) struct Buf {
     tree: Vec<Shape>,
     /// The work done since it was last taken: bytes measured plus pieces placed.
     work: usize,
+    /// The sum of [`Piece::held_bytes`] over `pieces`.
+    held: usize,
 }
 
 impl Buf {
@@ -175,6 +224,7 @@ impl Buf {
             totals: Vec::new(),
             tree: Vec::new(),
             work: 0,
+            held: 0,
         }
     }
 
@@ -215,6 +265,7 @@ impl Buf {
         }
         let total = self.total().then(shape);
         let end = self.len().saturating_add(piece.len());
+        self.held = self.held.saturating_add(piece.held_bytes());
         self.pieces.push(piece);
         self.ends.push(end);
         self.shapes.push(*shape);
@@ -229,7 +280,9 @@ impl Buf {
         self.shapes.pop();
         self.totals.pop();
         self.tree.pop();
-        self.pieces.pop()
+        let piece = self.pieces.pop()?;
+        self.held = self.held.saturating_sub(piece.held_bytes());
+        Some(piece)
     }
 
     /// The measure of pieces `from .. to`.
@@ -260,31 +313,39 @@ impl Buf {
         (index, at.saturating_sub(start))
     }
 
-    /// Append `text`.
+    /// Append `text`, as at most three pieces: its leading spaces, the segment
+    /// between, and its trailing spaces.
     pub(super) fn push_str(&mut self, text: &str) {
+        self.push_text(text, Join::Spaces);
+    }
+
+    /// [`Buf::push_str`], its leading spaces joining a run already at the end only
+    /// under [`Join::Spaces`].
+    fn push_text(&mut self, text: &str, join: Join) {
         self.work = self.work.saturating_add(text.len());
-        let mut rest = text;
-        while !rest.is_empty() {
-            let spaces = rest
-                .len()
-                .saturating_sub(rest.trim_start_matches(' ').len());
-            if spaces > 0 {
-                self.push_spaces(spaces);
-                rest = rest.get(spaces..).unwrap_or_default();
-                continue;
-            }
-            let end = rest.find(' ').unwrap_or(rest.len());
-            let segment = rest.get(..end).unwrap_or_default();
-            match segment.as_bytes() {
-                [byte] if byte.is_ascii() => {
-                    let piece = Piece::Ascii(*byte);
-                    let shape = piece.shape();
-                    self.place(piece, &shape);
-                }
-                _ => self.place(Piece::Leaf(Rc::from(segment)), &Shape::of(segment)),
-            }
-            rest = rest.get(end..).unwrap_or_default();
+        let body = text.trim_start_matches(' ');
+        let lead = text.len().saturating_sub(body.len());
+        match join {
+            Join::Spaces => self.push_spaces(lead),
+            Join::Apart if lead > 0 => self.place(Piece::Spaces(lead), &Shape::spaces(lead)),
+            Join::Apart => {}
         }
+        let segment = body.trim_end_matches(' ');
+        match segment.as_bytes() {
+            [] => {}
+            [byte] if byte.is_ascii() => {
+                let piece = Piece::Ascii(*byte);
+                let shape = piece.shape();
+                self.place(piece, &shape);
+            }
+            _ => self.place(Piece::Leaf(Rc::from(segment)), &Shape::of(segment)),
+        }
+        self.push_spaces(body.len().saturating_sub(segment.len()));
+    }
+
+    /// The bytes the buffer's top-level pieces hold (see [`Piece::held_bytes`]).
+    pub(super) const fn held_bytes(&self) -> usize {
+        self.held
     }
 
     /// Append `c`.
@@ -412,7 +473,7 @@ impl Buf {
                 let text = other.text();
                 let (head, tail) = text.split_at_checked(offset).unwrap_or((&text, ""));
                 self.push_str(head);
-                self.push_str(tail);
+                self.push_text(tail, Join::Apart);
             }
         }
         for piece in after {
@@ -455,6 +516,7 @@ impl Buf {
                     pieces: pieces.to_vec(),
                     len: sum(pieces),
                     shape,
+                    held: Node::held_of(pieces),
                     first_line: OnceCell::new(),
                 };
                 Some((Piece::Node(Rc::new(node)), shape))
@@ -571,7 +633,7 @@ impl Frozen {
 
 #[cfg(test)]
 mod tests {
-    use super::{Buf, Shape};
+    use super::{Buf, Piece, Shape};
 
     /// A buffer and the text it must hold, driven through the same edits.
     struct Model {
@@ -585,6 +647,8 @@ mod tests {
             assert_eq!(text, self.text);
             assert_eq!(self.buf.len(), self.text.len());
             assert_eq!(*self.buf.total(), Shape::of(&self.text));
+            let summed = self.buf.pieces.iter().map(Piece::held_bytes).sum::<usize>();
+            assert_eq!(self.buf.held_bytes(), summed, "{:?}", self.text);
             for at in 0..=self.text.len() {
                 if !self.text.is_char_boundary(at) {
                     continue;
@@ -678,6 +742,26 @@ mod tests {
                 }
                 model.check();
             }
+        }
+    }
+
+    /// The refusal: a text costs at most three pieces however many spaces it
+    /// holds, so its spaces cannot multiply the per-piece measures the buffer
+    /// keeps.
+    #[test]
+    fn spaced_text_costs_bounded_pieces() {
+        for (words, edge) in [(1, ""), (2, " "), (1000, "  "), (100_000, " ")] {
+            let text = format!("{edge}{}x{edge}", "a ".repeat(words));
+            let mut buf = Buf::new();
+            buf.push_str(&text);
+            assert!(
+                buf.pieces.len() <= 3,
+                "{words} words: {} pieces",
+                buf.pieces.len()
+            );
+            assert_eq!(buf.len(), text.len());
+            assert_eq!(*buf.total(), Shape::of(&text));
+            assert_eq!(Buf::into_string(buf), text);
         }
     }
 }

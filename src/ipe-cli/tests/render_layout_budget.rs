@@ -49,8 +49,26 @@ fn fixture_name(entry: &Path) -> String {
 
 /// The layout budget of every body in `entry`, or the reason none was measured.
 fn measure(entry: &Path) -> Result<Vec<ipe_backend_rust::BodyLayoutBudget>, String> {
-    let main = vec!["Main".to_owned()];
     let src = std::fs::read_to_string(entry).map_err(|e| format!("read: {e}"))?;
+    measure_source(entry, src)
+}
+
+/// The layout budget of every body in the `Main` module source `src`.
+fn measure_source(
+    entry: &Path,
+    src: String,
+) -> Result<Vec<ipe_backend_rust::BodyLayoutBudget>, String> {
+    measure_source_on(entry, src, None)
+}
+
+/// [`measure_source`], with the emit and layout run on a thread of `stack` bytes
+/// when given.
+fn measure_source_on(
+    entry: &Path,
+    src: String,
+    stack: Option<usize>,
+) -> Result<Vec<ipe_backend_rust::BodyLayoutBudget>, String> {
+    let main = vec!["Main".to_owned()];
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     sources.insert(main.clone(), (entry.to_path_buf(), src));
     let mut discovered = Vec::new();
@@ -65,8 +83,30 @@ fn measure(entry: &Path) -> Result<Vec<ipe_backend_rust::BodyLayoutBudget>, Stri
     let program = ipe_db::lower_program(&db, root, entry_file)
         .clone()
         .map_err(|(diag, _)| format!("lower: {diag:?}"))?;
-    ipe_backend_rust::body_layout_budgets(&db.interner().lock(), &program)
-        .map_err(|e| format!("emit: {e:?}"))
+    emit_on(&db.interner().lock(), &program, stack)
+}
+
+/// The layout budgets of `program`'s bodies, measured on a thread of `stack` bytes
+/// when given.
+fn emit_on(
+    interner: &ipe_intern::Interner,
+    program: &ipe_ir::Program,
+    stack: Option<usize>,
+) -> Result<Vec<ipe_backend_rust::BodyLayoutBudget>, String> {
+    let emit = move || {
+        ipe_backend_rust::body_layout_budgets(interner, program).map_err(|e| format!("emit: {e:?}"))
+    };
+    let Some(stack) = stack else {
+        return emit();
+    };
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn_scoped(scope, emit)
+            .map_err(|e| format!("spawn: {e}"))?
+            .join()
+            .map_err(|_| "the emit thread panicked".to_owned())?
+    })
 }
 
 #[test]
@@ -124,4 +164,111 @@ fn golden_bodies_render_within_fuel_fraction() {
         "function bodies past an eighth of the layout fuel:\n{}",
         over.join("\n")
     );
+}
+
+/// A shared zero-parameter binding (a CAF) lays its body out exactly once: the
+/// cell-wrapped form is the only body built, never an inline body discarded
+/// after it.
+#[test]
+fn caf_body_renders_once() {
+    let src = "module Main exposing (main)\n\n\
+               import Ipe.Io as Io\n\n\n\
+               greeting : String\n\
+               greeting =\n    \"hello\"\n\n\n\
+               main =\n    Io.println greeting\n"
+        .to_owned();
+    let measured = measure_source(Path::new("Main.ipe"), src);
+    assert!(
+        measured.is_ok(),
+        "the CAF program must lower and emit: {measured:?}"
+    );
+    let budgets = measured.unwrap_or_default();
+    let names: Vec<&str> = budgets.iter().map(|b| b.func.as_str()).collect();
+    let renders = names.iter().filter(|n| n.ends_with("greeting")).count();
+    assert_eq!(renders, 1, "the CAF body must render once, got {names:?}");
+}
+
+/// The stack `ipe watch` compiles on: a spawned thread's default.
+const WATCH_WORKER_STACK: usize = 2 << 20;
+
+/// A `main` whose body chains `n` `Task.andThen` continuations.
+fn task_pipe_source(n: usize) -> String {
+    let mut body = String::from("Io.println \"s\"");
+    for _ in 0..n {
+        body.push_str(" |> Task.andThen (\\_ -> Io.println \"s\")");
+    }
+    format!(
+        "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.Task as Task\n\n\n\
+         main =\n    {body}\n"
+    )
+}
+
+/// A `main` whose body nests `n` `Task.andThen` continuations, each inside the last.
+fn task_nest_source(n: usize) -> String {
+    let mut body = String::from("Io.println \"end\"");
+    for _ in 0..n {
+        body = format!("Io.println \"s\" |> Task.andThen (\\_ -> {body})");
+    }
+    format!(
+        "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.Task as Task\n\n\n\
+         main =\n    {body}\n"
+    )
+}
+
+/// One nesting bound: its name, the source it shapes at a depth, the deepest depth
+/// it admits, and the diagnostic refusing one step deeper.
+struct NestingCase {
+    name: &'static str,
+    source: fn(usize) -> String,
+    deepest: usize,
+    refusal: &'static str,
+}
+
+/// The deepest body each nesting bound admits lays out on the watch worker's
+/// stack, and one step deeper is refused by that bound instead of reaching the
+/// renderer: the IR bound for a chained pipeline, the parser bound for nested
+/// continuations.
+#[test]
+fn deepest_admitted_body_lays_out_on_watch_stack() {
+    let cases = [
+        NestingCase {
+            name: "chained",
+            source: task_pipe_source,
+            deepest: 93,
+            refusal: "BackendNestingTooDeep",
+        },
+        NestingCase {
+            name: "nested",
+            source: task_nest_source,
+            deepest: 25,
+            refusal: "NestingTooDeep",
+        },
+    ];
+    for NestingCase {
+        name,
+        source,
+        deepest,
+        refusal,
+    } in cases
+    {
+        let admitted = measure_source_on(
+            Path::new("Main.ipe"),
+            source(deepest),
+            Some(WATCH_WORKER_STACK),
+        );
+        assert!(
+            admitted
+                .as_ref()
+                .is_ok_and(|budgets| budgets.iter().all(|b| !b.exhausted)),
+            "{name}: depth {deepest} must be admitted and lay out within fuel: {admitted:?}"
+        );
+        let refused = measure_source(Path::new("Main.ipe"), source(deepest + 1));
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|reason| reason.contains(refusal)),
+            "{name}: depth {} must be refused by {refusal}, got {refused:?}",
+            deepest + 1
+        );
+    }
 }

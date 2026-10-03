@@ -950,6 +950,26 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     }
     let ret = render_type(ctx, ret_ty, generics)?;
 
+    // A zero-parameter top-level binding is a CAF (constant applicative form) — a
+    // shared VALUE, not a function. Ipê (like Elm) evaluates it once and shares
+    // the result; emitting the body inline re-evaluates it on every reference,
+    // which reallocates a fresh value per use and, for a binding whose body
+    // reads live runtime state, can observe a different value each time. Emit the
+    // body behind a lazily-initialised, thread-safe cell so first use evaluates
+    // it exactly once and every later use returns a clone of that one value.
+    //
+    // The gate is deliberately conservative (fail closed): a static cell requires
+    // the value type to be `Sync + Send + Clone + 'static`, and the closure must
+    // capture nothing type-parametric, so the wrapper applies only to a
+    // monomorphic CAF whose return type is a plain shareable data type
+    // ([`is_share_once_safe`]). `ipe_main` is excluded — the epilogue's
+    // `block_on(ipe_main())` needs a fresh future each call. Every other binding
+    // keeps the direct inline emission.
+    let is_caf = func.params.is_empty()
+        && func.type_params.is_empty()
+        && name != "ipe_main"
+        && is_share_once_safe(ret_ty);
+
     // M is inferred bottom-up from concrete element/attrs types
     // propagated by the region-type–sourced lowerer; `generics` is used
     // directly.
@@ -984,7 +1004,13 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     let saved_transition = ctx.begin_transition_update(tea_update_param);
     // Arm the sub-description rewrite for a TEA `subscriptions` body; inert off.
     let saved_subs_hot = ctx.begin_subs_hot(ctx.hot_appearance && is_tea_subs_function(func));
-    let body = if let Some(init_body) =
+    let body = if is_caf {
+        let call_line = emit_caf_get_or_init(ctx, body_expr, generics)?;
+        format!(
+            "static CELL: std::sync::OnceLock<{ret}> = std::sync::OnceLock::new();\n    \
+             {call_line}"
+        )
+    } else if let Some(init_body) =
         emit_init_hot_for_func(ctx, func, body_expr, ipe_main_wrap, generics)?
     {
         init_body
@@ -1030,34 +1056,6 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     // generics, appended after the ordinary `T{n}` type variables.
     let generic_clause = render_fn_generics(ctx, func, ret_is_task, &impl_fn_params, generics)?;
 
-    // A zero-parameter top-level binding is a CAF (constant applicative form) — a
-    // shared VALUE, not a function. Ipê (like Elm) evaluates it once and shares
-    // the result; emitting the body inline re-evaluates it on every reference,
-    // which reallocates a fresh value per use and, for a binding whose body
-    // reads live runtime state, can observe a different value each time. Emit the
-    // body behind a lazily-initialised, thread-safe cell so first use evaluates
-    // it exactly once and every later use returns a clone of that one value.
-    //
-    // The gate is deliberately conservative (fail closed): a static cell requires
-    // the value type to be `Sync + Send + Clone + 'static`, and the closure must
-    // capture nothing type-parametric, so the wrapper applies only to a
-    // monomorphic CAF whose return type is a plain shareable data type
-    // ([`is_share_once_safe`]). `ipe_main` is excluded — the epilogue's
-    // `block_on(ipe_main())` needs a fresh future each call. Every other binding
-    // keeps the direct inline emission.
-    let is_caf = func.params.is_empty()
-        && func.type_params.is_empty()
-        && name != "ipe_main"
-        && is_share_once_safe(ret_ty);
-    let body = if is_caf {
-        let call_line = emit_caf_get_or_init(ctx, body_expr, generics)?;
-        format!(
-            "static CELL: std::sync::OnceLock<{ret}> = std::sync::OnceLock::new();\n    \
-             {call_line}"
-        )
-    } else {
-        body
-    };
     // The body (the only place a TEA `update`'s arms are emitted) is rendered;
     // disarm the transition rewrite so no sibling / nested function inherits it.
     ctx.end_transition_update(saved_transition);
