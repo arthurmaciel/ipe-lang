@@ -12,8 +12,8 @@ path = "src/lib.rs"
 # check exercise the real compiler crates. Kept as dev-dependencies so the
 # crate's RUNTIME graph stays dependency-free — the whole point of this leaf
 # crate is that the WebAssembly frontend can embed the stdlib without pulling
-# the compiler's world. (No cycle: nothing in the compiler depends on
-# `ipe_stdlib`.)
+# the compiler's world. (No cycle: `ipe_stdlib` has no runtime dependencies,
+# so `ipe_db` reading `COMPILED_STD_MODULES` closes no loop.)
 [dev-dependencies]
 ipe_intern = { path = "../compiler/intern" }
 ipe_kernels = { path = "../compiler/kernels" }

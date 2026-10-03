@@ -511,6 +511,10 @@ pub struct Env {
     pub internal_quals: Rc<BTreeSet<Symbol>>,
     /// Every module this module could import, for the unbound-qualifier verdict.
     pub module_catalog: ModuleCatalog,
+    /// Each module this module imports under an `as` alias (dotted path), with
+    /// those aliases: an unbound qualifier spelling such a module's own name is
+    /// pointed at its alias, never told to import a module already imported.
+    pub import_aliases: Rc<BTreeMap<Box<str>, BTreeSet<Box<str>>>>,
     /// The module's driver-vouched trust provenance. `Ffi.binding` bodies
     /// resolve ONLY under [`ModuleOrigin::FfiInterface`]; any other origin
     /// falls through to ordinary qualified-name resolution (and fails there —

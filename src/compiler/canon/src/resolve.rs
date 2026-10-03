@@ -1189,6 +1189,16 @@ pub fn canonicalise_module_in_project(
     let mut env = Env::initial(home.clone(), interner)?;
     env.origin = origin;
     env.module_catalog = catalog.clone();
+    let mut import_aliases: BTreeMap<Box<str>, BTreeSet<Box<str>>> = BTreeMap::new();
+    for import in &m.imports {
+        if let Some(alias) = import.alias {
+            import_aliases
+                .entry(path_to_dot_string(interner, &import.name.value))
+                .or_default()
+                .insert(name_str(interner, alias)?);
+        }
+    }
+    env.import_aliases = Rc::new(import_aliases);
     // Fail closed at the boundary on an `Ipe.*` import that names neither a
     // kernel stdlib module nor a compiled-source dep (a typo such as
     // `Ipe.Strng`), before alias registration and the dep loop silently skip it.
@@ -5829,24 +5839,13 @@ fn canonicalise_pattern(
                     return Err(ambiguous_ctor(*name, span, origins, interner)?);
                 }
                 CtorLookup::Missing => {
-                    let name_s = name_str(interner, *name)?;
-                    // An unqualified constructor pattern starts with its name; a
-                    // qualified one starts with the module, so it has no region.
-                    let region = if segments.is_empty() {
-                        EditTarget::prefix(span, &name_s)
-                    } else {
-                        None
-                    };
-                    return Err(Diagnostic::Name {
+                    return Err(ctor_pattern_not_found(
+                        *name,
+                        segments.is_empty(),
                         span,
-                        msg: NameError::ConstructorNotFound {
-                            name: name_s,
-                            suggestions: Candidates::at(
-                                region,
-                                suggestions(*name, env.ctor_names(), interner),
-                            ),
-                        },
-                    });
+                        env,
+                        interner,
+                    )?);
                 }
             };
             let home = ctor.home.clone();
@@ -6338,6 +6337,36 @@ fn reject_bare_reserved_constructor(
     None
 }
 
+/// The diagnostic for a constructor pattern naming no constructor in scope.
+///
+/// An unqualified constructor pattern starts with its name, so a sole
+/// did-you-mean may overwrite that prefix; a qualified one starts with the
+/// module, so it has no edit region.
+///
+/// # Errors
+/// [`Diagnostic::CompilerBug`] if `name` is not interned.
+fn ctor_pattern_not_found(
+    name: Symbol,
+    unqualified: bool,
+    span: Span,
+    env: &Env,
+    interner: &Interner,
+) -> DResult<Diagnostic> {
+    let name_s = name_str(interner, name)?;
+    let region = if unqualified {
+        EditTarget::prefix(span, &name_s)
+    } else {
+        None
+    };
+    Ok(Diagnostic::Name {
+        span,
+        msg: NameError::ConstructorNotFound {
+            suggestions: Candidates::at(region, suggestions(name, env.ctor_names(), interner)),
+            name: name_s,
+        },
+    })
+}
+
 /// `span` when it is exactly the source token `qualifier.member`.
 ///
 /// A reference the parser synthesised (an operator desugared to a qualified
@@ -6371,13 +6400,7 @@ fn unbound_qualifier(
     let home = path_to_dot_string(interner, &env.home);
     let modules = env.module_catalog.modules_bound_by(&qualifier_s, &home);
     if !modules.is_empty() {
-        return Ok(Diagnostic::Name {
-            span,
-            msg: NameError::ImportRequired {
-                qualifier: qualifier_s,
-                candidates: modules,
-            },
-        });
+        return Ok(import_required(qualifier_s, modules, span, token, env));
     }
     Ok(Diagnostic::Name {
         span,
@@ -6389,6 +6412,48 @@ fn unbound_qualifier(
             qualifier: qualifier_s,
         },
     })
+}
+
+/// The verdict for `qualifier`, which a bare `import` of each of `modules`
+/// (non-empty, sorted) would bind but no import in this module binds.
+///
+/// A module already imported under an `as` alias is not missing an import: the
+/// use site spelled the module's name instead of its alias, so the verdict is
+/// IPE-N0004 offering the alias (an applicable edit only when exactly one
+/// module and one alias answer). Otherwise it is IPE-N0034 naming `modules`.
+fn import_required(
+    qualifier: Box<str>,
+    modules: Box<[Box<str>]>,
+    span: Span,
+    token: Option<Span>,
+    env: &Env,
+) -> Diagnostic {
+    let aliases: BTreeSet<&Box<str>> = modules
+        .iter()
+        .filter_map(|module| env.import_aliases.get(module))
+        .flatten()
+        .collect();
+    if aliases.is_empty() {
+        return Diagnostic::Name {
+            span,
+            msg: NameError::ImportRequired {
+                qualifier,
+                candidates: modules,
+            },
+        };
+    }
+    let region = if modules.len() == 1 && aliases.len() == 1 {
+        token.and_then(|t| EditTarget::prefix(t, &qualifier))
+    } else {
+        None
+    };
+    Diagnostic::Name {
+        span,
+        msg: NameError::UnknownModule {
+            suggestions: Candidates::at(region, aliases.into_iter().cloned().collect()),
+            qualifier,
+        },
+    }
 }
 
 /// Resolve a qualified name `Qualifier.name`. Distinguishes an unknown
@@ -6464,16 +6529,16 @@ fn resolve_qual_var(
     // catalog, and NOT the generic "unknown module" (the module is known; the
     // import is missing). Checked before the member lookup, since the catalog
     // members are present regardless of import.
-    if let Some(import_path) = env.stdlib_import_required(qualifier) {
-        return Err(Diagnostic::Name {
-            span,
-            msg: NameError::ImportRequired {
-                qualifier: name_str(interner, qualifier)?,
-                candidates: Box::new([path_to_dot_string(interner, import_path)]),
-            },
-        });
-    }
     let token = qualified_token(span, qualifier_text, name_text);
+    if let Some(import_path) = env.stdlib_import_required(qualifier) {
+        return Err(import_required(
+            name_str(interner, qualifier)?,
+            Box::new([path_to_dot_string(interner, import_path)]),
+            span,
+            token,
+            env,
+        ));
+    }
     let Some(members) = env.qual_members(qualifier) else {
         return Err(unbound_qualifier(qualifier, span, token, env, interner)?);
     };
@@ -7324,13 +7389,13 @@ fn canonicalise_type(
                 // before the unknown-qualifier fallback, since the catalog
                 // qualifier is present in `qual_vars` regardless of import.
                 if let Some(import_path) = ctx.env.stdlib_import_required(*qualifier) {
-                    return Err(Diagnostic::Name {
-                        span: ctx.ann_span,
-                        msg: NameError::ImportRequired {
-                            qualifier: qualifier_str.into(),
-                            candidates: Box::new([path_to_dot_string(ctx.interner, import_path)]),
-                        },
-                    });
+                    return Err(import_required(
+                        qualifier_str.into(),
+                        Box::new([path_to_dot_string(ctx.interner, import_path)]),
+                        ctx.ann_span,
+                        None,
+                        ctx.env,
+                    ));
                 }
                 if !ctx.env.qual_vars.contains_key(qualifier) {
                     return Err(unbound_qualifier(

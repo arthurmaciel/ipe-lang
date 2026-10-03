@@ -1157,4 +1157,27 @@ mod tests {
             "prose never drives an import fix"
         );
     }
+
+    /// The client echoes `data` back: an entry that is not a dotted module path
+    /// (a newline smuggling a second line, a space, a lowercase segment, an
+    /// empty segment, a bidi override, a Cyrillic homoglyph) never becomes an
+    /// inserted import.
+    #[test]
+    fn add_import_action_refuses_a_non_module_candidate() {
+        let mut diag = diag_at(5, "IPE-N0034");
+        diag.data = Some(serde_json::json!({ "importCandidates": [
+            "Lib.Utils\nmain = evil",
+            "Lib Utils",
+            "lib.Utils",
+            "Lib..Utils",
+            "",
+            "Lib.\u{202e}Utils",
+            "Lib.\u{0423}tils",
+            "Lib.Utils",
+        ] }));
+        assert_eq!(
+            crate::diagnostics::import_candidates(&diag),
+            ["Lib.Utils".to_owned()]
+        );
+    }
 }

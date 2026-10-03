@@ -275,8 +275,17 @@ fn import_candidates_data(diag: &Diagnostic) -> Option<serde_json::Value> {
     Some(serde_json::json!({ IMPORT_CANDIDATES_KEY: modules }))
 }
 
+/// The most import actions one diagnostic's `data` can produce.
+const MAX_IMPORT_CANDIDATES: usize = 64;
+
 /// The candidate modules an LSP diagnostic's `data` carries, in order; empty
 /// when it carries none.
+///
+/// The client echoes `data` back, so it is untrusted input bound for the
+/// document text: only an entry that is a dotted module path (each segment an
+/// uppercase-initial identifier) survives, and at most
+/// [`MAX_IMPORT_CANDIDATES`] of them. Anything else — a newline, a space, a
+/// backtick, a control or bidi character — is dropped, never inserted.
 #[must_use]
 pub fn import_candidates(diag: &lsp_types::Diagnostic) -> Vec<String> {
     diag.data
@@ -286,10 +295,23 @@ pub fn import_candidates(diag: &lsp_types::Diagnostic) -> Vec<String> {
         .map(|ms| {
             ms.iter()
                 .filter_map(serde_json::Value::as_str)
+                .filter(|m| is_module_path(m))
+                .take(MAX_IMPORT_CANDIDATES)
                 .map(str::to_owned)
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// `true` when `text` is `Seg(.Seg)*`, each segment an ASCII uppercase letter
+/// then ASCII letters, digits or `_` (the parser's module-name grammar, so no
+/// homoglyph of a real module survives).
+fn is_module_path(text: &str) -> bool {
+    text.split('.').all(|segment| {
+        let mut chars = segment.chars();
+        chars.next().is_some_and(|c| c.is_ascii_uppercase())
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 /// Run the linter over the project's user modules and return each finding as an
