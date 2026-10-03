@@ -664,7 +664,6 @@ PLUMBING_WORKFLOWS = {
     "release-please.yml",
     "rerun-failed-once.yml",
     "nightly-full-gate.yml",
-    "manifest-guard.yml",
     "ci-health.yml",
 }
 

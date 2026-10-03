@@ -148,15 +148,51 @@ jobs:
   # (a target/ directory, an .rlib/.rmeta/.o/.a/.so/.dylib/.wasm blob) or any file
   # over 5 MiB turns this red. Regenerable build output committed once bloats every
   # future clone and can only be purged from history by a human-run rewrite;
-  # this keeps the tree clean going forward. No toolchain needed — pure git +
-  # shell, so it stays on the
-  # fast required PR path.
+  # this keeps the tree clean going forward. The same required job runs the CI
+  # check-disposition gate (`verify-manifest.py` and the CI tooling's refusal
+  # tests), so no CI invariant rests on an advisory context. No Rust toolchain
+  # needed — git, shell and Python only, so it stays on the fast required PR path.
   artifact-guard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Reject committed build artifacts
         run: .github/ci/artifact-guard.sh
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install PyYAML
+        run: 'PIP_CONFIG_FILE=/dev/null python3 -m pip install --isolated --require-hashes --only-binary :all: -r "$GITHUB_WORKSPACE/.github/ci/requirements.txt"'
+      - name: Every produced check has exactly one declared disposition
+        run: python3 .github/ci/verify-manifest.py
+      - name: Prove the workflow-step refusals (unit tests)
+        run: python3 .github/ci/test_verify_manifest.py -v
+      - name: Prove the strict-YAML loader refusals (unit tests)
+        run: python3 .github/ci/test_strict_yaml.py -v
+      - name: Prove the fail-closed change-classifier refusals (unit tests)
+        run: python3 .github/ci/test_change_class.py -v
+      - name: The e2e shards and their cover run exactly the SSOT plan
+        run: python3 .github/ci/e2e_shard.py --lint
+      - name: Prove the e2e shard-partition refusals (unit tests)
+        run: python3 .github/ci/test_e2e_shard.py -v
+      - name: Reruns fire only on infrastructure; no test retries
+        run: python3 .github/ci/rerun_policy.py --lint
+      - name: Prove the rerun-policy refusals (unit tests)
+        run: python3 .github/ci/test_rerun_policy.py -v
+      - name: A red nightly blocks the next merge (nightly-green wiring)
+        run: python3 .github/ci/nightly_green.py --lint
+      - name: Prove the nightly-green refusals (unit tests)
+        run: python3 .github/ci/test_nightly_green.py -v
+      - name: Prove the trust-root parser and merge-decision refusals (unit tests)
+        run: python3 .github/ci/test_trust_roots.py -v
+      - name: Prove the local-gate refusals (unit tests)
+        run: python3 .github/ci/test_local_gate.py -v
+      - name: Prove the cargo-invocation reader refusals (unit tests)
+        run: python3 .github/ci/test_cargo_invocation.py -v
+      - name: Prove the test-claims table refusals (unit tests)
+        run: python3 .github/ci/test_claims_table.py -v
+      - name: The derived required-set is in sync with the manifest
+        run: python3 .github/ci/check_required_set.py
 
   # Cargo.lock must agree with the version Cargo.toml declares. Fail-closed
   # backstop to the release-please sync-cargo-lock job: a version-desynced tree
@@ -1187,7 +1223,7 @@ jobs:
           # `.github/ci/e2e_shard.py`: shards 1-5 spread the heavy cold-build
           # goldens, shards 6-14 the heavy-free complement, all from the
           # prebuilt archive (no recompile). `seal-slice` proves the plan
-          # partitions the archive's test set exactly, and manifest-guard
+          # partitions the archive's test set exactly, and artifact-guard
           # (`e2e_shard.py --lint`) pins this matrix and this wiring.
           SHARD_FILTER: ${{ fromJSON(needs.changes.outputs.e2e_plan)[matrix.shard].filter }}
           SHARD_PARTITION: ${{ fromJSON(needs.changes.outputs.e2e_plan)[matrix.shard].partition }}
@@ -1752,8 +1788,8 @@ jobs:
   # fork PR rather than attempted and denied.
   #
   # `.github/ci/deterministic-checks.json` is the SSOT of (job, check step)
-  # pairs; `ci/verify-manifest.py` (run in
-  # `manifest-guard.yml`) fails the build if this job's `needs:` differs from
+  # pairs; `ci/verify-manifest.py` (run in the
+  # required `artifact-guard` job) fails the build if this job's `needs:` differs from
   # that file's job set or a listed step name is not in the job's steps.
   cancel-on-cheap-red:
     runs-on: ubuntu-latest
