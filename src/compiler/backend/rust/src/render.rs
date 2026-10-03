@@ -29,6 +29,15 @@ use std::collections::{HashMap, HashSet};
 
 use crate::doc::{ChainOperand, Doc, LeafNorm};
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the measures the sink-generic layout engine reads"
+    )
+)]
+mod shape;
+
 /// Rendering configuration. Mirrors the `rustfmt` knobs the golden harness pins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RenderConfig {

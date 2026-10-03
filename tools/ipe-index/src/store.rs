@@ -74,13 +74,15 @@ CREATE TABLE IF NOT EXISTS reviewed (
 ) WITHOUT ROWID;
 ";
 
-/// Current schema version: v4 `file` units carry `residual_hash`, the change
-/// key of the lines no other unit of the file covers; v3 rows carry `sha256:`
-/// view attestations in `body_hash` and no residual; v2 rows a bare blake3 of
-/// the span. `open` stamps it only on a
-/// DB with no units yet, so a stamp always describes the rows beside it; a DB
-/// holding rows of another version keeps its stamp until `index` rebuilds it.
-const SCHEMA_VERSION: &str = "4";
+/// Current schema version: v5 `file` units attest their residual (the lines no
+/// other unit of the file covers) in `body_hash` and leave `residual_hash`
+/// NULL; v4 `file` units attest the whole file in `body_hash` and the residual
+/// in `residual_hash`; v3 rows carry `sha256:` view attestations in
+/// `body_hash` and no residual; v2 rows a bare blake3 of the span. `open`
+/// stamps it only on a DB with no units yet, so a stamp always describes the
+/// rows beside it; a DB holding rows of another version keeps its stamp until
+/// `index` rebuilds it.
+const SCHEMA_VERSION: &str = "5";
 
 /// Stable unit id: blake3 of `path|kind|qualified`. Content-stable across
 /// re-indexes; a rename of the symbol or path changes the id by design.
@@ -187,14 +189,6 @@ impl Store {
         )?;
         Ok(())
     }
-    /// Records a `file` unit's residual change key.
-    pub fn set_residual_hash(&self, uid: &str, hash: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE units SET residual_hash=? WHERE uid=?",
-            rusqlite::params![hash, uid],
-        )?;
-        Ok(())
-    }
     /// The line spans of every non-`file` unit of `path`.
     pub fn child_spans(&self, path: &str) -> Result<Vec<(i64, i64)>> {
         let mut st = self
@@ -293,9 +287,11 @@ impl Store {
             Some(path),
         )
     }
-    /// The queue state of every unit in the index. A `units` table of an
-    /// older schema has no `residual_hash`; its file units are keyed by their
-    /// whole body, so the first rebuild over it queues each changed file once.
+    /// The queue state of every unit in the index. A v4 file row is keyed by
+    /// its `residual_hash`, which equals the `body_hash` a v5 row stores for
+    /// the same residual. A `units` table of an older schema has no
+    /// `residual_hash`; its file units are keyed by their whole body, so the
+    /// first rebuild over it queues each changed file once.
     pub fn snapshot_all(&self) -> Result<Snapshot> {
         let has_residual: bool = self.conn.query_row(
             "SELECT COUNT(*) > 0 FROM pragma_table_info('units') WHERE name='residual_hash'",
@@ -494,6 +490,22 @@ mod tests {
         ensure_schema_version(&s.conn).unwrap();
         assert_eq!(s.get_meta("schema_version").unwrap().as_deref(), Some("2"));
         assert!(!s.schema_is_current().unwrap());
+    }
+
+    // A DB stamped with the previous version is not current, so `update`
+    // refuses to run incrementally over it, and the full rebuild stamps it 5.
+    #[test]
+    fn an_older_schema_stamp_forces_a_full_rebuild_at_version_5() {
+        assert_eq!(SCHEMA_VERSION, "5");
+        let s = Store::open(":memory:").unwrap();
+        s.put_unit(&sample_unit("src/a.rs", "foo", "crate::foo"))
+            .unwrap();
+        s.set_meta("schema_version", "4").unwrap();
+        ensure_schema_version(&s.conn).unwrap();
+        assert!(!s.schema_is_current().unwrap());
+        s.reset_index().unwrap();
+        assert_eq!(s.get_meta("schema_version").unwrap().as_deref(), Some("5"));
+        assert!(s.schema_is_current().unwrap());
     }
 
     // A DB with units but no recorded version is not stamped current either.

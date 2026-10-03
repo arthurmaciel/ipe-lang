@@ -43,8 +43,6 @@ use crate::{CliError, io_err, text};
 
 pub(crate) mod held;
 mod proven;
-#[cfg(any(windows, test))]
-mod win32_name;
 
 use proven::{ProvenOutPath, prove_parent_steps};
 

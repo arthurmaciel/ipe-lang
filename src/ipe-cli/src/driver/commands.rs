@@ -3173,7 +3173,7 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
 /// [`CliError::Io`] when the entry file cannot be read.
 pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
     let file = ResolvedPath::of(entry).map_err(|e| io_err(entry, e))?;
-    emit_ir_text_for_target(&AnalysisTarget::LooseFile(file))
+    emit_ir_text_for_target(&AnalysisTarget::Loose(file))
 }
 
 // ===========================================================================
@@ -3761,12 +3761,11 @@ fn typecheck_graph(graph: &SourceGraph, blame_path: &Path) -> Result<(), CliErro
 /// Same as [`typecheck_entry_via_graph`].
 pub fn typecheck_target(target: &AnalysisTarget) -> Result<(), CliError> {
     match target {
-        AnalysisTarget::Project(entry) => typecheck_entry_via_graph(entry),
-        AnalysisTarget::LooseFile(file) => typecheck_entry_via_graph(file.as_path()),
-        AnalysisTarget::SourceFile { file, src_root } => {
+        AnalysisTarget::Loose(file) => typecheck_entry_via_graph(file.as_path()),
+        AnalysisTarget::Source { file, src_root } => {
             typecheck_manifest_file_via_graph(src_root.as_path(), file.as_path())
         }
-        AnalysisTarget::TestFile {
+        AnalysisTarget::Test {
             file,
             src_root,
             tests_root,
@@ -3785,16 +3784,15 @@ pub fn source_graph_for_target(
     target: &AnalysisTarget,
 ) -> Result<(SourceGraph, PathBuf), CliError> {
     match target {
-        AnalysisTarget::Project(entry) => Ok((build_source_graph(entry)?, entry.clone())),
-        AnalysisTarget::LooseFile(file) => Ok((
+        AnalysisTarget::Loose(file) => Ok((
             build_source_graph(file.as_path())?,
             file.as_path().to_path_buf(),
         )),
-        AnalysisTarget::SourceFile { file, src_root } => Ok((
+        AnalysisTarget::Source { file, src_root } => Ok((
             build_source_graph_for_manifest_file(src_root.as_path(), file.as_path())?,
             file.as_path().to_path_buf(),
         )),
-        AnalysisTarget::TestFile {
+        AnalysisTarget::Test {
             file,
             src_root,
             tests_root,

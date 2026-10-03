@@ -496,6 +496,14 @@ impl From<build_plan::Refusal> for CliError {
     }
 }
 
+impl From<ipe_docs::argv::NonUtf8Argument> for CliError {
+    /// A command-line argument that is not UTF-8 is command-line misuse; the
+    /// refusal names its position, never its bytes.
+    fn from(refused: ipe_docs::argv::NonUtf8Argument) -> Self {
+        Self::Usage(text::Message::relay(&refused))
+    }
+}
+
 impl From<delivery::DeliveryError> for CliError {
     /// A delivery refusal is a pedagogical, user-facing message; it surfaces
     /// through the reader's named-error channel.
@@ -545,6 +553,29 @@ pub fn emit_machine_error(
 }
 
 impl CliError {
+    /// The manifest refusal for a program entry that [`parse_entry`] turned away.
+    ///
+    /// The entry and the refused segment are author text, so both render through
+    /// `{:?}` (escaped) and a control byte cannot reach the terminal raw.
+    ///
+    /// [`parse_entry`]: crate::project::parse_entry
+    #[must_use]
+    pub fn manifest_entry_refused(entry: &str, refusal: &crate::project::EntryRefusal) -> Self {
+        use crate::project::EntryRefusal;
+        let entry = format!("{entry:?}");
+        Self::Usage(match refusal {
+            EntryRefusal::Empty => text::msg::manifest_entry_no_module(&entry),
+            EntryRefusal::NotModuleSegment { segment } => {
+                text::msg::manifest_entry_segment_invalid(&entry, &format!("{segment:?}"))
+            }
+            EntryRefusal::EmptySegment => text::msg::manifest_entry_empty_segment(&entry),
+            EntryRefusal::DotSegment => text::msg::manifest_entry_dot_segment(&entry),
+            EntryRefusal::Backslash => text::msg::manifest_entry_backslash(&entry),
+            EntryRefusal::DrivePrefix => text::msg::manifest_entry_drive_prefix(&entry),
+            EntryRefusal::Extension => text::msg::manifest_entry_extension(&entry),
+        })
+    }
+
     /// The stable machine `kind` tag for this error — the fixed vocabulary word a
     /// `--json` consumer branches on, carried under `payload.kind` alongside the
     /// prose `message`.

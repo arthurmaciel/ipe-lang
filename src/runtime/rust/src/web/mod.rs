@@ -375,18 +375,62 @@ mod island_escape_tests {
 /// (already needed for same-origin resource loading). Adding a nonce to the
 /// inline script to tighten CSP is deferred; it requires threading the nonce
 /// through the response pipeline and is outside the scope of this change.
-/// Server-side client-config templating: read the `IPE_WEB_*` tuning env vars
-/// and emit the `window.__IPE_*` assignments the client (`client.js`) reads
-/// with a hardcoded fallback. Malformed values fall back to the default; never
-/// panics.
+/// The client's numeric tuning ceilings, each with the `window.__IPE_*` global
+/// it sets. `0` passes through to the client unchanged.
+#[cfg(feature = "server")]
+const CLIENT_TUNING_CEILINGS: [(&str, crate::system::EnvCeiling); 8] = {
+    const fn tuning(name: &'static str, default: u64) -> crate::system::EnvCeiling {
+        crate::system::EnvCeiling::new(
+            name,
+            default,
+            crate::system::ZeroCeiling::Accepted,
+            "decimal count",
+        )
+    }
+    [
+        ("RETRY_BASE_MS", tuning("IPE_WEB_RETRY_BASE_MS", 500)),
+        ("RETRY_MAX_MS", tuning("IPE_WEB_RETRY_MAX_MS", 16000)),
+        (
+            "RETRY_MAX_ATTEMPTS",
+            tuning("IPE_WEB_RETRY_MAX_ATTEMPTS", 10),
+        ),
+        ("RETRY_FAST_MS", tuning("IPE_WEB_RETRY_FAST_MS", 200)),
+        (
+            "RETRY_FAST_WINDOW_MS",
+            tuning("IPE_WEB_RETRY_FAST_WINDOW_MS", 3000),
+        ),
+        ("EVENT_QUEUE_MAX", tuning("IPE_WEB_QUEUE_MAX", 50)),
+        ("HELLO_TIMEOUT_MS", tuning("IPE_WEB_HELLO_TIMEOUT_MS", 8000)),
+        (
+            "HEARTBEAT_TTL_MS",
+            tuning("IPE_WEB_HEARTBEAT_TTL_MS", 35000),
+        ),
+    ]
+};
+
+/// The `window.__IPE_*` numeric tuning assignments, resolved once per process.
+///
+/// [`build_web_router`] refuses to start on a refusal here, so every page a
+/// served app renders reads the resolved `Ok`.
+#[cfg(feature = "server")]
+fn client_tuning_js() -> &'static Result<String, crate::system::EnvCeilingRefusal> {
+    static TUNING: std::sync::OnceLock<Result<String, crate::system::EnvCeilingRefusal>> =
+        std::sync::OnceLock::new();
+    TUNING.get_or_init(|| {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        for (global, ceiling) in CLIENT_TUNING_CEILINGS {
+            let value: u64 = ceiling.read()?;
+            let _ = write!(out, "window.__IPE_{global}={value};");
+        }
+        Ok(out)
+    })
+}
+
+/// Server-side client-config templating: emit the `window.__IPE_*` assignments
+/// the client (`client.js`) reads, each with a hardcoded client fallback.
 #[cfg(feature = "server")]
 fn web_client_config_js() -> String {
-    fn num(var: &str, default: u64) -> u64 {
-        crate::system::read_env_var(var)
-            .ok()
-            .and_then(|s| s.trim().parse::<u64>().ok())
-            .unwrap_or(default)
-    }
     // IPE_WEB_BANNER: off/0/false → disabled; anything else → on.
     let banner = !matches!(
         crate::system::read_env_var("IPE_WEB_BANNER")
@@ -406,28 +450,17 @@ fn web_client_config_js() -> String {
             .map(|s| s.trim().to_string()),
         Some(ref v) if !v.is_empty() && v != "0"
     );
+    // A refused tuning value never reaches a served page (the router refused
+    // to start on it); an unserved render omits the numbers, so the client
+    // keeps its own fallbacks rather than an invented value.
+    let tuning = client_tuning_js().as_deref().unwrap_or_default();
     format!(
         "window.__IPE_BANNER_ENABLED={banner};\
          window.__IPE_SWAP_TOAST={swap_toast};\
-         window.__IPE_RETRY_BASE_MS={};\
-         window.__IPE_RETRY_MAX_MS={};\
-         window.__IPE_RETRY_MAX_ATTEMPTS={};\
-         window.__IPE_RETRY_FAST_MS={};\
-         window.__IPE_RETRY_FAST_WINDOW_MS={};\
-         window.__IPE_EVENT_QUEUE_MAX={};\
-         window.__IPE_HELLO_TIMEOUT_MS={};\
-         window.__IPE_HEARTBEAT_TTL_MS={};\
+         {tuning}\
          window.__IPE_MSG_RECONNECTING=\"Reconnecting…\";\
          window.__IPE_MSG_UPDATED=\"updated ✓\";\
-         window.__IPE_MSG_OFFLINE=\"Connection lost — refresh to retry\";",
-        num("IPE_WEB_RETRY_BASE_MS", 500),
-        num("IPE_WEB_RETRY_MAX_MS", 16000),
-        num("IPE_WEB_RETRY_MAX_ATTEMPTS", 10),
-        num("IPE_WEB_RETRY_FAST_MS", 200),
-        num("IPE_WEB_RETRY_FAST_WINDOW_MS", 3000),
-        num("IPE_WEB_QUEUE_MAX", 50),
-        num("IPE_WEB_HELLO_TIMEOUT_MS", 8000),
-        num("IPE_WEB_HEARTBEAT_TTL_MS", 35000),
+         window.__IPE_MSG_OFFLINE=\"Connection lost — refresh to retry\";"
     )
 }
 
@@ -998,11 +1031,16 @@ impl<Model, Msg, FInit, FUpdate, FView, FSubs> Clone
 /// enough to bound memory under a session-creation flood.
 /// Env `IPE_WEB_MAX_SESSIONS`.
 #[cfg(feature = "server")]
-fn max_sessions() -> usize {
-    crate::system::read_env_var("IPE_WEB_MAX_SESSIONS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(50_000)
+const MAX_SESSIONS_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_WEB_MAX_SESSIONS",
+    50_000,
+    crate::system::ZeroCeiling::Accepted,
+    "decimal session count",
+);
+
+#[cfg(feature = "server")]
+fn max_sessions() -> Result<usize, crate::system::EnvCeilingRefusal> {
+    MAX_SESSIONS_CEILING.read()
 }
 
 /// RAII admission slot: decrements `WebState::session_count` exactly once when
@@ -1672,39 +1710,34 @@ fn page_response_with_overlay(
 /// default 5 MiB (5 << 20 = 5 242 880). The default covers `Event.onFile` /
 /// `Event.onImage` data-URL payloads; override for larger file uploads.
 #[cfg(feature = "server")]
-fn web_max_body_bytes() -> usize {
-    crate::system::read_env_var("IPE_WEB_MAX_BODY_BYTES")
-        .ok()
-        .and_then(|s| s.trim().parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(5 << 20)
-}
+const WEB_MAX_BODY_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_WEB_MAX_BODY_BYTES",
+    5 << 20,
+    crate::system::ZeroCeiling::Refused,
+    "decimal byte count",
+);
 
 #[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "server", not(target_arch = "wasm32")))]
 mod web_max_body_bytes_tests {
-    // IPE_WEB_MAX_BODY_BYTES=0 must floor at the default, not disable the
-    // body (matching server::max_body's `.filter(|&n| n > 0)`). Without the
-    // floor a 0 value would 413 every /_ipe/event POST.
-    //
-    // This tests the parsing/filtering formula directly rather than mutating
-    // the real env var: `std::env::set_var` is not thread-safe under a
-    // parallel test harness, and `IPE_WEB_MAX_BODY_BYTES` already has an
-    // env-mutating test in server.rs (`max_body_env_override`) — a second
-    // unsynchronized mutator of the same key would make both tests
-    // intermittently flaky. Mirrors the established convention documented at
-    // `server::tests::ws_send_buffer_default_is_256`.
-    fn parse(raw: Option<&str>) -> usize {
-        raw.and_then(|s| s.trim().parse::<usize>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(5 << 20)
+    // A zero cap would 413 every /_ipe/event POST, so `0` is refused like any
+    // other malformed value; the parse is driven without touching the shared
+    // environment variable `server::tests::max_body_env_override` mutates.
+    use super::WEB_MAX_BODY_CEILING;
+
+    fn parse(raw: Option<&str>) -> Result<usize, crate::system::EnvCeilingRefusal> {
+        WEB_MAX_BODY_CEILING.parse_as(raw.map(str::to_owned).ok_or(std::env::VarError::NotPresent))
     }
 
     #[test]
-    fn web_max_body_bytes_floors_at_default_on_zero() {
-        assert_eq!(parse(None), 5 << 20);
-        assert_eq!(parse(Some("1024")), 1024);
-        assert_eq!(parse(Some("0")), 5 << 20); // invalid → default, not "reject everything"
+    fn web_max_body_bytes_refuses_zero() {
+        assert_eq!(parse(None), Ok(5 << 20));
+        assert_eq!(parse(Some("1024")), Ok(1024));
+        assert!(parse(Some("0")).is_err(), "a zero body cap is refused");
+        assert!(
+            parse(Some(" 1024")).is_err(),
+            "a padded body cap is refused"
+        );
     }
 }
 
@@ -1795,12 +1828,19 @@ pub(crate) fn reset_state_from_env() -> bool {
 /// Tunable via `IPE_WEB_SHUTDOWN_GRACE_MS` (default 1500 ms; 0 = exit at
 /// once).
 #[cfg(feature = "server")]
-fn shutdown_grace() -> std::time::Duration {
-    let ms = crate::system::read_env_var("IPE_WEB_SHUTDOWN_GRACE_MS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(1500);
-    std::time::Duration::from_millis(ms)
+const SHUTDOWN_GRACE_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_WEB_SHUTDOWN_GRACE_MS",
+    1500,
+    crate::system::ZeroCeiling::Accepted,
+    "decimal millisecond count",
+);
+
+/// The shutdown grace window, resolved by `serve_web` before it binds.
+#[cfg(feature = "server")]
+fn shutdown_grace() -> Result<std::time::Duration, crate::system::EnvCeilingRefusal> {
+    SHUTDOWN_GRACE_CEILING
+        .read()
+        .map(std::time::Duration::from_millis)
 }
 
 /// Best-effort bounded flush of all active telemetry exporters (push + hub).
@@ -1957,7 +1997,7 @@ async fn maybe_push_reload_to_web_sessions<Model, Msg>(
 /// the generated entry exits 0).
 ///
 /// Two escapes guard against the drain hanging — both keep the no-panic thesis:
-///  - A bounded grace timer that force-exits 0 (CLEAN) after `shutdown_grace()`,
+///  - A bounded grace timer that force-exits 0 (CLEAN) after `grace`,
 ///    so a never-idle SSE stream can't wedge the process (drops long-lived
 ///    connections rather than waiting).
 ///  - A SECOND signal (Ctrl-C twice) that force-exits 130 immediately.
@@ -1965,8 +2005,10 @@ async fn maybe_push_reload_to_web_sessions<Model, Msg>(
 /// Robustness: a failed SIGTERM registration must NOT crash — it degrades to
 /// SIGINT-only (`ctrl_c`). On non-unix only `ctrl_c` is available.
 #[cfg(feature = "server")]
-async fn web_shutdown_signal<Model, Msg>(store: Arc<dyn store::SessionStore<Model, Msg>>)
-where
+async fn web_shutdown_signal<Model, Msg>(
+    store: Arc<dyn store::SessionStore<Model, Msg>>,
+    grace: std::time::Duration,
+) where
     Model: Send + 'static,
     Msg: Send + 'static,
 {
@@ -2009,8 +2051,8 @@ where
     // immediately and let the axum drain
     // win the race when there are no long-lived connections (the common case →
     // sub-window exit). Exit 0 keeps the IpeTask-Ok / exit-0 contract.
-    tokio::spawn(async {
-        tokio::time::sleep(shutdown_grace()).await;
+    tokio::spawn(async move {
+        tokio::time::sleep(grace).await;
         // Defense-in-depth: kill the console child again in case it was spawned
         // after the first teardown call (shutdown_console is idempotent).
         #[cfg(feature = "http_client")]
@@ -2528,6 +2570,8 @@ pub(crate) enum StartupRefusal {
         base: String,
         refusal: crate::encoding::DecodeRefusal,
     },
+    /// An environment ceiling the app applies is present but malformed.
+    Ceiling(crate::system::EnvCeilingRefusal),
 }
 
 #[cfg(feature = "server")]
@@ -2539,6 +2583,7 @@ impl std::fmt::Display for StartupRefusal {
             Self::BasePath { base, refusal } => {
                 write!(f, "web base path `{base}` is malformed: {refusal}")
             }
+            Self::Ceiling(refusal) => write!(f, "{refusal}"),
         }
     }
 }
@@ -2705,16 +2750,14 @@ fn is_browser_noise_path(p: &str) -> bool {
     .any(|ext| p.ends_with(ext))
 }
 
-///go `handleInitial`): serve an unrouted browser-noise file
-/// from the static dir's ROOT when it exists there. Browsers always probe
-/// `/favicon.ico` (and friends) at the origin root, never under `/static/`,
-/// so without this shortcut an author with a configured static dir has no
-/// way to suppress the 404. `None` → the caller 404s.
+/// Serve an unrouted browser-noise file from the static dir's root when it
+/// exists there.
 ///
-/// Security: the path is attacker-shaped. Any non-plain segment (empty, `.`,
-/// `..`) is rejected BEFORE the join — stricter than  `filepath.Clean`,
-/// no traversal can escape the dir. A directory (or unreadable file) reads
-/// as `Err` → `None` → 404.
+/// Browsers probe `/favicon.ico` (and friends) at the origin root, never under
+/// `/static/`, so without this shortcut an author with a configured static dir
+/// has no way to suppress the 404. `None` means the caller answers 404: no
+/// static dir, a request path [`noise_candidate`] refuses, or an entry that is
+/// absent, a directory or unreadable.
 #[cfg(feature = "server")]
 async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Response> {
     use axum::response::IntoResponse;
@@ -2722,17 +2765,8 @@ async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Resp
     let dir = crate::system::read_env_var("IPE_WEB_STATIC_DIR")
         .ok()
         .filter(|d| !d.is_empty())?;
-    let rel = path.trim_start_matches('/');
-    if rel.is_empty()
-        || rel
-            .split('/')
-            .any(|seg| seg.is_empty() || seg == "." || seg == "..")
-    {
-        return None;
-    }
-    let candidate = std::path::Path::new(&dir).join(rel);
+    let (candidate, mime) = noise_candidate(&dir, path, crate::path_core::HOST)?;
     let bytes = tokio::fs::read(&candidate).await.ok()?;
-    let mime = static_noise_mime(rel.rsplit('.').next().unwrap_or(""));
     Some(
         (
             axum::http::StatusCode::OK,
@@ -2741,6 +2775,30 @@ async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Resp
         )
             .into_response(),
     )
+}
+
+/// The file beneath `dir` a browser-noise request path names under `regime`,
+/// with its content type, or `None` when the path may not reach the
+/// filesystem.
+///
+/// The request path is parsed by the one static-request parse
+/// ([`crate::server::static_request`]): decoded once by the strict core, every
+/// segment a plain name under the regime. The candidate is the checked join
+/// ([`crate::path::join_rel`]), never a raw `Path::join`.
+#[cfg(feature = "server")]
+fn noise_candidate(
+    dir: &str,
+    uri_path: &str,
+    regime: crate::path_core::Regime,
+) -> Option<(std::path::PathBuf, &'static str)> {
+    let crate::server::StaticRequest::File(rel) =
+        crate::server::static_request(uri_path, std::path::Path::new(dir), regime).ok()?
+    else {
+        return None;
+    };
+    let candidate = std::path::PathBuf::from(crate::path::join_rel(dir, &rel).ok()?);
+    let mime = static_noise_mime(rel.last().rsplit('.').next().unwrap_or(""));
+    Some((candidate, mime))
 }
 
 /// Content type for a browser-noise file served from the static root. The
@@ -2989,9 +3047,14 @@ mod handlers {
                 // pass at cap-1. ALWAYS reserve (so the slot built below is
                 // paired 1:1 with a decrement); only the rejection is gated on
                 // cap>0 (0 = unlimited opt-out). Over cap → roll back + 503.
-                let cap = max_sessions();
+                // A malformed ceiling admits no new session (`usize::MIN` cap
+                // with the unlimited opt-out off), never the default.
+                let (cap, unlimited) = match max_sessions() {
+                    Ok(cap) => (cap, cap == 0),
+                    Err(_) => (usize::MIN, false),
+                };
                 let reserved = st.session_count.fetch_add(1, Ordering::SeqCst);
-                if cap > 0 && reserved >= cap {
+                if !unlimited && reserved >= cap {
                     st.session_count.fetch_sub(1, Ordering::SeqCst);
                     return (
                         StatusCode::SERVICE_UNAVAILABLE,
@@ -3158,7 +3221,10 @@ mod handlers {
             let _ = await_entry(reply_rx).await;
         }
 
-        let (tx, rx) = sse::channel();
+        // A malformed buffer ceiling refuses the stream, never the default.
+        let Ok((tx, rx)) = sse::channel() else {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        };
         {
             entry.lock().unwrap_or_else(|e| e.into_inner()).sse_tx = Some(tx.clone());
         }
@@ -4759,6 +4825,10 @@ where
         Ok(app) => app,
         Err(cause) => return IpeResult::Err(cause.to_string().into()),
     };
+    let grace = match shutdown_grace() {
+        Ok(grace) => grace,
+        Err(refusal) => return IpeResult::Err(format!("Web.tea: {refusal}").into()),
+    };
 
     // Port precedence (shared with `Ipe.Http.Server`): the supervisor's
     // relocation var > `IPE_WEB_PORT` (operator) > 8000. A malformed env layer
@@ -4789,7 +4859,7 @@ where
     // the IpeTask resolves Ok → the generated entry exits 0 (NOT 130). A
     // SECOND signal force-exits 130 via the watchdog inside web_shutdown_signal.
     match axum::serve(listener, app)
-        .with_graceful_shutdown(web_shutdown_signal(shutdown_store))
+        .with_graceful_shutdown(web_shutdown_signal(shutdown_store, grace))
         .await
     {
         Ok(()) => ok_res(()),
@@ -4838,6 +4908,17 @@ where
     // a malformed base refuses the router rather than a per-request re-parse
     // that silently matches the unstripped path.
     let sse_base = Arc::new(parse_route_base(&web_base_path())?);
+    // Every environment ceiling the app applies resolves here, so a malformed
+    // one refuses the router instead of a request; the per-request sites
+    // re-read and refuse that request on their own.
+    let body_limit: usize = WEB_MAX_BODY_CEILING
+        .read()
+        .map_err(StartupRefusal::Ceiling)?;
+    max_sessions().map_err(StartupRefusal::Ceiling)?;
+    sse::buffer_capacity().map_err(StartupRefusal::Ceiling)?;
+    if let Err(refusal) = client_tuning_js() {
+        return Err(StartupRefusal::Ceiling(refusal.clone()));
+    }
     let sse_route = get(
         move |st: axum::extract::State<WebState<Model, Msg, FInit, FUpdate, FView, FSubs>>,
               uri: axum::http::Uri,
@@ -4855,13 +4936,13 @@ where
     // before the handler sees the bytes, so an over-sized payload is
     // rejected at the extract layer with 413 Payload Too Large.
     let event_route = post(handlers::event_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
-        .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes()));
+        .layer(axum::extract::DefaultBodyLimit::max(body_limit));
 
     // Inbound `Ipe.Ffi.Js` port route: same body-size cap as `/_ipe/event`, so an
     // over-sized port frame is rejected at the extract layer (413) before the
     // handler's own seal-boundary budget even runs.
     let port_route = post(handlers::port_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
-        .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes()));
+        .layer(axum::extract::DefaultBodyLimit::max(body_limit));
 
     // Content-addressed client JS asset route. The URL is computed once at
     // startup from SHA-256(CLIENT_JS) so the path changes when the file
@@ -4964,7 +5045,7 @@ where
         router.route(
             "/_ipe/hot-appearance",
             post(handlers::hot_appearance_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
-                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+                .layer(axum::extract::DefaultBodyLimit::max(body_limit)),
         )
     } else {
         router
@@ -4978,7 +5059,7 @@ where
         router.route(
             "/_ipe/hot-transition",
             post(handlers::hot_transition_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
-                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+                .layer(axum::extract::DefaultBodyLimit::max(body_limit)),
         )
     } else {
         router
@@ -4993,7 +5074,7 @@ where
         router.route(
             "/_ipe/hot-msg",
             post(handlers::hot_msg_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
-                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+                .layer(axum::extract::DefaultBodyLimit::max(body_limit)),
         )
     } else {
         router
@@ -5007,7 +5088,7 @@ where
         router.route(
             "/_ipe/hot-init",
             post(handlers::hot_init_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
-                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+                .layer(axum::extract::DefaultBodyLimit::max(body_limit)),
         )
     } else {
         router
@@ -5021,7 +5102,7 @@ where
         router.route(
             "/_ipe/hot-subs",
             post(handlers::hot_subs_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
-                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+                .layer(axum::extract::DefaultBodyLimit::max(body_limit)),
         )
     } else {
         router
@@ -5035,7 +5116,7 @@ where
         router.route(
             "/_ipe/hot-wiring",
             post(handlers::hot_wiring_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
-                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+                .layer(axum::extract::DefaultBodyLimit::max(body_limit)),
         )
     } else {
         router
@@ -5048,7 +5129,7 @@ where
         router.route(
             "/_ipe/watch/status",
             post(handlers::watch_status_handler::<Model, Msg, FInit, FUpdate, FView, FSubs>)
-                .layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+                .layer(axum::extract::DefaultBodyLimit::max(body_limit)),
         )
     } else {
         router
@@ -5065,7 +5146,7 @@ where
         // memory before the JSON parse.
         .route(
             "/_ipe/observability/ingest",
-            post(console::ingest).layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
+            post(console::ingest).layer(axum::extract::DefaultBodyLimit::max(body_limit)),
         );
 
     // The console + metrics auth gate applies whether or not a console is
@@ -5158,8 +5239,9 @@ where
     // package.ipe `[web] static` (baked as IPE_WEB_STATIC_DIR) → serve files at
     // /static/* via ServeDir. MUST be added before the `/*path` page catch-all
     // so a /static/<file> request hits ServeDir, not the page handler (which
-    // would return HTML). ServeDir blocks `..` path traversal by construction
-    // (percent-decodes first, so `%2e%2e` is caught too). NOTE: like
+    // would return HTML). `strict_serve_dir` parses each request path through
+    // `server::static_request` (decoded once, every segment a plain name under
+    // the host regime, the join re-checked) before `ServeDir` reads it. NOTE: like
     // http.FileServer it FOLLOWS symlinks inside the dir — the dir is
     // author-controlled (package.ipe [web] static), so that is the intended
     // contract, NOT a confinement guarantee. Absent/empty → no static mount.
@@ -5282,7 +5364,7 @@ mod reload_push_tests {
     #[tokio::test]
     async fn push_reload_to_web_sessions_sends_one_frame_per_web_session() {
         let store_impl: MemoryStore<(), ()> = MemoryStore::new(Duration::from_secs(60));
-        let (sse_tx, mut sse_rx) = sse::channel();
+        let (sse_tx, mut sse_rx) = sse::channel().expect("the default SSE buffer resolves");
         store_impl.set("with_sse", handle_with(Some(sse_tx))).await;
         store_impl.set("without_sse", handle_with(None)).await;
         let store: Arc<dyn SessionStore<(), ()>> = Arc::new(store_impl);
@@ -5311,7 +5393,7 @@ mod reload_push_tests {
         let prior_ipe_env = crate::system::read_env_var("IPE_ENV").ok();
 
         let store_impl: MemoryStore<(), ()> = MemoryStore::new(Duration::from_secs(60));
-        let (sse_tx, mut sse_rx) = sse::channel();
+        let (sse_tx, mut sse_rx) = sse::channel().expect("the default SSE buffer resolves");
         store_impl.set("s", handle_with(Some(sse_tx))).await;
         let store: Arc<dyn SessionStore<(), ()>> = Arc::new(store_impl);
 
@@ -5426,7 +5508,7 @@ mod hot_appearance_push_tests {
             literal_table::clear_dev_overlay_for_test();
 
             let store_impl: MemoryStore<i64, ()> = MemoryStore::new(Duration::from_secs(60));
-            let (sse_tx, mut sse_rx) = sse::channel();
+            let (sse_tx, mut sse_rx) = sse::channel().expect("the default SSE buffer resolves");
             // A non-initial Model, to prove the re-render uses the CURRENT Model.
             store_impl
                 .set("live", session_with_current_view(7, Some(sse_tx)))
@@ -5489,7 +5571,7 @@ mod hot_appearance_push_tests {
             literal_table::clear_dev_overlay_for_test();
 
             let store_impl: MemoryStore<i64, ()> = MemoryStore::new(Duration::from_secs(60));
-            let (sse_tx, mut sse_rx) = sse::channel();
+            let (sse_tx, mut sse_rx) = sse::channel().expect("the default SSE buffer resolves");
             store_impl
                 .set("live", session_with_current_view(3, Some(sse_tx)))
                 .await;
@@ -6014,18 +6096,36 @@ mod admission_control_tests {
         assert_eq!(count.load(Ordering::SeqCst), 0);
     }
 
-    // max_sessions(): env override, default, and the 0=unlimited opt-out.
+    // max_sessions(): env override, default, the 0=unlimited opt-out, and the
+    // refusal of a malformed value.
     #[test]
     fn max_sessions_parsing() {
         crate::system::locked_remove_var("IPE_WEB_MAX_SESSIONS");
-        assert_eq!(max_sessions(), 50_000);
+        let absent = max_sessions();
         crate::system::locked_set_var("IPE_WEB_MAX_SESSIONS", "7");
-        assert_eq!(max_sessions(), 7);
+        let seven = max_sessions();
         crate::system::locked_set_var("IPE_WEB_MAX_SESSIONS", "0");
-        assert_eq!(max_sessions(), 0, "0 = unlimited opt-out");
+        let zero = max_sessions();
         crate::system::locked_set_var("IPE_WEB_MAX_SESSIONS", "garbage");
-        assert_eq!(max_sessions(), 50_000, "unparseable falls back to default");
+        let garbage = max_sessions();
         crate::system::locked_remove_var("IPE_WEB_MAX_SESSIONS");
+        assert_eq!(absent, Ok(50_000));
+        assert_eq!(seven, Ok(7));
+        assert_eq!(zero, Ok(0), "0 = unlimited opt-out");
+        assert!(
+            garbage.is_err_and(|r| r.name() == "IPE_WEB_MAX_SESSIONS"),
+            "a malformed value is refused, never the default"
+        );
+    }
+
+    #[test]
+    fn web_ceilings_honour_the_shared_contract() {
+        crate::system::assert_env_ceiling_contract(MAX_SESSIONS_CEILING);
+        crate::system::assert_env_ceiling_contract(WEB_MAX_BODY_CEILING);
+        crate::system::assert_env_ceiling_contract(SHUTDOWN_GRACE_CEILING);
+        for (_, ceiling) in CLIENT_TUNING_CEILINGS {
+            crate::system::assert_env_ceiling_contract(ceiling);
+        }
     }
 }
 
@@ -6543,7 +6643,58 @@ mod sse_reconnect_reconcile_tests {
 
 #[cfg(all(test, feature = "server"))]
 mod static_noise_mime_tests {
-    use super::static_noise_mime;
+    use super::{noise_candidate, static_noise_mime};
+    use crate::path_core::Regime;
+
+    #[test]
+    fn noise_candidate_windows_refuses_escaping_paths() {
+        for uri in [
+            "/con.ico",
+            "/C:x.ico",
+            "/x:y.ico",
+            "/.well-known/..%5C..%5Cx",
+            "/.well-known/a.",
+        ] {
+            assert_eq!(
+                noise_candidate("C:\\site", uri, Regime::Windows),
+                None,
+                "{uri:?}"
+            );
+        }
+        let ok = noise_candidate("C:\\site", "/a/favicon.ico", Regime::Windows);
+        assert_eq!(
+            ok,
+            Some((
+                std::path::PathBuf::from("C:\\site\\a\\favicon.ico"),
+                "image/x-icon"
+            ))
+        );
+    }
+
+    #[test]
+    fn noise_candidate_unix_decodes_once_and_accepts_legal_names() {
+        assert_eq!(
+            noise_candidate("/srv/site", "/con.ico", Regime::Unix),
+            Some((
+                std::path::PathBuf::from("/srv/site/con.ico"),
+                "image/x-icon"
+            ))
+        );
+        assert_eq!(
+            noise_candidate("/srv/site", "/fav%69con.ico", Regime::Unix),
+            Some((
+                std::path::PathBuf::from("/srv/site/favicon.ico"),
+                "image/x-icon"
+            ))
+        );
+        for uri in ["/", "/a/../x.ico", "/a%2F..%2Fx.ico", "/a//b.ico"] {
+            assert_eq!(
+                noise_candidate("/srv/site", uri, Regime::Unix),
+                None,
+                "{uri:?}"
+            );
+        }
+    }
 
     #[test]
     fn known_browser_noise_extensions_map() {
@@ -6678,35 +6829,29 @@ mod security_env_tests {
 
     // ── IPE_WEB_MAX_BODY_BYTES (Web path) ────────────────────────────────────
     //
-    // `web_max_body_bytes()` reads live from env each call (not memoized), so
-    // we can test the production function directly.
+    // The Web path's ceiling reads live from env each call (not memoized), so
+    // the production read is driven directly.
 
     #[test]
     fn web_max_body_bytes_new_name_and_default() {
-        use super::web_max_body_bytes;
-        const DEFAULT: usize = 5 << 20;
-
+        let read = || super::WEB_MAX_BODY_CEILING.read::<usize>();
         crate::system::locked_remove_var("IPE_WEB_MAX_BODY_BYTES");
-
-        // (c) unset → default (5 MiB); a rename bug that silently zeros this
-        // would reject all /_ipe/event POSTs.
+        // Unset → default (5 MiB); a rename bug that silently zeros this would
+        // reject all /_ipe/event POSTs.
+        let absent = read();
+        crate::system::locked_set_var("IPE_WEB_MAX_BODY_BYTES", "8192");
+        let overridden = read();
+        crate::system::locked_remove_var("IPE_WEB_MAX_BODY_BYTES");
         assert_eq!(
-            web_max_body_bytes(),
-            DEFAULT,
+            absent,
+            Ok(5 << 20),
             "unset → 5 MiB default must be preserved"
         );
-
-        // Set → override takes effect.
-        crate::system::locked_set_var("IPE_WEB_MAX_BODY_BYTES", "8192");
         assert_eq!(
-            web_max_body_bytes(),
-            8192,
+            overridden,
+            Ok(8192),
             "IPE_WEB_MAX_BODY_BYTES must take effect"
         );
-        crate::system::locked_remove_var("IPE_WEB_MAX_BODY_BYTES");
-
-        // Restore default.
-        assert_eq!(web_max_body_bytes(), DEFAULT);
     }
 }
 
@@ -6905,7 +7050,7 @@ mod watch_status_handler_tests {
         locked_set_var("IPE_WATCH_HOT_TOKEN", "broadcast-token");
 
         let store = Arc::new(TestStore::new(Duration::from_secs(60)));
-        let (sse_tx, mut sse_rx) = sse::channel();
+        let (sse_tx, mut sse_rx) = sse::channel().expect("the default SSE buffer resolves");
         store
             .set("live-session", make_session_handle(Some(sse_tx)))
             .await;
@@ -7019,7 +7164,7 @@ mod watch_status_handler_tests {
     #[tokio::test]
     async fn no_sse_event_emitted_when_route_absent() {
         let store = Arc::new(TestStore::new(Duration::from_secs(60)));
-        let (sse_tx, mut sse_rx) = sse::channel();
+        let (sse_tx, mut sse_rx) = sse::channel().expect("the default SSE buffer resolves");
         store
             .set("session", make_session_handle(Some(sse_tx)))
             .await;
@@ -7050,7 +7195,7 @@ mod watch_status_handler_tests {
         locked_set_var("IPE_WATCH_HOT_TOKEN", "injection-test-token");
 
         let store = Arc::new(TestStore::new(Duration::from_secs(60)));
-        let (sse_tx, mut sse_rx) = sse::channel();
+        let (sse_tx, mut sse_rx) = sse::channel().expect("the default SSE buffer resolves");
         store.set("sess", make_session_handle(Some(sse_tx))).await;
         let state = make_state(store);
         let watch_build_status = state.watch_build_status.clone();
@@ -7213,7 +7358,7 @@ mod watch_status_handler_tests {
         let body = format!(r#"{{"ok":false,"error":"{long_error}"}}"#);
 
         let store = Arc::new(TestStore::new(Duration::from_secs(60)));
-        let (sse_tx, mut sse_rx) = sse::channel();
+        let (sse_tx, mut sse_rx) = sse::channel().expect("the default SSE buffer resolves");
         store.set("s", make_session_handle(Some(sse_tx))).await;
         let state = make_state(store);
         let watch_build_status = state.watch_build_status.clone();
@@ -7273,7 +7418,7 @@ mod watch_status_handler_tests {
 
         // Simulate what the sse_handler replay block does: read the status and
         // send the SSE frame to the newly-connected session's tx.
-        let (sse_tx, mut sse_rx) = sse::channel();
+        let (sse_tx, mut sse_rx) = sse::channel().expect("the default SSE buffer resolves");
         {
             let snapshot = watch_build_status
                 .lock()

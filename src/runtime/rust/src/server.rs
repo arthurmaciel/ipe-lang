@@ -775,40 +775,56 @@ pub fn server_with_cookie(c: ServerCookie, mut r: ServerResponse) -> ServerRespo
 
 // ─── listen + axum adapter (step 4) ───────────────────────────────────────
 
-const DEFAULT_MAX_BODY: usize = 32 * 1024 * 1024; // 32 MiB
+/// Request-body cap: `IPE_WEB_MAX_BODY_BYTES`, default 32 MiB.
+const MAX_BODY_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_WEB_MAX_BODY_BYTES",
+    32 * 1024 * 1024,
+    crate::system::ZeroCeiling::Refused,
+    "decimal byte count",
+);
 
-/// Request-body cap. Overridable via `IPE_WEB_MAX_BODY_BYTES`; falls back to
-/// 32 MiB.
-fn max_body() -> usize {
-    crate::system::read_env_var("IPE_WEB_MAX_BODY_BYTES")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_MAX_BODY)
+/// Per-request deadline (slowloris ceiling): `IPE_HTTP_REQUEST_TIMEOUT` seconds, default 30.
+const REQUEST_TIMEOUT_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_HTTP_REQUEST_TIMEOUT",
+    30,
+    crate::system::ZeroCeiling::Refused,
+    "decimal second count",
+);
+
+/// Global in-flight request cap: `IPE_HTTP_MAX_INFLIGHT`, default 1024.
+const MAX_INFLIGHT_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_HTTP_MAX_INFLIGHT",
+    1024,
+    crate::system::ZeroCeiling::Refused,
+    "decimal request count",
+)
+.at_most(tokio::sync::Semaphore::MAX_PERMITS as u64);
+
+fn max_body() -> Result<usize, crate::system::EnvCeilingRefusal> {
+    MAX_BODY_CEILING.read()
 }
 
-const DEFAULT_HTTP_REQUEST_TIMEOUT_SECS: u64 = 30;
-
-/// Per-request deadline (slowloris ceiling). Overridable via
-/// `IPE_HTTP_REQUEST_TIMEOUT` (seconds); falls back to 30s.
-fn http_request_timeout_secs() -> u64 {
-    crate::system::read_env_var("IPE_HTTP_REQUEST_TIMEOUT")
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_HTTP_REQUEST_TIMEOUT_SECS)
+/// The ceilings `Server.listen` applies to its listener.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ListenCeilings {
+    /// The per-request deadline, in seconds.
+    request_timeout_secs: u64,
+    /// The global in-flight request cap.
+    max_inflight: usize,
 }
 
-const DEFAULT_HTTP_MAX_INFLIGHT: usize = 1024;
-
-/// Global in-flight request cap. Overridable via `IPE_HTTP_MAX_INFLIGHT`; falls
-/// back to 1024.
-fn http_max_inflight() -> usize {
-    crate::system::read_env_var("IPE_HTTP_MAX_INFLIGHT")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_HTTP_MAX_INFLIGHT)
+/// Resolves every server ceiling once, before the listener binds.
+///
+/// The per-request and per-socket ceilings are re-read where they apply; this
+/// preflight makes a malformed one refuse `Server.listen` instead of every
+/// request.
+fn listen_ceilings() -> Result<ListenCeilings, crate::system::EnvCeilingRefusal> {
+    max_body()?;
+    ws_ceilings()?;
+    Ok(ListenCeilings {
+        request_timeout_secs: REQUEST_TIMEOUT_CEILING.read()?,
+        max_inflight: MAX_INFLIGHT_CEILING.read()?,
+    })
 }
 
 /// Why a request is turned away before its handler runs.
@@ -819,6 +835,8 @@ pub(crate) enum RequestRejection {
     /// The path or query is not a well-formed URL (a malformed escape, decoded
     /// bytes that are not UTF-8, an over-cap component or too many query pairs).
     BadRequest,
+    /// The request-body ceiling's environment value is malformed.
+    Unavailable,
 }
 
 impl RequestRejection {
@@ -832,6 +850,10 @@ impl RequestRejection {
                 "Payload Too Large",
             ),
             Self::BadRequest => (axum::http::StatusCode::BAD_REQUEST, "Bad Request"),
+            Self::Unavailable => (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Service Unavailable",
+            ),
         }
     }
 }
@@ -905,10 +927,67 @@ fn gate_listener(app: axum::Router) -> axum::Router {
     app.layer(axum::middleware::from_fn(refuse_malformed_url))
 }
 
-/// A static file service behind the strict URL gate.
+/// What a static-file mount may serve for one request path.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum StaticRequest {
+    /// The mount's own directory (no segment).
+    Root,
+    /// A path beneath the directory whose every segment is a plain name.
+    File(crate::path_core::RelPath),
+}
+
+/// Why a static-file request path may not reach the filesystem.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum StaticRefusal {
+    /// The strict core refused the path text itself.
+    Malformed(crate::encoding::DecodeRefusal),
+    /// A decoded segment is not a plain name under the serving regime.
+    Segment(crate::path_core::RelPathRefusal),
+    /// The served directory is not UTF-8 text, so no join beneath it is judged.
+    RootNotText,
+    /// The checked join of the parsed path beneath the directory refused.
+    Join(crate::path::PathRefusal),
+}
+
+/// Parse a static-file request path under the serving `regime`, or say why it
+/// may not reach the filesystem beneath `root`.
 ///
-/// `ServeDir` percent-decodes the path itself; the gate makes that decode run
-/// only on a path the strict core already accepted.
+/// The path is decoded once by the strict core (`DecodedPath::parse`; a
+/// malformed one was already answered 400 by [`refuse_malformed_url`]), then
+/// parsed into a `RelPath`, so a segment that climbs, re-anchors, names a
+/// device or a stream, or aliases another entry under the regime is refused
+/// before any join. An empty segment (`/a//b`) names no entry and is refused
+/// too. The join itself ([`crate::path::join_rel`]) then re-checks the joined
+/// text independently; its result is discarded here.
+///
+/// # Errors
+///
+/// The [`StaticRefusal`] of the first boundary that refused the path.
+pub(crate) fn static_request(
+    uri_path: &str,
+    root: &std::path::Path,
+    regime: crate::path_core::Regime,
+) -> Result<StaticRequest, StaticRefusal> {
+    let decoded =
+        crate::encoding::DecodedPath::parse(uri_path).map_err(StaticRefusal::Malformed)?;
+    if decoded.is_root() {
+        return Ok(StaticRequest::Root);
+    }
+    let rel = crate::path_core::RelPath::from_segments(
+        decoded.segments().iter().map(String::as_str),
+        regime,
+    )
+    .map_err(StaticRefusal::Segment)?;
+    let root = root.to_str().ok_or(StaticRefusal::RootNotText)?;
+    crate::path::join_rel(root, &rel).map_err(StaticRefusal::Join)?;
+    Ok(StaticRequest::File(rel))
+}
+
+/// A static file service behind the strict URL gate and the static path gate.
+///
+/// `ServeDir` percent-decodes the path itself; the gates make that decode run
+/// only on a path the strict core already accepted and [`static_request`]
+/// admits under the host regime.
 pub(crate) fn strict_serve_dir(
     dir: std::path::PathBuf,
 ) -> impl tower::Service<
@@ -919,9 +998,42 @@ pub(crate) fn strict_serve_dir(
 > + Clone
 + Send
 + 'static {
+    strict_serve_dir_with(dir, crate::path_core::HOST)
+}
+
+/// [`strict_serve_dir`] under an explicit `regime`, so any host proves the
+/// Windows refusals.
+///
+/// A request path [`static_request`] refuses is answered a bare 404 that never
+/// echoes the path, whether or not the entry exists.
+fn strict_serve_dir_with(
+    dir: std::path::PathBuf,
+    regime: crate::path_core::Regime,
+) -> impl tower::Service<
+    axum::extract::Request,
+    Response = axum::response::Response,
+    Error = std::convert::Infallible,
+    Future: Send + 'static,
+> + Clone
++ Send
++ 'static {
+    use axum::response::IntoResponse;
+    let root = dir.clone();
+    let static_gate = axum::middleware::from_fn(
+        move |req: axum::extract::Request, next: axum::middleware::Next| {
+            let admitted = static_request(req.uri().path(), &root, regime).is_ok();
+            async move {
+                if admitted {
+                    next.run(req).await
+                } else {
+                    axum::http::StatusCode::NOT_FOUND.into_response()
+                }
+            }
+        },
+    );
     tower::Layer::layer(
         &axum::middleware::from_fn(refuse_malformed_url),
-        tower_http::services::ServeDir::new(dir),
+        tower::Layer::layer(&static_gate, tower_http::services::ServeDir::new(dir)),
     )
 }
 
@@ -1012,7 +1124,10 @@ async fn build_request(
     let upgrader = axum::extract::ws::WebSocketUpgrade::from_request_parts(&mut parts, &())
         .await
         .ok();
-    let cap = max_body();
+    // A malformed ceiling refuses the request rather than widening the cap.
+    let Ok(cap) = max_body() else {
+        return Err(RequestRejection::Unavailable);
+    };
     // Reject an oversize body with 413 instead of silently truncating to "".
     // Pre-check Content-Length when declared (deterministic for non-chunked
     // requests); to_bytes still enforces the cap for chunked bodies.
@@ -1311,6 +1426,10 @@ pub fn server_listen<E: From<String> + Send + 'static>(
         if let Some(msg) = endpoint_conflict(&routes) {
             return IpeResult::Err(msg.into());
         }
+        let ceilings = match listen_ceilings() {
+            Ok(ceilings) => ceilings,
+            Err(refusal) => return IpeResult::Err(format!("Server.listen: {refusal}").into()),
+        };
         let mut app: axum::Router = axum::Router::new();
         // At most ONE mounted web app per server: the embedded app's cookie /
         // CSRF / asset paths are scoped through the process-wide base path
@@ -1408,10 +1527,10 @@ pub fn server_listen<E: From<String> + Send + 'static>(
         // forever behind the cap.
         let app = app
             .layer(tower::limit::GlobalConcurrencyLimitLayer::new(
-                http_max_inflight(),
+                ceilings.max_inflight,
             ))
             .layer(tower_http::timeout::TimeoutLayer::new(
-                std::time::Duration::from_secs(http_request_timeout_secs()),
+                std::time::Duration::from_secs(ceilings.request_timeout_secs),
             ));
         // Port precedence: the supervisor's relocation var (`ipe watch` placing
         // the app behind its proxy) > `IPE_SERVER_PORT` (operator) > the port the
@@ -1504,38 +1623,51 @@ enum WsOut {
 /// Per-peer outbound queue depth. A slow/idle WebSocket consumer must NOT let the
 /// server buffer unboundedly (OOM) — the channel is bounded and a full queue drops
 /// the message (the send kernel returns Err), giving real backpressure. Override
-/// via IPE_WS_SEND_BUFFER; default 256 frames.
-fn ws_send_buffer() -> usize {
-    crate::system::read_env_var("IPE_WS_SEND_BUFFER")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(256)
-}
-
-const DEFAULT_WS_MAX_CONNECTIONS: usize = 1024;
+/// via `IPE_WS_SEND_BUFFER`; default 256 frames.
+const WS_SEND_BUFFER_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_WS_SEND_BUFFER",
+    256,
+    crate::system::ZeroCeiling::Refused,
+    "decimal frame count",
+)
+.at_most(tokio::sync::Semaphore::MAX_PERMITS as u64);
 
 /// Live-peer ceiling. Each accepted upgrade pins a registry slot, an mpsc
 /// channel, and a heartbeat task; without a ceiling a peer can open connections
 /// until FD/memory exhaustion. Override via `IPE_WS_MAX_CONNECTIONS`; default
 /// 1024, mirroring `http_stream`'s `CLIENT_STREAMS_MAX`.
-fn ws_max_connections() -> usize {
-    crate::system::read_env_var("IPE_WS_MAX_CONNECTIONS")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_WS_MAX_CONNECTIONS)
+const WS_MAX_CONNECTIONS_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_WS_MAX_CONNECTIONS",
+    1024,
+    crate::system::ZeroCeiling::Refused,
+    "decimal connection count",
+);
+
+/// Heartbeat interval for WebSocket Ping frames: `IPE_WS_HEARTBEAT` seconds, default 30.
+const WS_HEARTBEAT_CEILING: crate::system::EnvCeiling = crate::system::EnvCeiling::new(
+    "IPE_WS_HEARTBEAT",
+    30,
+    crate::system::ZeroCeiling::Refused,
+    "decimal second count",
+);
+
+/// The ceilings one WebSocket peer runs under, resolved at its upgrade.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WsCeilings {
+    /// The outbound queue depth, in frames.
+    send_buffer: usize,
+    /// The live-peer ceiling.
+    max_connections: usize,
+    /// The Ping interval, in seconds.
+    heartbeat_secs: u64,
 }
 
-/// Heartbeat interval for WebSocket Ping frames.  Mirrors
-/// `wsDefaultPingInterval = 30s` (``).
-/// Override via `IPE_WS_HEARTBEAT` (seconds, must be > 0).
-fn ws_heartbeat_secs() -> u64 {
-    crate::system::read_env_var("IPE_WS_HEARTBEAT")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(30)
+fn ws_ceilings() -> Result<WsCeilings, crate::system::EnvCeilingRefusal> {
+    Ok(WsCeilings {
+        send_buffer: WS_SEND_BUFFER_CEILING.read()?,
+        max_connections: WS_MAX_CONNECTIONS_CEILING.read()?,
+        heartbeat_secs: WS_HEARTBEAT_CEILING.read()?,
+    })
 }
 
 fn ws_registry() -> &'static Mutex<HashMap<i64, tokio::sync::mpsc::Sender<WsOut>>> {
@@ -1572,6 +1704,7 @@ async fn ws_loop<E: From<String> + Send + 'static>(
     mut socket: axum::extract::ws::WebSocket,
     cfg: WsServerCfg<E>,
     id: i64,
+    ceilings: WsCeilings,
 ) {
     use axum::extract::ws::Message;
     use std::time::Duration;
@@ -1582,7 +1715,7 @@ async fn ws_loop<E: From<String> + Send + 'static>(
     // rejected by tokio-tungstenite before it reaches this loop. The Text/Binary
     // size checks below are application-layer defense in depth (belt-and-braces
     // against a future axum/tungstenite version silently dropping the cap).
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<WsOut>(ws_send_buffer());
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<WsOut>(ceilings.send_buffer);
     // Live-peer ceiling, application-layer defense in depth: the upgrade gate in
     // `server_web_socket_upgrade` is the primary check, but under high
     // concurrency the check-then-insert is a TOCTOU window. Re-check under the
@@ -1591,7 +1724,7 @@ async fn ws_loop<E: From<String> + Send + 'static>(
     // Close frame instead of registering it (no `onConnect`, no slot held).
     let admitted = {
         let mut reg = ws_registry().lock().unwrap_or_else(|e| e.into_inner());
-        if reg.len() >= ws_max_connections() {
+        if reg.len() >= ceilings.max_connections {
             false
         } else {
             reg.insert(id, tx);
@@ -1604,12 +1737,12 @@ async fn ws_loop<E: From<String> + Send + 'static>(
         return;
     }
     let _ = (cfg.onConnect)(WsHandle::WebSocketServer(id)).await;
-    // Heartbeat: send a Ping every `ws_heartbeat_secs()` seconds to keep the
+    // Heartbeat: send a Ping every `ceilings.heartbeat_secs` seconds to keep the
     // connection alive through proxies and detect silent drops.  Mirrors
     // `wsDefaultPingInterval = 30s` + `wsPingTimeout = 10s` pattern in
     // ``.  axum auto-replies to incoming Pong
     // frames on our behalf, so we only need to send the Ping here.
-    let mut heartbeat = tokio::time::interval(Duration::from_secs(ws_heartbeat_secs()));
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(ceilings.heartbeat_secs));
     heartbeat.tick().await; // consume the immediate first tick
     loop {
         tokio::select! {
@@ -1804,12 +1937,16 @@ pub fn server_web_socket_upgrade<E: From<String> + Send + 'static>(
         // id/channel/task is minted — "allocated slot without a capacity check"
         // is unrepresentable. A race between this check and the registry insert
         // is closed by a re-check at the insert site in `ws_loop`.
+        // A malformed ceiling refuses the upgrade rather than widening it.
+        let Ok(ceilings) = ws_ceilings() else {
+            return ok_res(ws_resp(503, "websocket: server ceiling misconfigured"));
+        };
         {
             let live = ws_registry()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .len();
-            if live >= ws_max_connections() {
+            if live >= ceilings.max_connections {
                 return ok_res(ws_resp(503, "websocket: server at connection capacity"));
             }
         }
@@ -1822,7 +1959,7 @@ pub fn server_web_socket_upgrade<E: From<String> + Send + 'static>(
                 // the limit holds even before `ws_loop`'s in-loop check runs.
                 let max_bytes = ws_max_message_bytes(cfg.maxMessageBytes);
                 let up = up.max_message_size(max_bytes).max_frame_size(max_bytes);
-                let resp = up.on_upgrade(move |socket| ws_loop(socket, cfg, id));
+                let resp = up.on_upgrade(move |socket| ws_loop(socket, cfg, id, ceilings));
                 let _ = WS_RESPONSE.try_with(|c| c.set(Some(resp)));
                 // Sentinel — method_router returns WS_RESPONSE instead of this.
                 ok_res(ServerResponse {
@@ -2124,44 +2261,65 @@ mod ws_adapter_tests {
         assert_eq!(id, 99);
     }
 
-    // ── ws_send_buffer env parsing ────────────────────────────────────────────
+    // ── server environment ceilings ───────────────────────────────────────────
 
     #[test]
-    fn ws_send_buffer_default_is_256() {
-        // Without IPE_WS_SEND_BUFFER the default is 256 frames.
-        // This test avoids touching the env so it's safe to run in parallel
-        // with other tests; it just confirms the fallback constant.
-        // (env-mutation tests use std::env::set_var which is not thread-safe
-        // in parallel test harnesses — we test the parsing logic separately.)
-        let parsed = "256"
-            .parse::<usize>()
-            .ok()
-            .filter(|n| *n > 0)
-            .unwrap_or(256);
-        assert_eq!(parsed, 256);
+    fn server_ceilings_refuse_every_malformed_value() {
+        for ceiling in [
+            MAX_BODY_CEILING,
+            REQUEST_TIMEOUT_CEILING,
+            MAX_INFLIGHT_CEILING,
+            WS_SEND_BUFFER_CEILING,
+            WS_MAX_CONNECTIONS_CEILING,
+            WS_HEARTBEAT_CEILING,
+        ] {
+            crate::system::assert_env_ceiling_contract(ceiling);
+        }
+        assert_eq!(WS_SEND_BUFFER_CEILING.default_value(), 256);
+        assert_eq!(WS_HEARTBEAT_CEILING.default_value(), 30);
     }
 
-    // ── ws_heartbeat_secs env parsing ──────────────────────────────────
-
-    /// Default heartbeat interval is 30 s .
     #[test]
-    fn ws_heartbeat_default_is_30() {
-        // Simulate what ws_heartbeat_secs() returns when the env var is absent.
-        let result: u64 = None::<String>
-            .and_then(|v| v.parse::<u64>().ok())
-            .filter(|n| *n > 0)
-            .unwrap_or(30);
-        assert_eq!(result, 30);
+    fn a_malformed_ws_ceiling_refuses_the_listen_preflight() {
+        crate::system::locked_set_var("IPE_WS_HEARTBEAT", "30s");
+        let refused = listen_ceilings();
+        crate::system::locked_remove_var("IPE_WS_HEARTBEAT");
+        assert!(
+            refused.is_err_and(|r| r.name() == "IPE_WS_HEARTBEAT"),
+            "a malformed per-socket ceiling must refuse Server.listen"
+        );
     }
 
-    /// A valid positive integer overrides the default.
     #[test]
-    fn ws_heartbeat_env_override_parses() {
-        let result: u64 = Some("60".to_string())
-            .and_then(|v| v.parse::<u64>().ok())
-            .filter(|n| *n > 0)
-            .unwrap_or(30);
-        assert_eq!(result, 60);
+    fn a_queue_ceiling_past_the_tokio_permit_limit_refuses_the_listen_preflight() {
+        let past = (tokio::sync::Semaphore::MAX_PERMITS as u64 + 1).to_string();
+        let at = tokio::sync::Semaphore::MAX_PERMITS.to_string();
+        for name in ["IPE_HTTP_MAX_INFLIGHT", "IPE_WS_SEND_BUFFER"] {
+            crate::system::locked_set_var(name, &past);
+            let refused = listen_ceilings();
+            crate::system::locked_set_var(name, &at);
+            let accepted = listen_ceilings();
+            crate::system::locked_remove_var(name);
+            assert!(
+                refused
+                    .is_err_and(|r| r.name() == name
+                        && r.defect() == crate::system::CeilingDefect::TooLarge),
+                "{name} past the permit limit must refuse Server.listen"
+            );
+            assert!(accepted.is_ok(), "{name} at the permit limit is accepted");
+        }
+    }
+
+    #[test]
+    fn a_malformed_body_ceiling_refuses_the_request() {
+        crate::system::locked_set_var("IPE_WEB_MAX_BODY_BYTES", " 1024");
+        let refused = max_body();
+        crate::system::locked_remove_var("IPE_WEB_MAX_BODY_BYTES");
+        assert!(refused.is_err(), "a padded body ceiling must be refused");
+        assert_eq!(
+            RequestRejection::Unavailable.status_and_reason().0,
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 
     /// Zero is rejected and the default is used.
@@ -2995,18 +3153,27 @@ mod tests {
         }
     }
 
-    /// Serve `uri` through `strict_serve_dir` mounted at `/static` over a
-    /// fresh directory holding `hello.txt`. Returns the status and body.
-    async fn serve_static(uri: &str) -> (axum::http::StatusCode, String) {
-        use tower::ServiceExt;
+    /// A fresh scratch directory for one static-serving test.
+    fn static_fixture_dir(tag: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
         let dir = crate::scratch_core::test_temp_root()
-            .join(format!("ipe-strict-static-{}-{nanos}", std::process::id()));
+            .join(format!("ipe-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp static dir");
-        std::fs::write(dir.join("hello.txt"), "hi").expect("static fixture file");
-        let app = axum::Router::new().nest_service("/static", strict_serve_dir(dir.clone()));
+        dir
+    }
+
+    /// Serve `uri` through `strict_serve_dir_with(dir, regime)` mounted at
+    /// `/static`. Returns the status and body.
+    async fn serve_static_dir(
+        dir: &std::path::Path,
+        regime: crate::path_core::Regime,
+        uri: &str,
+    ) -> (axum::http::StatusCode, String) {
+        use tower::ServiceExt;
+        let app = axum::Router::new()
+            .nest_service("/static", strict_serve_dir_with(dir.to_path_buf(), regime));
         let wire = axum::http::Request::builder()
             .method("GET")
             .uri(uri)
@@ -3018,8 +3185,157 @@ mod tests {
         };
         let status = resp.status();
         let body = axum_body_string(resp).await;
-        let _ = std::fs::remove_dir_all(&dir);
         (status, body)
+    }
+
+    /// Serve `uri` through `strict_serve_dir` mounted at `/static` over a
+    /// fresh directory holding `hello.txt`. Returns the status and body.
+    async fn serve_static(uri: &str) -> (axum::http::StatusCode, String) {
+        let dir = static_fixture_dir("strict-static");
+        std::fs::write(dir.join("hello.txt"), "hi").expect("static fixture file");
+        let out = serve_static_dir(&dir, crate::path_core::HOST, uri).await;
+        let _ = std::fs::remove_dir_all(&dir);
+        out
+    }
+
+    #[test]
+    fn static_request_windows_refuses_escaping_paths() {
+        use crate::path_core::{ElementRefusal, Regime, RelPathRefusal};
+        let root = std::path::Path::new("C:\\site");
+        let element = |why| StaticRefusal::Segment(RelPathRefusal::Element(why));
+        let segment = StaticRefusal::Segment;
+        for (uri, want) in [
+            ("/a%5C..%5Cx", segment(RelPathRefusal::Separator)),
+            ("/C:x", element(ElementRefusal::Colon)),
+            ("/x:stream", element(ElementRefusal::Colon)),
+            ("/CON", element(ElementRefusal::DosDevice)),
+            ("/nul.txt", element(ElementRefusal::DosDevice)),
+            ("/a/COM1", element(ElementRefusal::DosDevice)),
+            ("/a%5CCOM1", segment(RelPathRefusal::Separator)),
+            ("/LPT9.log", element(ElementRefusal::DosDevice)),
+            ("/..%20", element(ElementRefusal::DotSpaceRun)),
+            ("/..", element(ElementRefusal::Parent)),
+            ("/a.", element(ElementRefusal::StrippedTail)),
+            ("/a%2Fb", segment(RelPathRefusal::Separator)),
+            ("/a%00b", segment(RelPathRefusal::Nul)),
+            // An empty inner segment names no entry: `/a//b.css` is refused,
+            // not collapsed to `a/b.css` as `ServeDir` alone would.
+            ("/a//b.css", segment(RelPathRefusal::NotAName)),
+        ] {
+            assert_eq!(
+                static_request(uri, root, Regime::Windows),
+                Err(want),
+                "{uri:?}"
+            );
+        }
+        assert_eq!(
+            static_request("/", root, Regime::Windows),
+            Ok(StaticRequest::Root)
+        );
+        let file = static_request("/a/b.css/", root, Regime::Windows);
+        assert!(
+            matches!(&file, Ok(StaticRequest::File(rel)) if rel.as_str() == "a\\b.css"),
+            "{file:?}"
+        );
+    }
+
+    #[test]
+    fn static_request_unix_accepts_legal_names() {
+        use crate::path_core::{ElementRefusal, Regime, RelPathRefusal};
+        let root = std::path::Path::new("/srv/site");
+        for (uri, want) in [
+            ("/CON", "CON"),
+            ("/nul.txt", "nul.txt"),
+            ("/x:stream", "x:stream"),
+            ("/a.", "a."),
+            ("/a%5Cb", "a\\b"),
+            ("/fav%69con.ico", "favicon.ico"),
+        ] {
+            let got = static_request(uri, root, Regime::Unix);
+            assert!(
+                matches!(&got, Ok(StaticRequest::File(rel)) if rel.as_str() == want),
+                "{uri:?}: {got:?}"
+            );
+        }
+        for (uri, want) in [
+            (
+                "/a%2F..%2Fx",
+                StaticRefusal::Segment(RelPathRefusal::Separator),
+            ),
+            (
+                "/a/../x",
+                StaticRefusal::Segment(RelPathRefusal::Element(ElementRefusal::Parent)),
+            ),
+            (
+                "/a//b.css",
+                StaticRefusal::Segment(RelPathRefusal::NotAName),
+            ),
+            (
+                "/a/./b.css",
+                StaticRefusal::Segment(RelPathRefusal::NotAName),
+            ),
+            ("/a%00b", StaticRefusal::Segment(RelPathRefusal::Nul)),
+        ] {
+            assert_eq!(
+                static_request(uri, root, Regime::Unix),
+                Err(want),
+                "{uri:?}"
+            );
+        }
+        let malformed = static_request("/a%zz", root, Regime::Unix);
+        assert!(
+            matches!(
+                malformed,
+                Err(StaticRefusal::Malformed(
+                    crate::encoding::DecodeRefusal::MalformedEscape { .. }
+                ))
+            ),
+            "{malformed:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn static_request_refuses_a_non_text_root() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/srv/\xff"));
+        assert_eq!(
+            static_request("/a.css", root, crate::path_core::Regime::Unix),
+            Err(StaticRefusal::RootNotText)
+        );
+    }
+
+    #[tokio::test]
+    async fn serve_dir_gate_refuses_a_present_device_name_under_windows() {
+        use crate::path_core::Regime;
+        // Each name is a legal Linux file, so only the gate can refuse it.
+        let names = ["CON", "nul.txt", "x:stream", "a."];
+        let dir = static_fixture_dir("static-gate");
+        for name in names {
+            std::fs::write(dir.join(name), format!("body of {name}")).expect("static fixture file");
+        }
+        for name in names {
+            let uri = format!("/static/{name}");
+            let (status, body) = serve_static_dir(&dir, Regime::Windows, &uri).await;
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{uri:?}");
+            assert!(!body.contains(name), "{uri:?} must not echo the path");
+            let (status, body) = serve_static_dir(&dir, Regime::Unix, &uri).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{uri:?}");
+            assert_eq!(body, format!("body of {name}"), "{uri:?}");
+        }
+        // `/a//b` names no entry, so it is refused on both regimes even though
+        // `ServeDir` alone would serve `a/b`.
+        std::fs::create_dir_all(dir.join("a")).expect("static fixture dir");
+        std::fs::write(dir.join("a").join("b"), "b body").expect("static fixture file");
+        for regime in [Regime::Windows, Regime::Unix] {
+            let (status, body) = serve_static_dir(&dir, regime, "/static/a//b").await;
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{regime:?}");
+            assert!(body.is_empty(), "{regime:?}: {body:?}");
+            let (status, body) = serve_static_dir(&dir, regime, "/static/a/b").await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{regime:?}");
+            assert_eq!(body, "b body", "{regime:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
@@ -3375,7 +3691,7 @@ mod tests {
         crate::system::locked_set_var("ENV", "dev");
         crate::system::locked_remove_var("IPE_ENV");
         crate::system::locked_remove_var("IPE_WS_MAX_CONNECTIONS");
-        let ceiling = ws_max_connections();
+        let ceiling = usize::try_from(WS_MAX_CONNECTIONS_CEILING.default_value()).unwrap();
         {
             let mut reg = ws_registry().lock().unwrap_or_else(|e| e.into_inner());
             reg.clear();
@@ -3406,51 +3722,47 @@ mod tests {
     }
 
     #[test]
-    fn ws_max_connections_default_is_1024() {
+    fn ws_max_connections_default_and_override() {
         crate::system::locked_remove_var("IPE_WS_MAX_CONNECTIONS");
-        assert_eq!(ws_max_connections(), DEFAULT_WS_MAX_CONNECTIONS);
-    }
-
-    #[test]
-    fn ws_max_connections_env_override() {
+        assert_eq!(ws_ceilings().map(|c| c.max_connections), Ok(1024));
         crate::system::locked_set_var("IPE_WS_MAX_CONNECTIONS", "7");
-        assert_eq!(ws_max_connections(), 7);
-        crate::system::locked_remove_var("IPE_WS_MAX_CONNECTIONS");
-    }
-
-    #[test]
-    fn ws_max_connections_zero_falls_back_to_default() {
+        let overridden = ws_ceilings().map(|c| c.max_connections);
         crate::system::locked_set_var("IPE_WS_MAX_CONNECTIONS", "0");
-        assert_eq!(ws_max_connections(), DEFAULT_WS_MAX_CONNECTIONS);
+        let zero = ws_ceilings();
         crate::system::locked_remove_var("IPE_WS_MAX_CONNECTIONS");
+        assert_eq!(overridden, Ok(7));
+        assert!(zero.is_err(), "a zero connection ceiling must be refused");
     }
 
     #[test]
-    fn http_request_timeout_default_is_30() {
+    fn listen_ceilings_default_override_and_zero() {
         crate::system::locked_remove_var("IPE_HTTP_REQUEST_TIMEOUT");
+        crate::system::locked_remove_var("IPE_HTTP_MAX_INFLIGHT");
         assert_eq!(
-            http_request_timeout_secs(),
-            DEFAULT_HTTP_REQUEST_TIMEOUT_SECS
+            listen_ceilings(),
+            Ok(ListenCeilings {
+                request_timeout_secs: 30,
+                max_inflight: 1024,
+            })
         );
         crate::system::locked_set_var("IPE_HTTP_REQUEST_TIMEOUT", "5");
-        assert_eq!(http_request_timeout_secs(), 5);
-        crate::system::locked_set_var("IPE_HTTP_REQUEST_TIMEOUT", "0"); // invalid → default
-        assert_eq!(
-            http_request_timeout_secs(),
-            DEFAULT_HTTP_REQUEST_TIMEOUT_SECS
-        );
-        crate::system::locked_remove_var("IPE_HTTP_REQUEST_TIMEOUT");
-    }
-
-    #[test]
-    fn http_max_inflight_default_is_1024() {
-        crate::system::locked_remove_var("IPE_HTTP_MAX_INFLIGHT");
-        assert_eq!(http_max_inflight(), DEFAULT_HTTP_MAX_INFLIGHT);
         crate::system::locked_set_var("IPE_HTTP_MAX_INFLIGHT", "16");
-        assert_eq!(http_max_inflight(), 16);
-        crate::system::locked_set_var("IPE_HTTP_MAX_INFLIGHT", "0"); // invalid → default
-        assert_eq!(http_max_inflight(), DEFAULT_HTTP_MAX_INFLIGHT);
+        let overridden = listen_ceilings();
+        crate::system::locked_set_var("IPE_HTTP_REQUEST_TIMEOUT", "0");
+        let zero_timeout = listen_ceilings();
+        crate::system::locked_remove_var("IPE_HTTP_REQUEST_TIMEOUT");
+        crate::system::locked_set_var("IPE_HTTP_MAX_INFLIGHT", "0");
+        let zero_inflight = listen_ceilings();
         crate::system::locked_remove_var("IPE_HTTP_MAX_INFLIGHT");
+        assert_eq!(
+            overridden,
+            Ok(ListenCeilings {
+                request_timeout_secs: 5,
+                max_inflight: 16,
+            })
+        );
+        assert!(zero_timeout.is_err_and(|r| r.name() == "IPE_HTTP_REQUEST_TIMEOUT"));
+        assert!(zero_inflight.is_err_and(|r| r.name() == "IPE_HTTP_MAX_INFLIGHT"));
     }
 
     #[tokio::test]
@@ -3460,8 +3772,12 @@ mod tests {
         // ceiling is on the served path — not merely configured.
         use tower::ServiceExt;
         crate::system::locked_set_var("IPE_HTTP_REQUEST_TIMEOUT", "1");
-        let timeout = http_request_timeout_secs();
-        let inflight = http_max_inflight();
+        let ceilings = listen_ceilings();
+        crate::system::locked_remove_var("IPE_HTTP_REQUEST_TIMEOUT");
+        let ListenCeilings {
+            request_timeout_secs: timeout,
+            max_inflight: inflight,
+        } = ceilings.expect("the listen ceilings must resolve");
         let app: axum::Router = axum::Router::new()
             .route(
                 "/slow",
@@ -3518,13 +3834,14 @@ mod tests {
     #[test]
     fn max_body_env_override() {
         crate::system::locked_remove_var("IPE_WEB_MAX_BODY_BYTES");
-        assert_eq!(max_body(), DEFAULT_MAX_BODY);
-        // New name takes effect.
+        assert_eq!(max_body(), Ok(32 * 1024 * 1024));
         crate::system::locked_set_var("IPE_WEB_MAX_BODY_BYTES", "1024");
-        assert_eq!(max_body(), 1024);
-        crate::system::locked_set_var("IPE_WEB_MAX_BODY_BYTES", "0"); // invalid → default
-        assert_eq!(max_body(), DEFAULT_MAX_BODY);
+        let overridden = max_body();
+        crate::system::locked_set_var("IPE_WEB_MAX_BODY_BYTES", "0");
+        let zero = max_body();
         crate::system::locked_remove_var("IPE_WEB_MAX_BODY_BYTES");
+        assert_eq!(overridden, Ok(1024));
+        assert!(zero.is_err(), "a zero body ceiling must be refused");
     }
 
     #[tokio::test]
