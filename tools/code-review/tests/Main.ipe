@@ -3799,8 +3799,9 @@ probeRefusesIndexWithoutReviewed =
 
 -- Two pages of decisions against a one-page ceiling refuse the rebuild and
 -- roll it back, keeping the copy's prior row; a two-page ceiling admits the
--- same review database. Red if the ceiling is not checked, or if the refused
--- rebuild commits its delete.
+-- same review database. The refusal is a `LimitExceeded` error. Red if the
+-- ceiling is not checked, if it is classified as another kind, or if the
+-- refused rebuild commits its delete.
 resyncStopsAtCeiling : Task.Task Error Bool
 resyncStopsAtCeiling =
     let
@@ -3829,6 +3830,7 @@ resyncStopsAtCeiling =
         cleanupProgressScratch at
         Task.succeed
             (maybeContains ("more than " ++ String.fromInt LibDb.pairPageSize ++ " decisions") refusal
+                && maybeContains "LimitExceeded: the review database holds more than " refusal
                 && kept.mirrored == 1
                 && List.length preRows == 1
                 && copied == decisions

@@ -180,7 +180,7 @@ refillStep bound db conn state =
 
 resyncCeilingRefusal : ResyncBound -> Error
 resyncCeilingRefusal bound =
-    Error.invalidInput
+    Error.limitExceeded
         ("the review database holds more than "
             ++ String.fromInt (bound.pageCeiling * bound.pageSize)
             ++ " decisions, past the "
