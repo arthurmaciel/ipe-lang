@@ -3,39 +3,83 @@ use super::{
 };
 use crate::EmitCtx;
 
-/// The Rust infix spelling for float binary operators and comparisons.
+/// A `BinOp` with a single Rust infix spelling: an operator the backend
+/// emits literally between its two operands.
 ///
-/// `IntAdd`/`IntSub`/`IntMul`/`IntDiv`/`Append` are routed through helpers
-/// or `format!` before reaching any infix path and never arrive here.
-/// `Add`/`Sub`/`Mul` (polymorphic `Number a`) emit `.ipe_wrapping_add/sub/mul`
-/// calls (never infix), so they also never arrive here.
-/// All variants are listed so adding a new `BinOp` without wiring it is a
-/// compile error rather than a silent gap.
-pub const fn op_str(op: BinOp) -> &'static str {
+/// `Add`/`Sub`/`Mul` (polymorphic `Number a`), `IntAdd`/`IntSub`/`IntMul`,
+/// `IntDiv` and `Append` route through a helper or `format!` instead (see
+/// [`infix`]), so they have no variant here and no spelling to call.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InfixOp {
+    FloatAdd,
+    FloatSub,
+    FloatMul,
+    Div,
+    Eq,
+    Neq,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    And,
+    Or,
+}
+
+impl InfixOp {
+    /// The Rust spelling this operator emits literally between its operands.
+    pub const fn spelling(self) -> &'static str {
+        match self {
+            InfixOp::FloatAdd => "+",
+            InfixOp::FloatSub => "-",
+            InfixOp::FloatMul => "*",
+            InfixOp::Div => "/",
+            InfixOp::Eq => "==",
+            InfixOp::Neq => "!=",
+            InfixOp::Lt => "<",
+            InfixOp::Gt => ">",
+            InfixOp::Le => "<=",
+            InfixOp::Ge => ">=",
+            InfixOp::And => "&&",
+            InfixOp::Or => "||",
+        }
+    }
+}
+
+/// Classifies a `BinOp` by whether it has a single Rust infix spelling.
+///
+/// The single source of truth for which operators are infix-shaped, shared by
+/// the string emitter ([`crate::emit_expr::expr`]'s `emit_expr_at`) and the
+/// `Doc` emitter (`emit_doc`'s `build_doc`/`build_binop_chain`): both go
+/// through this function instead of keeping their own copy of the operator
+/// list, so the two paths cannot drift. Every `BinOp` variant is listed so
+/// adding one without wiring it here is a compile error, not a silent gap.
+/// The call-shaped operators (`Add`/`Sub`/`Mul`/`IntAdd`/`IntSub`/`IntMul`/
+/// `IntDiv`/`Append`) route through a helper or `format!` before reaching any
+/// infix path; they have no infix spelling, so `None` has no sentinel string
+/// to fall back on — a caller that reaches `None` on a path that assumed
+/// `Some` has a real bug, not a routing accident.
+pub const fn infix(op: BinOp) -> Option<InfixOp> {
     match op {
-        BinOp::FloatAdd => "+",
-        BinOp::FloatSub => "-",
-        BinOp::FloatMul => "*",
-        BinOp::Div => "/",
-        BinOp::Eq => "==",
-        BinOp::Neq => "!=",
-        BinOp::Lt => "<",
-        BinOp::Gt => ">",
-        BinOp::Le => "<=",
-        BinOp::Ge => ">=",
-        BinOp::And => "&&",
-        BinOp::Or => "||",
-        // These route through helpers before reaching here — sentinel strings
-        // that are invalid Rust keep the match exhaustive without emitting
-        // garbage in case the routing is ever accidentally bypassed.
-        BinOp::Add => "ipe_wrapping_add",
-        BinOp::Sub => "ipe_wrapping_sub",
-        BinOp::Mul => "ipe_wrapping_mul",
-        BinOp::IntAdd => "wrapping_add",
-        BinOp::IntSub => "wrapping_sub",
-        BinOp::IntMul => "wrapping_mul",
-        BinOp::IntDiv => "//",
-        BinOp::Append => "++",
+        BinOp::FloatAdd => Some(InfixOp::FloatAdd),
+        BinOp::FloatSub => Some(InfixOp::FloatSub),
+        BinOp::FloatMul => Some(InfixOp::FloatMul),
+        BinOp::Div => Some(InfixOp::Div),
+        BinOp::Eq => Some(InfixOp::Eq),
+        BinOp::Neq => Some(InfixOp::Neq),
+        BinOp::Lt => Some(InfixOp::Lt),
+        BinOp::Gt => Some(InfixOp::Gt),
+        BinOp::Le => Some(InfixOp::Le),
+        BinOp::Ge => Some(InfixOp::Ge),
+        BinOp::And => Some(InfixOp::And),
+        BinOp::Or => Some(InfixOp::Or),
+        BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::IntAdd
+        | BinOp::IntSub
+        | BinOp::IntMul
+        | BinOp::IntDiv
+        | BinOp::Append => None,
     }
 }
 
@@ -287,4 +331,91 @@ pub fn ffi_union_app_name(ctx: &EmitCtx, module: &[String], name: &str) -> DResu
     }
     let name_sym = ctx.lookup_symbol(name)?;
     Ok(ctx.enum_name(&ipe_ir::ModPath(segs), name_sym)?.to_owned())
+}
+
+#[cfg(test)]
+mod infix_tests {
+    use super::{BinOp, InfixOp, infix};
+
+    const ALL: [InfixOp; 12] = [
+        InfixOp::FloatAdd,
+        InfixOp::FloatSub,
+        InfixOp::FloatMul,
+        InfixOp::Div,
+        InfixOp::Eq,
+        InfixOp::Neq,
+        InfixOp::Lt,
+        InfixOp::Gt,
+        InfixOp::Le,
+        InfixOp::Ge,
+        InfixOp::And,
+        InfixOp::Or,
+    ];
+
+    /// Every `InfixOp` spelling is a literal Rust operator token: non-empty,
+    /// and never opens a line or block comment or reads as a call. This is
+    /// the property that made the old `op_str`/`chain_op_str` sentinels
+    /// (`"//"` for `IntDiv`, `unwrap_or("")` for a call-shaped op) unsound —
+    /// `InfixOp` has no variant that could stand for a call-shaped `BinOp`,
+    /// so no spelling here can be one of those sentinels.
+    #[test]
+    fn infix_spelling_never_comment_or_call() {
+        for op in ALL {
+            let s = op.spelling();
+            assert!(!s.is_empty(), "{op:?} spelling is empty");
+            assert!(
+                !s.contains("//"),
+                "{op:?} spelling {s:?} opens a line comment"
+            );
+            assert!(
+                !s.contains("/*"),
+                "{op:?} spelling {s:?} opens a block comment"
+            );
+            assert!(!s.contains('('), "{op:?} spelling {s:?} reads as a call");
+        }
+    }
+
+    /// `infix` returns `None` for exactly the 8 call-shaped `BinOp` variants
+    /// (no single Rust infix spelling) and `Some` for every other variant —
+    /// the classification both emitters share.
+    #[test]
+    fn call_shaped_ops_have_no_infix() {
+        let call_shaped = [
+            BinOp::Add,
+            BinOp::Sub,
+            BinOp::Mul,
+            BinOp::IntAdd,
+            BinOp::IntSub,
+            BinOp::IntMul,
+            BinOp::IntDiv,
+            BinOp::Append,
+        ];
+        for op in call_shaped {
+            assert!(
+                infix(op).is_none(),
+                "{op:?} unexpectedly has an infix spelling"
+            );
+        }
+
+        let infix_shaped = [
+            BinOp::FloatAdd,
+            BinOp::FloatSub,
+            BinOp::FloatMul,
+            BinOp::Div,
+            BinOp::Eq,
+            BinOp::Neq,
+            BinOp::Lt,
+            BinOp::Gt,
+            BinOp::Le,
+            BinOp::Ge,
+            BinOp::And,
+            BinOp::Or,
+        ];
+        for op in infix_shaped {
+            assert!(
+                infix(op).is_some(),
+                "{op:?} unexpectedly has no infix spelling"
+            );
+        }
+    }
 }
