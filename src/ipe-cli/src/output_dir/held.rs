@@ -457,7 +457,9 @@ impl HeldDir {
         let mut file = match self.dir.open_regular(&entry) {
             Ok(file) => file,
             Err(OpenRefusal::Absent) => return Ok(MarkerState::Absent),
-            Err(OpenRefusal::Link) => return Ok(MarkerState::NotGenuine),
+            Err(OpenRefusal::Link | OpenRefusal::NotRegular(_)) => {
+                return Ok(MarkerState::NotGenuine);
+            }
             Err(refusal) => return Err(refused(&path, refusal)),
         };
         let head = file
@@ -2067,11 +2069,17 @@ mod tests {
             .expect("base exists");
         let ownership = held.ownership();
         assert!(
-            matches!(ownership, Err(CliError::Io { .. })),
-            "a directory at the marker name is refused, got {ownership:?}"
+            matches!(ownership, Ok(Ownership::User)),
+            "a directory at the marker name is user territory, got {ownership:?}"
         );
         let claimed = held.claim();
-        assert!(claimed.is_err(), "no claim takes it, got {claimed:?}");
+        assert!(
+            matches!(
+                claimed,
+                Err(CliError::OutputRefused(OutputRefusal::NotIpeOwned(_)))
+            ),
+            "no claim takes it, got {claimed:?}"
+        );
         assert!(
             marker.join("keep.txt").is_file(),
             "the user file is untouched"
