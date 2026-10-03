@@ -104,12 +104,22 @@ pub const OBLIGATION_SLOTS: &[(StdlibKernel, u32, ObligationKind)] = {
 pub const EXPECTED_OBLIGATION_SLOT_COUNT: usize = 32;
 
 impl Builder<'_> {
-    #[allow(clippy::too_many_lines)] // Handler expansion block (E-12) pushes it over 100
+    /// Constrain one def's body with `current_home` set to the def's module
+    /// for exactly the walk: every record minted inside it names that module,
+    /// and once it returns a mint names no module, so it fails closed instead
+    /// of inheriting the last def's home.
     pub fn constrain_def(&mut self, def: &canon::Def) -> DResult<()> {
         // Track which source module this def belongs to so every `regions.insert`
         // in the sub-expression walk uses `(home, span)` as the key, preventing
         // cross-module span collisions after `link::link` merges dep modules.
         self.current_home = ModuleHome::new(def.home().to_vec());
+        let walked = self.constrain_def_body(def);
+        self.current_home = None;
+        walked
+    }
+
+    #[allow(clippy::too_many_lines)] // the Handler expansion block pushes it over 100
+    fn constrain_def_body(&mut self, def: &canon::Def) -> DResult<()> {
         match def {
             canon::Def::Typed {
                 name,
