@@ -10,6 +10,28 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.4.1](https://github.com/ipe-lang/compiler/compare/ipe-v0.4.0...ipe-v0.4.1) (2026-10-03)
+
+
+### Bug Fixes
+
+* entry-rooted analysis, total int literals, Store projection refusal, InfixOp SSOT, required CI tooling jobs ([#3385](https://github.com/ipe-lang/compiler/issues/3385)) ([24f154b](https://github.com/ipe-lang/compiler/commit/24f154be73fdc3013fe9f618240fd6626058fa1b))
+* fmt corpus fixed point, one fixity table, classifier stubs, Windows doc/health, typed remote-ingest ceilings ([#3359](https://github.com/ipe-lang/compiler/issues/3359)) ([e5cf41a](https://github.com/ipe-lang/compiler/commit/e5cf41a038f905905abc61d3eb5c70a9219f4219))
+* fuzz templates as data, one program-entry parser, compiled-in audit wrapper, tracked smoke probes ([#3360](https://github.com/ipe-lang/compiler/issues/3360)) ([f54f46f](https://github.com/ipe-lang/compiler/commit/f54f46fbe02cadd7f2cb45dc5c6c5d84d70da108))
+* installer output through helpers, held output-dir handles, one jail mount plan ([#3363](https://github.com/ipe-lang/compiler/issues/3363)) ([ca548f2](https://github.com/ipe-lang/compiler/commit/ca548f24b29b99e473f592d0b2617f93867596b5))
+* **lower:** a stored function passed to a kernel's function slot builds ([#3373](https://github.com/ipe-lang/compiler/issues/3373)) ([3c47981](https://github.com/ipe-lang/compiler/commit/3c479811f4d181d51db7fbd58da6ffc1ad01c769)), closes [#3332](https://github.com/ipe-lang/compiler/issues/3332)
+* mobile bundle held-handle walk, parsed home across boundaries, judged page examples, one comment owner in fmt ([#3388](https://github.com/ipe-lang/compiler/issues/3388)) ([003ca39](https://github.com/ipe-lang/compiler/commit/003ca39f1d0e3cd6b687dd9a84b1aa3d7ee6a9ab))
+* path element regime, Windows runtime tests, display-hazard names, code-review busy timeout, Windows jail env ([#3358](https://github.com/ipe-lang/compiler/issues/3358)) ([7ceea18](https://github.com/ipe-lang/compiler/commit/7ceea184eda71d60fc46574fe9c3eb0fe165ce0c))
+* **runtime:** redacting Debug, one log-hazard set, posture-gated dev surface ([#3391](https://github.com/ipe-lang/compiler/issues/3391)) ([72b4c15](https://github.com/ipe-lang/compiler/commit/72b4c15a90a692b3cc0657aa46ab2190ee6efb4b))
+* type errors at their owning module, one binding ladder, one-scalar UTF-8 scanning ([#3387](https://github.com/ipe-lang/compiler/issues/3387)) ([77fc424](https://github.com/ipe-lang/compiler/commit/77fc424f7b0b65a0c37d661ae0c636044fecd8d0))
+* typed env ceilings, transfers end on SIGTERM, termination beside hung teardown ([#3374](https://github.com/ipe-lang/compiler/issues/3374)) ([8516c4c](https://github.com/ipe-lang/compiler/commit/8516c4c8c49f82f277287b5a47fcd6350ed64ca0))
+* typed thread-start refusals, one spelled-name predicate, typed session-store persist error ([#3386](https://github.com/ipe-lang/compiler/issues/3386)) ([5b5c08d](https://github.com/ipe-lang/compiler/commit/5b5c08db4f27a69a2ea0f5870fb4839ad26da324))
+
+
+### Performance Improvements
+
+* **backend:** linear render layout from composable text measures ([#3390](https://github.com/ipe-lang/compiler/issues/3390)) ([ef4f9ed](https://github.com/ipe-lang/compiler/commit/ef4f9edafd742e39c26a47e36271a4e2f0b2809e))
+
 ## [0.4.0](https://github.com/ipe-lang/compiler/compare/ipe-v0.3.5...ipe-v0.4.0) (2026-10-02)
 
 
