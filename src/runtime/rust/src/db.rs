@@ -10511,9 +10511,11 @@ mod tests {
             return (Err(DbFailure::Io), None);
         };
         let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
-        std::thread::spawn(move || {
-            let _sent = seen_tx.send(serve_one_pg_tls_client(&listener));
-        });
+        std::thread::Builder::new()
+            .spawn(move || {
+                let _sent = seen_tx.send(serve_one_pg_tls_client(&listener));
+            })
+            .expect("spawn test thread");
         let relay = crate::ssrf::PinnedRelay::open(
             crate::ssrf::VettedAddr::assume_vetted_for_test(server),
             5432,

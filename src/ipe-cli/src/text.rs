@@ -965,6 +965,26 @@ messages! {
     cli_io_other(path, kind) = "cli-io-other";
     /// No private scratch directory could be created under the OS temp root.
     cli_scratch_unavailable(kind) = "cli-scratch-unavailable";
+    /// The OS refused to start a thread the command needs.
+    cli_thread_refused(role, kind) = "cli-thread-refused";
+    /// The thread that runs an `ipe watch` session.
+    thread_role_watch_session = "thread-role-watch-session";
+    /// The thread that coalesces `ipe watch` file events.
+    thread_role_watch_coalesce = "thread-role-watch-coalesce";
+    /// The thread that relays filesystem events to `ipe watch`.
+    thread_role_watch_fs_relay = "thread-role-watch-fs-relay";
+    /// The thread that relays a stop request to `ipe watch`.
+    thread_role_watch_stop_relay = "thread-role-watch-stop-relay";
+    /// The thread that retries an `ipe watch` dependency resolve.
+    thread_role_watch_resolve_retry = "thread-role-watch-resolve-retry";
+    /// The thread that runs an `ipe watch` compile.
+    thread_role_watch_compile = "thread-role-watch-compile";
+    /// The thread that waits on an `ipe watch` cargo build.
+    thread_role_watch_cargo_waiter = "thread-role-watch-cargo-waiter";
+    /// The thread that enforces a WASI run's wall-clock ceiling.
+    thread_role_wasi_wall_clock = "thread-role-wasi-wall-clock";
+    /// `ipe watch` could not start its dependency-resolve retry thread.
+    watch_thread_refused(detail) = "watch-thread-refused";
     /// Publish from a dirty working tree.
     publish_dirty_tree(source_root) = "publish-dirty-tree";
     /// Publish of an unpushed HEAD.
