@@ -9,7 +9,10 @@
 //! integration test, and `build.rs`) with `cfg-expr` against those legs. A
 //! region is covered when some leg compiles the target that holds it with a
 //! configuration under which the region's whole ancestor `cfg` conjunction
-//! holds.
+//! holds. Every item without a `cfg` of its own is a region too, under its
+//! ancestors' `cfg`s, so a file reached only through a gated `mod` is charged
+//! under its own name and an item added under an uncovered `cfg` changes the
+//! count. A statement added inside an existing item changes no count.
 //!
 //! An uncovered region must be compiled by one of the named candidate legs in
 //! `CANDIDATES` (the first that compiles it is charged), and the per-candidate,
@@ -22,6 +25,12 @@
 //! feature the model does not know, a `cfg` on a syntax position the walk does
 //! not track, an ambiguous or missing module file, a source file no module
 //! reaches, and a runtime clippy line outside the modelled jobs are refused.
+//! A leg counts only when it can fail the run: it must end in exactly
+//! `-- -D warnings` and run alone in its step, and no workflow, job, or step key
+//! (`if`, `continue-on-error`, `shell`, `working-directory`, `defaults`,
+//! `container`), toolchain `env` variable, `GITHUB_ENV` write, root
+//! `.cargo/config` flag, or `dev` / `test` profile setting the model does not
+//! follow may change what it compiles or whether its failure counts.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -142,7 +151,7 @@ const CANDIDATES: &[Candidate] = &[
 /// Rows of a residual table: a candidate, then each file's charged region count.
 type ResidualRows<'a> = &'a [(&'a str, &'a [(&'a str, usize)])];
 
-/// The uncovered `cfg` regions, per charged candidate and per file.
+/// The uncovered `cfg` and item regions, per charged candidate and per file.
 ///
 /// Exact: a missing, extra, or miscounted row fails the test, which prints the
 /// computed table to paste here.
@@ -520,6 +529,7 @@ fn parse_clippy_command(
     let (mut all_targets, mut lib, mut no_default, mut package, mut whole) =
         (false, false, false, false, false);
     let mut features_given = false;
+    let mut denies = false;
     let mut named_tests = BTreeSet::new();
     let mut seeds = BTreeSet::new();
     let mut triple: Option<&str> = None;
@@ -530,7 +540,11 @@ fn parse_clippy_command(
             "--lib" => lib = true,
             "--no-default-features" => no_default = true,
             "--workspace" => whole = true,
-            "--" => break,
+            "--" => {
+                denies_warnings(line, tokens.by_ref())?;
+                denies = true;
+                break;
+            }
             "--test" => {
                 let name = tokens.next().ok_or("`--test` without a name")?;
                 named_tests.insert(name.to_owned());
@@ -563,6 +577,11 @@ fn parse_clippy_command(
             other => return Err(format!("unmodelled clippy flag `{other}` in `{line}`")),
         }
     }
+    if !denies {
+        return Err(format!(
+            "`{line}` must deny warnings (`-- -D warnings`), or a lint finding passes"
+        ));
+    }
     if package == whole {
         return Err(format!(
             "`{line}` needs exactly one of `-p` and `--workspace`"
@@ -581,7 +600,38 @@ fn parse_clippy_command(
     } else if !no_default {
         seeds.insert("default".to_owned());
     }
-    let (lib_tests, tests) = if all_targets {
+    let (lib_tests, tests) = selected_units(all_targets, lib, named_tests);
+    Ok(Leg {
+        target: target_info(triple.unwrap_or(HOST_TRIPLE))?,
+        features: graph.closure(&seeds)?,
+        lib_tests,
+        tests,
+        flags: BTreeSet::new(),
+    })
+}
+
+/// Refuses clippy arguments after `--` other than exactly `-D warnings`.
+///
+/// A missing deny lets a lint finding pass, and a trailing `|| true` or pipe
+/// turns the leg's failure into a pass.
+fn denies_warnings<'l>(line: &str, tail: impl Iterator<Item = &'l str>) -> Result<(), String> {
+    let tail: Vec<&str> = tail.collect();
+    if matches!(tail.as_slice(), ["-D", "warnings"] | ["-Dwarnings"]) {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{line}`: the clippy arguments after `--` must be exactly `-D warnings`"
+        ))
+    }
+}
+
+/// The library test settings and integration tests a leg's target selectors compile.
+fn selected_units(
+    all_targets: bool,
+    lib: bool,
+    named_tests: BTreeSet<String>,
+) -> (BTreeSet<bool>, Tests) {
+    if all_targets {
         (BTreeSet::from([false, true]), Tests::Every)
     } else if lib || !named_tests.is_empty() {
         let lib_tests = if lib {
@@ -597,14 +647,7 @@ fn parse_clippy_command(
         (lib_tests, tests)
     } else {
         (BTreeSet::from([false]), Tests::Skipped)
-    };
-    Ok(Leg {
-        target: target_info(triple.unwrap_or(HOST_TRIPLE))?,
-        features: graph.closure(&seeds)?,
-        lib_tests,
-        tests,
-        flags: BTreeSet::new(),
-    })
+    }
 }
 
 /// A labelled leg: where it came from, and what it compiles.
@@ -624,6 +667,8 @@ fn ci_legs(
         .get("jobs")
         .and_then(serde_yaml::Value::as_mapping)
         .ok_or("ci.yml has no `jobs` mapping")?;
+    unmodelled_keys("the workflow", &doc, &["defaults"])?;
+    env_problem("the workflow", doc.get("env"))?;
     let mut legs = Vec::new();
     let mut found = BTreeSet::new();
     for (name, job) in jobs {
@@ -640,16 +685,33 @@ fn ci_legs(
                     "job `{name}` runs on `{runner}`, not the modelled host"
                 ));
             }
+            let scope = format!("job `{name}`");
+            unmodelled_keys(&scope, job, &["continue-on-error", "defaults", "container"])?;
+            env_problem(&scope, job.get("env"))?;
         }
         let before = legs.len();
-        let runs = job
+        let steps = job
             .get("steps")
             .and_then(serde_yaml::Value::as_sequence)
             .into_iter()
-            .flatten()
-            .filter_map(|step| step.get("run").and_then(serde_yaml::Value::as_str));
-        for run in runs {
-            for line in run.lines().map(str::trim).filter(|l| !l.starts_with('#')) {
+            .flatten();
+        for step in steps {
+            let Some(run) = step.get("run").and_then(serde_yaml::Value::as_str) else {
+                continue;
+            };
+            if in_set && (run.contains("GITHUB_ENV") || run.contains("GITHUB_PATH")) {
+                return Err(format!(
+                    "job `{name}`: a step writing `GITHUB_ENV` / `GITHUB_PATH` is not modelled"
+                ));
+            }
+            let mut runs_leg = false;
+            let mut commands = 0_usize;
+            for line in run
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            {
+                commands = commands.saturating_add(1);
                 if !in_set {
                     outside_line(name, line)?;
                 } else if line.contains("clippy") {
@@ -658,7 +720,22 @@ fn ci_legs(
                     }
                     let leg = parse_clippy_command(line, graph, workspace)?;
                     legs.push((format!("{name}: {line}"), leg));
+                    runs_leg = true;
                 }
+            }
+            if runs_leg {
+                let scope = format!("job `{name}`: the step running `{}`", run.trim());
+                if commands != 1 {
+                    return Err(format!(
+                        "{scope}: a clippy step must run that one command alone"
+                    ));
+                }
+                unmodelled_keys(
+                    &scope,
+                    step,
+                    &["if", "continue-on-error", "shell", "working-directory"],
+                )?;
+                env_problem(&scope, step.get("env"))?;
             }
         }
         if in_set && legs.len() == before {
@@ -693,6 +770,156 @@ fn outside_line(job: &str, line: &str) -> Result<(), String> {
             "job `{job}` lints `{RUNTIME_PACKAGE}` outside the clippy job set: `{line}`"
         )),
     }
+}
+
+/// The environment variables a clippy leg may see that the toolchain reads.
+///
+/// Any other `RUST*`, `CARGO_*`, or `CLIPPY*` variable can set a `cfg`, cap
+/// the lint level, or swap the target (`RUSTFLAGS`, `CARGO_BUILD_TARGET`,
+/// `CLIPPY_CONF_DIR`, …), which the model does not follow.
+const MODELLED_ENV: &[&str] = &["CARGO_TERM_COLOR", "CARGO_INCREMENTAL"];
+
+/// Refuses each of `keys` present on the workflow node `node`.
+///
+/// Each one can make a counted leg skip, pass on failure, or run under a
+/// shell or directory the model does not follow.
+fn unmodelled_keys(scope: &str, node: &serde_yaml::Value, keys: &[&str]) -> Result<(), String> {
+    keys.iter()
+        .find(|key| node.get(**key).is_some())
+        .map_or(Ok(()), |key| {
+            Err(format!("{scope}: `{key}` is not modelled"))
+        })
+}
+
+/// Refuses a toolchain variable outside `MODELLED_ENV` in the `env` mapping `env`.
+fn env_problem(scope: &str, env: Option<&serde_yaml::Value>) -> Result<(), String> {
+    let Some(env) = env else {
+        return Ok(());
+    };
+    let env = env
+        .as_mapping()
+        .ok_or_else(|| format!("{scope}: `env` is not a mapping"))?;
+    for name in env.keys() {
+        let name = name
+            .as_str()
+            .ok_or_else(|| format!("{scope}: an `env` name is not a string"))?;
+        let toolchain =
+            name.starts_with("RUST") || name.starts_with("CARGO") || name.starts_with("CLIPPY");
+        if toolchain && !MODELLED_ENV.contains(&name) {
+            return Err(format!("{scope}: `env.{name}` is not modelled"));
+        }
+    }
+    Ok(())
+}
+
+/// The `-C` codegen options a `.cargo/config.toml` `rustflags` may carry.
+///
+/// None of them sets a `cfg`; `-C panic`, `-C target-feature`, `-C
+/// debug-assertions` and every non-`-C` flag (`--cfg`, `--cap-lints`, `-A`)
+/// would, or would hide a lint, and are refused.
+const MODELLED_CODEGEN: &[&str] = &["debuginfo=", "link-arg=", "link-args=", "linker=", "strip="];
+
+/// Refuses a `.cargo/config.toml` that can change what a clippy leg compiles or reports.
+///
+/// Only `[target.<key>]` tables are modelled, carrying `runner`, `linker`, and
+/// a `rustflags` array of `-C` options from `MODELLED_CODEGEN`.
+fn cargo_config_problem(text: &str) -> Result<(), String> {
+    let config: toml::Table = toml::from_str(text).map_err(|e| format!("cargo config: {e}"))?;
+    for (key, value) in &config {
+        if key != "target" {
+            return Err(format!("cargo config `[{key}]` is not modelled"));
+        }
+        let targets = value
+            .as_table()
+            .ok_or("cargo config `[target]` is not a table")?;
+        for (target, table) in targets {
+            let table = table
+                .as_table()
+                .ok_or_else(|| format!("cargo config `[target.{target}]` is not a table"))?;
+            for (field, flags) in table {
+                match field.as_str() {
+                    "runner" | "linker" => {}
+                    "rustflags" => rustflags_problem(target, flags)?,
+                    other => {
+                        return Err(format!(
+                            "cargo config `target.{target}.{other}` is not modelled"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a `rustflags` array that is not pairs of `-C` and a modelled codegen option.
+fn rustflags_problem(target: &str, flags: &toml::Value) -> Result<(), String> {
+    let flags = flags
+        .as_array()
+        .ok_or_else(|| format!("cargo config `target.{target}.rustflags` is not an array"))?
+        .iter()
+        .map(|flag| {
+            flag.as_str().ok_or_else(|| {
+                format!("cargo config `target.{target}.rustflags` lists a non-string")
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for pair in flags.chunks(2) {
+        let modelled = match pair {
+            ["-C", option] => MODELLED_CODEGEN
+                .iter()
+                .any(|prefix| option.starts_with(*prefix)),
+            _ => false,
+        };
+        if !modelled {
+            return Err(format!(
+                "cargo config `target.{target}.rustflags` carries `{}`, which is not modelled",
+                pair.join(" ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a `dev` / `test` profile setting that changes a `cfg` the model fixes.
+///
+/// The model holds `debug_assertions` true and `panic` at the target default,
+/// so neither may change on the profile, a `package` override, or
+/// `build-override`.
+fn profile_problem(root_manifest: &str) -> Result<(), String> {
+    let root: toml::Table =
+        toml::from_str(root_manifest).map_err(|e| format!("root manifest: {e}"))?;
+    for name in ["dev", "test"] {
+        let Some(profile) = root.get("profile").and_then(|profiles| profiles.get(name)) else {
+            continue;
+        };
+        let overrides = profile
+            .get("package")
+            .and_then(toml::Value::as_table)
+            .into_iter()
+            .flatten()
+            .map(|(package, table)| (format!("profile.{name}.package.{package}"), table));
+        let build = profile
+            .get("build-override")
+            .map(|table| (format!("profile.{name}.build-override"), table));
+        let tables = std::iter::once((format!("profile.{name}"), profile))
+            .chain(build)
+            .chain(overrides);
+        for (scope, table) in tables {
+            if table
+                .get("debug-assertions")
+                .is_some_and(|value| value.as_bool() != Some(true))
+            {
+                return Err(format!(
+                    "`{scope}.debug-assertions` other than `true` is not modelled"
+                ));
+            }
+            if table.get("panic").is_some() {
+                return Err(format!("`{scope}.panic` is not modelled"));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A compilation target of the runtime package.
@@ -743,13 +970,27 @@ fn covers(leg: &Leg, unit: &Unit, conj: &[Rc<Expression>], host: &TargetInfo) ->
     }
 }
 
-/// A `cfg` region: the conjunction under which its code compiles.
+/// What a recorded region is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Region {
+    /// A `cfg` / `cfg_attr` attribute.
+    Cfg,
+    /// An item with no `cfg` of its own, compiled under its ancestors' `cfg`s.
+    ///
+    /// It charges the file that holds it, so a file reached only through a
+    /// gated `mod` is listed under its own name, and an item added under an
+    /// uncovered `cfg` changes the count.
+    Item,
+    /// A `compile_error!` guard, which no CI leg may satisfy.
+    Guard,
+}
+
+/// A region: the conjunction under which its code compiles.
 struct Node {
     unit: Unit,
     file: String,
     conj: Vec<Rc<Expression>>,
-    /// A `compile_error!` guard, which no CI leg may satisfy.
-    guard: bool,
+    kind: Region,
 }
 
 /// Where the walk is in the module tree.
@@ -883,12 +1124,12 @@ impl<'a> Walk<'a> {
         self.stack.iter().chain(extra).cloned().collect()
     }
 
-    fn record(&mut self, conj: Vec<Rc<Expression>>, guard: bool) {
+    fn record(&mut self, conj: Vec<Rc<Expression>>, kind: Region) {
         self.nodes.push(Node {
             unit: self.unit.clone(),
             file: self.ctx.file.clone(),
             conj,
-            guard,
+            kind,
         });
     }
 
@@ -981,16 +1222,17 @@ impl<'a> Walk<'a> {
             }
         }
         let base = self.conj(&cfgs);
+        let kind = if guard { Region::Guard } else { Region::Cfg };
         if guard && cfgs.is_empty() {
-            self.record(base.clone(), true);
+            self.record(base.clone(), Region::Guard);
         }
         for _ in &cfgs {
-            self.record(base.clone(), guard);
+            self.record(base.clone(), kind);
         }
         for predicate in predicates {
             let mut conj = base.clone();
             conj.push(predicate);
-            self.record(conj, false);
+            self.record(conj, Region::Cfg);
         }
         let pushed = cfgs.len().saturating_add(usize::from(test));
         self.stack.extend(cfgs);
@@ -1006,6 +1248,17 @@ impl<'a> Walk<'a> {
 
     fn gated(&mut self, attrs: &[Attribute], inner: impl FnOnce(&mut Self)) {
         let pushed = self.enter(attrs, false);
+        inner(self);
+        self.leave(pushed);
+    }
+
+    /// `gated` for an item; an item with no `cfg` of its own is a region of its file.
+    fn gated_item(&mut self, attrs: &[Attribute], inner: impl FnOnce(&mut Self)) {
+        let pushed = self.enter(attrs, false);
+        if !attrs.iter().any(|attr| attr.path().is_ident("cfg")) {
+            let conj = self.stack.clone();
+            self.record(conj, Region::Item);
+        }
         inner(self);
         self.leave(pushed);
     }
@@ -1240,7 +1493,7 @@ impl<'a> Walk<'a> {
                 if let Some(expr) = self.parse_cfg(&args.to_string()) {
                     let expr = Rc::new(expr);
                     let conj = self.conj(outer.iter().chain(pending.iter()).chain([&expr]));
-                    self.record(conj, false);
+                    self.record(conj, Region::Cfg);
                     pending.push(expr);
                 }
             }
@@ -1248,7 +1501,7 @@ impl<'a> Walk<'a> {
                 if let Some(expr) = self.cfg_attr_predicate(args) {
                     let expr = Rc::new(expr);
                     let conj = self.conj(outer.iter().chain(pending.iter()).chain([&expr]));
-                    self.record(conj, false);
+                    self.record(conj, Region::Cfg);
                 }
             }
         }
@@ -1400,7 +1653,7 @@ impl<'ast> Visit<'ast> for Walk<'_> {
                 self.leave(pushed);
             }
             Item::Verbatim(_) => self.refuse("an item syn leaves unparsed"),
-            _ => self.gated(item_attrs(item), |walk| visit::visit_item(walk, item)),
+            _ => self.gated_item(item_attrs(item), |walk| visit::visit_item(walk, item)),
         }
     }
 
@@ -1415,7 +1668,7 @@ impl<'ast> Visit<'ast> for Walk<'_> {
                 return;
             }
         };
-        self.gated(attrs, |walk| visit::visit_impl_item(walk, item));
+        self.gated_item(attrs, |walk| visit::visit_impl_item(walk, item));
     }
 
     fn visit_trait_item(&mut self, item: &'ast TraitItem) {
@@ -1429,7 +1682,7 @@ impl<'ast> Visit<'ast> for Walk<'_> {
                 return;
             }
         };
-        self.gated(attrs, |walk| visit::visit_trait_item(walk, item));
+        self.gated_item(attrs, |walk| visit::visit_trait_item(walk, item));
     }
 
     fn visit_foreign_item(&mut self, item: &'ast ForeignItem) {
@@ -1443,7 +1696,7 @@ impl<'ast> Visit<'ast> for Walk<'_> {
                 return;
             }
         };
-        self.gated(attrs, |walk| visit::visit_foreign_item(walk, item));
+        self.gated_item(attrs, |walk| visit::visit_foreign_item(walk, item));
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
@@ -1631,7 +1884,7 @@ fn charge(
         let covered = legs
             .iter()
             .any(|(_, leg)| covers(leg, &node.unit, &node.conj, host));
-        if node.guard {
+        if node.kind == Region::Guard {
             if covered {
                 errors.insert(format!(
                     "{}: a `compile_error!` guard holds under a CI clippy leg: {}",
@@ -1655,8 +1908,12 @@ fn charge(
                 .or_default();
             *count = count.saturating_add(1);
         } else {
+            let what = match node.kind {
+                Region::Item => "an item",
+                Region::Cfg | Region::Guard => "a cfg region",
+            };
             errors.insert(format!(
-                "{} ({:?}): a cfg region no clippy leg or candidate compiles: {}",
+                "{} ({:?}): {what} no clippy leg or candidate compiles: {}",
                 node.file,
                 node.unit,
                 render_conj(&node.conj)
@@ -1729,6 +1986,13 @@ fn every_cfg_region_is_linted_by_a_ci_clippy_leg_or_pinned() {
             .unwrap_or_else(|e| format!("<unreadable {}: {e}>", path.display()))
     };
     let package = Package::from_manifest(&read(&crate_dir.join("Cargo.toml"))).unwrap();
+    profile_problem(&read(&repo.join("Cargo.toml"))).unwrap();
+    for config in [".cargo/config.toml", ".cargo/config"] {
+        let path = repo.join(config);
+        if path.is_file() {
+            cargo_config_problem(&read(&path)).unwrap();
+        }
+    }
     let host = target_info(HOST_TRIPLE).unwrap();
     let workspace = workspace_seeds(&read(&repo.join("Cargo.toml")), &host, |member| {
         std::fs::read_to_string(repo.join(member).join("Cargo.toml"))
@@ -2113,4 +2377,110 @@ fn an_inline_module_with_a_path_fails() {
     let files = [("src/mod.rs", "#[path = \"x\"] mod y { }")];
     let err = refusal(&files, &ci, &[], &[]);
     assert!(err.contains("an inline module with `#[path]`"), "{err}");
+}
+
+#[test]
+fn a_leg_without_deny_warnings_fails() {
+    let bare = "cargo clippy -p ipe-runtime-rust --features a --all-targets";
+    let ci = synth_ci(bare, &leg("--features f"));
+    let err = refusal(&[("src/mod.rs", "")], &ci, &[], &[]);
+    assert!(err.contains("must deny warnings"), "{err}");
+}
+
+#[test]
+fn a_leg_whose_failure_is_swallowed_fails() {
+    let swallowed = format!("{} || true", leg("--features a"));
+    let ci = synth_ci(&swallowed, &leg("--features f"));
+    let err = refusal(&[("src/mod.rs", "")], &ci, &[], &[]);
+    assert!(err.contains("must be exactly `-D warnings`"), "{err}");
+}
+
+#[test]
+fn a_leg_sharing_its_step_fails() {
+    let shared = format!("|\n          set +e\n          {}", leg("--features a"));
+    let ci = synth_ci(&shared, &leg("--features f"));
+    let err = refusal(&[("src/mod.rs", "")], &ci, &[], &[]);
+    assert!(err.contains("must run that one command alone"), "{err}");
+}
+
+#[test]
+fn a_continue_on_error_leg_fails() {
+    let ci = format!(
+        "jobs:\n  clippy:\n    runs-on: ubuntu-latest\n    steps:\n      - run: {}\n        \
+         continue-on-error: true\n  runtime-feature-combos-run:\n    runs-on: ubuntu-latest\n    \
+         steps:\n      - run: {}\n",
+        leg("--features a"),
+        leg("--features f")
+    );
+    let err = refusal(&[("src/mod.rs", "")], &ci, &[], &[]);
+    assert!(err.contains("`continue-on-error` is not modelled"), "{err}");
+}
+
+#[test]
+fn a_toolchain_env_on_the_workflow_fails() {
+    let ci = format!(
+        "env:\n  RUSTFLAGS: --cfg sneaky\n{}",
+        synth_ci(&leg("--features a"), &leg("--features f"))
+    );
+    let err = refusal(&[("src/mod.rs", "")], &ci, &[], &[]);
+    assert!(err.contains("`env.RUSTFLAGS` is not modelled"), "{err}");
+}
+
+#[test]
+fn a_clippy_job_step_writing_github_env_fails() {
+    let ci = format!(
+        "jobs:\n  clippy:\n    runs-on: ubuntu-latest\n    steps:\n      \
+         - run: echo RUSTFLAGS=--cfg=sneaky >> \"$GITHUB_ENV\"\n      - run: {}\n  \
+         runtime-feature-combos-run:\n    runs-on: ubuntu-latest\n    steps:\n      - run: {}\n",
+        leg("--features a"),
+        leg("--features f")
+    );
+    let err = refusal(&[("src/mod.rs", "")], &ci, &[], &[]);
+    assert!(err.contains("writing `GITHUB_ENV`"), "{err}");
+}
+
+#[test]
+fn a_cargo_config_that_can_set_a_cfg_fails() {
+    let build = cargo_config_problem("[build]\nrustflags = [\"--cfg\", \"ipe_asan\"]\n");
+    assert!(build.is_err(), "{build:?}");
+    let target = cargo_config_problem("[target.x]\nrustflags = [\"--cfg\", \"ipe_asan\"]\n");
+    assert!(target.is_err(), "{target:?}");
+    let odd = cargo_config_problem("[target.x]\nrustflags = [\"-C\"]\n");
+    assert!(odd.is_err(), "{odd:?}");
+    let shield =
+        cargo_config_problem("[target.x]\nrustflags = [\"-C\", \"debuginfo=0\"]\nrunner = \"r\"\n");
+    assert!(shield.is_ok(), "{shield:?}");
+}
+
+#[test]
+fn a_profile_that_turns_off_debug_assertions_fails() {
+    let profile = profile_problem("[profile.dev]\ndebug-assertions = false\n");
+    assert!(profile.is_err(), "{profile:?}");
+    let package =
+        profile_problem("[profile.test.package.ipe-runtime-rust]\ndebug-assertions = false\n");
+    assert!(package.is_err(), "{package:?}");
+    let panic = profile_problem("[profile.dev]\npanic = \"abort\"\n");
+    assert!(panic.is_err(), "{panic:?}");
+    let pinned = profile_problem("[profile.test]\ndebug-assertions = true\nopt-level = 1\n");
+    assert!(pinned.is_ok(), "{pinned:?}");
+}
+
+#[test]
+fn an_item_in_a_file_only_an_uncovered_mod_reaches_is_charged() {
+    let ci = synth_ci(&leg("--features a"), &leg("--features f"));
+    let files = [
+        ("src/mod.rs", "#[cfg(feature = \"b\")] mod w;"),
+        ("src/w.rs", "fn a() {}\nfn b() {}"),
+    ];
+    let candidates = [Candidate {
+        name: "b-leg",
+        command: "cargo clippy -p ipe-runtime-rust --features b --all-targets -- -D warnings",
+        flags: &[],
+    }];
+    let exact: ResidualRows<'_> = &[("b-leg", &[("src/mod.rs", 1), ("src/w.rs", 2)])];
+    let result = synth(&files, &ci, &candidates, exact);
+    assert!(result.is_ok(), "{result:?}");
+    let blind: ResidualRows<'_> = &[("b-leg", &[("src/mod.rs", 1)])];
+    let err = refusal(&files, &ci, &candidates, blind);
+    assert!(err.contains("(\"src/w.rs\", 2)"), "{err}");
 }
