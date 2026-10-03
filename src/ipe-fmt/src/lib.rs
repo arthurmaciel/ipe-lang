@@ -843,6 +843,63 @@ impl<'a> Printer<'a> {
         }
     }
 
+    /// Render the import block, each import with the comments `owned_from` its
+    /// keyword gives it.
+    ///
+    /// elm-format sorts imports by module path and prints them directly under
+    /// the header (one blank line separates the header from the first import
+    /// only when imports exist). An import prints on one line, so every
+    /// comment it owns travels above it through the sort, except the comments
+    /// written directly above the FIRST import in the source, which describe
+    /// the module (or the whole import block) and stay above the block. That
+    /// block keeps the source's blank lines between its comments and before
+    /// the first import, so the comments of an import sorted to the front
+    /// print the same on every pass: the second pass reads them as part of the
+    /// block, with the same blank lines.
+    fn import_block<'c>(
+        &self,
+        out: &mut String,
+        imports: &[Import],
+        owned_from: impl Fn(usize) -> &'c [Comment],
+    ) {
+        if imports.is_empty() {
+            return;
+        }
+        let first_in_source = imports
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, imp)| imp.import_kw.lo)
+            .map(|(i, _)| i);
+        out.push('\n');
+        if let Some(first) = first_in_source.and_then(|i| imports.get(i)) {
+            let kw = first.import_kw.lo as usize;
+            let above = self.anchored(kw);
+            if !above.is_empty() {
+                self.push_comment_block(out, above);
+                if self.blank_line_before(kw) {
+                    out.push('\n');
+                }
+            }
+        }
+        let mut order: Vec<usize> = (0..imports.len()).collect();
+        order.sort_by_key(|&i| imports.get(i).map(|imp| self.dotted(&imp.name.value)));
+        for i in order {
+            let Some(imp) = imports.get(i) else { continue };
+            let kw = imp.import_kw.lo as usize;
+            let owned = owned_from(kw);
+            // The first import's comments above its keyword head the block.
+            let travels = if Some(i) == first_in_source {
+                owned.get(self.anchored(kw).len()..).unwrap_or_default()
+            } else {
+                owned
+            };
+            let line = self.import(imp);
+            push_comment_lines(out, unplaced(travels, &line));
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+
     /// Render a whole module.
     fn module(&self, m: &Module) -> String {
         // Destructured field by field, with no `..`: a new kind of top-level
@@ -903,52 +960,7 @@ impl<'a> Printer<'a> {
         out.push_str(&header);
         out.push('\n');
 
-        // Import block: elm-format sorts imports by module path and prints them
-        // directly under the header (one blank line separates the header from
-        // the first import only when imports exist). An import prints on one
-        // line, so every comment it owns travels above it through the sort,
-        // except the comments written directly above the FIRST import in the
-        // source, which describe the module (or the whole import block) and
-        // stay above the block. That block keeps the source's blank lines
-        // between its comments and before the first import, so the comments of
-        // an import sorted to the front print the same on every pass: the
-        // second pass reads them as part of the block, with the same blank
-        // lines.
-        if !imports.is_empty() {
-            let first_in_source = imports
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, imp)| imp.import_kw.lo)
-                .map(|(i, _)| i);
-            out.push('\n');
-            if let Some(first) = first_in_source.and_then(|i| imports.get(i)) {
-                let kw = first.import_kw.lo as usize;
-                let above = self.anchored(kw);
-                if !above.is_empty() {
-                    self.push_comment_block(&mut out, above);
-                    if self.blank_line_before(kw) {
-                        out.push('\n');
-                    }
-                }
-            }
-            let mut order: Vec<usize> = (0..imports.len()).collect();
-            order.sort_by_key(|&i| imports.get(i).map(|imp| self.dotted(&imp.name.value)));
-            for i in order {
-                let Some(imp) = imports.get(i) else { continue };
-                let kw = imp.import_kw.lo as usize;
-                let owned = owned_from(kw);
-                // The first import's comments above its keyword head the block.
-                let travels = if Some(i) == first_in_source {
-                    owned.get(self.anchored(kw).len()..).unwrap_or_default()
-                } else {
-                    owned
-                };
-                let line = self.import(imp);
-                push_comment_lines(&mut out, unplaced(travels, &line));
-                out.push_str(&line);
-                out.push('\n');
-            }
-        }
+        self.import_block(&mut out, imports, &owned_from);
 
         // Declarations in source order, each preceded by two blank lines
         // (elm-format's top-level spacing). Unions / aliases / values /
