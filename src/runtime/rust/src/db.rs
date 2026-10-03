@@ -3055,7 +3055,11 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
 /// constituent field type here (`String`, `i64`, `f64`, `bool`, `Vec<u8>`) is
 /// already `PartialEq`, so the derive below is total and structural — no
 /// hand-written impl needed.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// `Debug` prints the variant and never the bound value: a bind may carry a
+/// revealed secret or a client-supplied credential, and every type that holds a
+/// `SqlParam` (a fragment, a statement, a refusal) prints through this impl.
+#[derive(Clone, PartialEq)]
 pub enum SqlParam {
     /// `SqlString s` — binds as TEXT.
     Text(String),
@@ -3082,6 +3086,20 @@ pub enum SqlParam {
     /// type-mismatch error. Boxed to keep construction cheap (one variant,
     /// rarely on a hot loop) without inflating every other variant's size.
     Null(Box<SqlParam>),
+}
+
+impl std::fmt::Debug for SqlParam {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let masked = crate::redact::Redacted::new(());
+        match self {
+            Self::Text(_) => f.debug_tuple("Text").field(&masked).finish(),
+            Self::Int(_) => f.debug_tuple("Int").field(&masked).finish(),
+            Self::Float(_) => f.debug_tuple("Float").field(&masked).finish(),
+            Self::Bool(_) => f.debug_tuple("Bool").field(&masked).finish(),
+            Self::Bytes(_) => f.debug_tuple("Bytes").field(&masked).finish(),
+            Self::Null(witness) => f.debug_tuple("Null").field(witness).finish(),
+        }
+    }
 }
 
 // ── `From<T> for SqlParam` — primitive Ipê types ────────────────────────────
@@ -5417,6 +5435,24 @@ pub fn db_insert_fields_returning<E: Send + From<String> + 'static, A: Send + 's
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sql_param_debug_prints_no_bound_value() {
+        let params = vec![
+            SqlParam::Text("Bearer S3CR3T".to_owned()),
+            SqlParam::Int(424_242),
+            SqlParam::Float(1.5),
+            SqlParam::Bool(true),
+            SqlParam::Bytes(b"T0K3N".to_vec()),
+            SqlParam::Null(Box::new(SqlParam::Text("PW0RD".to_owned()))),
+        ];
+        let shown = format!("{params:?}");
+        for planted in ["S3CR3T", "424242", "1.5", "true", "84, 48", "PW0RD"] {
+            assert!(!shown.contains(planted), "{planted} leaked: {shown}");
+        }
+        assert!(shown.contains("Text(<redacted>)"), "{shown}");
+        assert!(shown.contains("Null(Text(<redacted>))"), "{shown}");
+    }
 
     /// Every target `url` makes the driver dial, as [`PostgresUrl::parse`] reads them.
     fn postgres_dial_targets(url: &str) -> Result<Vec<DialTarget>, DbConnectError> {

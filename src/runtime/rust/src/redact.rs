@@ -1,13 +1,13 @@
 //! `Redacted<T>` — a field carrier whose `Debug` never prints the value.
 //!
-//! A runtime type that holds secret-role data (request headers and cookies, a
-//! cookie value, a session token, a principal's identity) wraps each such field
-//! in [`Redacted`]. Its `Debug` writes [`REDACTED`] and nothing else, so the
+//! A runtime type that holds secret-role data (a cookie value, a principal's
+//! identity) wraps each such field in [`Redacted`]. Its `Debug` writes [`REDACTED`] and nothing else, so the
 //! owning type can keep `#[derive(Debug)]` and every `{:?}` of it — a runtime
 //! log line, a `dbg!`, the stringify `Debug` fallback — prints the type's
 //! structure with the secret fields masked. The value stays reachable to the
-//! runtime code that owns it through `Deref`, [`Redacted::get`] and
-//! [`Redacted::into_inner`].
+//! runtime code that owns it through `Deref` and [`Redacted::into_inner`]. There
+//! is no inherent `get`: a method of that name would shadow the wrapped
+//! value's own (`BTreeMap::get`) through auto-deref.
 //!
 //! `Redacted` implements no `Display` and no `IpeStringify`, so there is no
 //! second formatting path that could reach the value. Std-only and declared in
@@ -29,16 +29,6 @@ impl<T> Redacted<T> {
     /// Wrap `value`.
     pub const fn new(value: T) -> Self {
         Self(value)
-    }
-
-    /// The wrapped value, borrowed.
-    pub const fn get(&self) -> &T {
-        &self.0
-    }
-
-    /// The wrapped value, mutably borrowed.
-    pub const fn get_mut(&mut self) -> &mut T {
-        &mut self.0
     }
 
     /// The wrapped value, by move.

@@ -58,6 +58,7 @@ const FIELD_WORDS: &[&str] = &[
     "claims",
     "bearer",
     "sid",
+    "jti",
     "apikey",
 ];
 

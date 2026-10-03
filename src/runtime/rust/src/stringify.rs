@@ -572,12 +572,12 @@ mod tests {
             req: crate::server::ServerRequest {
                 method: "GET".to_owned(),
                 path: "/me".to_owned(),
-                body: String::new().into(),
-                headers: pair("Authorization", "Bearer S3CR3T").into(),
-                params: crate::redact::Redacted::default(),
-                query: crate::redact::Redacted::default(),
-                cookies: pair("sid", "T0K3N").into(),
-                remoteAddr: String::new().into(),
+                body: String::new(),
+                headers: pair("Authorization", "Bearer S3CR3T"),
+                params: HashMap::new(),
+                query: HashMap::new(),
+                cookies: pair("sid", "T0K3N"),
+                remoteAddr: String::new(),
             },
             cookie: crate::server::server_cookie("sid".to_owned(), "T0K3N".to_owned()),
             who: crate::principal::principal_mint_with_claims(
@@ -588,6 +588,6 @@ mod tests {
         let shown = g.ipe_show();
         assert!(!shown.contains("S3CR3T"), "{shown}");
         assert!(!shown.contains("T0K3N"), "{shown}");
-        assert!(shown.contains("\"/me\""), "{shown}");
+        assert!(shown.contains("\"GET\""), "{shown}");
     }
 }

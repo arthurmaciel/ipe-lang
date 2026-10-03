@@ -28,25 +28,59 @@ use crate::redact::{Redacted, redacting_debug};
 
 /// Ipe.Http.Server.Request — opaque parsed request handle.
 // camelCase field names are required because accessor kernels (server_body,
-// server_path, server_method, …) read these fields directly by name. These
-// fields are NOT part of the Ipê API — Ipê code always goes through a kernel.
+// server_path, server_method, …) read these fields directly by name, and Ipê
+// `req.<field>` access lowers to `(req).<field>.clone()` against the field
+// types of `RequestFields` in `ipe_types` — so every field keeps its plain type.
 // `build_request` populates every field exactly once at the axum boundary.
-// Every field but the method and path is client-supplied data that can carry a
-// credential (an `Authorization` header, a session cookie, a token in the query
-// or body), so it is a `Redacted` carrier: the derived `Debug` prints those
-// fields as `<redacted>`.
+// Every field but the method is client-supplied data that can carry a credential
+// (an `Authorization` header, a session cookie, a token in the path, query or
+// body), so `Debug` masks it.
 #[allow(non_snake_case)]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ServerRequest {
     pub method: String,
     pub path: String,
-    pub body: Redacted<String>,
-    pub headers: Redacted<HashMap<String, String>>,
-    pub params: Redacted<HashMap<String, String>>,
-    pub query: Redacted<HashMap<String, String>>,
-    pub cookies: Redacted<HashMap<String, String>>,
-    pub remoteAddr: Redacted<String>,
+    pub body: String,
+    pub headers: HashMap<String, String>,
+    pub params: HashMap<String, String>,
+    pub query: HashMap<String, String>,
+    pub cookies: HashMap<String, String>,
+    pub remoteAddr: String,
 }
+
+redacting_debug!(ServerRequest {
+    shown: [method],
+    masked: [path, body, headers, params, query, cookies, remoteAddr],
+});
+
+/// Emitted `req.<field>` reads each field at the plain type `ipe_types`'
+/// `RequestFields` table gives it (`String`, or `Dict String String` =
+/// `HashMap<String, String>`); a field whose type changes breaks this build,
+/// not a downstream cargo build of an emitted program.
+#[allow(clippy::type_complexity)]
+const _: fn(
+    ServerRequest,
+) -> (
+    String,
+    String,
+    String,
+    String,
+    HashMap<String, String>,
+    HashMap<String, String>,
+    HashMap<String, String>,
+    HashMap<String, String>,
+) = |r| {
+    (
+        r.method,
+        r.path,
+        r.body,
+        r.remoteAddr,
+        r.headers,
+        r.params,
+        r.query,
+        r.cookies,
+    )
+};
 
 /// Ipe.Http.Server.Response — opaque response handle built by accessor kernels.
 // camelCase field names are required because builder/emit kernels (server_text,
@@ -728,7 +762,7 @@ pub fn server_get_cookie(name: String, req: ServerRequest) -> IpeMaybe<String> {
 // return plain `String`, NOT `IpeMaybe<String>`.  analogous
 // accessors return the raw parsed string values with no Maybe wrapper.
 pub fn server_body(req: ServerRequest) -> String {
-    req.body.into_inner()
+    req.body
 }
 pub fn server_path(req: ServerRequest) -> String {
     req.path
@@ -1144,12 +1178,12 @@ async fn build_request(
         ServerRequest {
             method,
             path,
-            body: body.into(),
-            headers: headers.into(),
-            params: params.into(),
-            query: query.into(),
-            cookies: cookies.into(),
-            remoteAddr: remote_addr.into(),
+            body,
+            headers,
+            params,
+            query,
+            cookies,
+            remoteAddr: remote_addr,
         },
         upgrader,
     ))
@@ -2942,12 +2976,12 @@ mod tests {
         let req = ServerRequest {
             method: "GET".to_string(),
             path: "/".to_string(),
-            body: Redacted::default(),
-            headers: headers.into(),
-            params: Redacted::default(),
-            query: Redacted::default(),
-            cookies: Redacted::default(),
-            remoteAddr: Redacted::default(),
+            body: String::new(),
+            headers,
+            params: HashMap::new(),
+            query: HashMap::new(),
+            cookies: HashMap::new(),
+            remoteAddr: String::new(),
         };
         for probe in ["content-type", "Content-Type", "CONTENT-TYPE"] {
             assert!(
@@ -2969,17 +3003,25 @@ mod tests {
         let pair = |k: &str, v: &str| HashMap::from([(k.to_owned(), v.to_owned())]);
         ServerRequest {
             method: "POST".to_owned(),
-            path: "/login".to_owned(),
-            body: "password=PW0RD".to_owned().into(),
-            headers: pair("Authorization", "Bearer S3CR3T").into(),
-            params: pair("id", "P4R4M").into(),
-            query: pair("token", "QT0K3N").into(),
-            cookies: pair("sid", "T0K3N").into(),
-            remoteAddr: "203.0.113.9".to_owned().into(),
+            path: "/reset/P4THT0K".to_owned(),
+            body: "password=PW0RD".to_owned(),
+            headers: pair("Authorization", "Bearer S3CR3T"),
+            params: pair("id", "P4R4M"),
+            query: pair("token", "QT0K3N"),
+            cookies: pair("sid", "T0K3N"),
+            remoteAddr: "203.0.113.9".to_owned(),
         }
     }
 
-    const PLANTED: [&str; 6] = ["S3CR3T", "T0K3N", "PW0RD", "P4R4M", "QT0K3N", "203.0.113.9"];
+    const PLANTED: [&str; 7] = [
+        "S3CR3T",
+        "T0K3N",
+        "PW0RD",
+        "P4R4M",
+        "QT0K3N",
+        "203.0.113.9",
+        "P4THT0K",
+    ];
 
     #[test]
     fn request_debug_prints_no_client_supplied_value() {
@@ -2988,7 +3030,7 @@ mod tests {
             for secret in PLANTED {
                 assert!(!shown.contains(secret), "{secret} leaked: {shown}");
             }
-            assert!(shown.contains("\"POST\"") && shown.contains("\"/login\""));
+            assert!(shown.contains("\"POST\""), "{shown}");
             assert!(shown.contains(crate::redact::REDACTED));
         }
         assert!(matches!(
@@ -3568,12 +3610,12 @@ mod tests {
         ServerRequest {
             method: "GET".to_string(),
             path: "/ws".to_string(),
-            body: Redacted::default(),
-            headers: h.into(),
-            params: Redacted::default(),
-            query: Redacted::default(),
-            cookies: Redacted::default(),
-            remoteAddr: Redacted::default(),
+            body: String::new(),
+            headers: h,
+            params: HashMap::new(),
+            query: HashMap::new(),
+            cookies: HashMap::new(),
+            remoteAddr: String::new(),
         }
     }
 
@@ -3865,12 +3907,12 @@ mod tests {
         ServerRequest {
             method: method.to_string(),
             path: "/".to_string(),
-            body: Redacted::default(),
-            headers: headers.into(),
-            params: Redacted::default(),
-            query: Redacted::default(),
-            cookies: cookies.into(),
-            remoteAddr: Redacted::default(),
+            body: String::new(),
+            headers,
+            params: HashMap::new(),
+            query: HashMap::new(),
+            cookies,
+            remoteAddr: String::new(),
         }
     }
 
@@ -4089,22 +4131,18 @@ mod tests {
             ServerRequest {
                 method: "GET".to_string(),
                 path: "/me".to_string(),
-                body: Redacted::default(),
-                headers: Redacted::new(
-                    headers
-                        .iter()
-                        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-                        .collect(),
-                ),
-                params: Redacted::default(),
-                query: Redacted::default(),
-                cookies: Redacted::new(
-                    cookies
-                        .iter()
-                        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-                        .collect(),
-                ),
-                remoteAddr: Redacted::default(),
+                body: String::new(),
+                headers: headers
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                    .collect(),
+                params: HashMap::new(),
+                query: HashMap::new(),
+                cookies: cookies
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                    .collect(),
+                remoteAddr: String::new(),
             }
         }
 
