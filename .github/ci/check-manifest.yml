@@ -111,6 +111,21 @@ checks:
       tier: quick
       run:
         - .github/ci/artifact-guard.sh
+        - python3 .github/ci/verify-manifest.py
+        - python3 .github/ci/test_verify_manifest.py -v
+        - python3 .github/ci/test_strict_yaml.py -v
+        - python3 .github/ci/test_change_class.py -v
+        - python3 .github/ci/e2e_shard.py --lint
+        - python3 .github/ci/test_e2e_shard.py -v
+        - python3 .github/ci/rerun_policy.py --lint
+        - python3 .github/ci/test_rerun_policy.py -v
+        - python3 .github/ci/nightly_green.py --lint
+        - python3 .github/ci/test_nightly_green.py -v
+        - python3 .github/ci/test_trust_roots.py -v
+        - python3 .github/ci/test_local_gate.py -v
+        - python3 .github/ci/test_cargo_invocation.py -v
+        - python3 .github/ci/test_claims_table.py -v
+        - python3 .github/ci/check_required_set.py
   - context: manifest-lock-consistency
     disposition: gate
     producer: ci.yml
