@@ -269,6 +269,7 @@ pub mod scratch_host;
 pub mod path_core;
 pub mod path;
 pub mod random;
+pub mod redact;
 pub mod regex_kernel;
 pub mod secret;
 pub mod app_config;

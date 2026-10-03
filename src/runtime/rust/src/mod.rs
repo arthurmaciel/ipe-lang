@@ -563,6 +563,12 @@ pub use ws_client::*;
 // qualified path (`crate::escape::…`); not glob-re-exported.
 pub mod escape;
 
+// `Redacted<T>`: the field carrier whose `Debug` never prints the value, worn by
+// every secret-role field of a runtime type (server, principal, js_port). Std-only
+// and declared in every module set (the emitted floor and the wasm set too).
+// Reached by qualified path (`crate::redact::…`); not glob-re-exported.
+pub mod redact;
+
 // Ipe.Html / Ipe.Ui render surface — the Html/Attribute/Event ADTs + renderer +
 // htmlXxx kernel wrappers. Pure (std only), so always available; a non-Web
 // Ipe.Ui app renders via Html.toString without the `web` server module. The
